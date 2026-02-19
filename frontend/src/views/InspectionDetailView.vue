@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { useToast } from '../composables/useToast'
 import api from '../services/api'
+import TemplatePreviewModal from '../components/settings/TemplatePreviewModal.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -24,6 +25,10 @@ const showEditKeyReturn = ref(false)
 const showEditNotes = ref(false)
 const showEditTenantEmail = ref(false)
 const showEditClientEmail = ref(false)
+const showPreview = ref(false)
+const showPhotoModal = ref(false)
+const photoUploading = ref(false)
+const localPhoto = ref(null)
 
 const editForms = ref({
   conduct_date: '',
@@ -189,6 +194,8 @@ async function fetchInspection() {
     editForms.value.internal_notes = inspection.value.internal_notes || ''
     editForms.value.tenant_email = inspection.value.tenant_email || ''
     editForms.value.client_email_override = inspection.value.client_email_override || inspection.value.client?.email || ''
+    // Load property photo
+    localPhoto.value = inspection.value.property?.overview_photo || null
   } catch (error) {
     console.error('Failed to fetch inspection:', error)
     toast.error('Failed to load inspection')
@@ -293,6 +300,46 @@ function formatDate(dateString) {
   return convertDateToUKFormat(dateString)
 }
 
+// ── Property photo ──────────────────────────────────────────────────
+function onPhotoFileChange(e) {
+  const file = e.target.files[0]
+  if (!file) return
+  if (file.size > 8 * 1024 * 1024) { toast.error('Photo must be under 8MB'); return }
+  const reader = new FileReader()
+  reader.onload = (ev) => { localPhoto.value = ev.target.result }
+  reader.readAsDataURL(file)
+}
+
+async function savePhoto() {
+  if (!inspection.value?.property_id) return
+  photoUploading.value = true
+  try {
+    await api.updateProperty(inspection.value.property_id, { overview_photo: localPhoto.value })
+    toast.success('Property photo saved')
+    showPhotoModal.value = false
+    fetchInspection()
+  } catch {
+    toast.error('Failed to save photo')
+  } finally {
+    photoUploading.value = false
+  }
+}
+
+// ── Preview branding ─────────────────────────────────────────────────
+const previewTemplate = computed(() => {
+  if (!inspection.value?.template_id) return null
+  return templates.value.find(t => t.id === inspection.value.template_id) || null
+})
+
+const previewBranding = computed(() => ({
+  primaryColor: inspection.value?.client?.primary_color || '#1E3A8A',
+  clientName:   inspection.value?.client?.name || 'Client',
+  logoText:     (inspection.value?.client?.name || 'CL').split(' ').map(w => w[0]).join('').slice(0,2).toUpperCase(),
+  logoUrl:      inspection.value?.client?.logo || null,
+  photoUrl:     localPhoto.value || inspection.value?.property?.overview_photo || null,
+  disclaimer:   inspection.value?.client?.report_disclaimer || null,
+}))
+
 onMounted(() => {
   fetchInspection()
   fetchTemplates()
@@ -370,6 +417,15 @@ onMounted(() => {
             Advance to {{ nextStep?.label }} →
           </button>
 
+          <!-- Preview button — always visible when template assigned -->
+          <button
+            v-if="inspection.template_id && previewTemplate"
+            @click="showPreview = true"
+            class="btn-preview-report"
+          >
+            👁 Preview Report
+          </button>
+
           <!-- Edit Report button — visible when Active or Review -->
           <button
             v-if="['active', 'processing', 'review'].includes(inspection.status)"
@@ -392,11 +448,21 @@ onMounted(() => {
         <!-- Left Column -->
         <div class="left-column">
           
-          <!-- Property Photo Placeholder -->
+          <!-- Property Overview Photo -->
           <div class="info-card photo-card">
-            <div class="photo-placeholder">
-              <span class="photo-icon">🏠</span>
-              <p>Property Photo</p>
+            <div class="card-header" style="padding: 14px 20px;">
+              <h3>🏠 Property Overview</h3>
+              <button class="btn-edit" @click="showPhotoModal = true">
+                {{ localPhoto ? '✏️ Edit' : '+ Add Photo' }}
+              </button>
+            </div>
+            <div class="photo-card-body">
+              <img v-if="localPhoto" :src="localPhoto" alt="Property overview" class="property-photo-img" />
+              <div v-else class="photo-placeholder">
+                <span class="photo-icon">🏠</span>
+                <p>No overview photo yet</p>
+                <p style="font-size:12px;opacity:0.7;">Appears on the report cover page</p>
+              </div>
             </div>
           </div>
 
@@ -822,6 +888,47 @@ onMounted(() => {
 
     </div>
   </div>
+
+    <!-- ══ PREVIEW MODAL ════════════════════════════════════════════════ -->
+    <TemplatePreviewModal
+      v-if="showPreview && previewTemplate"
+      :template="previewTemplate"
+      :branding="previewBranding"
+      @close="showPreview = false"
+    />
+
+    <!-- ══ PHOTO EDIT MODAL ══════════════════════════════════════════════ -->
+    <div v-if="showPhotoModal" class="modal-overlay" @click.self="showPhotoModal = false">
+      <div class="photo-modal">
+        <div class="modal-header">
+          <h2>Property Overview Photo</h2>
+          <button @click="showPhotoModal = false" class="btn-close">✕</button>
+        </div>
+        <div class="modal-body">
+          <div v-if="localPhoto" class="photo-preview">
+            <img :src="localPhoto" alt="Property overview" class="photo-preview-img" />
+            <button class="photo-remove-btn" @click="localPhoto = null">× Remove photo</button>
+          </div>
+          <div v-else class="photo-dropzone">
+            <span style="font-size:40px;">🏠</span>
+            <p>No photo uploaded yet</p>
+            <p style="font-size:12px;color:#94a3b8;">Appears on the report cover page</p>
+          </div>
+          <label class="photo-upload-label">
+            {{ localPhoto ? '📷 Replace photo' : '📷 Upload photo' }}
+            <input type="file" accept="image/*" style="display:none" @change="onPhotoFileChange" />
+          </label>
+          <p style="font-size:12px;color:#94a3b8;margin-top:6px;">JPG, PNG, WEBP — max 8MB</p>
+        </div>
+        <div class="modal-footer">
+          <button @click="showPhotoModal = false" class="btn-secondary">Cancel</button>
+          <button @click="savePhoto" :disabled="photoUploading || !localPhoto" class="btn-primary">
+            {{ photoUploading ? 'Saving…' : 'Save Photo' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
 </template>
 
 <style scoped>
@@ -1007,6 +1114,23 @@ onMounted(() => {
 }
 .btn-status-advance:hover { filter: brightness(1.1); }
 
+.btn-preview-report {
+  padding: 9px 18px;
+  background: #0f172a;
+  border: 1.5px solid #334155;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #94a3b8;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn-preview-report:hover {
+  background: #1e293b;
+  color: #e2e8f0;
+  border-color: #475569;
+}
+
 .btn-edit-report {
   padding: 9px 18px;
   background: white;
@@ -1108,25 +1232,52 @@ onMounted(() => {
   padding: 0;
 }
 
+.photo-card-body { position: relative; }
+
+.property-photo-img {
+  width: 100%;
+  height: auto;
+  max-height: 280px;
+  object-fit: cover;
+  display: block;
+}
+
 .photo-placeholder {
-  height: 240px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  height: 200px;
+  background: linear-gradient(135deg, #1e3a5f 0%, #1e293b 100%);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   color: white;
+  gap: 6px;
 }
 
 .photo-icon {
-  font-size: 64px;
-  margin-bottom: 12px;
+  font-size: 48px;
 }
 
 .photo-placeholder p {
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 600;
 }
+
+.photo-modal {
+  background: white;
+  border-radius: 12px;
+  width: 500px;
+  max-width: 95vw;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.25);
+  overflow: hidden;
+}
+
+.photo-preview { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+.photo-preview-img { width: 100%; max-height: 260px; object-fit: cover; border-radius: 8px; border: 1px solid #e2e8f0; }
+.photo-remove-btn { background: none; border: none; color: #ef4444; font-size: 13px; font-weight: 600; cursor: pointer; text-align: left; }
+.photo-remove-btn:hover { text-decoration: underline; }
+.photo-dropzone { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 32px; background: #f8fafc; border: 2px dashed #e2e8f0; border-radius: 8px; text-align: center; margin-bottom: 12px; color: #64748b; font-size: 14px; }
+.photo-upload-label { display: inline-block; padding: 9px 18px; background: #6366f1; color: white; border-radius: 7px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.photo-upload-label:hover { background: #4f46e5; }
 
 /* Date & Time Display */
 .date-display {

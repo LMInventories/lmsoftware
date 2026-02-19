@@ -5,18 +5,27 @@ const props = defineProps({
   template: {
     type: Object,
     required: true
+  },
+  // Real branding — passed from InspectionDetailView
+  branding: {
+    type: Object,
+    default: () => ({})
   }
 })
 
 const emit = defineEmits(['close'])
 
-// Demo branding values — these will come from Settings > Reports > Client config at runtime
-const demoBranding = {
-  primaryColor: '#1E3A8A',
-  clientName: 'Yellands Estates',
-  logoText: 'YE', // initials fallback when no logo uploaded
-  hasLogo: false
-}
+// Resolved branding — real values fall through, demo values as fallback
+const demoBranding = computed(() => ({
+  primaryColor: props.branding?.primaryColor || '#1E3A8A',
+  clientName:   props.branding?.clientName   || 'Client Name',
+  logoText:     props.branding?.logoText      || '??',
+  hasLogo:      !!(props.branding?.logoUrl),
+  logoUrl:      props.branding?.logoUrl       || null,
+  hasPhoto:     !!(props.branding?.photoUrl),
+  photoUrl:     props.branding?.photoUrl      || null,
+  disclaimer:   props.branding?.disclaimer    || null,
+}))
 
 // Parse template content
 const content = computed(() => {
@@ -719,7 +728,7 @@ const cleanlinessOptions = [
 
 /* Real logo — 600px wide, no border, height auto */
 .cover-logo-img {
-  width: 600px;
+  width: 400px;
   max-width: 100%;
   height: auto;
   display: block;
@@ -727,7 +736,7 @@ const cleanlinessOptions = [
 
 /* Fallback initials box when no logo uploaded */
 .cover-logo-fallback {
-  width: 600px;
+  width: 400px;
   max-width: 100%;
   height: 80px;
   display: flex;

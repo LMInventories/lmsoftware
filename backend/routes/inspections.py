@@ -71,6 +71,8 @@ def get_inspection(inspection_id):
         }
         
         # Safely add client details
+        result['property']['overview_photo'] = inspection.property.overview_photo
+
         if inspection.property.client:
             result['client'] = {
                 'id': inspection.property.client.id,
@@ -78,6 +80,9 @@ def get_inspection(inspection_id):
                 'email': inspection.property.client.email,
                 'phone': inspection.property.client.phone,
                 'company': inspection.property.client.company,
+                'logo': inspection.property.client.logo,
+                'primary_color': inspection.property.client.primary_color,
+                'report_disclaimer': inspection.property.client.report_disclaimer,
             }
     
     # Safely add inspector details

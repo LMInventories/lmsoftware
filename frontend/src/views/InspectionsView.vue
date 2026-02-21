@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../services/api'
 import { useToast } from '../composables/useToast'
@@ -13,10 +13,10 @@ import interactionPlugin from '@fullcalendar/interaction'
 const router = useRouter()
 
 const activeTab = ref('list') // 'list' or 'calendar'
-const calendarView = ref('dayGridMonth') // 'dayGridMonth', 'timeGridWeek', 'timeGridDay'
-const calendarRef = ref(null) // Reference to FullCalendar component
-const selectedDate = ref('') // For date picker
-const showDatePicker = ref(false) // Toggle date picker modal
+const calendarView = ref('dayGridMonth')
+const calendarRef = ref(null)
+const selectedDate = ref('')
+const showDatePicker = ref(false)
 const inspections = ref([])
 const properties = ref([])
 const clients = ref([])
@@ -51,8 +51,66 @@ const form = ref({
   conduct_date: '',
   time_preference: 'anytime',
   time_hour: '09',
-  time_minute: '00'
+  time_minute: '00',
+  source_inspection_id: null,
+  include_photos: false
 })
+
+// ── Lifecycle suggestion state ─────────────────────────────────────────
+const propertyHistory    = ref([])
+const lifecycleSuggestion = ref(null)  // { sourceId, sourceType, sourceDateStr, label }
+const historyLoading     = ref(false)
+
+// Watch property + inspection_type — load history and compute suggestion
+watch(
+  () => [form.value.property_id, form.value.inspection_type],
+  async ([propId, iType]) => {
+    lifecycleSuggestion.value = null
+    form.value.source_inspection_id = null
+    if (!propId) return
+
+    historyLoading.value = true
+    try {
+      const res = await api.getPropertyHistory(propId)
+      propertyHistory.value = res.data
+
+      // Determine what type of prior report can seed this new inspection
+      const seedableTypes = iType === 'check_out'
+        ? ['check_in', 'inventory']
+        : iType === 'check_in'
+          ? ['check_out']
+          : []
+
+      // For check_out: find any check_in/inventory, prefer ones with report data
+      // For check_in: find any check_out with report data
+      const source = res.data.find(h =>
+        h.id !== undefined &&
+        seedableTypes.includes(h.inspection_type) &&
+        (iType === 'check_out' ? true : h.has_report_data)
+      )
+
+      if (source) {
+        const typeLabel = { check_in: 'Check In', check_out: 'Check Out', inventory: 'Inventory' }[source.inspection_type] || source.inspection_type
+        const dateStr = source.conduct_date
+          ? new Date(source.conduct_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+          : new Date(source.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+
+        lifecycleSuggestion.value = {
+          sourceId: source.id,
+          sourceType: source.inspection_type,
+          sourceDateStr: dateStr,
+          label: typeLabel
+        }
+        // Pre-select it
+        form.value.source_inspection_id = source.id
+      }
+    } catch {
+      // silent fail
+    } finally {
+      historyLoading.value = false
+    }
+  }
+)
 
 // Time options
 const timePreferenceOptions = [
@@ -62,10 +120,7 @@ const timePreferenceOptions = [
   { value: 'specific', label: 'Specific Time' }
 ]
 
-const hourOptions = [
-  '09', '10', '11', '12', '13', '14', '15', '16', '17'
-]
-
+const hourOptions = ['09', '10', '11', '12', '13', '14', '15', '16', '17']
 const minuteOptions = ['00', '15', '30', '45']
 
 const statusColors = {
@@ -87,11 +142,11 @@ const statusOptions = [
   { value: 'complete', label: 'Complete' }
 ]
 
-// FullCalendar plugins and options
+// FullCalendar options
 const calendarOptions = computed(() => ({
   plugins: [dayGridPlugin, timeGridPlugin, interactionPlugin],
   initialView: calendarView.value,
-  firstDay: 1, // Start week on Monday
+  firstDay: 1,
   headerToolbar: {
     left: 'prev,next today',
     center: 'title',
@@ -112,29 +167,20 @@ const calendarOptions = computed(() => ({
   }
 }))
 
-// Convert inspections to calendar events
 const calendarEvents = computed(() => {
   let filtered = [...inspections.value]
-  
-  // Apply calendar filters
-  if (calendarFilters.value.client_id) {
+
+  if (calendarFilters.value.client_id)
     filtered = filtered.filter(i => i.client_id === calendarFilters.value.client_id)
-  }
-  
-  if (calendarFilters.value.status) {
+  if (calendarFilters.value.status)
     filtered = filtered.filter(i => i.status === calendarFilters.value.status)
-  }
-  
-  if (calendarFilters.value.clerk_id) {
+  if (calendarFilters.value.clerk_id)
     filtered = filtered.filter(i => i.inspector_id === calendarFilters.value.clerk_id)
-  }
-  
+
   return filtered
-    .filter(i => i.conduct_date) // Only show inspections with dates
+    .filter(i => i.conduct_date)
     .map(inspection => {
       let eventTime = null
-      
-      // Parse time preference
       if (inspection.conduct_time_preference) {
         const pref = inspection.conduct_time_preference
         if (pref.startsWith('specific:')) {
@@ -143,45 +189,25 @@ const calendarEvents = computed(() => {
           eventTime = `${hour}:${minute}:00`
         }
       }
-      
       const eventDate = inspection.conduct_date.split('T')[0]
-      
-      // Extract postcode from address (last part)
       let postcode = ''
       if (inspection.property_address) {
-        const addressParts = inspection.property_address.split(',').map(p => p.trim())
-        postcode = addressParts[addressParts.length - 1] || ''
+        const parts = inspection.property_address.split(',').map(p => p.trim())
+        postcode = parts[parts.length - 1] || ''
       }
-      
-      // Format inspection type (e.g., "Check In" -> "C/I", "Check Out" -> "C/O")
       let typeShort = ''
-      switch(inspection.inspection_type) {
-        case 'check_in':
-          typeShort = 'C/I'
-          break
-        case 'check_out':
-          typeShort = 'C/O'
-          break
-        case 'inventory':
-          typeShort = 'INV'
-          break
-        case 'mid_term':
-          typeShort = 'M/T'
-          break
-        default:
-          typeShort = inspection.inspection_type.substring(0, 3).toUpperCase()
+      switch (inspection.inspection_type) {
+        case 'check_in':  typeShort = 'C/I'; break
+        case 'check_out': typeShort = 'C/O'; break
+        case 'inventory': typeShort = 'INV'; break
+        default: typeShort = inspection.inspection_type.substring(0, 3).toUpperCase()
       }
-      
-      // Create compact title
       const title = `${typeShort} - ${postcode}`
-      
-      // Get clerk color
       const assignedClerk = users.value.find(u => u.id === inspection.inspector_id)
       const clerkColor = assignedClerk?.color || '#6366f1'
-      
       return {
         id: inspection.id,
-        title: title,
+        title,
         start: eventTime ? `${eventDate}T${eventTime}` : eventDate,
         allDay: !eventTime,
         backgroundColor: clerkColor,
@@ -197,56 +223,29 @@ const calendarEvents = computed(() => {
     })
 })
 
-// Filtered inspections for list view
 const filteredInspections = computed(() => {
   let result = [...inspections.value]
-  
-  // Filter by client
-  if (filters.value.client_id) {
+  if (filters.value.client_id)
     result = result.filter(i => i.client_id === filters.value.client_id)
-  }
-  
-  // Filter by postcode
   if (filters.value.postcode) {
-    const searchPostcode = filters.value.postcode.toLowerCase()
-    result = result.filter(i => 
-      i.property_address && i.property_address.toLowerCase().includes(searchPostcode)
-    )
+    const s = filters.value.postcode.toLowerCase()
+    result = result.filter(i => i.property_address && i.property_address.toLowerCase().includes(s))
   }
-  
-  // Filter by status
-  if (filters.value.status) {
+  if (filters.value.status)
     result = result.filter(i => i.status === filters.value.status)
-  }
-  
-  // Filter by clerk
-  if (filters.value.clerk_id) {
+  if (filters.value.clerk_id)
     result = result.filter(i => i.inspector_id === filters.value.clerk_id)
-  }
-  
   return result
 })
 
-// Filter properties by selected client
 const filteredProperties = computed(() => {
-  if (!form.value.client_id) {
-    return properties.value
-  }
+  if (!form.value.client_id) return properties.value
   return properties.value.filter(p => p.client_id === form.value.client_id)
 })
 
-// Filter users by role
-const clerks = computed(() => {
-  return users.value.filter(u => u.role === 'clerk')
-})
-
-const typists = computed(() => {
-  return users.value.filter(u => u.role === 'typist')
-})
-
-const filteredTemplates = computed(() => {
-  return templates.value.filter(t => t.inspection_type === form.value.inspection_type)
-})
+const clerks = computed(() => users.value.filter(u => u.role === 'clerk'))
+const typists = computed(() => users.value.filter(u => u.role === 'typist'))
+const filteredTemplates = computed(() => templates.value.filter(t => t.inspection_type === form.value.inspection_type))
 
 function convertDateToUKFormat(isoDate) {
   if (!isoDate) return ''
@@ -258,40 +257,25 @@ function convertDateToUKFormat(isoDate) {
 }
 
 function clearFilters() {
-  filters.value = {
-    client_id: null,
-    postcode: '',
-    status: null,
-    clerk_id: null
-  }
+  filters.value = { client_id: null, postcode: '', status: null, clerk_id: null }
 }
 
 function clearCalendarFilters() {
-  calendarFilters.value = {
-    client_id: null,
-    status: null,
-    clerk_id: null
-  }
+  calendarFilters.value = { client_id: null, status: null, clerk_id: null }
 }
 
 function handleEventClick(info) {
-  const inspectionId = info.event.id
-  router.push(`/inspections/${inspectionId}`)
+  router.push(`/inspections/${info.event.id}`)
 }
 
-// Open date picker
 function openDatePicker() {
-  // Set to today's date initially
-  const today = new Date()
-  selectedDate.value = today.toISOString().split('T')[0]
+  selectedDate.value = new Date().toISOString().split('T')[0]
   showDatePicker.value = true
 }
 
-// Go to selected date in day view
 function goToDate() {
   if (selectedDate.value && calendarRef.value) {
-    const calendarApi = calendarRef.value.getApi()
-    calendarApi.changeView('timeGridDay', selectedDate.value)
+    calendarRef.value.getApi().changeView('timeGridDay', selectedDate.value)
     showDatePicker.value = false
   }
 }
@@ -357,14 +341,19 @@ function openModal() {
     conduct_date: '',
     time_preference: 'anytime',
     time_hour: '09',
-    time_minute: '00'
+    time_minute: '00',
+    source_inspection_id: null,
+  include_photos: false
   }
+  lifecycleSuggestion.value = null
+  propertyHistory.value = []
   showModal.value = true
 }
 
-// Reset property selection when client changes
 function onClientChange() {
   form.value.property_id = null
+  lifecycleSuggestion.value = null
+  form.value.source_inspection_id = null
 }
 
 async function handleSubmit() {
@@ -372,7 +361,6 @@ async function handleSubmit() {
     toast.warning('Please select a property')
     return
   }
-
   if (!form.value.inspector_id) {
     toast.warning('Please assign a clerk')
     return
@@ -391,7 +379,9 @@ async function handleSubmit() {
       typist_id: form.value.typist_id,
       template_id: form.value.template_id || null,
       tenant_email: form.value.tenant_email,
-      conduct_time_preference: timePreference
+      conduct_time_preference: timePreference,
+      source_inspection_id: form.value.source_inspection_id || null,
+      include_photos: form.value.include_photos || false
     }
 
     if (form.value.conduct_date) {
@@ -410,7 +400,6 @@ async function handleSubmit() {
 
 async function deleteInspection(id) {
   if (!confirm('Delete this inspection?')) return
-
   try {
     await api.deleteInspection(id)
     toast.success('Inspection deleted')
@@ -443,66 +432,41 @@ onMounted(() => {
 
     <!-- Tabs -->
     <div class="tabs">
-      <button 
-        @click="activeTab = 'list'" 
-        class="tab-button"
-        :class="{ active: activeTab === 'list' }"
-      >
+      <button @click="activeTab = 'list'" class="tab-button" :class="{ active: activeTab === 'list' }">
         📄 List View
       </button>
-      <button 
-        @click="activeTab = 'calendar'" 
-        class="tab-button"
-        :class="{ active: activeTab === 'calendar' }"
-      >
+      <button @click="activeTab = 'calendar'" class="tab-button" :class="{ active: activeTab === 'calendar' }">
         📅 Calendar View
       </button>
     </div>
 
     <!-- List View -->
     <div v-if="activeTab === 'list'">
-      
-      <!-- Filters -->
       <div class="filters-bar">
         <div class="filter-group">
           <label>Client</label>
           <select v-model="filters.client_id" class="filter-select">
             <option :value="null">All Clients</option>
-            <option v-for="client in clients" :key="client.id" :value="client.id">
-              {{ client.name }}
-            </option>
+            <option v-for="client in clients" :key="client.id" :value="client.id">{{ client.name }}</option>
           </select>
         </div>
-
         <div class="filter-group">
           <label>Postcode</label>
-          <input 
-            v-model="filters.postcode" 
-            type="text" 
-            placeholder="Search postcode..."
-            class="filter-input"
-          />
+          <input v-model="filters.postcode" type="text" placeholder="Search postcode..." class="filter-input" />
         </div>
-
         <div class="filter-group">
           <label>Workflow Stage</label>
           <select v-model="filters.status" class="filter-select">
-            <option v-for="option in statusOptions" :key="option.value" :value="option.value">
-              {{ option.label }}
-            </option>
+            <option v-for="option in statusOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
           </select>
         </div>
-
         <div class="filter-group">
           <label>Clerk</label>
           <select v-model="filters.clerk_id" class="filter-select">
             <option :value="null">All Clerks</option>
-            <option v-for="clerk in clerks" :key="clerk.id" :value="clerk.id">
-              {{ clerk.name }}
-            </option>
+            <option v-for="clerk in clerks" :key="clerk.id" :value="clerk.id">{{ clerk.name }}</option>
           </select>
         </div>
-
         <button @click="clearFilters" class="btn-clear-filters">Clear Filters</button>
       </div>
 
@@ -515,30 +479,24 @@ onMounted(() => {
               <h3>{{ inspection.property_address }}</h3>
               <p class="inspection-type">{{ inspection.inspection_type.replace('_', ' ').toUpperCase() }}</p>
             </div>
-            <span 
-              class="status-badge" 
-              :style="{ backgroundColor: statusColors[inspection.status] }"
-            >
+            <span class="status-badge" :style="{ backgroundColor: statusColors[inspection.status] }">
               {{ inspection.status }}
             </span>
           </div>
-
           <div class="inspection-details">
             <p v-if="inspection.client_name">🏢 {{ inspection.client_name }}</p>
             <p v-if="inspection.inspector_name">👤 Clerk: {{ inspection.inspector_name }}</p>
             <p v-if="inspection.conduct_date">📅 Conduct: {{ new Date(inspection.conduct_date).toLocaleDateString('en-GB') }}</p>
             <p>🕐 Created: {{ new Date(inspection.created_at).toLocaleDateString('en-GB') }}</p>
           </div>
-
           <div class="inspection-actions">
             <button @click="viewInspection(inspection.id)" class="btn-view">View Details</button>
             <button @click="deleteInspection(inspection.id)" class="btn-delete">Delete</button>
           </div>
         </div>
-
         <div v-if="filteredInspections.length === 0" class="empty-state">
-          {{ filters.client_id || filters.postcode || filters.status || filters.clerk_id 
-            ? 'No inspections match your filters.' 
+          {{ filters.client_id || filters.postcode || filters.status || filters.clerk_id
+            ? 'No inspections match your filters.'
             : 'No inspections yet. Create your first inspection!' }}
         </div>
       </div>
@@ -546,50 +504,37 @@ onMounted(() => {
 
     <!-- Calendar View -->
     <div v-if="activeTab === 'calendar'" class="calendar-view">
-      
-      <!-- Calendar Filters -->
       <div class="filters-bar calendar-filters">
         <div class="filter-group">
           <label>Client</label>
           <select v-model="calendarFilters.client_id" class="filter-select">
             <option :value="null">All Clients</option>
-            <option v-for="client in clients" :key="client.id" :value="client.id">
-              {{ client.name }}
-            </option>
+            <option v-for="client in clients" :key="client.id" :value="client.id">{{ client.name }}</option>
           </select>
         </div>
-
         <div class="filter-group">
           <label>Workflow Stage</label>
           <select v-model="calendarFilters.status" class="filter-select">
-            <option v-for="option in statusOptions" :key="option.value" :value="option.value">
-              {{ option.label }}
-            </option>
+            <option v-for="option in statusOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
           </select>
         </div>
-
         <div class="filter-group">
           <label>Clerk</label>
           <select v-model="calendarFilters.clerk_id" class="filter-select">
             <option :value="null">All Clerks</option>
-            <option v-for="clerk in clerks" :key="clerk.id" :value="clerk.id">
-              {{ clerk.name }}
-            </option>
+            <option v-for="clerk in clerks" :key="clerk.id" :value="clerk.id">{{ clerk.name }}</option>
           </select>
         </div>
-
         <button @click="clearCalendarFilters" class="btn-clear-filters">Clear Filters</button>
         <button @click="openDatePicker" class="btn-date-picker">📅 Go to Date</button>
       </div>
 
       <div v-if="loading" class="loading">Loading calendar...</div>
 
-      <!-- Calendar Component -->
       <div v-else class="calendar-container">
         <FullCalendar ref="calendarRef" :options="calendarOptions" />
       </div>
 
-      <!-- Legend -->
       <div class="calendar-legend">
         <h4>Clerk Legend:</h4>
         <div class="legend-items">
@@ -597,14 +542,12 @@ onMounted(() => {
             <span class="legend-color" :style="{ background: clerk.color }"></span>
             <span>{{ clerk.name }}</span>
           </div>
-          <div v-if="clerks.length === 0" class="empty-legend">
-            No clerks assigned yet
-          </div>
+          <div v-if="clerks.length === 0" class="empty-legend">No clerks assigned yet</div>
         </div>
       </div>
     </div>
 
-    <!-- Create Inspection Modal -->
+    <!-- ══ Create Inspection Modal ══════════════════════════════════════ -->
     <div v-if="showModal" class="modal-overlay" @click.self="showModal = false">
       <div class="modal modal-large">
         <div class="modal-header">
@@ -613,7 +556,7 @@ onMounted(() => {
         </div>
 
         <form @submit.prevent="handleSubmit" class="modal-body">
-          
+
           <!-- Client Selection -->
           <div class="form-group">
             <label>Client *</label>
@@ -625,7 +568,7 @@ onMounted(() => {
             </select>
           </div>
 
-          <!-- Property Selection (filtered by client) -->
+          <!-- Property Selection -->
           <div class="form-group">
             <label>Property *</label>
             <select v-model="form.property_id" required :disabled="!form.client_id">
@@ -637,7 +580,7 @@ onMounted(() => {
               </option>
             </select>
             <p v-if="form.client_id && filteredProperties.length === 0" class="helper-text">
-              No properties found for this client. Please add a property first.
+              No properties found for this client.
             </p>
           </div>
 
@@ -647,80 +590,94 @@ onMounted(() => {
             <select v-model="form.inspection_type" required>
               <option value="check_in">Check In</option>
               <option value="check_out">Check Out</option>
+              <option value="interim">Interim Inspection</option>
               <option value="inventory">Inventory</option>
-              <option value="mid_term">Mid Term</option>
             </select>
           </div>
 
-          <!-- Conduct Date & Time -->
-          <div class="form-section">
-            <h3 class="section-title">📅 Conduct Date & Time (Optional)</h3>
-            
-            <div class="form-group">
-              <label>Date</label>
-              <input 
-                v-model="form.conduct_date" 
-                type="date" 
-                class="input-field date-picker-input" 
-              />
-              <p class="helper-text">Selected: {{ form.conduct_date ? convertDateToUKFormat(form.conduct_date + 'T00:00:00') : 'No date selected' }}</p>
-            </div>
+          <!-- ── Lifecycle suggestion banner ───────────────────────────── -->
+          <div v-if="historyLoading" class="lc-loading">
+            <span class="lc-spinner"></span> Checking property history…
+          </div>
 
-            <div class="form-group">
-              <label>Time Preference</label>
-              <select v-model="form.time_preference" class="input-field">
-                <option v-for="option in timePreferenceOptions" :key="option.value" :value="option.value">
-                  {{ option.label }}
-                </option>
+          <div v-else-if="lifecycleSuggestion" class="lc-banner">
+            <div class="lc-banner-icon">🔗</div>
+            <div class="lc-banner-body">
+              <strong class="lc-banner-title">
+                Completed {{ lifecycleSuggestion.label }} found for this property
+              </strong>
+              <p class="lc-banner-desc">
+                Pre-fill this {{ form.inspection_type === 'check_out' ? 'Check Out' : 'Check In' }}
+                with conditions from the
+                {{ lifecycleSuggestion.label }} ({{ lifecycleSuggestion.sourceDateStr }}).
+                You'll only need to note what changed.
+              </p>
+              <label class="lc-checkbox">
+                <input
+                  type="checkbox"
+                  :checked="form.source_inspection_id === lifecycleSuggestion.sourceId"
+                  @change="form.source_inspection_id = $event.target.checked ? lifecycleSuggestion.sourceId : null"
+                />
+                <span>
+                  Work from {{ lifecycleSuggestion.label }} report
+                  <span class="lc-date-chip">{{ lifecycleSuggestion.sourceDateStr }}</span>
+                </span>
+              </label>
+              <label class="lc-checkbox" v-if="form.source_inspection_id">
+                <input
+                  type="checkbox"
+                  v-model="form.include_photos"
+                />
+                <span>
+                  Include photos from {{ lifecycleSuggestion.label }}
+                  <span class="lc-photo-hint">Room item photos will carry through to the new report</span>
+                </span>
+              </label>
+            </div>
+          </div>
+          <!-- ────────────────────────────────────────────────────────── -->
+
+          <!-- Conduct Date -->
+          <div class="form-group">
+            <label>Conduct Date</label>
+            <input v-model="form.conduct_date" type="date" class="input-field date-picker" />
+          </div>
+
+          <!-- Time Preference -->
+          <div class="form-group">
+            <label>Time Preference</label>
+            <select v-model="form.time_preference">
+              <option v-for="opt in timePreferenceOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+            </select>
+            <div v-if="form.time_preference === 'specific'" class="time-row">
+              <select v-model="form.time_hour" class="time-select">
+                <option v-for="h in hourOptions" :key="h" :value="h">{{ h }}</option>
               </select>
-            </div>
-
-            <div v-if="form.time_preference === 'specific'" class="time-selection">
-              <div class="form-row">
-                <div class="form-group">
-                  <label>Hour</label>
-                  <select v-model="form.time_hour" class="input-field">
-                    <option v-for="hour in hourOptions" :key="hour" :value="hour">
-                      {{ hour }}:00
-                    </option>
-                  </select>
-                </div>
-
-                <div class="form-group">
-                  <label>Minute</label>
-                  <select v-model="form.time_minute" class="input-field">
-                    <option v-for="minute in minuteOptions" :key="minute" :value="minute">
-                      :{{ minute }}
-                    </option>
-                  </select>
-                </div>
-              </div>
-              <p class="helper-text">Selected time: {{ form.time_hour }}:{{ form.time_minute }}</p>
+              <span>:</span>
+              <select v-model="form.time_minute" class="time-select">
+                <option v-for="m in minuteOptions" :key="m" :value="m">{{ m }}</option>
+              </select>
             </div>
           </div>
 
-          <!-- Template Assignment -->
-          <div class="form-section">
-            <h3 class="section-title">📋 Report Template</h3>
-            <div class="form-group">
-              <label>Template</label>
-              <select v-model="form.template_id" class="input-field">
-                <option :value="null">— Use default for {{ form.inspection_type.replace('_', ' ') }} —</option>
-                <option v-for="t in filteredTemplates" :key="t.id" :value="t.id">
-                  {{ t.name }}{{ t.is_default ? ' ★ Default' : '' }}
-                </option>
-              </select>
-              <p v-if="filteredTemplates.length === 0" class="helper-text warning">
-                ⚠️ No templates found for this inspection type. Create one in Settings → Templates.
-              </p>
-              <p v-else class="helper-text">
-                {{ filteredTemplates.length }} template{{ filteredTemplates.length !== 1 ? 's' : '' }} available for this type.
-                Leave blank to use the default.
-              </p>
-            </div>
+          <!-- Template -->
+          <div class="form-group">
+            <label>Template</label>
+            <select v-model="form.template_id">
+              <option :value="null">Use default template for this type</option>
+              <option v-for="t in filteredTemplates" :key="t.id" :value="t.id">
+                {{ t.name }}{{ t.is_default ? ' ★ Default' : '' }}
+              </option>
+            </select>
+            <p v-if="filteredTemplates.length === 0" class="helper-text warning">
+              ⚠️ No templates for this inspection type. Create one in Settings → Templates.
+            </p>
+            <p v-else class="helper-text">
+              {{ filteredTemplates.length }} template{{ filteredTemplates.length !== 1 ? 's' : '' }} available. Leave blank to use the default.
+            </p>
           </div>
 
-          <!-- Assign Clerk -->
+          <!-- Clerk -->
           <div class="form-group">
             <label>Assign Clerk (Inspector) *</label>
             <select v-model="form.inspector_id" required>
@@ -734,7 +691,7 @@ onMounted(() => {
             </p>
           </div>
 
-          <!-- Assign Typist -->
+          <!-- Typist -->
           <div class="form-group">
             <label>Assign Typist (Optional)</label>
             <select v-model="form.typist_id">
@@ -743,22 +700,14 @@ onMounted(() => {
                 {{ typist.name }} ({{ typist.email }})
               </option>
             </select>
-            <p class="helper-text">
-              Typists handle the "Processing" stage. You can assign them now or later.
-            </p>
+            <p class="helper-text">Typists handle the "Processing" stage. You can assign them now or later.</p>
           </div>
 
           <!-- Tenant Email -->
           <div class="form-group">
             <label>Tenant Email(s)</label>
-            <input 
-              v-model="form.tenant_email" 
-              type="text" 
-              placeholder="tenant@example.com, tenant2@example.com"
-            />
-            <p class="helper-text">
-              💡 Enter tenant email addresses separated by commas
-            </p>
+            <input v-model="form.tenant_email" type="text" placeholder="tenant@example.com, tenant2@example.com" />
+            <p class="helper-text">💡 Enter tenant email addresses separated by commas</p>
           </div>
 
           <div class="modal-footer">
@@ -779,11 +728,7 @@ onMounted(() => {
         <div class="modal-body">
           <div class="form-group">
             <label>Select a date to view in Day view</label>
-            <input 
-              v-model="selectedDate" 
-              type="date" 
-              class="input-field date-picker-input" 
-            />
+            <input v-model="selectedDate" type="date" class="input-field date-picker-input" />
           </div>
         </div>
         <div class="modal-footer">
@@ -822,512 +767,408 @@ onMounted(() => {
   font-size: 15px;
   font-weight: 600;
   cursor: pointer;
+  transition: background 0.15s;
 }
+.btn-primary:hover { background: #4f46e5; }
 
-.btn-primary:hover {
-  background: #4f46e5;
+.btn-secondary {
+  padding: 10px 20px;
+  background: white;
+  color: #475569;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
 }
+.btn-secondary:hover { background: #f8fafc; }
 
-/* Tabs */
 .tabs {
   display: flex;
-  gap: 8px;
+  gap: 4px;
   margin-bottom: 24px;
-  border-bottom: 2px solid #e5e7eb;
+  border-bottom: 2px solid #e2e8f0;
 }
 
 .tab-button {
-  padding: 12px 24px;
+  padding: 10px 20px;
   background: none;
   border: none;
-  border-bottom: 3px solid transparent;
-  font-size: 15px;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  font-size: 14px;
   font-weight: 600;
   color: #64748b;
   cursor: pointer;
-  transition: all 0.2s;
-  margin-bottom: -2px;
+  transition: all 0.15s;
 }
-
-.tab-button:hover {
-  color: #1e293b;
-}
-
-.tab-button.active {
-  color: #6366f1;
-  border-bottom-color: #6366f1;
-}
+.tab-button:hover { color: #1e293b; }
+.tab-button.active { color: #6366f1; border-bottom-color: #6366f1; }
 
 /* Filters */
 .filters-bar {
   display: flex;
+  align-items: flex-end;
   gap: 16px;
-  padding: 20px;
-  background: white;
-  border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
   margin-bottom: 24px;
   flex-wrap: wrap;
-  align-items: flex-end;
-}
-
-.calendar-filters {
-  margin-bottom: 16px;
 }
 
 .filter-group {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  flex: 1;
-  min-width: 180px;
+  min-width: 160px;
 }
 
 .filter-group label {
-  font-size: 13px;
-  font-weight: 600;
-  color: #475569;
+  font-size: 12px;
+  font-weight: 700;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .filter-select,
 .filter-input {
   padding: 8px 12px;
-  border: 1px solid #cbd5e1;
+  border: 1px solid #e2e8f0;
   border-radius: 6px;
   font-size: 14px;
   background: white;
+  color: #1e293b;
+  font-family: inherit;
 }
 
-.filter-select:focus,
-.filter-input:focus {
-  outline: none;
-  border-color: #6366f1;
-}
-
-.btn-clear-filters {
-  padding: 8px 16px;
-  background: #f1f5f9;
-  color: #475569;
-  border: 1px solid #cbd5e1;
-  border-radius: 6px;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s;
-  align-self: flex-end;
-}
-
-.btn-clear-filters:hover {
-  background: #e2e8f0;
-}
-
+.btn-clear-filters,
 .btn-date-picker {
   padding: 8px 16px;
-  background: #6366f1;
-  color: white;
-  border: none;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
   border-radius: 6px;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
+  color: #475569;
   cursor: pointer;
-  transition: all 0.2s;
   align-self: flex-end;
-  white-space: nowrap;
 }
+.btn-clear-filters:hover, .btn-date-picker:hover { background: #e2e8f0; }
 
-.btn-date-picker:hover {
-  background: #4f46e5;
-}
-
-.loading {
-  text-align: center;
-  padding: 60px;
-  color: #64748b;
-}
-
+/* Inspections list */
 .inspections-list {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
   gap: 16px;
 }
 
 .inspection-card {
   background: white;
-  padding: 24px;
-  border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 20px;
+  transition: box-shadow 0.15s;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
 }
+.inspection-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
 
 .inspection-header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  margin-bottom: 16px;
-}
-
-.inspection-header h3 {
-  font-size: 20px;
-  font-weight: 600;
-  color: #1e293b;
-  margin-bottom: 4px;
-}
-
-.inspection-type {
-  font-size: 13px;
-  color: #64748b;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.status-badge {
-  padding: 6px 14px;
-  color: white;
-  border-radius: 16px;
-  font-size: 12px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.inspection-details {
-  margin-bottom: 16px;
-}
-
-.inspection-details p {
-  font-size: 14px;
-  color: #64748b;
-  margin: 6px 0;
-}
-
-.inspection-actions {
-  display: flex;
   gap: 12px;
-}
-
-.btn-view {
-  padding: 10px 20px;
-  background: #6366f1;
-  color: white;
-  border: none;
-  border-radius: 6px;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.btn-view:hover {
-  background: #4f46e5;
-}
-
-.btn-delete {
-  padding: 10px 20px;
-  background: #fee2e2;
-  color: #991b1b;
-  border: none;
-  border-radius: 6px;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.btn-delete:hover {
-  background: #fecaca;
-}
-
-.empty-state {
-  text-align: center;
-  padding: 60px 20px;
-  color: #64748b;
-}
-
-/* Calendar View */
-.calendar-view {
-  background: white;
-  border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-  padding: 24px;
-}
-
-.calendar-container {
-  margin-bottom: 24px;
-}
-
-/* FullCalendar Custom Styles */
-:deep(.fc) {
-  font-family: inherit;
-}
-
-:deep(.fc-toolbar-title) {
-  font-size: 24px;
-  font-weight: 700;
-  color: #1e293b;
-}
-
-:deep(.fc-button) {
-  background: #6366f1;
-  border-color: #6366f1;
-  text-transform: capitalize;
-  font-weight: 600;
-}
-
-:deep(.fc-button:hover) {
-  background: #4f46e5;
-  border-color: #4f46e5;
-}
-
-:deep(.fc-button-active) {
-  background: #4338ca !important;
-  border-color: #4338ca !important;
-}
-
-:deep(.fc-event) {
-  cursor: pointer;
-  border-radius: 4px;
-  padding: 2px 4px;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-:deep(.fc-event:hover) {
-  opacity: 0.85;
-}
-
-:deep(.fc-daygrid-event) {
-  white-space: normal;
-}
-
-:deep(.fc-col-header-cell) {
-  background: #f8fafc;
-  font-weight: 600;
-  color: #475569;
-  text-transform: uppercase;
-  font-size: 12px;
-  letter-spacing: 0.5px;
-}
-
-:deep(.fc-day-today) {
-  background: #eff6ff !important;
-}
-
-/* Calendar Legend */
-.calendar-legend {
-  padding: 20px;
-  background: #f8fafc;
-  border-radius: 8px;
-  border: 1px solid #e5e7eb;
-}
-
-.calendar-legend h4 {
-  font-size: 14px;
-  font-weight: 700;
-  color: #1e293b;
   margin-bottom: 12px;
 }
 
-.legend-items {
-  display: flex;
-  gap: 20px;
-  flex-wrap: wrap;
+.inspection-header h3 {
+  font-size: 15px;
+  font-weight: 700;
+  color: #1e293b;
+  line-height: 1.3;
 }
 
-.legend-item {
+.inspection-type {
+  font-size: 11px;
+  font-weight: 700;
+  color: #6366f1;
+  margin-top: 3px;
+}
+
+.status-badge {
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 700;
+  color: white;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.inspection-details {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 16px;
+}
+.inspection-details p { font-size: 13px; color: #64748b; }
+
+.inspection-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.btn-view {
+  flex: 1;
+  padding: 8px 16px;
+  background: #6366f1;
+  color: white;
+  border: none;
+  border-radius: 6px;
   font-size: 13px;
-  color: #475569;
+  font-weight: 600;
+  cursor: pointer;
 }
+.btn-view:hover { background: #4f46e5; }
 
-.legend-color {
-  width: 16px;
-  height: 16px;
-  border-radius: 4px;
+.btn-delete {
+  padding: 8px 16px;
+  background: none;
+  color: #ef4444;
+  border: 1px solid #fca5a5;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
 }
+.btn-delete:hover { background: #fef2f2; }
 
-.empty-legend {
+.empty-state {
+  grid-column: 1 / -1;
+  text-align: center;
+  padding: 60px 20px;
   color: #94a3b8;
-  font-style: italic;
+  font-size: 15px;
 }
 
-/* Modal styles */
+.loading {
+  text-align: center;
+  padding: 60px;
+  color: #94a3b8;
+  font-size: 15px;
+}
+
+/* Calendar */
+.calendar-view { margin-top: 8px; }
+.calendar-filters { background: #f8fafc; padding: 16px; border-radius: 8px; border: 1px solid #e2e8f0; }
+.calendar-container { margin-top: 16px; }
+
+.calendar-legend {
+  margin-top: 20px;
+  padding: 16px;
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+}
+.calendar-legend h4 { font-size: 13px; font-weight: 700; color: #475569; margin-bottom: 10px; }
+.legend-items { display: flex; flex-wrap: wrap; gap: 12px; }
+.legend-item { display: flex; align-items: center; gap: 7px; font-size: 13px; color: #475569; }
+.legend-color { width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0; }
+.empty-legend { font-size: 13px; color: #94a3b8; font-style: italic; }
+
+/* Modal */
 .modal-overlay {
   position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
+  inset: 0;
+  background: rgba(0,0,0,0.5);
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
+  z-index: 100;
   padding: 20px;
 }
 
 .modal {
   background: white;
   border-radius: 12px;
-  width: 100%;
-  max-width: 600px;
+  width: 560px;
+  max-width: 100%;
   max-height: 90vh;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
+  overflow-y: auto;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.2);
 }
 
-.modal-large {
-  max-width: 700px;
-}
-
-.modal-small {
-  max-width: 400px;
-}
+.modal-large { width: 680px; }
+.modal-small { width: 400px; }
 
 .modal-header {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  padding: 24px;
-  border-bottom: 1px solid #e5e7eb;
+  justify-content: space-between;
+  padding: 18px 24px;
+  border-bottom: 1px solid #f1f5f9;
+  position: sticky;
+  top: 0;
+  background: white;
+  z-index: 1;
 }
-
-.modal-header h2 {
-  font-size: 20px;
-  font-weight: 600;
-}
+.modal-header h2 { font-size: 17px; font-weight: 700; color: #0f172a; }
 
 .btn-close {
   background: none;
   border: none;
-  font-size: 24px;
+  font-size: 18px;
+  color: #94a3b8;
   cursor: pointer;
-  padding: 0;
-  width: 32px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  padding: 4px 8px;
   border-radius: 4px;
+  line-height: 1;
 }
-
-.btn-close:hover {
-  background: #f1f5f9;
-}
+.btn-close:hover { background: #f1f5f9; color: #475569; }
 
 .modal-body {
   padding: 24px;
-  overflow-y: auto;
-  flex: 1;
-}
-
-.form-section {
-  padding: 20px;
-  background: #f8fafc;
-  border-radius: 8px;
-  border: 1px solid #e5e7eb;
-  margin-bottom: 20px;
-}
-
-.section-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: #1e293b;
-  margin-bottom: 16px;
-}
-
-.form-group {
-  margin-bottom: 20px;
-}
-
-.form-group label {
-  display: block;
-  margin-bottom: 8px;
-  font-weight: 600;
-  color: #475569;
-  font-size: 14px;
-}
-
-.form-group select,
-.form-group input,
-.input-field {
-  width: 100%;
-  padding: 10px 14px;
-  border: 1px solid #cbd5e1;
-  border-radius: 6px;
-  font-size: 14px;
-  background: white;
-}
-
-.form-group select:focus,
-.form-group input:focus,
-.input-field:focus {
-  outline: none;
-  border-color: #6366f1;
-}
-
-.form-group select:disabled {
-  background: #f1f5f9;
-  color: #94a3b8;
-  cursor: not-allowed;
-}
-
-.date-picker-input {
-  cursor: pointer;
-  font-size: 16px;
-}
-
-.date-picker-input::-webkit-calendar-picker-indicator {
-  cursor: pointer;
-  font-size: 20px;
-}
-
-.form-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-}
-
-.time-selection {
-  background: #fff;
-  padding: 16px;
-  border-radius: 8px;
-  border: 1px solid #e5e7eb;
-}
-
-.helper-text {
-  margin-top: 6px;
-  font-size: 12px;
-  color: #64748b;
-  line-height: 1.5;
-}
-
-.helper-text.warning {
-  color: #f59e0b;
-  font-weight: 600;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
 }
 
 .modal-footer {
   display: flex;
   justify-content: flex-end;
-  gap: 12px;
-  padding: 20px 24px;
-  border-top: 1px solid #e5e7eb;
-  background: #f8fafc;
+  gap: 10px;
+  padding-top: 8px;
 }
 
-.btn-secondary {
-  padding: 10px 20px;
-  background: white;
-  color: #64748b;
-  border: 1px solid #cbd5e1;
-  border-radius: 6px;
-  cursor: pointer;
-  font-weight: 600;
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.form-group label {
+  font-size: 13px;
+  font-weight: 700;
+  color: #374151;
+}
+
+.form-group select,
+.form-group input {
+  padding: 9px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 7px;
   font-size: 14px;
+  font-family: inherit;
+  color: #1e293b;
+  background: white;
+  width: 100%;
+  transition: border-color 0.15s;
+}
+.form-group select:focus,
+.form-group input:focus {
+  outline: none;
+  border-color: #6366f1;
+  box-shadow: 0 0 0 2px rgba(99,102,241,0.08);
+}
+.form-group select:disabled { background: #f8fafc; color: #94a3b8; cursor: not-allowed; }
+
+.input-field { padding: 9px 12px; border: 1px solid #e2e8f0; border-radius: 7px; font-size: 14px; font-family: inherit; width: 100%; }
+
+.helper-text { font-size: 12px; color: #64748b; }
+.helper-text.warning { color: #f59e0b; font-weight: 600; }
+
+.time-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.time-select { width: 80px; padding: 7px 10px; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 14px; font-family: inherit; }
+
+.date-picker { cursor: pointer; }
+.date-picker-input { width: 100%; }
+
+/* ── Lifecycle banner ──────────────────────────────────────────────── */
+.lc-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #64748b;
+  padding: 10px 14px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
 }
 
-.btn-secondary:hover {
-  background: #f1f5f9;
+.lc-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid #e2e8f0;
+  border-top-color: #6366f1;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.lc-banner {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  padding: 14px 16px;
+  background: #eef2ff;
+  border: 1px solid #c7d2fe;
+  border-radius: 10px;
+}
+
+.lc-banner-icon {
+  font-size: 20px;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.lc-banner-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.lc-banner-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #3730a3;
+}
+
+.lc-banner-desc {
+  font-size: 12px;
+  color: #4338ca;
+  line-height: 1.5;
+}
+
+.lc-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: #1e293b;
+  margin-top: 2px;
+}
+
+.lc-checkbox input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: #6366f1;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.lc-photo-hint{display:block;font-size:11px;color:#94a3b8;margin-top:2px}
+.lc-date-chip {
+  display: inline-block;
+  padding: 1px 8px;
+  background: #ddd6fe;
+  color: #4c1d95;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  margin-left: 4px;
 }
 </style>

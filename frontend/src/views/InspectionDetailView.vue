@@ -5,6 +5,7 @@ import { useAuthStore } from '../stores/auth'
 import { useToast } from '../composables/useToast'
 import api from '../services/api'
 import TemplatePreviewModal from '../components/settings/TemplatePreviewModal.vue'
+import PdfExportModal from '../components/PdfExportModal.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -29,6 +30,11 @@ const showPreview = ref(false)
 const showPhotoModal = ref(false)
 const photoUploading = ref(false)
 const localPhoto = ref(null)
+
+// PDF export
+const showPdfExport = ref(false)
+const pdfTemplate   = ref(null)
+const pdfReportData = ref({})
 
 const editForms = ref({
   conduct_date: '',
@@ -73,13 +79,11 @@ const timePreferenceOptions = [
   { value: 'specific', label: 'Specific Time' }
 ]
 
-const hourOptions = [
-  '09', '10', '11', '12', '13', '14', '15', '16', '17'
-]
-
+const hourOptions = ['09', '10', '11', '12', '13', '14', '15', '16', '17']
 const minuteOptions = ['00', '15', '30', '45']
 
-const statusSteps = [
+// ── Status steps (dynamic: Processing only shown when typist assigned) ──
+const allStatusSteps = [
   { key: 'created',    label: 'Created',    icon: '📋' },
   { key: 'assigned',   label: 'Assigned',   icon: '👤' },
   { key: 'active',     label: 'Active',     icon: '🔍' },
@@ -88,21 +92,24 @@ const statusSteps = [
   { key: 'complete',   label: 'Complete',   icon: '✅'  }
 ]
 
+const statusSteps = computed(() => {
+  const hasTypist = !!(inspection.value?.typist_id)
+  return hasTypist
+    ? allStatusSteps
+    : allStatusSteps.filter(s => s.key !== 'processing')
+})
+
 const currentStepIndex = computed(() => {
   if (!inspection.value) return 0
-  return statusSteps.findIndex(s => s.key === inspection.value.status)
+  return statusSteps.value.findIndex(s => s.key === inspection.value.status)
 })
 
 const canEdit = computed(() => authStore.isAdmin || authStore.isManager)
 
-// Role-based: which statuses can the current user advance to?
-// Clerks: can move created→active, active→processing
-// Managers/Admins: can move anything forward or back
 const canAdvance = computed(() => {
   if (!inspection.value) return false
-  if (currentStepIndex.value >= statusSteps.length - 1) return false
+  if (currentStepIndex.value >= statusSteps.value.length - 1) return false
   if (authStore.isAdmin || authStore.isManager) return true
-  // Clerks can mark as active or processing
   const clerkAllowed = ['assigned', 'active']
   return clerkAllowed.includes(inspection.value.status)
 })
@@ -113,8 +120,8 @@ const canGoBack = computed(() => {
   return authStore.isAdmin || authStore.isManager
 })
 
-const nextStep = computed(() => statusSteps[currentStepIndex.value + 1] ?? null)
-const prevStep = computed(() => statusSteps[currentStepIndex.value - 1] ?? null)
+const nextStep = computed(() => statusSteps.value[currentStepIndex.value + 1] ?? null)
+const prevStep = computed(() => statusSteps.value[currentStepIndex.value - 1] ?? null)
 
 // Status colour theming
 const statusColors = {
@@ -126,7 +133,6 @@ const statusColors = {
   complete:   { bg: '#f0fdf4', text: '#15803d', dot: '#16a34a' }
 }
 
-// Get the email to display (override or default client email)
 const displayClientEmail = computed(() => {
   if (inspection.value?.client_email_override) {
     return inspection.value.client_email_override
@@ -134,10 +140,8 @@ const displayClientEmail = computed(() => {
   return inspection.value?.client?.email || 'Not set'
 })
 
-// Format time preference for display
 const displayTimePreference = computed(() => {
   if (!inspection.value?.conduct_time_preference) return 'Anytime'
-  
   const pref = inspection.value.conduct_time_preference
   if (pref === 'anytime') return 'Anytime'
   if (pref === 'am') return 'AM (Morning)'
@@ -164,15 +168,13 @@ async function fetchInspection() {
   try {
     const response = await api.getInspection(route.params.id)
     inspection.value = response.data
-    
-    // Initialize edit forms
+
     if (inspection.value.conduct_date) {
       editForms.value.conduct_date = inspection.value.conduct_date.split('T')[0]
     } else {
       editForms.value.conduct_date = ''
     }
-    
-    // Parse time preference
+
     const timePref = inspection.value.conduct_time_preference || 'anytime'
     if (timePref.startsWith('specific:')) {
       editForms.value.time_preference = 'specific'
@@ -185,7 +187,7 @@ async function fetchInspection() {
       editForms.value.time_hour = '09'
       editForms.value.time_minute = '00'
     }
-    
+
     editForms.value.template_id = inspection.value.template_id
     editForms.value.inspector_id = inspection.value.inspector?.id || null
     editForms.value.typist_id = inspection.value.typist?.id || null
@@ -194,7 +196,6 @@ async function fetchInspection() {
     editForms.value.internal_notes = inspection.value.internal_notes || ''
     editForms.value.tenant_email = inspection.value.tenant_email || ''
     editForms.value.client_email_override = inspection.value.client_email_override || inspection.value.client?.email || ''
-    // Load property photo
     localPhoto.value = inspection.value.property?.overview_photo || null
   } catch (error) {
     console.error('Failed to fetch inspection:', error)
@@ -223,7 +224,7 @@ async function fetchUsers() {
   }
 }
 
-const clerks = computed(() => users.value.filter(u => u.role === 'clerk'))
+const clerks  = computed(() => users.value.filter(u => u.role === 'clerk'))
 const typists = computed(() => users.value.filter(u => u.role === 'typist'))
 
 async function updateField(field, value) {
@@ -231,7 +232,6 @@ async function updateField(field, value) {
     await api.updateInspection(inspection.value.id, { [field]: value })
     toast.success('Updated successfully')
     fetchInspection()
-    // Close all modals
     showEditConductDate.value = false
     showEditTemplate.value = false
     showEditClerk.value = false
@@ -250,19 +250,14 @@ async function updateField(field, value) {
 async function saveConductDateTime() {
   try {
     const updates = {}
-    
-    // Save date if provided (now comes from date picker in YYYY-MM-DD format)
     if (editForms.value.conduct_date) {
       updates.conduct_date = editForms.value.conduct_date + 'T00:00:00'
     }
-    
-    // Build time preference string
     let timePreference = editForms.value.time_preference
     if (timePreference === 'specific') {
       timePreference = `specific:${editForms.value.time_hour}_${editForms.value.time_minute}`
     }
     updates.conduct_time_preference = timePreference
-    
     await api.updateInspection(inspection.value.id, updates)
     toast.success('Date and time updated')
     fetchInspection()
@@ -274,11 +269,11 @@ async function saveConductDateTime() {
 }
 
 async function changeStatus(newStatus) {
-  if (!confirm(`Move inspection to "${statusSteps.find(s => s.key === newStatus)?.label}"?`)) return
+  if (!confirm(`Move inspection to "${statusSteps.value.find(s => s.key === newStatus)?.label}"?`)) return
   try {
     await api.updateInspection(inspection.value.id, { status: newStatus })
     inspection.value.status = newStatus
-    toast.success(`Status updated to ${statusSteps.find(s => s.key === newStatus)?.label}`)
+    toast.success(`Status updated to ${statusSteps.value.find(s => s.key === newStatus)?.label}`)
   } catch (error) {
     console.error('Failed to change status:', error)
     toast.error('Failed to update status')
@@ -325,7 +320,25 @@ async function savePhoto() {
   }
 }
 
-// ── Preview branding ─────────────────────────────────────────────────
+// ── PDF export ──────────────────────────────────────────────────────
+async function openPdfExport() {
+  try {
+    const iRes = await api.getInspection(inspection.value.id)
+    const fresh = iRes.data
+    let tpl = null
+    if (fresh.template_id) {
+      const tRes = await api.getTemplate(fresh.template_id)
+      tpl = tRes.data
+    }
+    pdfTemplate.value = tpl
+    pdfReportData.value = fresh.report_data ? JSON.parse(fresh.report_data) : {}
+    showPdfExport.value = true
+  } catch {
+    toast.error('Failed to load report data for export')
+  }
+}
+
+// ── Preview branding ────────────────────────────────────────────────
 const previewTemplate = computed(() => {
   if (!inspection.value?.template_id) return null
   return templates.value.find(t => t.id === inspection.value.template_id) || null
@@ -426,7 +439,7 @@ onMounted(() => {
             👁 Preview Report
           </button>
 
-          <!-- Edit Report button — visible when Active or Review -->
+          <!-- Edit Report button — visible when Active, Processing or Review -->
           <button
             v-if="['active', 'processing', 'review'].includes(inspection.status)"
             @click="router.push(`/inspections/${inspection.id}/report`)"
@@ -439,15 +452,24 @@ onMounted(() => {
           <div v-if="inspection.status === 'complete'" class="complete-badge">
             ✅ Inspection Complete
           </div>
+
+          <!-- Export PDF — available when complete -->
+          <button
+            v-if="inspection.status === 'complete'"
+            @click="openPdfExport"
+            class="btn-export-pdf"
+          >
+            📄 Export PDF
+          </button>
         </div>
       </div>
 
       <!-- Main Content Grid -->
       <div class="content-grid">
-        
+
         <!-- Left Column -->
         <div class="left-column">
-          
+
           <!-- Property Overview Photo -->
           <div class="info-card photo-card">
             <div class="card-header" style="padding: 14px 20px;">
@@ -506,6 +528,9 @@ onMounted(() => {
                 <span>{{ inspection.typist?.name || 'Not assigned' }}</span>
                 <button v-if="canEdit" @click="showEditTypist = true" class="btn-edit-inline">✏️</button>
               </div>
+              <p v-if="!inspection.typist" class="helper-text" style="margin-top:8px;font-size:12px;color:#94a3b8;">
+                ℹ️ No typist — inspection skips Processing and goes directly Active → Review
+              </p>
             </div>
           </div>
 
@@ -536,7 +561,7 @@ onMounted(() => {
 
         <!-- Right Column -->
         <div class="right-column">
-          
+
           <!-- Client Info -->
           <div class="info-card" v-if="inspection.client">
             <div class="card-header">
@@ -561,39 +586,17 @@ onMounted(() => {
               </div>
               <div class="contact-row" v-if="inspection.client?.phone">
                 <strong>Phone:</strong>
-                <a :href="`tel:${inspection.client.phone}`">{{ inspection.client.phone }}</a>
+                <span>{{ inspection.client.phone }}</span>
               </div>
-              <div class="contact-row">
+              <div class="contact-row" v-if="inspection.tenant_email">
                 <strong>Tenant:</strong>
-                <span>{{ inspection.tenant_email || 'Not specified' }}</span>
+                <span>{{ inspection.tenant_email }}</span>
                 <button v-if="canEdit" @click="showEditTenantEmail = true" class="btn-edit-inline">✏️</button>
               </div>
-              <div class="contact-row" v-if="inspection.typist?.email">
-                <strong>Typist:</strong>
-                <a :href="`mailto:${inspection.typist.email}`">{{ inspection.typist.email }}</a>
-              </div>
-            </div>
-          </div>
-
-          <!-- Property Address -->
-          <div class="info-card" v-if="inspection.property">
-            <div class="card-header">
-              <h3>📍 Address</h3>
-            </div>
-            <div class="card-content">
-              <div class="address-container">
-                <a 
-                  :href="`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(inspection.property.address)}`" 
-                  target="_blank"
-                  class="map-button"
-                  title="View on Google Maps"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
-                    <circle cx="12" cy="10" r="3"></circle>
-                  </svg>
-                </a>
-                <p class="address-text">{{ inspection.property.address }}</p>
+              <div v-if="!inspection.tenant_email" class="contact-row">
+                <strong>Tenant:</strong>
+                <span style="color:#94a3b8">Not set</span>
+                <button v-if="canEdit" @click="showEditTenantEmail = true" class="btn-edit-inline">✏️</button>
               </div>
             </div>
           </div>
@@ -601,10 +604,21 @@ onMounted(() => {
           <!-- Property Details -->
           <div class="info-card" v-if="inspection.property">
             <div class="card-header">
-              <h3>🏠 Property Details</h3>
+              <h3>🏘 Property Details</h3>
             </div>
             <div class="card-content">
-              <div class="detail-row">
+              <div class="address-container">
+                <a
+                  :href="`https://maps.google.com/?q=${encodeURIComponent(inspection.property.address)}`"
+                  target="_blank"
+                  class="map-button"
+                  title="Open in Google Maps"
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                </a>
+                <p class="address-text">{{ inspection.property.address }}</p>
+              </div>
+              <div class="detail-row" v-if="inspection.property.property_type">
                 <strong>Type:</strong>
                 <span>{{ inspection.property.property_type }}</span>
               </div>
@@ -645,8 +659,8 @@ onMounted(() => {
         </div>
       </div>
 
-      <!-- Modals -->
-      
+      <!-- ═══════════ MODALS ═══════════ -->
+
       <!-- Edit Conduct Date & Time -->
       <div v-if="showEditConductDate" class="modal-overlay" @click.self="showEditConductDate = false">
         <div class="modal modal-large">
@@ -655,49 +669,40 @@ onMounted(() => {
             <button @click="showEditConductDate = false" class="btn-close">✕</button>
           </div>
           <div class="modal-body">
-            
             <div class="form-group">
               <label>Date</label>
-              <input 
-                v-model="editForms.conduct_date" 
-                type="date" 
-                class="input-field date-picker" 
+              <input
+                v-model="editForms.conduct_date"
+                type="date"
+                class="input-field date-picker"
               />
-              <p class="helper-text">Selected: {{ editForms.conduct_date ? convertDateToUKFormat(editForms.conduct_date + 'T00:00:00') : 'No date selected' }}</p>
+              <p class="helper-text">Selected: {{ editForms.conduct_date ? convertDateToUKFormat(editForms.conduct_date) : 'None' }}</p>
             </div>
-
             <div class="form-group">
               <label>Time Preference</label>
               <select v-model="editForms.time_preference" class="input-field">
-                <option v-for="option in timePreferenceOptions" :key="option.value" :value="option.value">
-                  {{ option.label }}
-                </option>
+                <option v-for="opt in timePreferenceOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
               </select>
             </div>
-
-            <div v-if="editForms.time_preference === 'specific'" class="time-selection">
-              <div class="form-row">
-                <div class="form-group">
-                  <label>Hour</label>
-                  <select v-model="editForms.time_hour" class="input-field">
-                    <option v-for="hour in hourOptions" :key="hour" :value="hour">
-                      {{ hour }}:00
-                    </option>
-                  </select>
-                </div>
-
-                <div class="form-group">
-                  <label>Minute</label>
-                  <select v-model="editForms.time_minute" class="input-field">
-                    <option v-for="minute in minuteOptions" :key="minute" :value="minute">
-                      :{{ minute }}
-                    </option>
-                  </select>
+            <div v-if="editForms.time_preference === 'specific'" class="form-group">
+              <label>Specific Time</label>
+              <div class="time-selection">
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>Hour</label>
+                    <select v-model="editForms.time_hour" class="input-field">
+                      <option v-for="h in hourOptions" :key="h" :value="h">{{ h }}</option>
+                    </select>
+                  </div>
+                  <div class="form-group">
+                    <label>Minute</label>
+                    <select v-model="editForms.time_minute" class="input-field">
+                      <option v-for="m in minuteOptions" :key="m" :value="m">{{ m }}</option>
+                    </select>
+                  </div>
                 </div>
               </div>
-              <p class="helper-text">Selected time: {{ editForms.time_hour }}:{{ editForms.time_minute }}</p>
             </div>
-
           </div>
           <div class="modal-footer">
             <button @click="showEditConductDate = false" class="btn-secondary">Cancel</button>
@@ -710,7 +715,7 @@ onMounted(() => {
       <div v-if="showEditTemplate" class="modal-overlay" @click.self="showEditTemplate = false">
         <div class="modal">
           <div class="modal-header">
-            <h2>Edit Template</h2>
+            <h2>Assign Template</h2>
             <button @click="showEditTemplate = false" class="btn-close">✕</button>
           </div>
           <div class="modal-body">
@@ -742,7 +747,7 @@ onMounted(() => {
                 {{ clerk.name }} ({{ clerk.email }})
               </option>
             </select>
-            <p class="helper-text" style="margin-top: 12px; font-size: 12px; color: #64748b;">
+            <p class="helper-text" style="margin-top: 12px;">
               ℹ️ Removing clerk assignment will automatically revert status to "Created"
             </p>
           </div>
@@ -762,11 +767,14 @@ onMounted(() => {
           </div>
           <div class="modal-body">
             <select v-model="editForms.typist_id" class="input-field">
-              <option :value="null">No typist</option>
+              <option :value="null">Not assigned</option>
               <option v-for="typist in typists" :key="typist.id" :value="typist.id">
                 {{ typist.name }} ({{ typist.email }})
               </option>
             </select>
+            <p class="helper-text" style="margin-top: 12px;">
+              ℹ️ With a typist assigned, inspection will include a Processing stage after Active.
+            </p>
           </div>
           <div class="modal-footer">
             <button @click="showEditTypist = false" class="btn-secondary">Cancel</button>
@@ -779,15 +787,13 @@ onMounted(() => {
       <div v-if="showEditKeyLocation" class="modal-overlay" @click.self="showEditKeyLocation = false">
         <div class="modal">
           <div class="modal-header">
-            <h2>Edit Key Location</h2>
+            <h2>Key Location</h2>
             <button @click="showEditKeyLocation = false" class="btn-close">✕</button>
           </div>
           <div class="modal-body">
             <select v-model="editForms.key_location" class="input-field">
               <option value="">Not specified</option>
-              <option v-for="option in keyLocationOptions" :key="option" :value="option">
-                {{ option }}
-              </option>
+              <option v-for="opt in keyLocationOptions" :key="opt" :value="opt">{{ opt }}</option>
             </select>
           </div>
           <div class="modal-footer">
@@ -801,15 +807,13 @@ onMounted(() => {
       <div v-if="showEditKeyReturn" class="modal-overlay" @click.self="showEditKeyReturn = false">
         <div class="modal">
           <div class="modal-header">
-            <h2>Edit Key Return</h2>
+            <h2>Key Return</h2>
             <button @click="showEditKeyReturn = false" class="btn-close">✕</button>
           </div>
           <div class="modal-body">
             <select v-model="editForms.key_return" class="input-field">
               <option value="">Not specified</option>
-              <option v-for="option in keyReturnOptions" :key="option" :value="option">
-                {{ option }}
-              </option>
+              <option v-for="opt in keyReturnOptions" :key="opt" :value="opt">{{ opt }}</option>
             </select>
           </div>
           <div class="modal-footer">
@@ -819,23 +823,32 @@ onMounted(() => {
         </div>
       </div>
 
+      <!-- Edit Internal Notes -->
+      <div v-if="showEditNotes" class="modal-overlay" @click.self="showEditNotes = false">
+        <div class="modal modal-large">
+          <div class="modal-header">
+            <h2>Internal Notes</h2>
+            <button @click="showEditNotes = false" class="btn-close">✕</button>
+          </div>
+          <div class="modal-body">
+            <textarea v-model="editForms.internal_notes" class="input-field" rows="6" placeholder="Internal notes…"></textarea>
+          </div>
+          <div class="modal-footer">
+            <button @click="showEditNotes = false" class="btn-secondary">Cancel</button>
+            <button @click="updateField('internal_notes', editForms.internal_notes)" class="btn-primary">Save</button>
+          </div>
+        </div>
+      </div>
+
       <!-- Edit Tenant Email -->
       <div v-if="showEditTenantEmail" class="modal-overlay" @click.self="showEditTenantEmail = false">
         <div class="modal">
           <div class="modal-header">
-            <h2>Edit Tenant Email</h2>
+            <h2>Tenant Email</h2>
             <button @click="showEditTenantEmail = false" class="btn-close">✕</button>
           </div>
           <div class="modal-body">
-            <input 
-              v-model="editForms.tenant_email" 
-              type="text" 
-              class="input-field" 
-              placeholder="tenant@example.com, tenant2@example.com"
-            />
-            <p class="helper-text" style="margin-top: 8px;">
-              💡 Enter multiple email addresses separated by commas
-            </p>
+            <input v-model="editForms.tenant_email" type="email" class="input-field" placeholder="tenant@example.com" />
           </div>
           <div class="modal-footer">
             <button @click="showEditTenantEmail = false" class="btn-secondary">Cancel</button>
@@ -848,19 +861,12 @@ onMounted(() => {
       <div v-if="showEditClientEmail" class="modal-overlay" @click.self="showEditClientEmail = false">
         <div class="modal">
           <div class="modal-header">
-            <h2>Edit Client Email</h2>
+            <h2>Client Email</h2>
             <button @click="showEditClientEmail = false" class="btn-close">✕</button>
           </div>
           <div class="modal-body">
-            <input 
-              v-model="editForms.client_email_override" 
-              type="text" 
-              class="input-field" 
-              placeholder="client@example.com, manager@example.com"
-            />
-            <p class="helper-text" style="margin-top: 8px;">
-              💡 This overrides the default client email for this inspection only. Enter multiple addresses separated by commas.
-            </p>
+            <input v-model="editForms.client_email_override" type="email" class="input-field" placeholder="client@example.com" />
+            <p class="helper-text" style="margin-top:8px;">Override the client's default email for this inspection.</p>
           </div>
           <div class="modal-footer">
             <button @click="showEditClientEmail = false" class="btn-secondary">Cancel</button>
@@ -869,66 +875,52 @@ onMounted(() => {
         </div>
       </div>
 
-      <!-- Edit Notes -->
-      <div v-if="showEditNotes" class="modal-overlay" @click.self="showEditNotes = false">
-        <div class="modal">
+      <!-- Property Photo Modal -->
+      <div v-if="showPhotoModal" class="modal-overlay" @click.self="showPhotoModal = false">
+        <div class="photo-modal">
           <div class="modal-header">
-            <h2>Edit Internal Notes</h2>
-            <button @click="showEditNotes = false" class="btn-close">✕</button>
+            <h2>Property Photo</h2>
+            <button @click="showPhotoModal = false" class="btn-close">✕</button>
           </div>
           <div class="modal-body">
-            <textarea v-model="editForms.internal_notes" class="input-field" rows="6"></textarea>
+            <div v-if="localPhoto" class="photo-preview">
+              <img :src="localPhoto" alt="Preview" class="photo-preview-img" />
+              <button @click="localPhoto = null" class="photo-remove-btn">✕ Remove</button>
+            </div>
+            <label class="btn-primary" style="display:inline-block;cursor:pointer;padding:10px 20px;">
+              {{ localPhoto ? '📷 Replace photo' : '📷 Upload photo' }}
+              <input type="file" accept="image/*" style="display:none" @change="onPhotoFileChange" />
+            </label>
+            <p style="font-size:12px;color:#94a3b8;margin-top:6px;">JPG, PNG, WEBP — max 8MB</p>
           </div>
           <div class="modal-footer">
-            <button @click="showEditNotes = false" class="btn-secondary">Cancel</button>
-            <button @click="updateField('internal_notes', editForms.internal_notes)" class="btn-primary">Save</button>
+            <button @click="showPhotoModal = false" class="btn-secondary">Cancel</button>
+            <button @click="savePhoto" :disabled="photoUploading || !localPhoto" class="btn-primary">
+              {{ photoUploading ? 'Saving…' : 'Save Photo' }}
+            </button>
           </div>
         </div>
       </div>
+
+      <!-- Template Preview Modal -->
+      <TemplatePreviewModal
+        v-if="showPreview && previewTemplate"
+        :template="previewTemplate"
+        :branding="previewBranding"
+        @close="showPreview = false"
+      />
+
+      <!-- PDF Export Modal -->
+      <PdfExportModal
+        v-if="showPdfExport"
+        :inspection="inspection"
+        :template="pdfTemplate"
+        :report-data="pdfReportData"
+        @close="showPdfExport = false"
+      />
 
     </div>
   </div>
-
-    <!-- ══ PREVIEW MODAL ════════════════════════════════════════════════ -->
-    <TemplatePreviewModal
-      v-if="showPreview && previewTemplate"
-      :template="previewTemplate"
-      :branding="previewBranding"
-      @close="showPreview = false"
-    />
-
-    <!-- ══ PHOTO EDIT MODAL ══════════════════════════════════════════════ -->
-    <div v-if="showPhotoModal" class="modal-overlay" @click.self="showPhotoModal = false">
-      <div class="photo-modal">
-        <div class="modal-header">
-          <h2>Property Overview Photo</h2>
-          <button @click="showPhotoModal = false" class="btn-close">✕</button>
-        </div>
-        <div class="modal-body">
-          <div v-if="localPhoto" class="photo-preview">
-            <img :src="localPhoto" alt="Property overview" class="photo-preview-img" />
-            <button class="photo-remove-btn" @click="localPhoto = null">× Remove photo</button>
-          </div>
-          <div v-else class="photo-dropzone">
-            <span style="font-size:40px;">🏠</span>
-            <p>No photo uploaded yet</p>
-            <p style="font-size:12px;color:#94a3b8;">Appears on the report cover page</p>
-          </div>
-          <label class="photo-upload-label">
-            {{ localPhoto ? '📷 Replace photo' : '📷 Upload photo' }}
-            <input type="file" accept="image/*" style="display:none" @change="onPhotoFileChange" />
-          </label>
-          <p style="font-size:12px;color:#94a3b8;margin-top:6px;">JPG, PNG, WEBP — max 8MB</p>
-        </div>
-        <div class="modal-footer">
-          <button @click="showPhotoModal = false" class="btn-secondary">Cancel</button>
-          <button @click="savePhoto" :disabled="photoUploading || !localPhoto" class="btn-primary">
-            {{ photoUploading ? 'Saving…' : 'Save Photo' }}
-          </button>
-        </div>
-      </div>
-    </div>
-
 </template>
 
 <style scoped>
@@ -961,10 +953,7 @@ onMounted(() => {
   cursor: pointer;
   transition: all 0.2s;
 }
-
-.btn-back:hover {
-  background: #f8fafc;
-}
+.btn-back:hover { background: #f8fafc; }
 
 .detail-header h1 {
   font-size: 32px;
@@ -981,7 +970,6 @@ onMounted(() => {
   overflow: hidden;
 }
 
-/* Progress track */
 .status-track {
   display: flex;
   align-items: center;
@@ -1013,17 +1001,12 @@ onMounted(() => {
   z-index: 1;
 }
 
-.status-step--completed .step-bubble {
-  background: #10b981;
-  color: white;
-}
-
+.status-step--completed .step-bubble { background: #10b981; color: white; }
 .status-step--active .step-bubble {
   background: #6366f1;
   color: white;
   box-shadow: 0 0 0 5px rgba(99, 102, 241, 0.15);
 }
-
 .status-step--pending .step-bubble {
   background: #f1f5f9;
   color: #94a3b8;
@@ -1040,8 +1023,7 @@ onMounted(() => {
   text-align: center;
   white-space: nowrap;
 }
-
-.status-step--active .step-label   { color: #6366f1; }
+.status-step--active .step-label    { color: #6366f1; }
 .status-step--completed .step-label { color: #10b981; }
 
 .step-connector {
@@ -1053,7 +1035,6 @@ onMounted(() => {
   background: #e5e7eb;
   z-index: 0;
 }
-
 .step-connector--done { background: #10b981; }
 
 /* Action row */
@@ -1149,11 +1130,24 @@ onMounted(() => {
 }
 
 .complete-badge {
-  margin-left: auto;
   font-size: 14px;
   font-weight: 700;
   color: #16a34a;
 }
+
+.btn-export-pdf {
+  padding: 9px 18px;
+  background: #065f46;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: white;
+  cursor: pointer;
+  transition: filter 0.15s;
+  margin-left: auto;
+}
+.btn-export-pdf:hover { filter: brightness(1.15); }
 
 /* Content Grid */
 .content-grid {
@@ -1203,10 +1197,7 @@ onMounted(() => {
   cursor: pointer;
   transition: all 0.2s;
 }
-
-.btn-edit:hover {
-  background: #4f46e5;
-}
+.btn-edit:hover { background: #4f46e5; }
 
 .btn-edit-inline {
   padding: 4px 8px;
@@ -1218,20 +1209,12 @@ onMounted(() => {
   cursor: pointer;
   transition: all 0.2s;
 }
+.btn-edit-inline:hover { background: #c7d2fe; }
 
-.btn-edit-inline:hover {
-  background: #c7d2fe;
-}
-
-.card-content {
-  padding: 24px;
-}
+.card-content { padding: 24px; }
 
 /* Photo Card */
-.photo-card .card-content {
-  padding: 0;
-}
-
+.photo-card .card-content { padding: 0; }
 .photo-card-body { position: relative; }
 
 .property-photo-img {
@@ -1253,14 +1236,8 @@ onMounted(() => {
   gap: 6px;
 }
 
-.photo-icon {
-  font-size: 48px;
-}
-
-.photo-placeholder p {
-  font-size: 14px;
-  font-weight: 600;
-}
+.photo-icon { font-size: 48px; }
+.photo-placeholder p { font-size: 14px; font-weight: 600; }
 
 .photo-modal {
   background: white;
@@ -1270,107 +1247,50 @@ onMounted(() => {
   box-shadow: 0 20px 60px rgba(0,0,0,0.25);
   overflow: hidden;
 }
-
 .photo-preview { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
 .photo-preview-img { width: 100%; max-height: 260px; object-fit: cover; border-radius: 8px; border: 1px solid #e2e8f0; }
-.photo-remove-btn { background: none; border: none; color: #ef4444; font-size: 13px; font-weight: 600; cursor: pointer; text-align: left; }
-.photo-remove-btn:hover { text-decoration: underline; }
-.photo-dropzone { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 32px; background: #f8fafc; border: 2px dashed #e2e8f0; border-radius: 8px; text-align: center; margin-bottom: 12px; color: #64748b; font-size: 14px; }
-.photo-upload-label { display: inline-block; padding: 9px 18px; background: #6366f1; color: white; border-radius: 7px; font-size: 13px; font-weight: 600; cursor: pointer; }
-.photo-upload-label:hover { background: #4f46e5; }
+.photo-remove-btn { background: #fee2e2; color: #dc2626; border: none; border-radius: 6px; padding: 6px 12px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.photo-remove-btn:hover { background: #fecaca; }
 
-/* Date & Time Display */
-.date-display {
-  font-size: 20px;
-  font-weight: 600;
-  color: #1e293b;
-  margin-bottom: 8px;
-}
-
-.time-display {
-  font-size: 14px;
-  color: #6366f1;
-  font-weight: 600;
-  background: #eff6ff;
-  padding: 6px 12px;
-  border-radius: 6px;
-  display: inline-block;
-}
+/* Date & time */
+.date-display { font-size: 20px; font-weight: 600; color: #1e293b; margin-bottom: 8px; }
+.time-display { font-size: 14px; color: #64748b; }
 
 /* Badge */
 .badge {
   display: inline-block;
+  margin-top: 8px;
   padding: 4px 12px;
   background: #e0e7ff;
   color: #4338ca;
   border-radius: 12px;
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-top: 8px;
+  font-size: 12px;
+  font-weight: 600;
 }
 
-/* Assignment Row */
+/* Assignment */
 .assignment-row {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 12px 0;
+  padding: 10px 0;
   border-bottom: 1px solid #f1f5f9;
-}
-
-.assignment-row:last-child {
-  border-bottom: none;
-}
-
-.assignment-row strong {
-  color: #64748b;
-  font-size: 14px;
-  min-width: 80px;
-}
-
-.assignment-row span {
-  flex: 1;
-  color: #1e293b;
   font-size: 14px;
 }
+.assignment-row:last-of-type { border-bottom: none; }
+.assignment-row strong { color: #64748b; min-width: 60px; }
+.assignment-row span { flex: 1; color: #1e293b; }
 
-/* Key Section */
-.key-section {
-  padding: 12px 0;
-  border-bottom: 1px solid #f1f5f9;
-}
+/* Key */
+.key-section { margin-bottom: 16px; }
+.key-section:last-child { margin-bottom: 0; }
+.key-header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.key-header strong { font-size: 14px; color: #1e293b; }
+.key-section p { font-size: 14px; color: #64748b; margin-top: 4px; }
 
-.key-section:last-child {
-  border-bottom: none;
-}
-
-.key-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 8px;
-}
-
-.key-header strong {
-  color: #64748b;
-  font-size: 14px;
-}
-
-.key-section p {
-  color: #1e293b;
-  font-size: 14px;
-  line-height: 1.6;
-}
-
-/* Company */
-.company {
-  color: #6366f1;
-  font-weight: 600;
-  font-size: 14px;
-  margin-top: 4px;
-}
+/* Client */
+.info-card .card-content h4 { font-size: 18px; font-weight: 600; color: #1e293b; margin-bottom: 4px; }
+.company { font-size: 14px; color: #64748b; margin-top: 4px; }
 
 /* Contact Row */
 .contact-row {
@@ -1381,73 +1301,24 @@ onMounted(() => {
   border-bottom: 1px solid #f1f5f9;
   font-size: 14px;
 }
-
-.contact-row:last-child {
-  border-bottom: none;
-}
-
-.contact-row strong {
-  color: #64748b;
-  min-width: 80px;
-}
-
-.contact-row span {
-  flex: 1;
-  color: #1e293b;
-  word-break: break-word;
-}
-
-.contact-row a {
-  color: #6366f1;
-  text-decoration: none;
-  flex: 1;
-}
-
-.contact-row a:hover {
-  text-decoration: underline;
-}
-
-/* Address Container */
-.address-container {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-}
-
-.map-button {
-  flex-shrink: 0;
-  width: 40px;
-  height: 40px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: #eff6ff;
-  border-radius: 8px;
-  color: #2563eb;
-  transition: all 0.2s;
-  text-decoration: none;
-}
-
-.map-button:hover {
-  background: #dbeafe;
-  transform: scale(1.05);
-}
-
-.map-button svg {
-  flex-shrink: 0;
-}
-
-.address-container .address-text {
-  flex: 1;
-  margin: 0;
-}
+.contact-row:last-child { border-bottom: none; }
+.contact-row strong { color: #64748b; min-width: 80px; }
+.contact-row span { flex: 1; color: #1e293b; word-break: break-word; }
+.contact-row a { color: #6366f1; text-decoration: none; flex: 1; }
+.contact-row a:hover { text-decoration: underline; }
 
 /* Address */
-.address-text {
-  font-size: 16px;
-  line-height: 1.6;
-  color: #1e293b;
+.address-container { display: flex; align-items: flex-start; gap: 12px; }
+.map-button {
+  flex-shrink: 0;
+  width: 40px; height: 40px;
+  display: flex; align-items: center; justify-content: center;
+  background: #eff6ff; border-radius: 8px; color: #2563eb;
+  transition: all 0.2s; text-decoration: none;
 }
+.map-button:hover { background: #dbeafe; transform: scale(1.05); }
+.address-container .address-text { flex: 1; margin: 0; }
+.address-text { font-size: 16px; line-height: 1.6; color: #1e293b; }
 
 /* Detail Row */
 .detail-row {
@@ -1457,36 +1328,17 @@ onMounted(() => {
   border-bottom: 1px solid #f1f5f9;
   font-size: 14px;
 }
-
-.detail-row:last-child {
-  border-bottom: none;
-}
-
-.detail-row strong {
-  color: #64748b;
-  min-width: 100px;
-}
-
-.detail-row span {
-  color: #1e293b;
-  text-transform: capitalize;
-}
+.detail-row:last-child { border-bottom: none; }
+.detail-row strong { color: #64748b; min-width: 100px; }
+.detail-row span { color: #1e293b; text-transform: capitalize; }
 
 /* Notes */
-.notes-text {
-  font-size: 14px;
-  line-height: 1.7;
-  color: #475569;
-  white-space: pre-wrap;
-}
+.notes-text { font-size: 14px; line-height: 1.7; color: #475569; white-space: pre-wrap; }
 
 /* Modals */
 .modal-overlay {
   position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  top: 0; left: 0; right: 0; bottom: 0;
   background: rgba(0, 0, 0, 0.5);
   display: flex;
   align-items: center;
@@ -1501,10 +1353,7 @@ onMounted(() => {
   width: 100%;
   max-width: 500px;
 }
-
-.modal-large {
-  max-width: 600px;
-}
+.modal-large { max-width: 600px; }
 
 .modal-header {
   display: flex;
@@ -1513,37 +1362,22 @@ onMounted(() => {
   padding: 24px;
   border-bottom: 1px solid #e5e7eb;
 }
-
-.modal-header h2 {
-  font-size: 20px;
-  font-weight: 600;
-}
+.modal-header h2 { font-size: 20px; font-weight: 600; }
 
 .btn-close {
   background: none;
   border: none;
   font-size: 24px;
   cursor: pointer;
-  width: 32px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  width: 32px; height: 32px;
+  display: flex; align-items: center; justify-content: center;
   border-radius: 4px;
 }
+.btn-close:hover { background: #f1f5f9; }
 
-.btn-close:hover {
-  background: #f1f5f9;
-}
+.modal-body { padding: 24px; }
 
-.modal-body {
-  padding: 24px;
-}
-
-.form-group {
-  margin-bottom: 20px;
-}
-
+.form-group { margin-bottom: 20px; }
 .form-group label {
   display: block;
   margin-bottom: 8px;
@@ -1551,7 +1385,6 @@ onMounted(() => {
   color: #475569;
   font-size: 14px;
 }
-
 .input-field {
   width: 100%;
   padding: 10px 14px;
@@ -1560,34 +1393,13 @@ onMounted(() => {
   font-size: 14px;
   font-family: inherit;
 }
+.input-field:focus { outline: none; border-color: #6366f1; }
+select.input-field { background: white; }
+textarea.input-field { resize: vertical; }
+.date-picker { cursor: pointer; }
+.date-picker::-webkit-calendar-picker-indicator { cursor: pointer; font-size: 18px; }
 
-.input-field:focus {
-  outline: none;
-  border-color: #6366f1;
-}
-
-select.input-field {
-  background: white;
-}
-
-textarea.input-field {
-  resize: vertical;
-}
-
-.date-picker {
-  cursor: pointer;
-}
-
-.date-picker::-webkit-calendar-picker-indicator {
-  cursor: pointer;
-  font-size: 18px;
-}
-
-.form-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-}
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 
 .time-selection {
   background: #f8fafc;
@@ -1596,12 +1408,7 @@ textarea.input-field {
   border: 1px solid #e5e7eb;
 }
 
-.helper-text {
-  font-size: 12px;
-  color: #64748b;
-  line-height: 1.5;
-  margin-top: 6px;
-}
+.helper-text { font-size: 12px; color: #64748b; line-height: 1.5; margin-top: 6px; }
 
 .modal-footer {
   display: flex;
@@ -1621,7 +1428,6 @@ textarea.input-field {
   cursor: pointer;
   font-weight: 600;
 }
-
 .btn-primary {
   padding: 10px 20px;
   background: #6366f1;
@@ -1631,19 +1437,11 @@ textarea.input-field {
   cursor: pointer;
   font-weight: 600;
 }
-
-.btn-primary:hover {
-  background: #4f46e5;
-}
+.btn-primary:hover { background: #4f46e5; }
 
 /* Responsive */
 @media (max-width: 1024px) {
-  .content-grid {
-    grid-template-columns: 1fr;
-  }
-  
-  .workflow-bar {
-    overflow-x: auto;
-  }
+  .content-grid { grid-template-columns: 1fr; }
+  .workflow-bar { overflow-x: auto; }
 }
 </style>

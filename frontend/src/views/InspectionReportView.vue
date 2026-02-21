@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useToast } from '../composables/useToast'
 import api from '../services/api'
+import CheckOutActionPicker from '../components/CheckOutActionPicker.vue'
 
 const route  = useRoute()
 const router = useRouter()
@@ -20,24 +21,80 @@ const photoUploading = ref(false)
 const currentPhoto   = ref(null)
 
 // Drag state
-const drag = ref({ sectionId: null, fromIdx: null, type: null }) // type: 'fixed'|'room'
+const dragFixedFrom = ref(null)
+const dragRoomFrom  = ref(null)
 
 const reportData = ref({})
 
 // ── Load ──────────────────────────────────────────────────────────────
+// ── Load ──────────────────────────────────────────────────────────────────
 async function load() {
   loading.value = true
   try {
     const iRes = await api.getInspection(route.params.id)
     inspection.value = iRes.data
 
-    if (inspection.value.template_id) {
-      const tRes = await api.getTemplate(inspection.value.template_id)
-      template.value = tRes.data
-    }
+    const iType = inspection.value.inspection_type
+    const isCheckOutType = iType === 'check_out'
 
-    if (inspection.value.report_data) {
-      try { reportData.value = JSON.parse(inspection.value.report_data) } catch { reportData.value = {} }
+    if (isCheckOutType) {
+      // ── CHECK OUT: build structure from source Check In ────────────────
+      // Find source: use saved link or auto-detect from property history
+      let sourceId = inspection.value.source_inspection_id
+      if (!sourceId) {
+        try {
+          const histRes = await api.getPropertyHistory(inspection.value.property_id)
+          const found = histRes.data.find(h =>
+            h.id !== inspection.value.id &&
+            ['check_in', 'inventory'].includes(h.inspection_type)
+            // any check in qualifies — even without saved data, we can use its template structure
+          )
+          if (found) {
+            sourceId = found.id
+            // Persist the link
+            await api.updateInspection(inspection.value.id, { source_inspection_id: sourceId })
+            inspection.value.source_inspection_id = sourceId
+          }
+        } catch { /* silent */ }
+      }
+
+      if (sourceId) {
+        try {
+          const srcRes = await api.getInspection(sourceId)
+          const srcData = srcRes.data
+          // Load template from source inspection
+          if (srcData.template_id) {
+            const tRes = await api.getTemplate(srcData.template_id)
+            template.value = tRes.data
+          } else {
+            // Source has no template — fall back to any available template
+            try {
+              const allTRes = await api.getTemplates()
+              const fallback = allTRes.data.find(t => t.is_default) || allTRes.data[0]
+              if (fallback) template.value = fallback
+            } catch { /* no templates */ }
+          }
+          // Store Check In's report_data as read-only reference for CO columns
+          if (srcData.report_data) {
+            try { sourceReportData.value = JSON.parse(srcData.report_data) } catch { sourceReportData.value = {} }
+          }
+        } catch { /* source gone */ }
+      }
+
+      // Load this Check Out's own saved data (checkout conditions + actions only)
+      if (inspection.value.report_data) {
+        try { reportData.value = JSON.parse(inspection.value.report_data) } catch { reportData.value = {} }
+      }
+
+    } else {
+      // ── CHECK IN / INVENTORY / INTERIM: normal template-based flow ─────
+      if (inspection.value.template_id) {
+        const tRes = await api.getTemplate(inspection.value.template_id)
+        template.value = tRes.data
+      }
+      if (inspection.value.report_data) {
+        try { reportData.value = JSON.parse(inspection.value.report_data) } catch { reportData.value = {} }
+      }
     }
 
     if (inspection.value.property_id) {
@@ -54,6 +111,14 @@ async function load() {
     await nextTick()
     if (allSections.value[0]) activeId.value = allSections.value[0].id
   }
+}
+
+// Source Check In data (read-only reference for Check Out)
+const sourceReportData = ref({})
+
+// Check In condition read-only getter — reads from the source Check In's saved report_data
+function getCI(sectionId, rowId, field) {
+  return sourceReportData.value[sectionId]?.[String(rowId)]?.[field] ?? ''
 }
 
 // ── Parse template ────────────────────────────────────────────────────
@@ -107,18 +172,18 @@ function hideItem(roomId, itemId) {
 function getOrderedRoomItems(room) {
   const storedOrder = reportData.value[room.id]?._itemOrder
   const templateItems = (room.sections || []).map(item => ({ ...item, _type: 'template' }))
-  const extraItems = (reportData.value[room.id]?._extra || []).map(ex => ({ ...ex, id: ex._eid, label: ex.label || 'New item', _type: 'extra' }))
+  const extraItems = (reportData.value[room.id]?._extra || []).map(ex => ({
+    ...ex, id: ex._eid, label: ex.label || 'New item', _type: 'extra'
+  }))
   const all = [...templateItems, ...extraItems]
 
   if (!storedOrder || storedOrder.length === 0) return all
 
-  // Reorder by storedOrder, append any new items not in order list
   const ordered = []
   for (const id of storedOrder) {
     const found = all.find(i => String(i.id) === String(id) || String(i._eid) === String(id))
     if (found) ordered.push(found)
   }
-  // Append anything not yet in order
   for (const item of all) {
     const key = item._type === 'extra' ? item._eid : String(item.id)
     if (!storedOrder.some(o => String(o) === key)) ordered.push(item)
@@ -146,12 +211,12 @@ function addExtraRow(sectionId, type) {
   if (!reportData.value[sectionId]._extra) reportData.value[sectionId]._extra = []
   const eid = `ex_${Date.now()}_${Math.random().toString(36).slice(2,6)}`
   const blank = { _eid: eid }
-  if (type === 'condition_summary')  { blank.name=''; blank.condition='' }
+  if (type === 'condition_summary')     { blank.name=''; blank.condition='' }
   else if (type === 'cleaning_summary') { blank.name=''; blank.cleanliness=''; blank.cleanlinessNotes='' }
   else if (type === 'smoke_alarms' || type === 'health_safety') { blank.question=''; blank.answer=''; blank.notes='' }
   else if (type === 'fire_door_safety') { blank.name=''; blank.question=''; blank.answer=''; blank.notes='' }
-  else if (type === 'keys')         { blank.name=''; blank.description='' }
-  else if (type === 'meter_readings') { blank.name=''; blank.locationSerial=''; blank.reading='' }
+  else if (type === 'keys')             { blank.name=''; blank.description='' }
+  else if (type === 'meter_readings')   { blank.name=''; blank.locationSerial=''; blank.reading='' }
   reportData.value[sectionId]._extra.push(blank)
   unsaved.value = true
 }
@@ -167,7 +232,6 @@ function addRoomExtraItem(roomId) {
   if (!reportData.value[roomId]._extra) reportData.value[roomId]._extra = []
   const eid = `rex_${Date.now()}_${Math.random().toString(36).slice(2,6)}`
   reportData.value[roomId]._extra.push({ _eid: eid, label: '', description: '', condition: '' })
-  // If there's an _itemOrder, append new eid to it
   if (reportData.value[roomId]._itemOrder) reportData.value[roomId]._itemOrder.push(eid)
   unsaved.value = true
 }
@@ -211,8 +275,19 @@ function removeSubItem(roomId, itemId, sid) {
   unsaved.value = true
 }
 
+
+function getItemActions(roomId, itemId) {
+  const key = `_actions_${itemId}`
+  return reportData.value[roomId]?.[key] ?? []
+}
+function setItemActions(roomId, itemId, actions) {
+  const key = `_actions_${itemId}`
+  if (!reportData.value[roomId]) reportData.value[roomId] = {}
+  reportData.value[roomId][key] = actions
+  unsaved.value = true
+}
+
 // ── Drag to reorder (fixed section extra rows) ────────────────────────
-const dragFixedFrom = ref(null)
 function onFixedDragStart(sectionId, idx) {
   dragFixedFrom.value = { sectionId, idx }
 }
@@ -228,7 +303,6 @@ function onFixedDrop(sectionId, toIdx) {
 }
 
 // ── Drag to reorder (room items) ──────────────────────────────────────
-const dragRoomFrom = ref(null)
 function onRoomDragStart(roomId, idx) { dragRoomFrom.value = { roomId, idx } }
 function onRoomDrop(room, toIdx) {
   if (!dragRoomFrom.value || dragRoomFrom.value.roomId !== room.id) return
@@ -287,10 +361,18 @@ function onScroll(e) {
   }
 }
 
-const cleanlinessOpts = ['Professionally Cleaned','Professionally Cleaned — Receipt Seen','Professionally Cleaned with Omissions','Domestically Cleaned','Domestically Cleaned with Omissions','Not Clean']
+const cleanlinessOpts = [
+  'Professionally Cleaned',
+  'Professionally Cleaned — Receipt Seen',
+  'Professionally Cleaned with Omissions',
+  'Domestically Cleaned',
+  'Domestically Cleaned with Omissions',
+  'Not Clean'
+]
 
-const typeLabel = computed(() => ({ check_in:'Check In', check_out:'Check Out', interim:'Interim Inspection', inventory:'Inventory' })[inspection.value?.inspection_type] ?? '')
-const savedTime = computed(() => lastSaved.value ? lastSaved.value.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}) : null)
+const typeLabel  = computed(() => ({ check_in:'Check In', check_out:'Check Out', interim:'Interim Inspection', inventory:'Inventory' })[inspection.value?.inspection_type] ?? '')
+const isCheckOut = computed(() => inspection.value?.inspection_type === 'check_out')
+const savedTime  = computed(() => lastSaved.value ? lastSaved.value.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' }) : null)
 
 function sectionStarted(sectionId) {
   const d = reportData.value[sectionId]
@@ -337,6 +419,8 @@ const startedCount = computed(() => allSections.value.filter(s => sectionStarted
       </div>
     </header>
 
+
+
     <div class="body">
       <nav class="sidebar">
         <div v-if="template">
@@ -355,18 +439,24 @@ const startedCount = computed(() => allSections.value.filter(s => sectionStarted
         </div>
         <div v-else class="sidebar-warn">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="1.5"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-          <p>No template assigned.</p>
+          <p>No Check In report found for this property.</p>
         </div>
       </nav>
 
       <main class="main" @scroll="onScroll">
-        <div v-if="!template" class="empty-state">
+        <div v-if="!template && inspection.inspection_type !== 'check_out'" class="empty-state">
           <h3>No template assigned</h3>
-          <p>Assign a template from the inspection overview first.</p>
+          <p>This inspection has no template assigned. Go back and assign one.</p>
           <button class="btn-ghost" @click="router.push(`/inspections/${inspection.id}`)">← Back to Overview</button>
         </div>
 
-        <div v-else>
+        <div v-if="!template && inspection.inspection_type === 'check_out'" class="empty-state">
+          <h3>⏳ No Check In report found</h3>
+          <p>This Check Out needs a completed Check In report for this property to load from. Please ensure the Check In has report data saved.</p>
+          <button class="btn-ghost" @click="router.push(`/inspections/${inspection.id}`)">← Back to Overview</button>
+        </div>
+
+        <div v-if="template">
 
           <!-- ═══ FIXED SECTIONS ═══════════════════════════════════ -->
           <div v-for="sec in fixedSections" :key="sec.id" :id="`sec-${sec.id}`" class="card">
@@ -406,18 +496,28 @@ const startedCount = computed(() => allSections.value.filter(s => sectionStarted
               <table class="tbl">
                 <thead><tr><th class="col-drag"></th><th class="col-item">Area</th><th class="col-clean">Cleanliness</th><th>Notes</th><th class="col-del"></th></tr></thead>
                 <tbody>
-                  <tr v-for="row in sec.rows" :key="row.id" v-show="!isHidden(sec.id,row.id)">
+                  <tr v-for="row in sec.rows" :key="row.id" v-show="!isHidden(sec.id, row.id)">
                     <td class="td-drag"><span class="drag-handle">⠿</span></td>
                     <td class="td-name">{{ row.name }}</td>
-                    <td><select class="fld-select" :value="get(sec.id,row.id,'cleanliness')" @change="set(sec.id,row.id,'cleanliness',$event.target.value)"><option value="">— Select —</option><option v-for="o in cleanlinessOpts" :key="o" :value="o">{{ o }}</option></select></td>
-                    <td><input class="fld-input" type="text" placeholder="Notes…" :value="get(sec.id,row.id,'cleanlinessNotes')" @input="set(sec.id,row.id,'cleanlinessNotes',$event.target.value)" /></td>
+                    <td>
+                      <select class="fld-input" :value="get(sec.id,row.id,'cleanliness')" @change="set(sec.id,row.id,'cleanliness',$event.target.value)">
+                        <option value="">Select…</option>
+                        <option v-for="o in cleanlinessOpts" :key="o" :value="o">{{ o }}</option>
+                      </select>
+                    </td>
+                    <td><input class="fld-input" type="text" placeholder="Additional notes…" :value="get(sec.id,row.id,'cleanlinessNotes')" @input="set(sec.id,row.id,'cleanlinessNotes',$event.target.value)" /></td>
                     <td class="td-del"><button class="del-btn" @click="hideRow(sec.id,row.id)">×</button></td>
                   </tr>
                   <tr v-for="(ex,idx) in getExtra(sec.id)" :key="ex._eid" class="extra-row"
                     draggable="true" @dragstart="onFixedDragStart(sec.id,idx)" @dragover.prevent @drop.prevent="onFixedDrop(sec.id,idx)">
                     <td class="td-drag"><span class="drag-handle">⠿</span></td>
                     <td><input class="fld-input" type="text" placeholder="Area name…" :value="ex.name" @input="setExtraField(sec.id,ex._eid,'name',$event.target.value)" /></td>
-                    <td><select class="fld-select" :value="ex.cleanliness" @change="setExtraField(sec.id,ex._eid,'cleanliness',$event.target.value)"><option value="">— Select —</option><option v-for="o in cleanlinessOpts" :key="o" :value="o">{{ o }}</option></select></td>
+                    <td>
+                      <select class="fld-input" :value="ex.cleanliness" @change="setExtraField(sec.id,ex._eid,'cleanliness',$event.target.value)">
+                        <option value="">Select…</option>
+                        <option v-for="o in cleanlinessOpts" :key="o" :value="o">{{ o }}</option>
+                      </select>
+                    </td>
                     <td><input class="fld-input" type="text" placeholder="Notes…" :value="ex.cleanlinessNotes" @input="setExtraField(sec.id,ex._eid,'cleanlinessNotes',$event.target.value)" /></td>
                     <td class="td-del"><button class="del-btn" @click="removeExtraRow(sec.id,ex._eid)">×</button></td>
                   </tr>
@@ -426,66 +526,21 @@ const startedCount = computed(() => allSections.value.filter(s => sectionStarted
               <div class="add-row-bar"><button class="add-row-btn" @click="addExtraRow(sec.id,sec.type)">+ Add line</button></div>
             </div>
 
-            <!-- SMOKE ALARMS -->
-            <div v-else-if="sec.type === 'smoke_alarms'">
-              <div v-for="row in sec.rows" :key="row.id" v-show="!isHidden(sec.id,row.id)" class="qa-row">
-                <div class="qa-row-header"><p class="qa-question">{{ row.question }}</p><button class="del-btn" @click="hideRow(sec.id,row.id)">×</button></div>
-                <p v-if="row.notes" class="qa-guidance">{{ row.notes }}</p>
-                <div class="qa-controls">
-                  <div class="yn-group"><label v-for="opt in ['Yes','No','N/A']" :key="opt" class="yn-chip" :class="{'yn-yes':get(sec.id,row.id,'answer')==='Yes'&&opt==='Yes','yn-no':get(sec.id,row.id,'answer')==='No'&&opt==='No','yn-na':get(sec.id,row.id,'answer')==='N/A'&&opt==='N/A'}"><input type="radio" :name="`${sec.id}_${row.id}`" style="display:none" :checked="get(sec.id,row.id,'answer')===opt" @change="set(sec.id,row.id,'answer',opt)" />{{ opt }}</label></div>
-                  <input class="fld-input fld-grow" type="text" placeholder="Additional notes…" :value="get(sec.id,row.id,'notes')" @input="set(sec.id,row.id,'notes',$event.target.value)" />
-                </div>
-              </div>
-              <div v-for="ex in getExtra(sec.id)" :key="ex._eid" class="qa-row extra-row">
-                <div class="qa-extra-header"><input class="fld-input fld-grow" type="text" placeholder="Question / item…" :value="ex.question" @input="setExtraField(sec.id,ex._eid,'question',$event.target.value)" /><button class="del-btn" @click="removeExtraRow(sec.id,ex._eid)">×</button></div>
-                <div class="qa-controls"><div class="yn-group"><label v-for="opt in ['Yes','No','N/A']" :key="opt" class="yn-chip" :class="{'yn-yes':ex.answer==='Yes'&&opt==='Yes','yn-no':ex.answer==='No'&&opt==='No','yn-na':ex.answer==='N/A'&&opt==='N/A'}"><input type="radio" :name="`${sec.id}_${ex._eid}`" style="display:none" :checked="ex.answer===opt" @change="setExtraField(sec.id,ex._eid,'answer',opt)" />{{ opt }}</label></div><input class="fld-input fld-grow" type="text" placeholder="Notes…" :value="ex.notes" @input="setExtraField(sec.id,ex._eid,'notes',$event.target.value)" /></div>
-              </div>
-              <div class="add-row-bar"><button class="add-row-btn" @click="addExtraRow(sec.id,sec.type)">+ Add line</button></div>
-            </div>
-
-            <!-- FIRE DOOR -->
-            <div v-else-if="sec.type === 'fire_door_safety'">
-              <div v-for="row in sec.rows" :key="row.id" v-show="!isHidden(sec.id,row.id)" class="qa-row">
-                <div class="qa-row-header"><div><div class="qa-location-badge">{{ row.name }}</div><p class="qa-question" style="margin-top:6px">{{ row.question }}</p></div><button class="del-btn" @click="hideRow(sec.id,row.id)">×</button></div>
-                <p v-if="row.notes" class="qa-guidance">{{ row.notes }}</p>
-                <div class="qa-controls"><div class="yn-group"><label v-for="opt in ['Yes','No','N/A']" :key="opt" class="yn-chip" :class="{'yn-yes':get(sec.id,row.id,'answer')==='Yes'&&opt==='Yes','yn-no':get(sec.id,row.id,'answer')==='No'&&opt==='No','yn-na':get(sec.id,row.id,'answer')==='N/A'&&opt==='N/A'}"><input type="radio" :name="`${sec.id}_${row.id}`" style="display:none" :checked="get(sec.id,row.id,'answer')===opt" @change="set(sec.id,row.id,'answer',opt)" />{{ opt }}</label></div><input class="fld-input fld-grow" type="text" placeholder="Notes…" :value="get(sec.id,row.id,'notes')" @input="set(sec.id,row.id,'notes',$event.target.value)" /></div>
-              </div>
-              <div v-for="ex in getExtra(sec.id)" :key="ex._eid" class="qa-row extra-row">
-                <div class="qa-extra-header"><input class="fld-input" type="text" placeholder="Location…" style="width:160px" :value="ex.name" @input="setExtraField(sec.id,ex._eid,'name',$event.target.value)" /><input class="fld-input fld-grow" type="text" placeholder="Question…" :value="ex.question" @input="setExtraField(sec.id,ex._eid,'question',$event.target.value)" /><button class="del-btn" @click="removeExtraRow(sec.id,ex._eid)">×</button></div>
-                <div class="qa-controls"><div class="yn-group"><label v-for="opt in ['Yes','No','N/A']" :key="opt" class="yn-chip" :class="{'yn-yes':ex.answer==='Yes'&&opt==='Yes','yn-no':ex.answer==='No'&&opt==='No','yn-na':ex.answer==='N/A'&&opt==='N/A'}"><input type="radio" :name="`${sec.id}_${ex._eid}`" style="display:none" :checked="ex.answer===opt" @change="setExtraField(sec.id,ex._eid,'answer',opt)" />{{ opt }}</label></div><input class="fld-input fld-grow" type="text" placeholder="Notes…" :value="ex.notes" @input="setExtraField(sec.id,ex._eid,'notes',$event.target.value)" /></div>
-              </div>
-              <div class="add-row-bar"><button class="add-row-btn" @click="addExtraRow(sec.id,sec.type)">+ Add line</button></div>
-            </div>
-
-            <!-- HEALTH & SAFETY -->
-            <div v-else-if="sec.type === 'health_safety'">
-              <div v-for="row in sec.rows" :key="row.id" v-show="!isHidden(sec.id,row.id)" class="qa-row">
-                <div class="qa-row-header"><p class="qa-question">{{ row.question }}</p><button class="del-btn" @click="hideRow(sec.id,row.id)">×</button></div>
-                <p v-if="row.notes" class="qa-guidance">{{ row.notes }}</p>
-                <div class="qa-controls"><div class="yn-group"><label v-for="opt in ['Yes','No','N/A']" :key="opt" class="yn-chip" :class="{'yn-yes':get(sec.id,row.id,'answer')==='Yes'&&opt==='Yes','yn-no':get(sec.id,row.id,'answer')==='No'&&opt==='No','yn-na':get(sec.id,row.id,'answer')==='N/A'&&opt==='N/A'}"><input type="radio" :name="`${sec.id}_${row.id}`" style="display:none" :checked="get(sec.id,row.id,'answer')===opt" @change="set(sec.id,row.id,'answer',opt)" />{{ opt }}</label></div><input class="fld-input fld-grow" type="text" placeholder="Notes…" :value="get(sec.id,row.id,'notes')" @input="set(sec.id,row.id,'notes',$event.target.value)" /></div>
-              </div>
-              <div v-for="ex in getExtra(sec.id)" :key="ex._eid" class="qa-row extra-row">
-                <div class="qa-extra-header"><input class="fld-input fld-grow" type="text" placeholder="Question / item…" :value="ex.question" @input="setExtraField(sec.id,ex._eid,'question',$event.target.value)" /><button class="del-btn" @click="removeExtraRow(sec.id,ex._eid)">×</button></div>
-                <div class="qa-controls"><div class="yn-group"><label v-for="opt in ['Yes','No','N/A']" :key="opt" class="yn-chip" :class="{'yn-yes':ex.answer==='Yes'&&opt==='Yes','yn-no':ex.answer==='No'&&opt==='No','yn-na':ex.answer==='N/A'&&opt==='N/A'}"><input type="radio" :name="`${sec.id}_${ex._eid}`" style="display:none" :checked="ex.answer===opt" @change="setExtraField(sec.id,ex._eid,'answer',opt)" />{{ opt }}</label></div><input class="fld-input fld-grow" type="text" placeholder="Notes…" :value="ex.notes" @input="setExtraField(sec.id,ex._eid,'notes',$event.target.value)" /></div>
-              </div>
-              <div class="add-row-bar"><button class="add-row-btn" @click="addExtraRow(sec.id,sec.type)">+ Add line</button></div>
-            </div>
-
             <!-- KEYS -->
             <div v-else-if="sec.type === 'keys'">
               <table class="tbl">
-                <thead><tr><th class="col-drag"></th><th class="col-item">Key / Access Item</th><th>Description</th><th class="col-del"></th></tr></thead>
+                <thead><tr><th class="col-drag"></th><th class="col-item">Key / Fob</th><th>Description / Quantity</th><th class="col-del"></th></tr></thead>
                 <tbody>
-                  <tr v-for="row in sec.rows" :key="row.id" v-show="!isHidden(sec.id,row.id)">
+                  <tr v-for="row in sec.rows" :key="row.id" v-show="!isHidden(sec.id, row.id)">
                     <td class="td-drag"><span class="drag-handle">⠿</span></td>
                     <td class="td-name">{{ row.name }}</td>
-                    <td><input class="fld-input" type="text" placeholder="e.g. 2× Yale front door key…" :value="get(sec.id,row.id,'description')" @input="set(sec.id,row.id,'description',$event.target.value)" /></td>
+                    <td><input class="fld-input" type="text" placeholder="e.g. 2 × Yale keys" :value="get(sec.id,row.id,'description')" @input="set(sec.id,row.id,'description',$event.target.value)" /></td>
                     <td class="td-del"><button class="del-btn" @click="hideRow(sec.id,row.id)">×</button></td>
                   </tr>
                   <tr v-for="(ex,idx) in getExtra(sec.id)" :key="ex._eid" class="extra-row"
                     draggable="true" @dragstart="onFixedDragStart(sec.id,idx)" @dragover.prevent @drop.prevent="onFixedDrop(sec.id,idx)">
                     <td class="td-drag"><span class="drag-handle">⠿</span></td>
-                    <td><input class="fld-input" type="text" placeholder="Key / item name…" :value="ex.name" @input="setExtraField(sec.id,ex._eid,'name',$event.target.value)" /></td>
+                    <td><input class="fld-input" type="text" placeholder="Key name…" :value="ex.name" @input="setExtraField(sec.id,ex._eid,'name',$event.target.value)" /></td>
                     <td><input class="fld-input" type="text" placeholder="Description…" :value="ex.description" @input="setExtraField(sec.id,ex._eid,'description',$event.target.value)" /></td>
                     <td class="td-del"><button class="del-btn" @click="removeExtraRow(sec.id,ex._eid)">×</button></td>
                   </tr>
@@ -494,12 +549,83 @@ const startedCount = computed(() => allSections.value.filter(s => sectionStarted
               <div class="add-row-bar"><button class="add-row-btn" @click="addExtraRow(sec.id,sec.type)">+ Add line</button></div>
             </div>
 
-            <!-- METERS -->
+            <!-- SMOKE ALARMS / HEALTH & SAFETY -->
+            <div v-else-if="sec.type === 'smoke_alarms' || sec.type === 'health_safety'">
+              <div v-for="row in sec.rows" :key="row.id" v-show="!isHidden(sec.id, row.id)" class="qa-row">
+                <div class="qa-row-header">
+                  <span class="qa-question">{{ row.question }}</span>
+                  <button class="del-btn" @click="hideRow(sec.id,row.id)">×</button>
+                </div>
+                <p v-if="row.guidance" class="qa-guidance">{{ row.guidance }}</p>
+                <div class="qa-controls">
+                  <select class="fld-input" style="width:180px" :value="get(sec.id,row.id,'answer')" @change="set(sec.id,row.id,'answer',$event.target.value)">
+                    <option value="">Select…</option>
+                    <option>Yes</option><option>No</option><option>N/A</option><option>Not Tested</option>
+                  </select>
+                  <input class="fld-input" style="flex:1" type="text" placeholder="Additional notes…" :value="get(sec.id,row.id,'notes')" @input="set(sec.id,row.id,'notes',$event.target.value)" />
+                </div>
+              </div>
+              <div v-for="(ex,idx) in getExtra(sec.id)" :key="ex._eid" class="qa-row extra-row"
+                draggable="true" @dragstart="onFixedDragStart(sec.id,idx)" @dragover.prevent @drop.prevent="onFixedDrop(sec.id,idx)">
+                <div class="qa-extra-header">
+                  <span class="drag-handle">⠿</span>
+                  <input class="fld-input" type="text" placeholder="Question…" :value="ex.question" @input="setExtraField(sec.id,ex._eid,'question',$event.target.value)" />
+                  <button class="del-btn" @click="removeExtraRow(sec.id,ex._eid)">×</button>
+                </div>
+                <div class="qa-controls">
+                  <select class="fld-input" style="width:180px" :value="ex.answer" @change="setExtraField(sec.id,ex._eid,'answer',$event.target.value)">
+                    <option value="">Select…</option>
+                    <option>Yes</option><option>No</option><option>N/A</option><option>Not Tested</option>
+                  </select>
+                  <input class="fld-input" style="flex:1" type="text" placeholder="Notes…" :value="ex.notes" @input="setExtraField(sec.id,ex._eid,'notes',$event.target.value)" />
+                </div>
+              </div>
+              <div class="add-row-bar"><button class="add-row-btn" @click="addExtraRow(sec.id,sec.type)">+ Add line</button></div>
+            </div>
+
+            <!-- FIRE DOOR SAFETY -->
+            <div v-else-if="sec.type === 'fire_door_safety'">
+              <table class="tbl">
+                <thead><tr><th class="col-drag"></th><th class="col-item">Door / Location</th><th>Question / Check</th><th style="width:140px">Answer</th><th>Notes</th><th class="col-del"></th></tr></thead>
+                <tbody>
+                  <tr v-for="row in sec.rows" :key="row.id" v-show="!isHidden(sec.id, row.id)">
+                    <td class="td-drag"><span class="drag-handle">⠿</span></td>
+                    <td class="td-name">{{ row.name }}</td>
+                    <td>{{ row.question }}</td>
+                    <td>
+                      <select class="fld-input" :value="get(sec.id,row.id,'answer')" @change="set(sec.id,row.id,'answer',$event.target.value)">
+                        <option value="">Select…</option>
+                        <option>Yes</option><option>No</option><option>N/A</option>
+                      </select>
+                    </td>
+                    <td><input class="fld-input" type="text" placeholder="Notes…" :value="get(sec.id,row.id,'notes')" @input="set(sec.id,row.id,'notes',$event.target.value)" /></td>
+                    <td class="td-del"><button class="del-btn" @click="hideRow(sec.id,row.id)">×</button></td>
+                  </tr>
+                  <tr v-for="(ex,idx) in getExtra(sec.id)" :key="ex._eid" class="extra-row"
+                    draggable="true" @dragstart="onFixedDragStart(sec.id,idx)" @dragover.prevent @drop.prevent="onFixedDrop(sec.id,idx)">
+                    <td class="td-drag"><span class="drag-handle">⠿</span></td>
+                    <td><input class="fld-input" type="text" placeholder="Door name…" :value="ex.name" @input="setExtraField(sec.id,ex._eid,'name',$event.target.value)" /></td>
+                    <td><input class="fld-input" type="text" placeholder="Check…" :value="ex.question" @input="setExtraField(sec.id,ex._eid,'question',$event.target.value)" /></td>
+                    <td>
+                      <select class="fld-input" :value="ex.answer" @change="setExtraField(sec.id,ex._eid,'answer',$event.target.value)">
+                        <option value="">Select…</option>
+                        <option>Yes</option><option>No</option><option>N/A</option>
+                      </select>
+                    </td>
+                    <td><input class="fld-input" type="text" placeholder="Notes…" :value="ex.notes" @input="setExtraField(sec.id,ex._eid,'notes',$event.target.value)" /></td>
+                    <td class="td-del"><button class="del-btn" @click="removeExtraRow(sec.id,ex._eid)">×</button></td>
+                  </tr>
+                </tbody>
+              </table>
+              <div class="add-row-bar"><button class="add-row-btn" @click="addExtraRow(sec.id,sec.type)">+ Add line</button></div>
+            </div>
+
+            <!-- METER READINGS -->
             <div v-else-if="sec.type === 'meter_readings'">
               <table class="tbl">
-                <thead><tr><th class="col-drag"></th><th class="col-item">Meter</th><th>Location &amp; Serial No.</th><th class="col-reading">Reading</th><th class="col-del"></th></tr></thead>
+                <thead><tr><th class="col-drag"></th><th class="col-item">Meter</th><th>Location & Serial No.</th><th class="col-reading">Reading</th><th class="col-del"></th></tr></thead>
                 <tbody>
-                  <tr v-for="row in sec.rows" :key="row.id" v-show="!isHidden(sec.id,row.id)">
+                  <tr v-for="row in sec.rows" :key="row.id" v-show="!isHidden(sec.id, row.id)">
                     <td class="td-drag"><span class="drag-handle">⠿</span></td>
                     <td class="td-name">{{ row.name }}</td>
                     <td><input class="fld-input" type="text" placeholder="e.g. Understairs cupboard — SN 123456" :value="get(sec.id,row.id,'locationSerial')" @input="set(sec.id,row.id,'locationSerial',$event.target.value)" /></td>
@@ -526,7 +652,10 @@ const startedCount = computed(() => allSections.value.filter(s => sectionStarted
           <div v-for="room in rooms" :key="room.id" :id="`sec-${room.id}`" class="card card-room">
             <div class="card-hd card-hd-room">
               <h2 class="card-title">{{ room.name }}</h2>
-              <span class="card-hint">{{ room.sections?.length || 0 }} items</span>
+              <div class="card-hd-right">
+                <span v-if="isCheckOut" class="co-badge">Check Out</span>
+                <span class="card-hint">{{ room.sections?.length || 0 }} items</span>
+              </div>
             </div>
 
             <!-- All items (template + extra) in drag-sortable order -->
@@ -552,38 +681,102 @@ const startedCount = computed(() => allSections.value.filter(s => sectionStarted
 
               <!-- Fields column -->
               <div class="room-row-right">
-                <div class="room-row-fields">
-                  <!-- Template item fields -->
-                  <template v-if="item._type === 'template'">
-                    <div v-if="item.hasDescription" class="room-field-desc">
-                      <label class="field-lbl">Description</label>
-                      <textarea class="fld-textarea" rows="3" :placeholder="`Describe ${item.label.toLowerCase()}…`"
-                        :value="get(room.id,item.id,'description')" @input="set(room.id,item.id,'description',$event.target.value)"></textarea>
-                    </div>
-                    <div v-if="item.hasCondition" class="room-field-cond">
-                      <label class="field-lbl">Condition</label>
-                      <textarea class="fld-textarea" rows="3" :placeholder="`Condition of ${item.label.toLowerCase()}…`"
-                        :value="get(room.id,item.id,'condition')" @input="set(room.id,item.id,'condition',$event.target.value)"></textarea>
-                    </div>
-                    <div v-if="item.hasNotes" class="room-field-notes">
-                      <label class="field-lbl">Notes</label>
-                      <input class="fld-input" type="text" placeholder="Notes…"
-                        :value="get(room.id,item.id,'notes')" @input="set(room.id,item.id,'notes',$event.target.value)" />
-                    </div>
+                <div class="room-row-fields" :class="{ 'co-layout': isCheckOut }">
+
+                  <!-- ── STANDARD layout (Check In / Interim / Inventory) ── -->
+                  <template v-if="!isCheckOut">
+                    <template v-if="item._type === 'template'">
+                      <div v-if="item.hasDescription" class="room-field-desc">
+                        <label class="field-lbl">Description</label>
+                        <textarea class="fld-textarea" rows="3" :placeholder="`Describe ${item.label.toLowerCase()}…`"
+                          :value="get(room.id,item.id,'description')"
+                          @input="set(room.id,item.id,'description',$event.target.value)"></textarea>
+                      </div>
+                      <div v-if="item.hasCondition" class="room-field-cond">
+                        <label class="field-lbl">Condition</label>
+                        <textarea class="fld-textarea" rows="3" :placeholder="`Condition of ${item.label.toLowerCase()}…`"
+                          :value="get(room.id,item.id,'condition')"
+                          @input="set(room.id,item.id,'condition',$event.target.value)"></textarea>
+                      </div>
+                      <div v-if="item.hasNotes" class="room-field-notes">
+                        <label class="field-lbl">Notes</label>
+                        <input class="fld-input" type="text" placeholder="Notes…"
+                          :value="get(room.id,item.id,'notes')"
+                          @input="set(room.id,item.id,'notes',$event.target.value)" />
+                      </div>
+                    </template>
+                    <template v-else>
+                      <div class="room-field-desc">
+                        <label class="field-lbl">Description</label>
+                        <textarea class="fld-textarea" rows="3" placeholder="Describe…"
+                          :value="item.description"
+                          @input="setRoomExtraField(room.id,item._eid,'description',$event.target.value)"></textarea>
+                      </div>
+                      <div class="room-field-cond">
+                        <label class="field-lbl">Condition</label>
+                        <textarea class="fld-textarea" rows="3" placeholder="Condition…"
+                          :value="item.condition"
+                          @input="setRoomExtraField(room.id,item._eid,'condition',$event.target.value)"></textarea>
+                      </div>
+                    </template>
                   </template>
-                  <!-- Extra item fields -->
+
+                  <!-- ── CHECK OUT layout ── -->
                   <template v-else>
+                    <!-- Description — read from Check In (read-only reference) -->
                     <div class="room-field-desc">
                       <label class="field-lbl">Description</label>
-                      <textarea class="fld-textarea" rows="3" placeholder="Describe…"
-                        :value="item.description" @input="setRoomExtraField(room.id,item._eid,'description',$event.target.value)"></textarea>
+                      <div class="co-inv-value" :class="{ 'co-inv-empty': !getCI(room.id, item._type==='template' ? item.id : item._eid, 'description') }">
+                        {{ getCI(room.id, item._type==='template' ? item.id : item._eid, 'description') || item.label || '—' }}
+                      </div>
                     </div>
+
+                    <!-- Condition at Check In — read-only from source Check In report_data -->
+                    <div class="room-field-inv">
+                      <label class="field-lbl co-inv-lbl">
+                        Condition at Check In
+                        <span class="co-inv-badge">Inventory</span>
+                      </label>
+                      <div class="co-inv-value" :class="{ 'co-inv-empty': !getCI(room.id, item._type==='template' ? item.id : item._eid, 'condition') }">
+                        {{ getCI(room.id, item._type==='template' ? item.id : item._eid, 'condition') || '—' }}
+                      </div>
+                    </div>
+
+                    <!-- Condition at Check Out — editable, defaults to "As Inventory & Check In" -->
                     <div class="room-field-cond">
-                      <label class="field-lbl">Condition</label>
-                      <textarea class="fld-textarea" rows="3" placeholder="Condition…"
-                        :value="item.condition" @input="setRoomExtraField(room.id,item._eid,'condition',$event.target.value)"></textarea>
+                      <label class="field-lbl">Condition at Check Out</label>
+                      <textarea class="fld-textarea" rows="3"
+                        placeholder="As Inventory &amp; Check In"
+                        :value="item._type==='template'
+                          ? (get(room.id,item.id,'checkOutCondition') || '')
+                          : (item.checkOutCondition || '')"
+                        @focus="e => {
+                          const cur = item._type==='template'
+                            ? get(room.id,item.id,'checkOutCondition')
+                            : item.checkOutCondition
+                          if (!cur) {
+                            item._type==='template'
+                              ? set(room.id,item.id,'checkOutCondition','As Inventory & Check In')
+                              : setRoomExtraField(room.id,item._eid,'checkOutCondition','As Inventory & Check In')
+                          }
+                        }"
+                        @input="item._type==='template'
+                          ? set(room.id,item.id,'checkOutCondition',$event.target.value)
+                          : setRoomExtraField(room.id,item._eid,'checkOutCondition',$event.target.value)"></textarea>
+                    </div>
+
+                    <!-- ⚠ Action picker -->
+                    <div class="room-field-actions">
+                      <label class="field-lbl">Actions</label>
+                      <CheckOutActionPicker
+                        :actions="getItemActions(room.id, item._type==='extra' ? item._eid : item.id)"
+                        :room-id="room.id"
+                        :item-id="item._type==='extra' ? item._eid : item.id"
+                        @update:actions="val => setItemActions(room.id, item._type==='extra' ? item._eid : item.id, val)"
+                      />
                     </div>
                   </template>
+
                 </div>
 
                 <!-- Sub-items (template items only) -->
@@ -656,6 +849,7 @@ const startedCount = computed(() => allSections.value.filter(s => sectionStarted
         </div>
       </div>
     </div>
+
   </div>
 </template>
 
@@ -708,6 +902,7 @@ const startedCount = computed(() => allSections.value.filter(s => sectionStarted
 .card-hint{font-size:11px;color:#94a3b8}
 .hidden-badge{font-size:11px;color:#f59e0b;background:#fffbeb;border:1px solid #fde68a;border-radius:4px;padding:2px 7px}
 .unknown-type{padding:16px 20px;font-size:13px;color:#f59e0b}
+.co-badge{font-size:11px;color:#7c3aed;background:#f5f3ff;border:1px solid #ddd6fe;border-radius:4px;padding:2px 7px;font-weight:700}
 
 /* Drag handle */
 .drag-handle{cursor:grab;color:#cbd5e1;font-size:16px;line-height:1;user-select:none;padding:0 4px}
@@ -724,7 +919,7 @@ const startedCount = computed(() => allSections.value.filter(s => sectionStarted
 .col-drag{width:28px}.col-item{width:20%;min-width:130px}.col-clean{width:280px}.col-reading{width:150px}.col-del{width:36px}
 .td-name{font-size:13px;font-weight:600;color:#374151;white-space:nowrap}
 .td-drag{text-align:center;padding-left:8px!important}.td-del{text-align:center}
-.extra-row td{background:white}  /* NO extra highlight — same as regular rows */
+.extra-row td{background:white}
 
 /* Add row bar */
 .add-row-bar{padding:10px 16px;border-top:1px dashed #e5e7eb;background:#fafbfd}
@@ -743,7 +938,6 @@ const startedCount = computed(() => allSections.value.filter(s => sectionStarted
 .qa-row:last-child{border-bottom:none}
 .qa-row-header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
 .qa-extra-header{display:flex;align-items:center;gap:8px}
-.qa-location-badge{display:inline-block;padding:2px 8px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:4px;font-size:11px;font-weight:700;color:#0369a1;text-transform:uppercase;letter-spacing:0.4px;width:fit-content}
 .qa-question{font-size:13px;font-weight:600;color:#1e293b;line-height:1.4;flex:1}
 .qa-guidance{font-size:12px;color:#64748b;line-height:1.5;background:#fffbeb;border-left:3px solid #fbbf24;padding:8px 12px;border-radius:0 4px 4px 0}
 .qa-controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
@@ -754,50 +948,63 @@ const startedCount = computed(() => allSections.value.filter(s => sectionStarted
 .room-row-label{display:flex;align-items:flex-start;padding:14px 12px;font-size:13px;font-weight:700;color:#374151;border-right:1px solid #f1f5f9;background:#fafbfd;line-height:1.3;gap:6px}
 .label-input{font-weight:700;font-size:13px}
 .room-row-right{display:flex;flex-direction:column}
+
+/* Standard layout (2-col: description + condition) */
 .room-row-fields{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:12px 16px;align-items:start}
 .room-field-desc{grid-column:1}.room-field-cond{grid-column:2}.room-field-notes{grid-column:1/-1}
+
+/* Check Out layout (4-col: description | check-in | check-out | actions) */
+.co-layout{grid-template-columns:1fr 1fr 1fr auto;gap:8px}
+.room-field-inv{}
+.co-inv-lbl{display:flex;align-items:center;gap:6px;margin-bottom:4px}
+.co-inv-badge{padding:1px 7px;background:#e0e7ff;color:#4338ca;border-radius:8px;font-size:10px;font-weight:600;flex-shrink:0}
+.co-inv-value{padding:8px 10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;font-size:13px;color:#64748b;min-height:60px;line-height:1.5;white-space:pre-wrap}
+.room-field-actions{display:flex;flex-direction:column;padding-top:0}
+
 .field-lbl{display:block;margin-bottom:4px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#94a3b8}
 
 /* Item action bar */
 .item-action-bar{display:flex;align-items:center;gap:12px;padding:6px 16px 10px;border-top:1px solid #f8fafc}
+.add-sub-btn{background:none;border:none;color:#7c3aed;font-size:12px;font-weight:600;cursor:pointer;padding:2px 0}
+.add-sub-btn:hover{text-decoration:underline}
 .del-item-btn{background:none;border:none;color:#ef4444;font-size:12px;font-weight:600;cursor:pointer;padding:2px 0;margin-left:auto}
 .del-item-btn:hover{text-decoration:underline}
 
 /* Sub-items */
 .sub-items{display:flex;flex-direction:column;border-top:1px dashed #e5e7eb}
-.sub-item{display:flex;align-items:flex-start;gap:8px;padding:10px 16px;background:#f9f8ff;border-bottom:1px dashed #ede9fe}
-.sub-item:last-child{border-bottom:none}
-.sub-item-fields{display:grid;grid-template-columns:1fr 1fr;gap:10px;flex:1}
+.sub-item{display:flex;align-items:flex-start;gap:8px;padding:10px 16px;border-bottom:1px dashed #f1f5f9}
+.sub-item-fields{display:grid;grid-template-columns:1fr 1fr;gap:12px;flex:1}
 
-/* Sub add bar */
-.add-sub-btn{padding:4px 10px;background:none;border:1px dashed #a78bfa;border-radius:5px;font-size:11.5px;font-weight:600;color:#7c3aed;cursor:pointer;transition:all 0.12s}
-.add-sub-btn:hover{background:#f5f3ff}
+/* Inputs */
+.fld-input{width:100%;padding:6px 10px;border:1px solid #e2e8f0;border-radius:5px;font-size:13px;color:#1e293b;font-family:inherit;background:white;transition:border-color 0.15s}
+.fld-input:focus{outline:none;border-color:#6366f1;box-shadow:0 0 0 2px rgba(99,102,241,0.08)}
+.fld-textarea{width:100%;padding:7px 10px;border:1px solid #e2e8f0;border-radius:5px;font-size:13px;color:#1e293b;font-family:inherit;resize:vertical;line-height:1.5;background:white;transition:border-color 0.15s}
+.fld-textarea:focus{outline:none;border-color:#6366f1;box-shadow:0 0 0 2px rgba(99,102,241,0.08)}
+.fld-mono{font-family:'Courier New',monospace}
 
-/* Fields */
-.fld-input{width:100%;padding:7px 10px;border:1px solid #e5e7eb;border-radius:6px;font-size:13px;color:#1e293b;font-family:inherit;background:white;transition:border-color 0.12s,box-shadow 0.12s}
-.fld-input:focus{outline:none;border-color:#6366f1;box-shadow:0 0 0 2.5px rgba(99,102,241,0.14)}
-.fld-textarea{width:100%;padding:8px 10px;border:1px solid #e5e7eb;border-radius:6px;font-size:13px;color:#1e293b;font-family:inherit;resize:vertical;min-height:72px;line-height:1.55}
-.fld-textarea:focus{outline:none;border-color:#6366f1;box-shadow:0 0 0 2.5px rgba(99,102,241,0.14)}
-.fld-select{width:100%;padding:7px 10px;border:1px solid #e5e7eb;border-radius:6px;font-size:13px;color:#1e293b;font-family:inherit;background:white;cursor:pointer}
-.fld-select:focus{outline:none;border-color:#6366f1}
-.fld-grow{flex:1;min-width:200px}.fld-mono{font-family:'Courier New',monospace;font-weight:700;letter-spacing:1px}
-
-/* Y/N chips */
-.yn-group{display:flex;gap:6px;flex-shrink:0}
-.yn-chip{padding:6px 13px;border:1.5px solid #e5e7eb;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;user-select:none;color:#94a3b8;background:white;transition:all 0.1s}
-.yn-chip:hover{border-color:#cbd5e1;color:#475569}
-.yn-yes{background:#f0fdf4!important;border-color:#16a34a!important;color:#166534!important}
-.yn-no{background:#fef2f2!important;border-color:#dc2626!important;color:#991b1b!important}
-.yn-na{background:#f1f5f9!important;border-color:#94a3b8!important;color:#475569!important}
-
-/* Bottom */
-.foot{display:flex;justify-content:space-between;align-items:center;padding:8px 0 0}
-.btn-ghost{padding:9px 18px;background:white;border:1px solid #e2e8f0;border-radius:7px;font-size:13px;font-weight:600;color:#475569;cursor:pointer;transition:all 0.15s;font-family:inherit}
+/* Foot */
+.foot{display:flex;align-items:center;justify-content:space-between;padding:20px 0}
+.btn-ghost{padding:10px 20px;background:white;border:1px solid #e2e8f0;border-radius:7px;font-size:14px;font-weight:600;color:#475569;cursor:pointer;transition:all 0.15s;font-family:inherit}
 .btn-ghost:hover{background:#f8fafc}
 .btn-save-lg{padding:10px 28px;background:#6366f1;color:white;border:none;border-radius:7px;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;transition:background 0.15s}
 .btn-save-lg:hover:not(:disabled){background:#4f46e5}.btn-save-lg:disabled{background:#94a3b8;cursor:not-allowed}
 
-/* Photo modal */
+/* Lifecycle seed banner */
+.seed-banner{background:#eef2ff;border-bottom:1px solid #c7d2fe;flex-shrink:0;z-index:9}
+.seed-banner-inner{display:flex;align-items:center;gap:16px;padding:12px 24px;flex-wrap:wrap}
+.seed-banner-icon{font-size:20px;flex-shrink:0}
+.seed-banner-text{flex:1;min-width:200px}
+.seed-banner-text strong{display:block;font-size:13px;font-weight:700;color:#3730a3;margin-bottom:2px}
+.seed-banner-text span{font-size:12px;color:#4338ca;line-height:1.5}
+.seed-banner-actions{display:flex;align-items:center;gap:10px;flex-shrink:0}
+.btn-seed{padding:7px 16px;background:#4f46e5;color:white;border:none;border-radius:6px;font-size:13px;font-weight:700;cursor:pointer;transition:background 0.15s;white-space:nowrap}
+.btn-seed:hover:not(:disabled){background:#4338ca}.btn-seed:disabled{background:#a5b4fc;cursor:not-allowed}
+.btn-seed-dismiss{padding:7px 12px;background:none;border:1px solid #c7d2fe;border-radius:6px;font-size:12px;font-weight:600;color:#6366f1;cursor:pointer;transition:all 0.15s}
+.btn-seed-dismiss:hover{background:#e0e7ff}
+
+/* Check Out inventory reference — empty state */
+.co-inv-empty{color:#94a3b8;font-style:italic;font-size:12px}
+
 .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:100}
 .photo-modal{background:white;border-radius:12px;width:520px;max-width:95vw;box-shadow:0 20px 60px rgba(0,0,0,0.2);overflow:hidden}
 .photo-modal-hd{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid #f1f5f9}

@@ -9,6 +9,9 @@ import InspectionReportView from '../views/InspectionReportView.vue'
 import UsersView from '../views/UsersView.vue'
 import SettingsView from '../views/SettingsView.vue'
 import TemplateEditorView from '../views/TemplateEditorView.vue'
+import MobileHome         from '../views-mobile/MobileHome.vue'
+import MobilePropertyView from '../views-mobile/MobilePropertyView.vue'
+import MobileReportEditor from '../views-mobile/MobileReportEditor.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -81,14 +84,28 @@ const router = createRouter({
       name: 'TemplateEdit',
       component: TemplateEditorView,
       meta: { requiresAuth: true }
-    }
+    },
+    {
+      path: '/mobile',
+      name: 'MobileHome',
+      component: MobileHome,
+    },
+    {
+      path: '/mobile/inspection/:id',
+      name: 'MobilePropertyView',
+      component: MobilePropertyView,
+    },
+    {
+      path: '/mobile/inspection/:id/report',
+      name: 'MobileReportEditor',
+      component: MobileReportEditor,
+    },
   ]
 })
 
 // Navigation guard
 router.beforeEach((to, from, next) => {
   const token = localStorage.getItem('token')
-
   if (to.meta.requiresAuth && !token) {
     next('/login')
   } else if (to.path === '/login' && token) {

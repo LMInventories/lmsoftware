@@ -16,3 +16,8 @@ const authStore = useAuthStore()
 authStore.initAuth()
 
 app.mount('#app')
+
+import { Capacitor } from '@capacitor/core'
+if (Capacitor.isNativePlatform() && router.currentRoute.value.path === '/') {
+  router.replace('/mobile')
+}

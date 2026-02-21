@@ -56,6 +56,18 @@ const form = ref({
   include_photos: false
 })
 
+// ── PDF import state (for Check Out with no linked Check In) ─────────
+const pdfFile     = ref(null)
+const pdfFileName = ref('')
+
+function onPdfSelected(e) {
+  const file = e.target?.files?.[0] || e.dataTransfer?.files?.[0]
+  if (!file) return
+  if (file.type !== 'application/pdf') { toast.error('Please choose a PDF file'); return }
+  pdfFile.value     = file
+  pdfFileName.value = file.name
+}
+
 // ── Lifecycle suggestion state ─────────────────────────────────────────
 const propertyHistory    = ref([])
 const lifecycleSuggestion = ref(null)  // { sourceId, sourceType, sourceDateStr, label }
@@ -67,6 +79,8 @@ watch(
   async ([propId, iType]) => {
     lifecycleSuggestion.value = null
     form.value.source_inspection_id = null
+    pdfFile.value     = null
+    pdfFileName.value = ''
     if (!propId) return
 
     historyLoading.value = true
@@ -347,6 +361,8 @@ function openModal() {
   }
   lifecycleSuggestion.value = null
   propertyHistory.value = []
+  pdfFile.value     = null
+  pdfFileName.value = ''
   showModal.value = true
 }
 
@@ -388,8 +404,98 @@ async function handleSubmit() {
       payload.conduct_date = form.value.conduct_date + 'T00:00:00'
     }
 
-    await api.createInspection(payload)
-    toast.success('Inspection created')
+    const createRes = await api.createInspection(payload)
+    const newId = createRes.data?.id || createRes.data?.inspection?.id
+
+    // If a PDF was uploaded for a check_out with no linked source, process it now
+    if (pdfFile.value && form.value.inspection_type === 'check_out' && newId) {
+      toast.info('Analysing PDF — please wait…')
+      try {
+        const base64 = await new Promise((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload  = e => resolve(e.target.result.split(',')[1])
+          reader.onerror = reject
+          reader.readAsDataURL(pdfFile.value)
+        })
+
+        const response = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'claude-opus-4-6',
+            max_tokens: 8000,
+            messages: [{
+              role: 'user',
+              content: [
+                { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } },
+                { type: 'text', text: `You are parsing a UK property inspection report PDF (inventory or check-in) to extract structured data for a Check Out system.
+
+Extract ALL rooms and items you find. For each item extract:
+- label: the item name/label
+- description: physical description
+- condition: condition at check-in
+
+The PDF format is typically rows like: [Room.Item] [Item Name] [Description] [Condition]
+
+Return ONLY valid JSON, no markdown:
+{
+  "rooms": [
+    { "name": "Lounge", "items": [{ "label": "Door, Frame & Furniture", "description": "White painted panel door", "condition": "Appears in good condition" }] }
+  ],
+  "fixedSections": {
+    "condition_summary": [{ "name": "General Condition", "condition": "Good overall" }],
+    "keys": [{ "name": "Front Door Key", "description": "2x Yale, 1x Deadlock" }],
+    "meter_readings": [{ "name": "Gas Meter", "locationSerial": "Under stairs SN123", "reading": "12345.6" }],
+    "cleaning_summary": [{ "name": "General Cleanliness", "cleanliness": "Professionally Cleaned", "cleanlinessNotes": "" }]
+  }
+}` }
+              ]
+            }]
+          })
+        })
+
+        if (response.ok) {
+          const apiData  = await response.json()
+          const rawText  = (apiData.content || []).map(b => b.text || '').join('')
+          const clean    = rawText.replace(/```json|```/g, '').trim()
+          const parsed   = JSON.parse(clean)
+
+          // Build sourceReportData keyed by synthetic room/item IDs
+          const built = {}
+          for (const room of (parsed.rooms || [])) {
+            const roomId = 'imp_rm_' + room.name.replace(/[^a-z0-9]/gi, '_').toLowerCase()
+            built[roomId] = { _importedName: room.name }
+            for (const item of (room.items || [])) {
+              const itemId = 'imp_it_' + item.label.replace(/[^a-z0-9]/gi, '_').toLowerCase()
+              built[roomId][itemId] = { description: item.description || '', condition: item.condition || '' }
+            }
+          }
+          for (const [type, rows] of Object.entries(parsed.fixedSections || {})) {
+            const secId = 'imp_fx_' + type
+            built[secId] = {}
+            for (const [i, row] of (rows || []).entries()) {
+              built[secId]['imp_fxr_' + i] = { ...row }
+            }
+          }
+
+          // Save to the new inspection's report_data
+          const reportDataPayload = { _importedSource: built, _importedFileName: pdfFileName.value }
+          await api.updateInspection(newId, { report_data: JSON.stringify(reportDataPayload) })
+
+          const roomCount = (parsed.rooms || []).length
+          const itemCount = (parsed.rooms || []).reduce((s, r) => s + (r.items || []).length, 0)
+          toast.success(`PDF imported: ${roomCount} rooms, ${itemCount} items loaded as Check In reference`)
+        } else {
+          toast.warning('Inspection created but PDF analysis failed — you can import it from the report screen')
+        }
+      } catch (pdfErr) {
+        console.error('PDF import error:', pdfErr)
+        toast.warning('Inspection created but PDF analysis failed — you can import it from the report screen')
+      }
+    } else {
+      toast.success('Inspection created')
+    }
+
     showModal.value = false
     fetchInspections()
   } catch (error) {
@@ -636,6 +742,43 @@ onMounted(() => {
             </div>
           </div>
           <!-- ────────────────────────────────────────────────────────── -->
+
+          <!-- ── PDF import for Check Out with no linked Check In ──── -->
+          <div
+            v-if="form.inspection_type === 'check_out' && !historyLoading && !lifecycleSuggestion"
+            class="pdf-import-section"
+          >
+            <div class="pdf-import-header">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+              <span>No previous Check In found for this property</span>
+            </div>
+            <p class="pdf-import-hint">
+              Upload a Check In or Inventory PDF from another system to use as the reference for this Check Out.
+              The report's room layout, descriptions, and conditions will be extracted automatically.
+            </p>
+            <label
+              class="pdf-dropzone-sm"
+              :class="{ 'pdf-dropzone-sm-has': pdfFileName }"
+              @dragover.prevent
+              @drop.prevent="onPdfSelected"
+            >
+              <template v-if="!pdfFileName">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                <span>Drop PDF here or <u>browse</u></span>
+                <span class="pdf-dz-sm-hint">Optional — can also import from the report screen</span>
+              </template>
+              <template v-else>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                <span class="pdf-dz-sm-name">{{ pdfFileName }}</span>
+                <span class="pdf-dz-sm-hint">Click to change</span>
+              </template>
+              <input type="file" accept="application/pdf" style="display:none" @change="onPdfSelected" />
+            </label>
+            <p v-if="pdfFileName" class="pdf-import-notice">
+              ✓ PDF will be analysed by AI when you create the inspection
+            </p>
+          </div>
+          <!-- ──────────────────────────────────────────────────────── -->
 
           <!-- Conduct Date -->
           <div class="form-group">
@@ -1171,4 +1314,65 @@ onMounted(() => {
   font-weight: 700;
   margin-left: 4px;
 }
+
+/* ── PDF import section in create modal ───────────────────────────── */
+.pdf-import-section {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.pdf-import-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #475569;
+}
+.pdf-import-hint {
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.5;
+  margin: 0;
+}
+.pdf-dropzone-sm {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  border: 2px dashed #cbd5e1;
+  border-radius: 8px;
+  padding: 16px;
+  cursor: pointer;
+  transition: all 0.15s;
+  background: white;
+  text-align: center;
+  font-size: 13px;
+  color: #64748b;
+}
+.pdf-dropzone-sm:hover,
+.pdf-dropzone-sm-has {
+  border-color: #6366f1;
+  background: #f5f3ff;
+  color: #4338ca;
+}
+.pdf-dz-sm-hint {
+  font-size: 11px;
+  color: #94a3b8;
+}
+.pdf-dz-sm-name {
+  font-weight: 600;
+  color: #4338ca;
+}
+.pdf-import-notice {
+  font-size: 12px;
+  color: #16a34a;
+  font-weight: 600;
+  margin: 0;
+}
+
 </style>

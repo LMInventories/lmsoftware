@@ -18,6 +18,7 @@ authStore.initAuth()
 app.mount('#app')
 
 import { Capacitor } from '@capacitor/core'
-if (Capacitor.isNativePlatform() && router.currentRoute.value.path === '/') {
-  router.replace('/mobile')
+if (Capacitor.isNativePlatform()) {
+  const token = localStorage.getItem('token')
+  router.replace(token ? '/mobile' : '/mobile/login')
 }

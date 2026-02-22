@@ -10,6 +10,7 @@ import UsersView from '../views/UsersView.vue'
 import SettingsView from '../views/SettingsView.vue'
 import TemplateEditorView from '../views/TemplateEditorView.vue'
 import MobileHome         from '../views-mobile/MobileHome.vue'
+import MobileLogin        from '../views-mobile/MobileLogin.vue'
 import MobilePropertyView from '../views-mobile/MobilePropertyView.vue'
 import MobileReportEditor from '../views-mobile/MobileReportEditor.vue'
 
@@ -86,19 +87,27 @@ const router = createRouter({
       meta: { requiresAuth: true }
     },
     {
+      path: '/mobile/login',
+      name: 'MobileLogin',
+      component: MobileLogin,
+    },
+    {
       path: '/mobile',
       name: 'MobileHome',
       component: MobileHome,
+      meta: { requiresMobileAuth: true },
     },
     {
       path: '/mobile/inspection/:id',
       name: 'MobilePropertyView',
       component: MobilePropertyView,
+      meta: { requiresMobileAuth: true },
     },
     {
       path: '/mobile/inspection/:id/report',
       name: 'MobileReportEditor',
       component: MobileReportEditor,
+      meta: { requiresMobileAuth: true },
     },
   ]
 })
@@ -106,6 +115,14 @@ const router = createRouter({
 // Navigation guard
 router.beforeEach((to, from, next) => {
   const token = localStorage.getItem('token')
+
+  // Mobile auth guard — redirect to mobile login if not logged in
+  if (to.meta.requiresMobileAuth && !token) {
+    next('/mobile/login')
+    return
+  }
+
+  // Desktop auth guard
   if (to.meta.requiresAuth && !token) {
     next('/login')
   } else if (to.path === '/login' && token) {

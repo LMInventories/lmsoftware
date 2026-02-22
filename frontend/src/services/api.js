@@ -1,8 +1,29 @@
 import axios from 'axios'
 
-// Use the same host as the frontend, but port 5000 for the backend.
-// This means it works on localhost AND on your local network IP (mobile, etc.)
-const API_URL = `${window.location.protocol}//${window.location.hostname}:5000`
+// ── API URL ─────────────────────────────────────────────────────────────────
+// Android WebViews always report window.location.hostname as 'localhost'.
+// We detect this and point straight at the real server IP instead.
+// No Capacitor import needed — avoids any plugin-load timing issues.
+//
+// ⚠️  Set BACKEND_LAN_IP to your PC's Wi-Fi IPv4 address (run: ipconfig)
+//
+const BACKEND_LAN_IP = '192.168.50.2'
+
+const API_URL = (() => {
+  try {
+    const hostname = window.location.hostname
+    const protocol = window.location.protocol
+    // Capacitor/Ionic WebView always has hostname 'localhost' on device
+    if (hostname === 'localhost' || protocol === 'capacitor:' || protocol === 'ionic:') {
+      return `http://${BACKEND_LAN_IP}:5000`
+    }
+    return `${protocol}//${hostname}:5000`
+  } catch {
+    return `http://${BACKEND_LAN_IP}:5000`
+  }
+})()
+
+console.log('[api] API_URL resolved to:', API_URL)
 
 // Create a single axios instance — all requests go through this
 const axiosInstance = axios.create({
@@ -28,8 +49,10 @@ axiosInstance.interceptors.response.use(
     if (error.response?.status === 401) {
       localStorage.removeItem('token')
       localStorage.removeItem('user')
-      if (window.location.pathname !== '/login') {
-        window.location.href = '/login'
+      const isMobile = window.location.pathname.startsWith('/mobile')
+      const loginPath = isMobile ? '/mobile/login' : '/login'
+      if (window.location.pathname !== loginPath) {
+        window.location.href = loginPath
       }
     }
     return Promise.reject(error)

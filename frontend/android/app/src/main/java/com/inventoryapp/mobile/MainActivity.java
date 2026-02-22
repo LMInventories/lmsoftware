@@ -1,4 +1,4 @@
-package com.inventoryapp.mobile;
+package com.inspectpro.mobile;
 
 import com.getcapacitor.BridgeActivity;
 

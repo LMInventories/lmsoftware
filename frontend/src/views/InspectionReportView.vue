@@ -397,24 +397,465 @@ function fixedItemLabel(sec, rowId, rowName) {
 }
 
 // ── Photo viewer (per item, all inspection types) ────────────────────
-// Reads photos from reportData[roomId][itemId].photos — populated by mobile app later.
-// This is a placeholder: shows "no photos" gracefully until photos exist.
-const photoViewer = ref({ show: false, photos: [], index: 0, ref: '', label: '' })
+const photoViewer = ref({
+  show: false, photos: [], index: 0, ref: '', label: '',
+  sectionId: null, rowId: null, // source location for move/delete
+})
+// Multi-select state: set of selected indices
+const lbSelected  = ref(new Set())
+const lbMoving    = ref(false)   // whether move-picker is open
+
 function getItemPhotos(roomId, itemId) {
   return reportData.value[roomId]?.[String(itemId)]?.photos || []
 }
 function openItemPhotos(ref, label, photos, startIndex = 0) {
   if (!photos.length) return
-  photoViewer.value = { show: true, photos, index: startIndex, ref, label }
+  photoViewer.value = { show: true, photos, index: startIndex, ref, label, sectionId: null, rowId: null }
+  lbSelected.value  = new Set()
+  lbMoving.value    = false
 }
-function photoViewerNext() { if (photoViewer.value.index < photoViewer.value.photos.length - 1) photoViewer.value.index++ }
-function photoViewerPrev() { if (photoViewer.value.index > 0) photoViewer.value.index-- }
-// Open lightbox at a specific thumbnail index — called from inline photo panels
 function openLightbox(sectionId, rowId, index) {
   const photos = getPhotos(sectionId, rowId)
   if (!photos.length) return
-  photoViewer.value = { show: true, photos, index, ref: '', label: '' }
+  photoViewer.value = { show: true, photos, index, ref: '', label: '', sectionId, rowId: String(rowId) }
+  lbSelected.value  = new Set()
+  lbMoving.value    = false
 }
+function photoViewerNext() { if (photoViewer.value.index < photoViewer.value.photos.length - 1) photoViewer.value.index++ }
+function photoViewerPrev() { if (photoViewer.value.index > 0) photoViewer.value.index-- }
+function closeLightbox() { photoViewer.value.show = false; lbSelected.value = new Set(); lbMoving.value = false }
+
+// Delete current photo, or all selected photos from the lightbox
+function lbDeletePhotos() {
+  const { sectionId, rowId, index } = photoViewer.value
+  if (!sectionId) return
+  const arr = reportData.value[sectionId]?.[rowId]?._photos
+  if (!arr) return
+
+  const toDelete = lbSelected.value.size > 0
+    ? [...lbSelected.value].sort((a,b) => b - a)   // reverse for safe splice
+    : [index]
+
+  // Splice in reverse order
+  toDelete.forEach(i => arr.splice(i, 1))
+  unsaved.value = true
+  lbSelected.value = new Set()
+
+  if (!arr.length) { closeLightbox(); return }
+
+  // Stay on a valid index
+  const newIdx = Math.min(photoViewer.value.index, arr.length - 1)
+  photoViewer.value.photos = [...arr]
+  photoViewer.value.index  = newIdx
+  toast.success(toDelete.length + ' photo' + (toDelete.length !== 1 ? 's' : '') + ' deleted')
+}
+
+// Delete selected photos from the grid
+function gridDeletePhotos() {
+  if (!gridSelected.value.size) return
+  const { sectionId, rowId, allSection } = photoGrid.value
+
+  if (allSection) {
+    // Remove from their individual source arrays
+    // Group by source to batch-delete
+    const bySource = {}
+    ;[...gridSelected.value].sort((a,b) => b-a).forEach(i => {
+      const entry = pgAllPhotos.value[i]
+      if (!entry) return
+      const key = entry.sectionId + ':' + entry.rowId
+      if (!bySource[key]) bySource[key] = { sectionId: entry.sectionId, rowId: entry.rowId, indices: [] }
+      bySource[key].indices.push(entry.index)
+    })
+    Object.values(bySource).forEach(({ sectionId: sid, rowId: rid, indices }) => {
+      const arr = reportData.value[sid]?.[rid]?._photos
+      if (!arr) return
+      ;[...new Set(indices)].sort((a,b) => b-a).forEach(i => arr.splice(i, 1))
+    })
+    unsaved.value = true
+    const count = gridSelected.value.size
+    gridSelected.value = new Set()
+    pgMoving.value = false
+    toast.success(count + ' photo' + (count !== 1 ? 's' : '') + ' deleted')
+    // Rebuild the flat array
+    // Re-open to refresh (find which sec/room it was)
+    closePhotoGrid()
+    return
+  }
+
+  const arr = reportData.value[sectionId]?.[rowId]?._photos
+  if (!arr) return
+  const count = gridSelected.value.size
+  ;[...gridSelected.value].sort((a,b) => b-a).forEach(i => arr.splice(i, 1))
+  unsaved.value = true
+  gridSelected.value = new Set()
+  pgMoving.value = false
+  toast.success(count + ' photo' + (count !== 1 ? 's' : '') + ' deleted')
+  if (!arr.length) closePhotoGrid()
+}
+
+// ── Photo grid (View All) ─────────────────────────────────────────────
+const photoGrid = ref({ show: false, sectionId: null, rowId: null, label: '', allSection: false })
+
+// Count total photos across an entire section (all rows + extras)
+function sectionPhotoCount(sec) {
+  let total = 0
+  for (const row of (sec.rows || [])) {
+    total += getPhotos(sec.id, row.id).length
+  }
+  for (const ex of getExtra(sec.id)) {
+    total += getPhotos(sec.id, ex._eid).length
+  }
+  return total
+}
+
+// Count total photos across a room (overview + all items)
+function roomPhotoCount(room) {
+  let total = getPhotos(room.id, '_overview').length
+  for (const item of getOrderedRoomItems(room)) {
+    const iid = item._type === 'extra' ? item._eid : String(item.id)
+    total += getPhotos(room.id, iid).length
+  }
+  return total
+}
+
+// Get all photos across a section as flat array of { photo, sectionId, rowId, index, label }
+function getSectionAllPhotos(sec) {
+  const all = []
+  for (const row of (sec.rows || [])) {
+    if (isHidden(sec.id, row.id)) continue
+    const photos = getPhotos(sec.id, row.id)
+    photos.forEach((ph, i) => all.push({ photo: ph, sectionId: sec.id, rowId: String(row.id), index: i, label: row.name }))
+  }
+  for (const ex of getExtra(sec.id)) {
+    const photos = getPhotos(sec.id, ex._eid)
+    photos.forEach((ph, i) => all.push({ photo: ph, sectionId: sec.id, rowId: ex._eid, index: i, label: ex.name || 'Extra' }))
+  }
+  return all
+}
+
+function getRoomAllPhotos(room) {
+  const all = []
+  const ov = getPhotos(room.id, '_overview')
+  ov.forEach((ph, i) => all.push({ photo: ph, sectionId: room.id, rowId: '_overview', index: i, label: 'Overview' }))
+  for (const item of getOrderedRoomItems(room)) {
+    const iid = item._type === 'extra' ? item._eid : String(item.id)
+    const photos = getPhotos(room.id, iid)
+    const lbl = item.label || item._label || iid
+    photos.forEach((ph, i) => all.push({ photo: ph, sectionId: room.id, rowId: iid, index: i, label: lbl }))
+  }
+  return all
+}
+
+// Section-level "View All" — opens grid showing all photos with sub-labels
+const pgAllPhotos = ref([]) // flat array when viewing whole section/room
+
+function openSectionPhotoGrid(sec) {
+  const all = getSectionAllPhotos(sec)
+  if (!all.length) return
+  pgAllPhotos.value = all
+  photoGrid.value = { show: true, sectionId: sec.id, rowId: null, label: sec.name, allSection: true }
+  gridSelected.value = new Set()
+  pgMoving.value = false
+}
+
+function openRoomPhotoGrid(room) {
+  const all = getRoomAllPhotos(room)
+  if (!all.length) return
+  pgAllPhotos.value = all
+  photoGrid.value = { show: true, sectionId: room.id, rowId: null, label: room.name, allSection: true }
+  gridSelected.value = new Set()
+  pgMoving.value = false
+}
+const gridSelected = ref(new Set())
+
+function openPhotoGrid(sectionId, rowId, label) {
+  pgAllPhotos.value = []
+  photoGrid.value  = { show: true, sectionId, rowId: String(rowId), label, allSection: false }
+  gridSelected.value = new Set()
+  pgMoving.value = false
+}
+function closePhotoGrid() { photoGrid.value.show = false; gridSelected.value = new Set(); pgMoving.value = false; pgAllPhotos.value = [] }
+
+function openFromGrid(idx) {
+  const { sectionId, rowId, label } = photoGrid.value
+  closePhotoGrid()
+  openLightbox(sectionId, rowId, idx)
+  photoViewer.value.label = label
+}
+
+function gridToggleSelect(idx) {
+  const s = new Set(gridSelected.value)
+  if (s.has(idx)) s.delete(idx); else s.add(idx)
+  gridSelected.value = s
+}
+function gridSelectAll() {
+  const photos = getPhotos(photoGrid.value.sectionId, photoGrid.value.rowId)
+  gridSelected.value = new Set(photos.map((_, i) => i))
+}
+function gridClearSelection() { gridSelected.value = new Set() }
+
+// Open selected grid photos in lightbox
+function openGridSelectionInLightbox() {
+  if (!gridSelected.value.size) return
+  const first = Math.min(...gridSelected.value)
+  const { sectionId, rowId, label } = photoGrid.value
+  closePhotoGrid()
+  openLightbox(sectionId, rowId, first)
+  photoViewer.value.label = label
+  lbSelected.value = new Set(gridSelected.value)
+}
+
+// Move selected grid photos to another section
+function gridMovePhotos(destSectionId, destRowId) {
+  const { sectionId, rowId } = photoGrid.value
+  const indices = gridSelected.value.size > 0
+    ? [...gridSelected.value].sort((a, b) => a - b)
+    : []
+  if (!indices.length) return
+
+  const srcArr = reportData.value[sectionId]?.[rowId]?._photos
+  if (!srcArr) return
+  const toMove = indices.map(i => srcArr[i])
+
+  // Add to destination
+  const dsid = destSectionId, drid = String(destRowId)
+  if (!reportData.value[dsid]) reportData.value[dsid] = {}
+  if (!reportData.value[dsid][drid]) reportData.value[dsid][drid] = {}
+  if (!reportData.value[dsid][drid]._photos) reportData.value[dsid][drid]._photos = []
+  reportData.value[dsid][drid]._photos.push(...toMove)
+
+  // Remove from source in reverse order
+  ;[...indices].reverse().forEach(i => srcArr.splice(i, 1))
+  unsaved.value = true
+  gridSelected.value = new Set()
+  pgMoving.value = false
+
+  toast.success(toMove.length + ' photo(s) moved')
+  if (!srcArr.length) closePhotoGrid()
+}
+
+// Photo grid move tree state
+const pgMoving = ref(false)
+const pgTreeExpanded = ref(new Set())
+
+function pgOpenMoveTree() {
+  // Auto-expand all on open
+  const keys = new Set()
+  for (const sec of fixedSections.value) keys.add('pgsec_' + sec.id)
+  for (const room of rooms.value) keys.add('pgroom_' + room.id)
+  pgTreeExpanded.value = keys
+  pgMoving.value = true
+}
+function pgTreeToggle(key) {
+  const s = new Set(pgTreeExpanded.value)
+  if (s.has(key)) s.delete(key); else s.add(key)
+  pgTreeExpanded.value = s
+}
+
+const pgMoveTree = computed(() => {
+  const tree = []
+  const srcSid = photoGrid.value.sectionId
+  const srcRid = photoGrid.value.rowId
+
+  for (const sec of fixedSections.value) {
+    const children = []
+    for (const row of (sec.rows || [])) {
+      if (isHidden(sec.id, row.id)) continue
+      if (srcSid === sec.id && srcRid === String(row.id)) continue
+      children.push({ key: sec.id+':'+row.id, label: fixedRowRef(sec, row.id) + ' · ' + row.name, sectionId: sec.id, rowId: String(row.id) })
+    }
+    for (const ex of getExtra(sec.id)) {
+      if (srcSid === sec.id && srcRid === ex._eid) continue
+      children.push({ key: sec.id+':'+ex._eid, label: '(extra) ' + (ex.name || ex._eid), sectionId: sec.id, rowId: ex._eid })
+    }
+    if (children.length) tree.push({ key: 'pgsec_'+sec.id, label: fixedSectionIndexMap.value[sec.id] + ' · ' + sec.name, type: 'fixed', children })
+  }
+
+  for (const room of rooms.value) {
+    const children = []
+    if (!(srcSid === room.id && srcRid === '_overview'))
+      children.push({ key: room.id+'_overview', label: 'Overview', sectionId: room.id, rowId: '_overview' })
+    for (const item of getOrderedRoomItems(room)) {
+      const iid = item._type === 'extra' ? item._eid : String(item.id)
+      if (srcSid === room.id && srcRid === iid) continue
+      children.push({ key: room.id+':'+iid, label: item.label || item._label || iid, sectionId: room.id, rowId: iid })
+    }
+    if (children.length) tree.push({ key: 'pgroom_'+room.id, label: room.name, type: 'room', children })
+  }
+  return tree
+})
+
+// ── Tree-style move destinations ──────────────────────────────────────
+// Groups destinations by parent section/room with expand/collapse
+const lbMoveTreeExpanded = ref(new Set())
+
+function lbMoveTreeToggle(key) {
+  const s = new Set(lbMoveTreeExpanded.value)
+  if (s.has(key)) s.delete(key); else s.add(key)
+  lbMoveTreeExpanded.value = s
+}
+
+function lbOpenMoveTree() {
+  const keys = new Set()
+  for (const sec of fixedSections.value) keys.add('sec_' + sec.id)
+  for (const room of rooms.value)        keys.add('room_' + room.id)
+  lbTreeExpanded.value = keys
+  lbMoving.value = true
+}
+
+const lbMoveTree = computed(() => {
+  const tree = []
+  const srcSid = photoViewer.value.sectionId
+  const srcRid = photoViewer.value.rowId
+
+  // Fixed sections
+  for (const sec of fixedSections.value) {
+    const children = []
+    for (const row of (sec.rows || [])) {
+      if (isHidden(sec.id, row.id)) continue
+      if (srcSid === sec.id && srcRid === String(row.id)) continue
+      children.push({ key: sec.id+':'+row.id, label: fixedRowRef(sec, row.id) + ' · ' + row.name, sectionId: sec.id, rowId: String(row.id) })
+    }
+    for (const ex of getExtra(sec.id)) {
+      if (srcSid === sec.id && srcRid === ex._eid) continue
+      children.push({ key: sec.id+':'+ex._eid, label: '(extra) ' + (ex.name || ex._eid), sectionId: sec.id, rowId: ex._eid })
+    }
+    if (children.length) tree.push({ key: 'sec_' + sec.id, label: fixedSectionIndexMap.value[sec.id] + ' · ' + sec.name, type: 'section', children })
+  }
+
+  // Rooms
+  for (const room of rooms.value) {
+    const children = []
+    // Overview
+    if (!(srcSid === room.id && srcRid === '_overview')) {
+      children.push({ key: room.id+'_ov', label: 'Overview', sectionId: room.id, rowId: '_overview' })
+    }
+    for (const item of getOrderedRoomItems(room)) {
+      const iid = item._type === 'extra' ? item._eid : String(item.id)
+      if (srcSid === room.id && srcRid === iid) continue
+      const lbl = item.label || item._label || iid
+      children.push({ key: room.id+':'+iid, label: lbl, sectionId: room.id, rowId: iid })
+    }
+    if (children.length) tree.push({ key: 'room_' + room.id, label: room.name, type: 'room', children })
+  }
+
+  return tree
+})
+
+
+
+// Toggle selection of a photo by index
+function lbToggleSelect(idx) {
+  const s = new Set(lbSelected.value)
+  if (s.has(idx)) s.delete(idx); else s.add(idx)
+  lbSelected.value = s
+}
+function lbSelectAll() {
+  lbSelected.value = new Set(photoViewer.value.photos.map((_, i) => i))
+}
+function lbClearSelection() { lbSelected.value = new Set() }
+
+// Rotate current photo 90° clockwise using canvas
+async function lbRotateCurrent() {
+  const idx = photoViewer.value.index
+  const src = photoViewer.value.photos[idx]
+  if (!src) return
+  const rotated = await rotateBase64(src, 90)
+  photoViewer.value.photos.splice(idx, 1, rotated)
+  // Persist back to reportData
+  const { sectionId, rowId } = photoViewer.value
+  if (sectionId && rowId) {
+    const arr = reportData.value[sectionId]?.[rowId]?._photos
+    if (arr) { arr.splice(idx, 1, rotated); unsaved.value = true }
+  }
+}
+
+function rotateBase64(base64, degrees) {
+  return new Promise((resolve) => {
+    const img = new Image()
+    img.onload = () => {
+      const canvas = document.createElement('canvas')
+      const swap   = degrees % 180 !== 0
+      canvas.width  = swap ? img.height : img.width
+      canvas.height = swap ? img.width  : img.height
+      const ctx = canvas.getContext('2d')
+      ctx.translate(canvas.width / 2, canvas.height / 2)
+      ctx.rotate((degrees * Math.PI) / 180)
+      ctx.drawImage(img, -img.width / 2, -img.height / 2)
+      resolve(canvas.toDataURL('image/jpeg', 0.92))
+    }
+    img.src = base64
+  })
+}
+
+// Move selected photos (or current if none selected) to another section/item
+function lbMovePhotos(destSectionId, destRowId) {
+  const { sectionId, rowId, photos } = photoViewer.value
+  if (!sectionId || !rowId) { toast.warning('Cannot move — source location unknown'); return }
+
+  const indices = lbSelected.value.size > 0
+    ? [...lbSelected.value].sort((a, b) => a - b)
+    : [photoViewer.value.index]
+
+  const toMove = indices.map(i => photos[i])
+
+  // Add to destination
+  const dsid = destSectionId, drid = String(destRowId)
+  if (!reportData.value[dsid]) reportData.value[dsid] = {}
+  if (!reportData.value[dsid][drid]) reportData.value[dsid][drid] = {}
+  if (!reportData.value[dsid][drid]._photos) reportData.value[dsid][drid]._photos = []
+  reportData.value[dsid][drid]._photos.push(...toMove)
+
+  // Remove from source (splice in reverse order so indices stay valid)
+  const srcArr = reportData.value[sectionId]?.[rowId]?._photos
+  if (srcArr) {
+    ;[...indices].reverse().forEach(i => srcArr.splice(i, 1))
+  }
+
+  unsaved.value = true
+  lbMoving.value = false
+  lbSelected.value = new Set()
+
+  // If no photos left, close lightbox
+  if (!srcArr || srcArr.length === 0) {
+    closeLightbox()
+    toast.success(`${toMove.length} photo(s) moved`)
+  } else {
+    // Refresh viewer photos
+    photoViewer.value.photos = [...srcArr]
+    photoViewer.value.index  = Math.min(photoViewer.value.index, srcArr.length - 1)
+    toast.success(`${toMove.length} photo(s) moved`)
+  }
+}
+
+// Build flat list of all move destinations (section + row combos)
+const lbMoveDestinations = computed(() => {
+  const dests = []
+  for (const sec of fixedSections.value) {
+    for (const row of (sec.rows || [])) {
+      if (isHidden(sec.id, row.id)) continue
+      const skip = photoViewer.value.sectionId === sec.id && photoViewer.value.rowId === String(row.id)
+      if (skip) continue
+      dests.push({ label: fixedItemLabel(sec, row.id, row.name), sectionId: sec.id, rowId: String(row.id) })
+    }
+    for (const ex of getExtra(sec.id)) {
+      const skip = photoViewer.value.sectionId === sec.id && photoViewer.value.rowId === ex._eid
+      if (skip) continue
+      dests.push({ label: sec.name + ' — (extra)', sectionId: sec.id, rowId: ex._eid })
+    }
+  }
+  for (const room of rooms.value) {
+    dests.push({ label: room.name + ' — Overview', sectionId: room.id, rowId: '_overview' })
+    for (const item of getOrderedRoomItems(room)) {
+      const iid = item._type === 'extra' ? item._eid : String(item.id)
+      const skip = photoViewer.value.sectionId === room.id && photoViewer.value.rowId === iid
+      if (skip) continue
+      const lbl  = item.label || item._label || ('Item ' + iid)
+      dests.push({ label: room.name + ' — ' + lbl, sectionId: room.id, rowId: iid })
+    }
+  }
+  return dests
+})
 
 // Check In condition read-only getter — reads from the source Check In's saved report_data
 function getCI(sectionId, rowId, field) {
@@ -1082,6 +1523,16 @@ onBeforeUnmount(() => {
               <div class="card-hd-right">
                 <span v-if="hasHidden(sec.id)" class="hidden-badge">{{ reportData[sec.id]?._hidden?.length }} hidden</span>
                 <span class="card-hint">{{ sec.rows?.length || 0 }} items</span>
+                <button
+                  v-if="sectionPhotoCount(sec) > 0"
+                  class="card-view-all-btn"
+                  @click.stop="openSectionPhotoGrid(sec)"
+                  :title="sectionPhotoCount(sec) + ' photos in this section'"
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+                  View All Photos
+                  <span class="card-photo-count">{{ sectionPhotoCount(sec) }}</span>
+                </button>
               </div>
             </div>
 
@@ -1100,7 +1551,7 @@ onBeforeUnmount(() => {
                       <td class="td-del"><button class="del-btn" @click="hideRow(sec.id,row.id)">×</button></td>
                     </tr>
                     <tr v-if="isPanelOpen(sec.id,row.id)" class="photo-panel-row">
-                      <td colspan="6" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,row.id)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,row.id,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,row.id,pi)">×</button></div><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,row.id,e.target.files)" /></label></div></td>
+                      <td colspan="6" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,row.id)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,row.id,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,row.id,pi)">×</button></div><button v-if="getPhotos(sec.id,row.id).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(sec.id,row.id,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,row.id,e.target.files)" /></label></div></td>
                     </tr>
                   </template>
                   <template v-for="(ex,idx) in getExtra(sec.id)" :key="ex._eid">
@@ -1113,7 +1564,7 @@ onBeforeUnmount(() => {
                       <td class="td-del"><button class="del-btn" @click="removeExtraRow(sec.id,ex._eid)">×</button></td>
                     </tr>
                     <tr v-if="isPanelOpen(sec.id,ex._eid)" class="photo-panel-row">
-                      <td colspan="5" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,ex._eid)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,ex._eid,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,ex._eid,pi)">×</button></div><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,ex._eid,e.target.files)" /></label></div></td>
+                      <td colspan="5" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,ex._eid)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,ex._eid,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,ex._eid,pi)">×</button></div><button v-if="getPhotos(sec.id,ex._eid).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(sec.id,ex._eid,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,ex._eid,e.target.files)" /></label></div></td>
                     </tr>
                   </template>
                 </tbody>
@@ -1136,7 +1587,7 @@ onBeforeUnmount(() => {
                       <td class="td-cam"><button class="cam-btn mic-btn" :class="{ 'mic-active': isItemRecording(sec.id,row.id), 'mic-has': !isItemRecording(sec.id,row.id) && getItemRecordings(sec.id,row.id).length }" @click.stop="toggleItemRecording(sec.id,row.id,fixedItemLabel(sec,row.id,row.name))" title="Record"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span v-if="getItemRecordings(sec.id,row.id).length && !isItemRecording(sec.id,row.id)" class="cam-count mic-count">{{ getItemRecordings(sec.id,row.id).length }}</span></button></td>
                       <td class="td-del"><button class="del-btn" @click="hideRow(sec.id,row.id)">×</button></td>
                     </tr>
-                    <tr v-if="isPanelOpen(sec.id,row.id)" class="photo-panel-row"><td colspan="6" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,row.id)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,row.id,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,row.id,pi)">×</button></div><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,row.id,e.target.files)" /></label></div></td></tr>
+                    <tr v-if="isPanelOpen(sec.id,row.id)" class="photo-panel-row"><td colspan="6" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,row.id)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,row.id,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,row.id,pi)">×</button></div><button v-if="getPhotos(sec.id,row.id).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(sec.id,row.id,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,row.id,e.target.files)" /></label></div></td></tr>
                   </template>
                   <template v-for="(ex,idx) in getExtra(sec.id)" :key="ex._eid">
                     <tr class="extra-row" draggable="true" @dragstart="onFixedDragStart(sec.id,idx)" @dragover.prevent @drop.prevent="onFixedDrop(sec.id,idx)">
@@ -1148,7 +1599,7 @@ onBeforeUnmount(() => {
                       <td class="td-cam"><button class="cam-btn mic-btn" :class="{ 'mic-active': isItemRecording(sec.id,ex._eid), 'mic-has': !isItemRecording(sec.id,ex._eid) && getItemRecordings(sec.id,ex._eid).length }" @click.stop="toggleItemRecording(sec.id,ex._eid,fixedItemLabel(sec,ex._eid,(ex.name||'Item')))" title="Record"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span v-if="getItemRecordings(sec.id,ex._eid).length && !isItemRecording(sec.id,ex._eid)" class="cam-count mic-count">{{ getItemRecordings(sec.id,ex._eid).length }}</span></button></td>
                       <td class="td-del"><button class="del-btn" @click="removeExtraRow(sec.id,ex._eid)">×</button></td>
                     </tr>
-                    <tr v-if="isPanelOpen(sec.id,ex._eid)" class="photo-panel-row"><td colspan="6" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,ex._eid)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,ex._eid,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,ex._eid,pi)">×</button></div><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,ex._eid,e.target.files)" /></label></div></td></tr>
+                    <tr v-if="isPanelOpen(sec.id,ex._eid)" class="photo-panel-row"><td colspan="6" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,ex._eid)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,ex._eid,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,ex._eid,pi)">×</button></div><button v-if="getPhotos(sec.id,ex._eid).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(sec.id,ex._eid,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,ex._eid,e.target.files)" /></label></div></td></tr>
                   </template>
                 </tbody>
               </table>
@@ -1169,7 +1620,7 @@ onBeforeUnmount(() => {
                       <td class="td-cam"><button class="cam-btn mic-btn" :class="{ 'mic-active': isItemRecording(sec.id,row.id), 'mic-has': !isItemRecording(sec.id,row.id) && getItemRecordings(sec.id,row.id).length }" @click.stop="toggleItemRecording(sec.id,row.id,fixedItemLabel(sec,row.id,row.name))" title="Record"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span v-if="getItemRecordings(sec.id,row.id).length && !isItemRecording(sec.id,row.id)" class="cam-count mic-count">{{ getItemRecordings(sec.id,row.id).length }}</span></button></td>
                       <td class="td-del"><button class="del-btn" @click="hideRow(sec.id,row.id)">×</button></td>
                     </tr>
-                    <tr v-if="isPanelOpen(sec.id,row.id)" class="photo-panel-row"><td colspan="5" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,row.id)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,row.id,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,row.id,pi)">×</button></div><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,row.id,e.target.files)" /></label></div></td></tr>
+                    <tr v-if="isPanelOpen(sec.id,row.id)" class="photo-panel-row"><td colspan="5" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,row.id)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,row.id,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,row.id,pi)">×</button></div><button v-if="getPhotos(sec.id,row.id).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(sec.id,row.id,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,row.id,e.target.files)" /></label></div></td></tr>
                   </template>
                   <template v-for="(ex,idx) in getExtra(sec.id)" :key="ex._eid">
                     <tr class="extra-row" draggable="true" @dragstart="onFixedDragStart(sec.id,idx)" @dragover.prevent @drop.prevent="onFixedDrop(sec.id,idx)">
@@ -1180,7 +1631,7 @@ onBeforeUnmount(() => {
                       <td class="td-cam"><button class="cam-btn mic-btn" :class="{ 'mic-active': isItemRecording(sec.id,ex._eid), 'mic-has': !isItemRecording(sec.id,ex._eid) && getItemRecordings(sec.id,ex._eid).length }" @click.stop="toggleItemRecording(sec.id,ex._eid,fixedItemLabel(sec,ex._eid,(ex.name||'Item')))" title="Record"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span v-if="getItemRecordings(sec.id,ex._eid).length && !isItemRecording(sec.id,ex._eid)" class="cam-count mic-count">{{ getItemRecordings(sec.id,ex._eid).length }}</span></button></td>
                       <td class="td-del"><button class="del-btn" @click="removeExtraRow(sec.id,ex._eid)">×</button></td>
                     </tr>
-                    <tr v-if="isPanelOpen(sec.id,ex._eid)" class="photo-panel-row"><td colspan="5" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,ex._eid)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,ex._eid,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,ex._eid,pi)">×</button></div><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,ex._eid,e.target.files)" /></label></div></td></tr>
+                    <tr v-if="isPanelOpen(sec.id,ex._eid)" class="photo-panel-row"><td colspan="5" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,ex._eid)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,ex._eid,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,ex._eid,pi)">×</button></div><button v-if="getPhotos(sec.id,ex._eid).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(sec.id,ex._eid,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,ex._eid,e.target.files)" /></label></div></td></tr>
                   </template>
                 </tbody>
               </table>
@@ -1205,7 +1656,7 @@ onBeforeUnmount(() => {
                     </select>
                     <input class="fld-input" style="flex:1" type="text" placeholder="Additional notes…" :value="get(sec.id,row.id,'notes')" @input="set(sec.id,row.id,'notes',$event.target.value)" />
                   </div>
-                  <div v-if="isPanelOpen(sec.id,row.id)" class="photo-panel-inline"><div v-for="(ph,pi) in getPhotos(sec.id,row.id)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,row.id,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,row.id,pi)">×</button></div><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,row.id,e.target.files)" /></label></div>
+                  <div v-if="isPanelOpen(sec.id,row.id)" class="photo-panel-inline"><div v-for="(ph,pi) in getPhotos(sec.id,row.id)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,row.id,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,row.id,pi)">×</button></div><button v-if="getPhotos(sec.id,row.id).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(sec.id,row.id,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,row.id,e.target.files)" /></label></div>
                 </div>
               </template>
               <template v-for="(ex,idx) in getExtra(sec.id)" :key="ex._eid">
@@ -1225,7 +1676,7 @@ onBeforeUnmount(() => {
                     </select>
                     <input class="fld-input" style="flex:1" type="text" placeholder="Notes…" :value="ex.notes" @input="setExtraField(sec.id,ex._eid,'notes',$event.target.value)" />
                   </div>
-                  <div v-if="isPanelOpen(sec.id,ex._eid)" class="photo-panel-inline"><div v-for="(ph,pi) in getPhotos(sec.id,ex._eid)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,ex._eid,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,ex._eid,pi)">×</button></div><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,ex._eid,e.target.files)" /></label></div>
+                  <div v-if="isPanelOpen(sec.id,ex._eid)" class="photo-panel-inline"><div v-for="(ph,pi) in getPhotos(sec.id,ex._eid)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,ex._eid,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,ex._eid,pi)">×</button></div><button v-if="getPhotos(sec.id,ex._eid).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(sec.id,ex._eid,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,ex._eid,e.target.files)" /></label></div>
                 </div>
               </template>
               <div class="add-row-bar"><button class="add-row-btn" @click="addExtraRow(sec.id,sec.type)">+ Add line</button></div>
@@ -1247,7 +1698,7 @@ onBeforeUnmount(() => {
                       <td class="td-cam"><button class="cam-btn mic-btn" :class="{ 'mic-active': isItemRecording(sec.id,row.id), 'mic-has': !isItemRecording(sec.id,row.id) && getItemRecordings(sec.id,row.id).length }" @click.stop="toggleItemRecording(sec.id,row.id,fixedItemLabel(sec,row.id,row.name))" title="Record"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span v-if="getItemRecordings(sec.id,row.id).length && !isItemRecording(sec.id,row.id)" class="cam-count mic-count">{{ getItemRecordings(sec.id,row.id).length }}</span></button></td>
                       <td class="td-del"><button class="del-btn" @click="hideRow(sec.id,row.id)">×</button></td>
                     </tr>
-                    <tr v-if="isPanelOpen(sec.id,row.id)" class="photo-panel-row"><td colspan="7" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,row.id)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,row.id,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,row.id,pi)">×</button></div><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,row.id,e.target.files)" /></label></div></td></tr>
+                    <tr v-if="isPanelOpen(sec.id,row.id)" class="photo-panel-row"><td colspan="7" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,row.id)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,row.id,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,row.id,pi)">×</button></div><button v-if="getPhotos(sec.id,row.id).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(sec.id,row.id,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,row.id,e.target.files)" /></label></div></td></tr>
                   </template>
                   <template v-for="(ex,idx) in getExtra(sec.id)" :key="ex._eid">
                     <tr class="extra-row" draggable="true" @dragstart="onFixedDragStart(sec.id,idx)" @dragover.prevent @drop.prevent="onFixedDrop(sec.id,idx)">
@@ -1260,7 +1711,7 @@ onBeforeUnmount(() => {
                       <td class="td-cam"><button class="cam-btn mic-btn" :class="{ 'mic-active': isItemRecording(sec.id,ex._eid), 'mic-has': !isItemRecording(sec.id,ex._eid) && getItemRecordings(sec.id,ex._eid).length }" @click.stop="toggleItemRecording(sec.id,ex._eid,fixedItemLabel(sec,ex._eid,(ex.name||'Item')))" title="Record"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span v-if="getItemRecordings(sec.id,ex._eid).length && !isItemRecording(sec.id,ex._eid)" class="cam-count mic-count">{{ getItemRecordings(sec.id,ex._eid).length }}</span></button></td>
                       <td class="td-del"><button class="del-btn" @click="removeExtraRow(sec.id,ex._eid)">×</button></td>
                     </tr>
-                    <tr v-if="isPanelOpen(sec.id,ex._eid)" class="photo-panel-row"><td colspan="7" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,ex._eid)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,ex._eid,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,ex._eid,pi)">×</button></div><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,ex._eid,e.target.files)" /></label></div></td></tr>
+                    <tr v-if="isPanelOpen(sec.id,ex._eid)" class="photo-panel-row"><td colspan="7" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,ex._eid)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,ex._eid,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,ex._eid,pi)">×</button></div><button v-if="getPhotos(sec.id,ex._eid).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(sec.id,ex._eid,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,ex._eid,e.target.files)" /></label></div></td></tr>
                   </template>
                 </tbody>
               </table>
@@ -1282,7 +1733,7 @@ onBeforeUnmount(() => {
                       <td class="td-cam"><button class="cam-btn mic-btn" :class="{ 'mic-active': isItemRecording(sec.id,row.id), 'mic-has': !isItemRecording(sec.id,row.id) && getItemRecordings(sec.id,row.id).length }" @click.stop="toggleItemRecording(sec.id,row.id,fixedItemLabel(sec,row.id,row.name))" title="Record"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span v-if="getItemRecordings(sec.id,row.id).length && !isItemRecording(sec.id,row.id)" class="cam-count mic-count">{{ getItemRecordings(sec.id,row.id).length }}</span></button></td>
                       <td class="td-del"><button class="del-btn" @click="hideRow(sec.id,row.id)">×</button></td>
                     </tr>
-                    <tr v-if="isPanelOpen(sec.id,row.id)" class="photo-panel-row"><td colspan="6" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,row.id)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,row.id,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,row.id,pi)">×</button></div><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,row.id,e.target.files)" /></label></div></td></tr>
+                    <tr v-if="isPanelOpen(sec.id,row.id)" class="photo-panel-row"><td colspan="6" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,row.id)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,row.id,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,row.id,pi)">×</button></div><button v-if="getPhotos(sec.id,row.id).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(sec.id,row.id,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,row.id,e.target.files)" /></label></div></td></tr>
                   </template>
                   <template v-for="(ex,idx) in getExtra(sec.id)" :key="ex._eid">
                     <tr class="extra-row" draggable="true" @dragstart="onFixedDragStart(sec.id,idx)" @dragover.prevent @drop.prevent="onFixedDrop(sec.id,idx)">
@@ -1294,7 +1745,7 @@ onBeforeUnmount(() => {
                       <td class="td-cam"><button class="cam-btn mic-btn" :class="{ 'mic-active': isItemRecording(sec.id,ex._eid), 'mic-has': !isItemRecording(sec.id,ex._eid) && getItemRecordings(sec.id,ex._eid).length }" @click.stop="toggleItemRecording(sec.id,ex._eid,fixedItemLabel(sec,ex._eid,(ex.name||'Item')))" title="Record"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span v-if="getItemRecordings(sec.id,ex._eid).length && !isItemRecording(sec.id,ex._eid)" class="cam-count mic-count">{{ getItemRecordings(sec.id,ex._eid).length }}</span></button></td>
                       <td class="td-del"><button class="del-btn" @click="removeExtraRow(sec.id,ex._eid)">×</button></td>
                     </tr>
-                    <tr v-if="isPanelOpen(sec.id,ex._eid)" class="photo-panel-row"><td colspan="6" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,ex._eid)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,ex._eid,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,ex._eid,pi)">×</button></div><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,ex._eid,e.target.files)" /></label></div></td></tr>
+                    <tr v-if="isPanelOpen(sec.id,ex._eid)" class="photo-panel-row"><td colspan="6" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,ex._eid)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,ex._eid,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,ex._eid,pi)">×</button></div><button v-if="getPhotos(sec.id,ex._eid).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(sec.id,ex._eid,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,ex._eid,e.target.files)" /></label></div></td></tr>
                   </template>
                 </tbody>
               </table>
@@ -1314,6 +1765,16 @@ onBeforeUnmount(() => {
               <div class="card-hd-right">
                 <span v-if="isCheckOut" class="co-badge">Check Out</span>
                 <span class="card-hint">{{ room.sections?.length || 0 }} items</span>
+                <button
+                  v-if="roomPhotoCount(room) > 0"
+                  class="card-view-all-btn card-view-all-room"
+                  @click.stop="openRoomPhotoGrid(room)"
+                  :title="roomPhotoCount(room) + ' photos in this room'"
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+                  View All Photos
+                  <span class="card-photo-count">{{ roomPhotoCount(room) }}</span>
+                </button>
               </div>
             </div>
 
@@ -1335,6 +1796,7 @@ onBeforeUnmount(() => {
                   <img :src="ph" class="ph-img-click" />
                   <button class="ph-del" @click="removePhoto(room.id,'_overview',pi)">×</button>
                 </div>
+                <button class="ph-view-all-btn" @click="openPhotoGrid(room.id,'_overview','Overview')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button>
               </div>
               <p v-else class="room-overview-empty">No overview photos yet — upload above or use the mobile app</p>
             </div>
@@ -1548,7 +2010,7 @@ onBeforeUnmount(() => {
                     <img :src="ph" class="ph-img-click" />
                     <button class="ph-del" @click="removePhoto(room.id, item._type==='template' ? item.id : item._eid, pi)">×</button>
                   </div>
-                  <label class="ph-upload-btn">
+                  <button v-if="getPhotos(room.id,item._type==='template' ? item.id : item._eid).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(room.id,item._type==='template' ? item.id : item._eid,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
                     Upload photos
                     <input type="file" accept="image/*" multiple style="display:none"
@@ -1591,12 +2053,14 @@ onBeforeUnmount(() => {
     <div
       v-if="photoViewer.show"
       class="ci-lightbox-overlay"
-      @click.self="photoViewer.show = false"
-      @keydown.esc.window="photoViewer.show = false"
+      @click.self="closeLightbox"
+      @keydown.esc.window="closeLightbox"
       @keydown.left.window="photoViewerPrev"
       @keydown.right.window="photoViewerNext"
     >
-      <div class="ci-lightbox">
+      <div class="ci-lightbox ci-lightbox-wide">
+
+        <!-- Header -->
         <div class="ci-lightbox-hd">
           <span class="ci-lightbox-title">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
@@ -1605,20 +2069,291 @@ onBeforeUnmount(() => {
               <span v-if="photoViewer.label" class="lb-sep">·</span>
               {{ photoViewer.label }}
             </template>
-            <template v-else>Photo</template>
+            <template v-else>Photo Viewer</template>
           </span>
           <span class="ci-lightbox-counter">{{ photoViewer.index + 1 }} / {{ photoViewer.photos.length }}</span>
-          <button class="modal-close" @click="photoViewer.show = false">×</button>
+          <button class="modal-close" @click="closeLightbox">×</button>
         </div>
+
+        <!-- Toolbar -->
+        <div class="lb-toolbar">
+          <div class="lb-toolbar-group">
+            <button class="lb-pill lb-pill-ghost" @click="lbSelectAll" title="Select all">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+              All
+            </button>
+            <button class="lb-pill lb-pill-ghost" @click="lbClearSelection" :disabled="lbSelected.size === 0">
+              Clear
+            </button>
+            <span v-if="lbSelected.size > 0" class="lb-sel-pill">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><polyline points="20 6 9 17 4 12" stroke="currentColor" stroke-width="3" fill="none"/></svg>
+              {{ lbSelected.size }} selected
+            </span>
+          </div>
+
+          <div class="lb-toolbar-group">
+            <button class="lb-pill lb-pill-ghost" @click="lbRotateCurrent" title="Rotate 90°">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>
+              Rotate
+            </button>
+            <button
+              v-if="photoViewer.sectionId"
+              class="lb-pill lb-pill-purple"
+              :class="{ active: lbMoving }"
+              @click="lbMoving = !lbMoving"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 9l-3 3 3 3"/><path d="M9 5l3-3 3 3"/><path d="M15 19l-3 3-3-3"/><path d="M19 9l3 3-3 3"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="2" x2="12" y2="22"/></svg>
+              Move{{ lbSelected.size > 0 ? ' ' + lbSelected.size : '' }}
+            </button>
+            <button
+              v-if="photoViewer.sectionId"
+              class="lb-pill lb-pill-danger"
+              @click="lbDeletePhotos"
+              :title="lbSelected.size > 0 ? 'Delete ' + lbSelected.size + ' selected' : 'Delete this photo'"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+              {{ lbSelected.size > 0 ? 'Delete ' + lbSelected.size : 'Delete' }}
+            </button>
+          </div>
+        </div>
+
+        <!-- Move destination tree -->
+        <div v-if="lbMoving" class="lb-move-panel">
+          <div class="lb-move-hd">
+            <span class="lb-move-hd-title">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 9l-3 3 3 3"/><path d="M9 5l3-3 3 3"/><path d="M15 19l-3 3-3-3"/><path d="M19 9l3 3-3 3"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="2" x2="12" y2="22"/></svg>
+              Move {{ lbSelected.size > 0 ? lbSelected.size + ' photo' + (lbSelected.size !== 1 ? 's' : '') : 'photo' }} to:
+            </span>
+            <button class="lb-move-cancel-btn" @click="lbMoving = false">✕</button>
+          </div>
+          <div class="lb-move-tree-scroll">
+            <div v-for="group in lbMoveTree" :key="group.key" class="lb-tree-group-wrap">
+              <button
+                class="lb-tree-group-btn"
+                :class="{ 'lb-tree-is-room': group.type === 'room', 'lb-tree-is-fixed': group.type === 'section' }"
+                @click="lbTreeToggle(group.key)"
+              >
+                <svg class="lb-tree-chev" :class="{ open: lbTreeExpanded.has(group.key) }" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="9 18 15 12 9 6"/></svg>
+                <svg v-if="group.type === 'room'" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="lb-tree-type-icon"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/></svg>
+                <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="lb-tree-type-icon"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+                <span class="lb-tree-group-label">{{ group.label }}</span>
+                <span class="lb-tree-group-count">{{ group.children ? group.children.length : (group.items ? group.items.length : 0) }}</span>
+              </button>
+              <template v-if="lbTreeExpanded.has(group.key)">
+                <!-- Fixed section has sub-groups -->
+                <template v-for="child in group.children" :key="child.key">
+                  <template v-if="child.type === 'group'">
+                    <button class="lb-tree-sub-btn" @click="lbTreeToggle(child.key)">
+                      <svg class="lb-tree-chev" :class="{ open: lbTreeExpanded.has(child.key) }" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="9 18 15 12 9 6"/></svg>
+                      <span>{{ child.label }}</span>
+                    </button>
+                    <div v-if="lbTreeExpanded.has(child.key)" class="lb-tree-items">
+                      <button v-for="item in child.children" :key="item.key" class="lb-tree-item-btn" @click="lbMovePhotos(item.sectionId, item.rowId)">
+                        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+                        {{ item.label }}
+                      </button>
+                    </div>
+                  </template>
+                  <button v-else class="lb-tree-item-btn" @click="lbMovePhotos(child.sectionId, child.rowId)">
+                    <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+                    {{ child.label }}
+                  </button>
+                </template>
+                <!-- Room has direct items -->
+                <template v-if="group.items">
+                  <div class="lb-tree-items">
+                    <button v-for="item in group.items" :key="item.key || (item.sectionId+item.rowId)" class="lb-tree-item-btn" @click="lbMovePhotos(item.sectionId, item.rowId)">
+                      <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+                      {{ item.label }}
+                    </button>
+                  </div>
+                </template>
+              </template>
+            </div>
+          </div>
+        </div>
+
+        <!-- Main image area -->
         <div class="ci-lightbox-body">
           <button class="ci-nav ci-nav-prev" @click="photoViewerPrev" :disabled="photoViewer.index === 0">‹</button>
-          <img :src="photoViewer.photos[photoViewer.index]" class="ci-lightbox-img" :alt="photoViewer.label" />
+
+          <!-- Image with selection overlay -->
+          <div class="lb-img-wrap" @click="lbToggleSelect(photoViewer.index)">
+            <img
+              :src="photoViewer.photos[photoViewer.index]"
+              class="ci-lightbox-img"
+              :class="{ 'lb-img-selected': lbSelected.has(photoViewer.index) }"
+              :alt="photoViewer.label"
+            />
+            <div v-if="lbSelected.has(photoViewer.index)" class="lb-img-check">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="white" stroke="white" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            </div>
+          </div>
+
           <button class="ci-nav ci-nav-next" @click="photoViewerNext" :disabled="photoViewer.index === photoViewer.photos.length - 1">›</button>
         </div>
+
+        <!-- Dot strip with selection indicators -->
         <div class="ci-lightbox-dots">
-          <span v-for="(_, i) in photoViewer.photos" :key="i" class="ci-dot" :class="{ active: i === photoViewer.index }" @click="photoViewer.index = i"></span>
+          <span
+            v-for="(_, i) in photoViewer.photos"
+            :key="i"
+            class="ci-dot"
+            :class="{ active: i === photoViewer.index, selected: lbSelected.has(i) }"
+            @click="photoViewer.index = i"
+          ></span>
         </div>
-        <p class="lb-hint">← → to navigate · Esc or click outside to close</p>
+
+        <p class="lb-hint">Click photo to select · ← → navigate · Esc to close</p>
+      </div>
+    </div>
+
+    <!-- PHOTO GRID (View All) -->
+    <div v-if="photoGrid.show" class="pg-overlay" @click.self="closePhotoGrid" @keydown.esc.window="closePhotoGrid">
+      <div class="pg-modal">
+
+        <!-- Header -->
+        <div class="pg-header">
+          <div class="pg-header-left">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+            <span class="pg-title">All Photos</span>
+            <span v-if="photoGrid.label" class="pg-title-sub">· {{ photoGrid.label }}</span>
+            <span class="pg-count-badge">{{ photoGrid.allSection ? pgAllPhotos.length : getPhotos(photoGrid.sectionId, photoGrid.rowId).length }}</span>
+          </div>
+          <button class="modal-close" @click="closePhotoGrid">×</button>
+        </div>
+
+        <!-- Toolbar -->
+        <div class="pg-toolbar">
+          <div class="pg-toolbar-left">
+            <button class="pg-pill pg-pill-ghost" @click="gridSelectAll">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+              Select All
+            </button>
+            <button class="pg-pill pg-pill-ghost" @click="gridClearSelection" :disabled="!gridSelected.size">Clear</button>
+            <span v-if="gridSelected.size" class="pg-sel-badge">
+              <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+              {{ gridSelected.size }} selected
+            </span>
+          </div>
+          <div class="pg-toolbar-right">
+            <button v-if="gridSelected.size" class="pg-pill pg-pill-indigo" @click="openGridSelectionInLightbox">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+              Open
+            </button>
+            <button
+              v-if="gridSelected.size"
+              class="pg-pill pg-pill-purple"
+              :class="{ active: pgMoving }"
+              @click="pgMoving ? pgMoving = false : pgOpenMoveTree()"
+            >
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 9l-3 3 3 3"/><path d="M9 5l3-3 3 3"/><path d="M15 19l-3 3-3-3"/><path d="M19 9l3 3-3 3"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="2" x2="12" y2="22"/></svg>
+              Move {{ gridSelected.size }}
+            </button>
+            <button v-if="gridSelected.size" class="pg-pill pg-pill-danger" @click="gridDeletePhotos">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+              Delete {{ gridSelected.size }}
+            </button>
+          </div>
+        </div>
+
+        <!-- Move tree panel -->
+        <div v-if="pgMoving" class="pg-move-panel">
+          <div class="pg-move-hd">
+            <span class="pg-move-title">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 9l-3 3 3 3"/><path d="M9 5l3-3 3 3"/><path d="M15 19l-3 3-3-3"/><path d="M19 9l3 3-3 3"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="2" x2="12" y2="22"/></svg>
+              Move {{ gridSelected.size }} photo{{ gridSelected.size !== 1 ? 's' : '' }} to:
+            </span>
+            <button class="pg-move-close" @click="pgMoving = false">✕ Cancel</button>
+          </div>
+          <div class="pg-move-tree">
+            <div v-for="group in pgMoveTree" :key="group.key" class="pg-tree-group-wrap">
+              <!-- Group header (section or room) -->
+              <button
+                class="pg-tree-group"
+                :class="{ 'pg-tree-room': group.type === 'room', 'pg-tree-fixed': group.type === 'fixed' }"
+                @click="pgTreeToggle(group.key)"
+              >
+                <svg class="pg-tree-chevron" :class="{ open: pgTreeExpanded.has(group.key) }" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+                <span class="pg-tree-group-icon">
+                  <svg v-if="group.type === 'room'" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/></svg>
+                  <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+                </span>
+                {{ group.label }}
+                <span class="pg-tree-child-count">{{ group.children.length }}</span>
+              </button>
+              <!-- Items inside group -->
+              <div v-if="pgTreeExpanded.has(group.key)" class="pg-tree-children">
+                <button
+                  v-for="item in group.children"
+                  :key="item.key"
+                  class="pg-tree-item"
+                  @click="gridMovePhotos(item.sectionId, item.rowId)"
+                >
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                  {{ item.label }}
+                </button>
+              </div>
+            </div>
+            <div v-if="!pgMoveTree.length" class="pg-move-empty">No other destinations available</div>
+          </div>
+        </div>
+
+        <!-- Grid -->
+        <div class="pg-grid">
+          <!-- All-section mode: flat array with per-photo source labels -->
+          <template v-if="photoGrid.allSection">
+            <div
+              v-for="(entry, pi) in pgAllPhotos"
+              :key="pi"
+              class="pg-cell"
+              :class="{ 'pg-cell-selected': gridSelected.has(pi) }"
+              @click="gridToggleSelect(pi)"
+              @dblclick="openLightbox(entry.sectionId, entry.rowId, entry.index)"
+            >
+              <img :src="entry.photo" class="pg-img" />
+              <div class="pg-cell-label">{{ entry.label }}</div>
+              <div class="pg-cell-num">{{ pi + 1 }}</div>
+              <div class="pg-cell-check" :class="{ visible: gridSelected.has(pi) }">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="white" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+              </div>
+              <button class="pg-cell-open" @click.stop="openLightbox(entry.sectionId, entry.rowId, entry.index)" title="Open in lightbox">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+              </button>
+            </div>
+            <div v-if="!pgAllPhotos.length" class="pg-empty">No photos in this section</div>
+          </template>
+
+          <!-- Single-item mode: original behaviour -->
+          <template v-else>
+            <div
+              v-for="(ph, pi) in getPhotos(photoGrid.sectionId, photoGrid.rowId)"
+              :key="pi"
+              class="pg-cell"
+              :class="{ 'pg-cell-selected': gridSelected.has(pi) }"
+              @click="gridToggleSelect(pi)"
+              @dblclick="openFromGrid(pi)"
+            >
+              <img :src="ph" class="pg-img" />
+              <div class="pg-cell-num">{{ pi + 1 }}</div>
+              <div class="pg-cell-check" :class="{ visible: gridSelected.has(pi) }">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="white" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+              </div>
+              <button class="pg-cell-open" @click.stop="openFromGrid(pi)" title="Open in lightbox">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+              </button>
+            </div>
+            <div v-if="!getPhotos(photoGrid.sectionId, photoGrid.rowId).length" class="pg-empty">
+              No photos in this section
+            </div>
+          </template>
+        </div>
+
+        <div class="pg-footer">
+          <span class="pg-footer-hint">Click to select · Double-click to open full view</span>
+          <span v-if="gridSelected.size" class="pg-footer-sel">{{ gridSelected.size }} photo{{ gridSelected.size !== 1 ? 's' : '' }} selected</span>
+        </div>
+
       </div>
     </div>
 
@@ -2082,6 +2817,9 @@ onBeforeUnmount(() => {
 .ph-upload-btn{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;background:#fff;border:1.5px dashed #94a3b8;border-radius:6px;font-size:12px;color:#475569;cursor:pointer;transition:all 0.15s;white-space:nowrap}
 .ph-upload-btn:hover{border-color:#6366f1;color:#6366f1;background:#f5f3ff}
 .ph-upload-btn-sm{padding:4px 9px;font-size:11px}
+/* Inline panel "View All" pill button */
+.ph-view-all-btn{display:inline-flex;align-items:center;gap:5px;padding:5px 11px;font-size:11px;font-weight:700;border-radius:20px;cursor:pointer;border:1.5px solid #c7d2fe;background:linear-gradient(135deg,#eef2ff,#e0e7ff);color:#4338ca;font-family:inherit;transition:all 0.18s;letter-spacing:0.01em;box-shadow:0 1px 4px rgba(99,102,241,0.1);white-space:nowrap}
+.ph-view-all-btn:hover{background:linear-gradient(135deg,#6366f1,#4f46e5);color:white;border-color:#6366f1;box-shadow:0 2px 10px rgba(99,102,241,0.3);transform:translateY(-1px)}
 .ph-img-click{cursor:zoom-in}
 /* CI photos link */
 .room-field-ci-photos{margin-top:8px}
@@ -2090,23 +2828,74 @@ onBeforeUnmount(() => {
 .ci-photo-count{background:#0284c7;color:#fff;border-radius:10px;padding:1px 6px;font-size:11px;font-weight:700}
 
 /* CI Lightbox */
-.ci-lightbox-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px}
-.ci-lightbox{background:#1e293b;border-radius:12px;width:min(680px,95vw);max-height:90vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 25px 60px rgba(0,0,0,0.5)}
-.ci-lightbox-hd{display:flex;align-items:center;gap:12px;padding:14px 18px;border-bottom:1px solid #334155}
+.ci-lightbox-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.88);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px}
+.ci-lightbox{background:#1e293b;border-radius:12px;width:min(680px,95vw);max-height:92vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 25px 60px rgba(0,0,0,0.6)}
+.ci-lightbox-wide{width:min(780px,96vw)}
+.ci-lightbox-hd{display:flex;align-items:center;gap:12px;padding:14px 18px;border-bottom:1px solid #334155;flex-shrink:0}
 .ci-lightbox-title{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:700;color:#e2e8f0;flex:1}
 .ci-lightbox-counter{font-size:12px;color:#64748b;font-weight:600}
-.ci-lightbox-body{position:relative;display:flex;align-items:center;justify-content:center;flex:1;min-height:300px;background:#0f172a;padding:12px}
-.ci-lightbox-img{max-width:100%;max-height:60vh;object-fit:contain;border-radius:6px}
-.ci-nav{position:absolute;top:50%;transform:translateY(-50%);background:rgba(255,255,255,0.1);border:none;color:#fff;font-size:28px;width:40px;height:40px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background 0.15s;z-index:2}
-.ci-nav:hover:not(:disabled){background:rgba(255,255,255,0.2)}
-.ci-nav:disabled{opacity:0.2;cursor:default}
-.ci-nav-prev{left:12px}.ci-nav-next{right:12px}
-.ci-lightbox-dots{display:flex;justify-content:center;gap:6px;padding:10px}
+.ci-lightbox-body{position:relative;display:flex;align-items:center;justify-content:center;flex:1;min-height:280px;background:#0a0f1a;padding:16px 56px}
+.ci-lightbox-img{max-width:100%;max-height:55vh;object-fit:contain;border-radius:6px;transition:outline 0.1s}
+/* Nav buttons — solid outline style */
+.ci-nav{position:absolute;top:50%;transform:translateY(-50%);background:#1e293b;border:2px solid #6366f1;color:#fff;font-size:26px;width:44px;height:44px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background 0.15s,border-color 0.15s;z-index:2;box-shadow:0 2px 12px rgba(0,0,0,0.5)}
+.ci-nav:hover:not(:disabled){background:#6366f1;border-color:#818cf8}
+.ci-nav:disabled{opacity:0.25;cursor:default;border-color:#334155}
+.ci-nav-prev{left:8px}.ci-nav-next{right:8px}
+/* Dots */
+.ci-lightbox-dots{display:flex;justify-content:center;gap:6px;padding:8px;flex-shrink:0}
 .ci-dot{width:7px;height:7px;border-radius:50%;background:#334155;cursor:pointer;transition:background 0.15s}
 .ci-dot.active{background:#6366f1}
+.ci-dot.selected{background:#f59e0b;outline:2px solid #fbbf24;outline-offset:1px}
+.ci-dot.active.selected{background:#f59e0b}
+/* Labels */
 .lb-ref{font-weight:700;color:#818cf8}
 .lb-sep{color:#475569;margin:0 2px}
-.lb-hint{text-align:center;font-size:11px;color:#475569;margin:0;padding:0 0 10px}
+.lb-hint{text-align:center;font-size:11px;color:#475569;margin:0;padding:2px 0 8px;flex-shrink:0}
+/* Toolbar */
+.lb-toolbar{display:flex;align-items:center;justify-content:space-between;padding:8px 16px;background:#0f172a;border-bottom:1px solid #1e293b;gap:10px;flex-shrink:0}
+.lb-toolbar-group{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+
+/* Pill buttons — shared base */
+.lb-pill{display:inline-flex;align-items:center;gap:5px;padding:5px 12px;font-size:12px;font-weight:600;border-radius:20px;cursor:pointer;border:1.5px solid transparent;font-family:inherit;transition:all 0.15s;white-space:nowrap;letter-spacing:0.01em}
+.lb-pill:disabled{opacity:0.35;cursor:default;pointer-events:none}
+.lb-pill-ghost{background:rgba(255,255,255,0.05);border-color:#334155;color:#94a3b8}
+.lb-pill-ghost:hover{background:rgba(255,255,255,0.1);border-color:#475569;color:#e2e8f0}
+.lb-pill-purple{background:linear-gradient(135deg,#4c1d95,#5b21b6);border-color:#7c3aed;color:#e9d5ff;box-shadow:0 1px 8px rgba(124,58,237,0.25)}
+.lb-pill-purple:hover,.lb-pill-purple.active{background:linear-gradient(135deg,#5b21b6,#7c3aed);border-color:#a78bfa;color:#fff;box-shadow:0 2px 12px rgba(124,58,237,0.4)}
+.lb-pill-danger{background:linear-gradient(135deg,#7f1d1d,#991b1b);border-color:#dc2626;color:#fca5a5;box-shadow:0 1px 8px rgba(220,38,38,0.2)}
+.lb-pill-danger:hover{background:linear-gradient(135deg,#991b1b,#dc2626);border-color:#f87171;color:#fff;box-shadow:0 2px 12px rgba(220,38,38,0.35)}
+.lb-sel-pill{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:700;color:#fbbf24;padding:4px 10px;background:rgba(251,191,36,0.1);border-radius:20px;border:1.5px solid rgba(251,191,36,0.3)}
+/* Image selection */
+.lb-img-wrap{position:relative;display:inline-flex;cursor:pointer}
+.lb-img-selected{outline:3px solid #f59e0b;border-radius:6px}
+.lb-img-check{position:absolute;top:8px;right:8px;width:28px;height:28px;background:#f59e0b;border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,0.4)}
+/* Move panel */
+.lb-move-panel{background:#080e1a;border-bottom:2px solid #1e293b;flex-shrink:0;display:flex;flex-direction:column;max-height:240px}
+.lb-move-hd{display:flex;align-items:center;justify-content:space-between;padding:9px 16px;border-bottom:1px solid #1a2840;flex-shrink:0}
+.lb-move-hd-title{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:#a78bfa;text-transform:uppercase;letter-spacing:0.5px}
+.lb-move-cancel-btn{width:22px;height:22px;border-radius:50%;background:#1e293b;border:1px solid #334155;color:#64748b;cursor:pointer;font-size:11px;display:flex;align-items:center;justify-content:center;transition:all 0.12s;font-family:inherit}
+.lb-move-cancel-btn:hover{background:#334155;color:#e2e8f0;border-color:#475569}
+.lb-move-tree-scroll{overflow-y:auto;padding:6px 10px;display:flex;flex-direction:column;gap:1px}
+
+/* Tree groups */
+.lb-tree-group-wrap{display:flex;flex-direction:column}
+.lb-tree-group-btn{display:flex;align-items:center;gap:6px;padding:6px 10px;font-size:12px;font-weight:700;border-radius:8px;cursor:pointer;border:none;text-align:left;width:100%;font-family:inherit;transition:all 0.12s;background:transparent}
+.lb-tree-is-room{color:#34d399}
+.lb-tree-is-room:hover{background:rgba(52,211,153,0.08)}
+.lb-tree-is-fixed{color:#818cf8}
+.lb-tree-is-fixed:hover{background:rgba(129,140,248,0.08)}
+.lb-tree-group-btn:not(.lb-tree-is-room):not(.lb-tree-is-fixed){color:#cbd5e1}
+.lb-tree-group-btn:not(.lb-tree-is-room):not(.lb-tree-is-fixed):hover{background:#1e293b}
+.lb-tree-group-label{flex:1}
+.lb-tree-group-count{font-size:10px;font-weight:700;background:#1e293b;color:#475569;padding:1px 6px;border-radius:8px}
+.lb-tree-chev{transition:transform 0.15s;opacity:0.5;flex-shrink:0}
+.lb-tree-chev.open{transform:rotate(90deg)}
+.lb-tree-type-icon{opacity:0.6;flex-shrink:0}
+.lb-tree-sub-btn{display:flex;align-items:center;gap:6px;padding:5px 10px 5px 22px;font-size:11px;font-weight:600;color:#94a3b8;border-radius:6px;cursor:pointer;border:none;text-align:left;width:100%;font-family:inherit;background:transparent;transition:all 0.12s}
+.lb-tree-sub-btn:hover{background:#1e293b;color:#e2e8f0}
+.lb-tree-items{display:flex;flex-direction:column;gap:1px;padding-left:28px}
+.lb-tree-item-btn{display:flex;align-items:center;gap:5px;padding:5px 10px;font-size:11px;color:#64748b;background:transparent;border:1px solid transparent;border-radius:6px;cursor:pointer;text-align:left;width:100%;font-family:inherit;transition:all 0.12s}
+.lb-tree-item-btn:hover{background:#1e3a5f;color:#93c5fd;border-color:rgba(59,130,246,0.3)}
 
 /* ═══════════════════════════════════════════════════════════════════ */
 /* AUDIO MODULE                                                        */
@@ -2276,5 +3065,90 @@ onBeforeUnmount(() => {
   font-size:14px;font-weight:700;cursor:pointer;transition:background 0.15s;font-family:inherit;
 }
 .btn-pdf-apply:hover{ background:#15803d }
+
+/* ═══════════════════════════════════════════════════════════════════ */
+/* PHOTO GRID (View All)                                               */
+/* ═══════════════════════════════════════════════════════════════════ */
+.pg-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.82);z-index:1100;display:flex;align-items:center;justify-content:center;padding:20px}
+.pg-modal{background:#1e293b;border-radius:14px;width:min(920px,96vw);max-height:92vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 30px 80px rgba(0,0,0,0.6)}
+
+/* Header */
+.pg-header{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid #334155;flex-shrink:0}
+.pg-header-left{display:flex;align-items:center;gap:9px}
+.pg-title{font-size:14px;font-weight:800;color:#f1f5f9}
+.pg-title-sub{font-size:13px;color:#64748b;font-weight:500}
+.pg-count-badge{background:#334155;color:#94a3b8;font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px}
+
+/* Toolbar */
+.pg-toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 16px;background:#0f172a;border-bottom:1px solid #1e293b;flex-shrink:0;flex-wrap:wrap}
+.pg-toolbar-left,.pg-toolbar-right{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+
+/* Pill buttons for photo grid — mirrors lb-pill system */
+.pg-pill{display:inline-flex;align-items:center;gap:5px;padding:5px 12px;font-size:12px;font-weight:600;border-radius:20px;cursor:pointer;border:1.5px solid transparent;font-family:inherit;transition:all 0.15s;white-space:nowrap}
+.pg-pill:disabled{opacity:0.35;cursor:default;pointer-events:none}
+.pg-pill-ghost{background:rgba(255,255,255,0.05);border-color:#334155;color:#94a3b8}
+.pg-pill-ghost:hover{background:rgba(255,255,255,0.1);border-color:#475569;color:#e2e8f0}
+.pg-pill-indigo{background:linear-gradient(135deg,#1e1b4b,#312e81);border-color:#6366f1;color:#c7d2fe;box-shadow:0 1px 8px rgba(99,102,241,0.2)}
+.pg-pill-indigo:hover{background:linear-gradient(135deg,#312e81,#4f46e5);border-color:#818cf8;color:#fff;box-shadow:0 2px 12px rgba(99,102,241,0.4)}
+.pg-pill-purple{background:linear-gradient(135deg,#4c1d95,#5b21b6);border-color:#7c3aed;color:#e9d5ff;box-shadow:0 1px 8px rgba(124,58,237,0.2)}
+.pg-pill-purple:hover,.pg-pill-purple.active{background:linear-gradient(135deg,#5b21b6,#7c3aed);border-color:#a78bfa;color:#fff;box-shadow:0 2px 12px rgba(124,58,237,0.4)}
+.pg-pill-danger{background:linear-gradient(135deg,#7f1d1d,#991b1b);border-color:#dc2626;color:#fca5a5;box-shadow:0 1px 8px rgba(220,38,38,0.15)}
+.pg-pill-danger:hover{background:linear-gradient(135deg,#991b1b,#dc2626);border-color:#f87171;color:#fff;box-shadow:0 2px 12px rgba(220,38,38,0.3)}
+.pg-sel-badge{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:700;color:#fbbf24;padding:4px 10px;background:rgba(251,191,36,0.1);border-radius:20px;border:1.5px solid rgba(251,191,36,0.3)}
+
+/* Move tree panel */
+.pg-move-panel{background:#080e1a;border-bottom:2px solid #1e293b;flex-shrink:0;display:flex;flex-direction:column;max-height:240px}
+.pg-move-hd{display:flex;align-items:center;justify-content:space-between;padding:9px 16px;border-bottom:1px solid #1a2840;flex-shrink:0}
+.pg-move-title{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:#a78bfa;text-transform:uppercase;letter-spacing:0.5px}
+.pg-move-close{width:22px;height:22px;border-radius:50%;background:#1e293b;border:1px solid #334155;color:#64748b;cursor:pointer;font-size:11px;display:flex;align-items:center;justify-content:center;transition:all 0.12s;font-family:inherit}
+.pg-move-close:hover{background:#334155;color:#e2e8f0;border-color:#475569}
+.pg-move-tree{overflow-y:auto;padding:6px 10px;display:flex;flex-direction:column;gap:1px}
+.pg-move-empty{font-size:12px;color:#475569;padding:12px;text-align:center}
+
+/* Tree items — shared style between pg and lb trees */
+.pg-tree-group-wrap{display:flex;flex-direction:column}
+.pg-tree-group{display:flex;align-items:center;gap:6px;padding:6px 10px;font-size:12px;font-weight:700;border-radius:8px;cursor:pointer;border:none;text-align:left;width:100%;font-family:inherit;transition:all 0.12s;background:transparent}
+.pg-tree-fixed{color:#818cf8}.pg-tree-fixed:hover{background:rgba(129,140,248,0.08)}
+.pg-tree-room{color:#34d399}.pg-tree-room:hover{background:rgba(52,211,153,0.08)}
+.pg-tree-group:not(.pg-tree-fixed):not(.pg-tree-room){color:#cbd5e1}.pg-tree-group:not(.pg-tree-fixed):not(.pg-tree-room):hover{background:#1e293b}
+.pg-tree-group-icon{opacity:0.6;display:flex;align-items:center;flex-shrink:0}
+.pg-tree-chevron{transition:transform 0.15s;flex-shrink:0;opacity:0.5}
+.pg-tree-chevron.open{transform:rotate(90deg)}
+.pg-tree-child-count{margin-left:auto;font-size:10px;font-weight:700;background:#1e293b;color:#475569;padding:1px 6px;border-radius:8px}
+.pg-tree-children{display:flex;flex-direction:column;gap:1px;padding:2px 0 4px 24px}
+.pg-tree-item{display:flex;align-items:center;gap:5px;padding:5px 10px;font-size:11px;color:#64748b;background:transparent;border:1px solid transparent;border-radius:6px;cursor:pointer;text-align:left;width:100%;font-family:inherit;transition:all 0.12s}
+.pg-tree-item:hover{background:#1e3a5f;color:#93c5fd;border-color:rgba(59,130,246,0.3)}
+
+/* Grid */
+.pg-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px;padding:14px;overflow-y:auto;flex:1;min-height:0;background:#0f172a}
+.pg-cell{position:relative;border-radius:8px;overflow:hidden;aspect-ratio:1;cursor:pointer;border:2px solid transparent;transition:border-color 0.12s,transform 0.1s;background:#1e293b}
+.pg-cell:hover{transform:scale(1.02);border-color:#475569}
+.pg-cell-selected{border-color:#f59e0b !important;box-shadow:0 0 0 1px #f59e0b}
+.pg-img{width:100%;height:100%;object-fit:cover;display:block}
+.pg-cell-num{position:absolute;bottom:5px;left:6px;font-size:10px;font-weight:700;color:rgba(255,255,255,0.7);background:rgba(0,0,0,0.5);padding:1px 5px;border-radius:4px;pointer-events:none}
+.pg-cell-check{position:absolute;top:6px;left:6px;width:22px;height:22px;background:#f59e0b;border-radius:50%;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity 0.12s;pointer-events:none}
+.pg-cell-check.visible{opacity:1}
+.pg-cell-open{position:absolute;top:5px;right:5px;width:24px;height:24px;background:rgba(0,0,0,0.55);border:1px solid rgba(255,255,255,0.2);border-radius:5px;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity 0.15s;cursor:pointer;color:white}
+.pg-cell:hover .pg-cell-open{opacity:1}
+.pg-cell-open:hover{background:rgba(99,102,241,0.8) !important}
+
+.pg-empty{grid-column:1/-1;text-align:center;color:#475569;padding:40px;font-size:14px}
+
+/* Footer */
+.pg-footer{display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-top:1px solid #1e293b;flex-shrink:0}
+.pg-footer-hint{font-size:11px;color:#475569}
+.pg-footer-sel{font-size:12px;font-weight:700;color:#f59e0b}
+
+/* Card-level View All Photos button */
+.card-view-all-btn{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;font-size:11px;font-weight:700;border-radius:20px;cursor:pointer;border:1.5px solid #c7d2fe;background:linear-gradient(135deg,#eef2ff,#e0e7ff);color:#4338ca;font-family:inherit;transition:all 0.18s;letter-spacing:0.01em;box-shadow:0 1px 4px rgba(99,102,241,0.12)}
+.card-view-all-btn:hover{background:linear-gradient(135deg,#6366f1,#4f46e5);color:white;border-color:#6366f1;box-shadow:0 2px 12px rgba(99,102,241,0.35);transform:translateY(-1px)}
+.card-view-all-room{border-color:#ddd6fe;background:linear-gradient(135deg,#f5f3ff,#ede9fe);color:#6d28d9;box-shadow:0 1px 4px rgba(124,58,237,0.12)}
+.card-view-all-room:hover{background:linear-gradient(135deg,#7c3aed,#6d28d9);color:white;border-color:#7c3aed;box-shadow:0 2px 12px rgba(124,58,237,0.35);transform:translateY(-1px)}
+.card-photo-count{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 5px;font-size:10px;font-weight:800;border-radius:9px;background:#6366f1;color:white;line-height:1}
+.card-view-all-room .card-photo-count{background:#7c3aed}
+.card-view-all-btn:hover .card-photo-count,.card-view-all-room:hover .card-photo-count{background:rgba(255,255,255,0.3)}
+
+/* Photo cell sub-label (allSection mode) */
+.pg-cell-label{position:absolute;bottom:0;left:0;right:0;font-size:9px;font-weight:700;color:rgba(255,255,255,0.9);background:linear-gradient(transparent,rgba(0,0,0,0.7));padding:12px 5px 4px;text-align:center;pointer-events:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
 </style>

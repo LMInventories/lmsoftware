@@ -1,23 +1,44 @@
 import axios from 'axios'
 
 // ── API URL ─────────────────────────────────────────────────────────────────
-// Android WebViews always report window.location.hostname as 'localhost'.
-// We detect this and point straight at the real server IP instead.
-// No Capacitor import needed — avoids any plugin-load timing issues.
+// Supports three environments:
+// 1. Production: Vercel frontend → Render backend (uses VITE_API_URL env var)
+// 2. Local dev:  localhost:5173 → localhost:5000
+// 3. Mobile dev: Capacitor app → LAN IP backend
 //
-// ⚠️  Set BACKEND_LAN_IP to your PC's Wi-Fi IPv4 address (run: ipconfig)
+// ⚠️  For mobile dev, set BACKEND_LAN_IP to your PC's Wi-Fi IPv4 (run: ipconfig)
 //
 const BACKEND_LAN_IP = '192.168.50.2'
 
 const API_URL = (() => {
+  // 1. Production: Use environment variable if set (Vercel will inject this)
+  if (import.meta.env.VITE_API_URL) {
+    console.log('[api] Using VITE_API_URL:', import.meta.env.VITE_API_URL)
+    return import.meta.env.VITE_API_URL
+  }
+
   try {
     const hostname = window.location.hostname
     const protocol = window.location.protocol
-    // Capacitor/Ionic WebView always has hostname 'localhost' on device
-    if (hostname === 'localhost' || protocol === 'capacitor:' || protocol === 'ionic:') {
+
+    // 2. Mobile/Capacitor: WebView reports 'localhost' — use LAN IP
+    if (protocol === 'capacitor:' || protocol === 'ionic:') {
       return `http://${BACKEND_LAN_IP}:5000`
     }
-    return `${protocol}//${hostname}:5000`
+
+    // 3. Local development: localhost → localhost:5000
+    if (hostname === 'localhost' || hostname === '127.0.0.1') {
+      return 'http://localhost:5000'
+    }
+
+    // 4. LAN development (accessing from another device on same network)
+    if (/^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(hostname)) {
+      return `http://${hostname}:5000`
+    }
+
+    // 5. Production fallback: Same origin without port (shouldn't normally hit this)
+    // This assumes API is on same domain or VITE_API_URL should have been set
+    return `${protocol}//${hostname}`
   } catch {
     return `http://${BACKEND_LAN_IP}:5000`
   }
@@ -67,49 +88,45 @@ const api = {
 
   // Auth
   login(credentials) { return axiosInstance.post('/api/auth/login', credentials) },
-  register(userData)  { return axiosInstance.post('/api/auth/register', userData) },
-  getCurrentUser()    { return axiosInstance.get('/api/auth/me') },
+  register(userData) { return axiosInstance.post('/api/auth/register', userData) },
+  getCurrentUser() { return axiosInstance.get('/api/auth/me') },
 
   // Dashboard
   getDashboardStats() { return axiosInstance.get('/api/dashboard/stats') },
 
   // Users
-  getUsers()        { return axiosInstance.get('/api/users') },
-  getUser(id)       { return axiosInstance.get(`/api/users/${id}`) },
-  createUser(data)  { return axiosInstance.post('/api/users', data) },
+  getUsers() { return axiosInstance.get('/api/users') },
+  getUser(id) { return axiosInstance.get(`/api/users/${id}`) },
+  createUser(data) { return axiosInstance.post('/api/users', data) },
   updateUser(id, data) { return axiosInstance.put(`/api/users/${id}`, data) },
-  deleteUser(id)    { return axiosInstance.delete(`/api/users/${id}`) },
+  deleteUser(id) { return axiosInstance.delete(`/api/users/${id}`) },
 
   // Clients
-  getClients()       { return axiosInstance.get('/api/clients') },
-  getClient(id)      { return axiosInstance.get(`/api/clients/${id}`) },
+  getClients() { return axiosInstance.get('/api/clients') },
+  getClient(id) { return axiosInstance.get(`/api/clients/${id}`) },
   createClient(data) { return axiosInstance.post('/api/clients', data) },
   updateClient(id, data) { return axiosInstance.put(`/api/clients/${id}`, data) },
-  deleteClient(id)   { return axiosInstance.delete(`/api/clients/${id}`) },
+  deleteClient(id) { return axiosInstance.delete(`/api/clients/${id}`) },
 
   // Properties
-  getProperties()       { return axiosInstance.get('/api/properties') },
-  getProperty(id)       { return axiosInstance.get(`/api/properties/${id}`) },
-  createProperty(data)  { return axiosInstance.post('/api/properties', data) },
+  getProperties() { return axiosInstance.get('/api/properties') },
+  getProperty(id) { return axiosInstance.get(`/api/properties/${id}`) },
+  createProperty(data) { return axiosInstance.post('/api/properties', data) },
   updateProperty(id, data) { return axiosInstance.put(`/api/properties/${id}`, data) },
-  deleteProperty(id)    { return axiosInstance.delete(`/api/properties/${id}`) },
+  deleteProperty(id) { return axiosInstance.delete(`/api/properties/${id}`) },
 
   // Inspections
-  getInspections()       { return axiosInstance.get('/api/inspections') },
-  getInspection(id)      { return axiosInstance.get(`/api/inspections/${id}`) },
+  getInspections() { return axiosInstance.get('/api/inspections') },
+  getInspection(id) { return axiosInstance.get(`/api/inspections/${id}`) },
   createInspection(data) { return axiosInstance.post('/api/inspections', data) },
   updateInspection(id, data) { return axiosInstance.put(`/api/inspections/${id}`, data) },
-  deleteInspection(id)   { return axiosInstance.delete(`/api/inspections/${id}`) },
+  deleteInspection(id) { return axiosInstance.delete(`/api/inspections/${id}`) },
 
   // ── Property lifecycle ────────────────────────────────────────────────
-  // Returns all inspections for a property ordered newest-first.
-  // Used to find previous Check In / Check Out when creating a new inspection.
   getPropertyHistory(propertyId) {
     return axiosInstance.get(`/api/inspections/property/${propertyId}/history`)
   },
 
-  // Returns a preview of the report_data that would be seeded into a new
-  // inspection of target_type if the given inspection is used as the source.
   getSeedPreview(inspectionId, targetType) {
     return axiosInstance.get(`/api/inspections/${inspectionId}/seed-preview`, {
       params: { target_type: targetType }
@@ -117,11 +134,11 @@ const api = {
   },
 
   // Templates
-  getTemplates()        { return axiosInstance.get('/api/templates') },
-  getTemplate(id)       { return axiosInstance.get(`/api/templates/${id}`) },
-  createTemplate(data)  { return axiosInstance.post('/api/templates', data) },
+  getTemplates() { return axiosInstance.get('/api/templates') },
+  getTemplate(id) { return axiosInstance.get(`/api/templates/${id}`) },
+  createTemplate(data) { return axiosInstance.post('/api/templates', data) },
   updateTemplate(id, data) { return axiosInstance.put(`/api/templates/${id}`, data) },
-  deleteTemplate(id)    { return axiosInstance.delete(`/api/templates/${id}`) },
+  deleteTemplate(id) { return axiosInstance.delete(`/api/templates/${id}`) },
 }
 
 export default api

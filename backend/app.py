@@ -5,6 +5,7 @@ from models import db
 from datetime import timedelta
 import os
 
+
 def create_app():
     app = Flask(__name__)
 
@@ -18,26 +19,49 @@ def create_app():
     # Database path - use absolute path
     db_path = os.path.join(instance_path, 'inspection_system.db')
 
-    # Configuration
+    # ── Configuration ────────────────────────────────────────────────────────
     app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-    app.config['JWT_SECRET_KEY'] = 'your-secret-key-change-in-production'
+    app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'your-secret-key-change-in-production')
     app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=24)
 
-    # CORS — allow localhost AND any local network IP (192.168.x.x, 10.x.x.x, 172.x.x.x)
-    # This lets mobile devices on the same WiFi network reach the API.
+    # ── CORS Configuration ───────────────────────────────────────────────────
+    # Allowed origins for CORS:
+    # - Production: Vercel frontend
+    # - Local dev: localhost on common ports
+    # - Mobile dev: Allow all origins (Capacitor apps)
+    #
+    # For tighter security in production, set ALLOWED_ORIGINS env var to a
+    # comma-separated list of allowed domains.
+
+    allowed_origins = os.environ.get('ALLOWED_ORIGINS')
+
+    if allowed_origins:
+        # Production: Use explicit list from environment variable
+        origins = [origin.strip() for origin in allowed_origins.split(',')]
+    else:
+        # Development: Allow localhost and common dev origins
+        origins = [
+            "http://localhost:5173",      # Vite default
+            "http://localhost:3000",      # Common React port
+            "http://127.0.0.1:5173",
+            "http://127.0.0.1:3000",
+            "https://lmsoftware-tau.vercel.app",  # Your Vercel production URL
+        ]
+
     CORS(app, resources={
         r"/api/*": {
-            "origins": "*",
+            "origins": origins,
             "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-            "allow_headers": ["Content-Type", "Authorization"]
+            "allow_headers": ["Content-Type", "Authorization"],
+            "supports_credentials": True
         }
     })
 
     db.init_app(app)
     JWTManager(app)
 
-    # Import and register blueprints
+    # ── Register Blueprints ──────────────────────────────────────────────────
     from routes.auth import auth_bp
     from routes.users import users_bp
     from routes.clients import clients_bp

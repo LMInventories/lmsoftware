@@ -628,10 +628,10 @@ function gridMovePhotos(destSectionId, destRowId) {
   ;[...indices].reverse().forEach(i => srcArr.splice(i, 1))
   unsaved.value = true
   gridSelected.value = new Set()
-  pgMoving.value = false
-
+  // pgMoving stays open; pgTreeExpanded keeps whatever groups user had open
   toast.success(toMove.length + ' photo(s) moved')
   if (!srcArr.length) closePhotoGrid()
+  // else tree stays visible for further moves
 }
 
 // Photo grid move tree state
@@ -639,11 +639,8 @@ const pgMoving = ref(false)
 const pgTreeExpanded = ref(new Set())
 
 function pgOpenMoveTree() {
-  // Auto-expand all on open
-  const keys = new Set()
-  for (const sec of fixedSections.value) keys.add('pgsec_' + sec.id)
-  for (const room of rooms.value) keys.add('pgroom_' + room.id)
-  pgTreeExpanded.value = keys
+  // Start collapsed — user expands what they need
+  // pgTreeExpanded is preserved across opens so last-used groups stay open
   pgMoving.value = true
 }
 function pgTreeToggle(key) {
@@ -696,10 +693,7 @@ function lbMoveTreeToggle(key) {
 }
 
 function lbOpenMoveTree() {
-  const keys = new Set()
-  for (const sec of fixedSections.value) keys.add('sec_' + sec.id)
-  for (const room of rooms.value)        keys.add('room_' + room.id)
-  lbTreeExpanded.value = keys
+  // Start collapsed — lbTreeExpanded persists so last-used sections stay open
   lbMoving.value = true
 }
 
@@ -813,8 +807,8 @@ function lbMovePhotos(destSectionId, destRowId) {
   }
 
   unsaved.value = true
-  lbMoving.value = false
   lbSelected.value = new Set()
+  // Keep tree visible and expanded state intact for further moves
 
   // If no photos left, close lightbox
   if (!srcArr || srcArr.length === 0) {
@@ -825,6 +819,7 @@ function lbMovePhotos(destSectionId, destRowId) {
     photoViewer.value.photos = [...srcArr]
     photoViewer.value.index  = Math.min(photoViewer.value.index, srcArr.length - 1)
     toast.success(`${toMove.length} photo(s) moved`)
+    // lbMoving stays true — tree stays open
   }
 }
 

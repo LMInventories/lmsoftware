@@ -550,9 +550,9 @@ onMounted(() => {
     <div v-if="activeTab === 'list'">
       <div class="filters-bar">
         <div class="filter-group">
-          <label>Client</label>
+          <label>Portfolio</label>
           <select v-model="filters.client_id" class="filter-select">
-            <option :value="null">All Clients</option>
+            <option :value="null">All Portfolio</option>
             <option v-for="client in clients" :key="client.id" :value="client.id">{{ client.name }}</option>
           </select>
         </div>
@@ -612,9 +612,9 @@ onMounted(() => {
     <div v-if="activeTab === 'calendar'" class="calendar-view">
       <div class="filters-bar calendar-filters">
         <div class="filter-group">
-          <label>Client</label>
+          <label>Portfolio</label>
           <select v-model="calendarFilters.client_id" class="filter-select">
-            <option :value="null">All Clients</option>
+            <option :value="null">All Portfolio</option>
             <option v-for="client in clients" :key="client.id" :value="client.id">{{ client.name }}</option>
           </select>
         </div>
@@ -665,9 +665,9 @@ onMounted(() => {
 
           <!-- Client Selection -->
           <div class="form-group">
-            <label>Client *</label>
+            <label>Portfolio *</label>
             <select v-model="form.client_id" @change="onClientChange" required>
-              <option :value="null" disabled>Select a client...</option>
+              <option :value="null" disabled>Select a portfolio...</option>
               <option v-for="client in clients" :key="client.id" :value="client.id">
                 {{ client.name }} {{ client.company ? `(${client.company})` : '' }}
               </option>
@@ -686,7 +686,7 @@ onMounted(() => {
               </option>
             </select>
             <p v-if="form.client_id && filteredProperties.length === 0" class="helper-text">
-              No properties found for this client.
+              No properties found for this portfolio.
             </p>
           </div>
 

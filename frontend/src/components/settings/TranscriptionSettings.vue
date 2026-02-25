@@ -13,7 +13,7 @@ const settings = ref({
 
 async function checkApiKeys() {
   try {
-    const res = await api.get('/api/transcribe/status')
+    const res = await api.getTranscribeStatus()
     apiStatus.value = res.data
   } catch {
     // endpoint not yet available — show neutral state
@@ -80,7 +80,11 @@ onMounted(() => {
           </div>
         </div>
       </div>
-     </div>
+      <p class="api-hint">
+        Add API keys in <strong>Render → Your Service → Environment</strong>.
+        Keys are never exposed to the browser.
+      </p>
+    </div>
 
     <!-- How AI Typist works -->
     <div class="info-panel">

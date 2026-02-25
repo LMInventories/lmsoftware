@@ -1,4 +1,11 @@
-# run.py
+# run.py — application entry point
+# Render calls:  gunicorn run:app
+# Local dev:     python run.py
+#
+# Seed logic: only runs when the users table is completely empty.
+# This means your real production users are NEVER overwritten on restart.
+# The demo seed only fires on a brand-new blank database.
+
 from app import create_app
 from models import db, User, Client, Property
 
@@ -7,11 +14,12 @@ app = create_app()
 with app.app_context():
     db.create_all()
 
-    # Only seed if database is completely empty
     if User.query.count() == 0:
-        print("Fresh database detected — seeding demo data...")
+        print("Fresh database — seeding initial accounts...")
 
-        # Users
+        # ── Users ─────────────────────────────────────────────────────────────
+        # These are the startup accounts. Once you've created real users through
+        # the app's Users page, change these passwords or delete these accounts.
         admin = User(name='Admin', email='admin@example.com', role='admin', color='#6366f1')
         admin.set_password('admin123')
 
@@ -27,7 +35,7 @@ with app.app_context():
         db.session.add_all([admin, manager, clerk, typist])
         db.session.flush()
 
-        # Client
+        # ── Client ────────────────────────────────────────────────────────────
         client = Client(
             name='Yellands Estates',
             email='info@yellands.co.uk',
@@ -43,7 +51,7 @@ with app.app_context():
         db.session.add(client)
         db.session.flush()
 
-        # Example property
+        # ── Property ──────────────────────────────────────────────────────────
         prop = Property(
             client_id=client.id,
             address='15 Cam Green, South Ockendon, RM15 5QN',
@@ -57,19 +65,10 @@ with app.app_context():
         db.session.add(prop)
         db.session.commit()
 
-        print("\n✅ Database seeded successfully!")
-        print("─" * 40)
-        print("  Admin:    admin@example.com   / admin123")
-        print("  Manager:  manager@example.com / manager123")
-        print("  Clerk:    clerk@example.com   / clerk123")
-        print("  Typist:   typist@example.com  / typist123")
-        print("─" * 40)
-        print("  Client:   Yellands Estates")
-        print("  Property: 15 Cam Green, South Ockendon, RM15 5QN")
-        print("─" * 40)
-
+        print("✅ Initial accounts created.")
+        print("   Use the Users page to create permanent staff accounts.")
     else:
-        print("Database already populated — skipping seed. Ready.")
+        print(f"✅ Database ready — {User.query.count()} user(s) loaded.")
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)

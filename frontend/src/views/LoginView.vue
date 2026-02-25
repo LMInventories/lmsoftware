@@ -50,7 +50,7 @@ async function handleLogin() {
             id="email"
             v-model="form.email"
             type="email"
-            placeholder="admin@example.com"
+            placeholder="your@email.com"
             required
             autocomplete="email"
           />
@@ -76,11 +76,6 @@ async function handleLogin() {
           {{ loading ? 'Logging in...' : 'Login' }}
         </button>
       </form>
-
-      <div class="login-footer">
-        <p>Demo credentials:</p>
-        <p><strong>admin@example.com</strong> / <strong>admin123</strong></p>
-      </div>
     </div>
   </div>
 </template>
@@ -184,18 +179,5 @@ async function handleLogin() {
 .btn-login:disabled {
   opacity: 0.6;
   cursor: not-allowed;
-}
-
-.login-footer {
-  margin-top: 24px;
-  padding-top: 24px;
-  border-top: 1px solid #e2e8f0;
-  text-align: center;
-}
-
-.login-footer p {
-  color: #64748b;
-  font-size: 13px;
-  margin: 4px 0;
 }
 </style>

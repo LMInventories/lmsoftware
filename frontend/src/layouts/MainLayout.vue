@@ -42,7 +42,7 @@ function navigateTo(path) {
         
         <router-link to="/clients" class="nav-item" v-if="authStore.isAdmin || authStore.isManager">
           <span class="icon">👥</span>
-          <span>Clients</span>
+          <span>Portfolio</span>
         </router-link>
         
         <router-link to="/users" class="nav-item" v-if="authStore.isAdmin || authStore.isManager">

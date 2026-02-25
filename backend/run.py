@@ -1,17 +1,48 @@
 import os
 from app import create_app
 from models import db, User, Client, Property
+from sqlalchemy import text
 
 app = create_app()
 
 with app.app_context():
+    # ── Step 1: Create any missing tables ───────────────────────────────────
     db.create_all()
 
-    # Only seed if database is completely empty — safe on every restart
+    # ── Step 2: Column migrations (safe on every restart) ───────────────────
+    # db.create_all() only creates missing TABLES, not missing COLUMNS.
+    # Any time we add a column to a model we must also handle it here so that
+    # existing live databases get the new column without needing Flask-Migrate.
+
+    def _is_sqlite():
+        return 'sqlite' in str(db.engine.url)
+
+    def column_exists(table, column):
+        if _is_sqlite():
+            rows = db.session.execute(text(f"PRAGMA table_info({table})")).fetchall()
+            return any(row[1] == column for row in rows)
+        else:
+            row = db.session.execute(text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name=:t AND column_name=:c"
+            ), {'t': table, 'c': column}).fetchone()
+            return row is not None
+
+    # users.is_ai — added when AI Typist feature was introduced
+    if not column_exists('users', 'is_ai'):
+        print("Migrating database: adding users.is_ai column...")
+        default = "0" if _is_sqlite() else "FALSE"
+        db.session.execute(
+            text(f"ALTER TABLE users ADD COLUMN is_ai BOOLEAN NOT NULL DEFAULT {default}")
+        )
+        db.session.commit()
+        print("✅ users.is_ai column added.")
+
+    # ── Step 3: Seed data (only on empty database) ───────────────────────────
     if User.query.count() == 0:
         print("Fresh database detected — seeding demo data...")
 
-        # ── Human users ──────────────────────────────────────────────────────
+        # Human users
         admin = User(name='Admin', email='admin@example.com', role='admin', color='#6366f1')
         admin.set_password('admin123')
 
@@ -24,10 +55,8 @@ with app.app_context():
         typist = User(name='Sarah Typist', email='typist@example.com', role='typist', color='#f59e0b')
         typist.set_password('typist123')
 
-        # ── AI Typist system account ──────────────────────────────────────────
-        # This special account triggers automatic AI transcription when assigned
-        # to an inspection. It cannot log in (random password) and should never
-        # be deleted via the UI.
+        # AI Typist system account — triggers automatic transcription when assigned.
+        # Random unguessable password; this account cannot log in.
         ai_typist = User(
             name='AI Typist',
             email='ai.typist@system.local',
@@ -40,7 +69,7 @@ with app.app_context():
         db.session.add_all([admin, manager, clerk, typist, ai_typist])
         db.session.flush()
 
-        # ── Client ───────────────────────────────────────────────────────────
+        # Client
         client = Client(
             name='Yellands Estates',
             email='info@yellands.co.uk',
@@ -56,7 +85,7 @@ with app.app_context():
         db.session.add(client)
         db.session.flush()
 
-        # ── Example property ─────────────────────────────────────────────────
+        # Example property
         prop = Property(
             client_id=client.id,
             address='15 Cam Green, South Ockendon, RM15 5QN',
@@ -83,8 +112,7 @@ with app.app_context():
         print("─" * 40)
 
     else:
-        # Database already has users — check if AI Typist is missing
-        # (handles upgrades on existing live databases)
+        # Existing database — check if AI Typist account is missing
         ai_exists = User.query.filter_by(email='ai.typist@system.local').first()
         if not ai_exists:
             print("Adding AI Typist system account to existing database...")

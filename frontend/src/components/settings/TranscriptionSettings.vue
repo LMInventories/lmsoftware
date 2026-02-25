@@ -80,10 +80,6 @@ onMounted(() => {
           </div>
         </div>
       </div>
-      <p class="api-hint">
-        Add API keys in <strong>Render → Your Service → Environment</strong>.
-        Keys are never exposed to the browser.
-      </p>
     </div>
 
     <!-- How AI Typist works -->

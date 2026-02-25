@@ -8,7 +8,7 @@ import os
 def create_app():
     app = Flask(__name__)
 
-    # ── Database ──────────────────────────────────────────────────────────────
+    # ── Database ────────────────────────────────────────────────────────────
     # Render (and any proper host) sets DATABASE_URL for a Postgres instance.
     # Locally we fall back to a SQLite file.
     database_url = os.environ.get('DATABASE_URL')
@@ -28,12 +28,12 @@ def create_app():
 
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-    # ── Security ──────────────────────────────────────────────────────────────
+    # ── Security ────────────────────────────────────────────────────────────
     # Set JWT_SECRET_KEY as an env var in Render dashboard. Never commit the real value.
     app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'dev-only-secret-change-in-production')
     app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=24)
 
-    # ── CORS ──────────────────────────────────────────────────────────────────
+    # ── CORS ────────────────────────────────────────────────────────────────
     # Explicit origins are more reliable than "*" when Authorization headers are involved.
     # Add your Vercel URL to ALLOWED_ORIGINS env var in Render, e.g.:
     #   ALLOWED_ORIGINS=https://your-app.vercel.app,https://your-app-git-main.vercel.app
@@ -49,9 +49,9 @@ def create_app():
 
     CORS(app, resources={
         r'/api/*': {
-            'origins': allowed_origins,
-            'methods': ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-            'allow_headers': ['Content-Type', 'Authorization'],
+            'origins':           allowed_origins,
+            'methods':           ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+            'allow_headers':     ['Content-Type', 'Authorization'],
             'supports_credentials': True,
         }
     })
@@ -59,14 +59,15 @@ def create_app():
     db.init_app(app)
     JWTManager(app)
 
-    # ── Blueprints ────────────────────────────────────────────────────────────
-    from routes.auth import auth_bp
-    from routes.users import users_bp
-    from routes.clients import clients_bp
-    from routes.properties import properties_bp
+    # ── Blueprints ───────────────────────────────────────────────────────────
+    from routes.auth        import auth_bp
+    from routes.users       import users_bp
+    from routes.clients     import clients_bp
+    from routes.properties  import properties_bp
     from routes.inspections import inspections_bp
-    from routes.dashboard import dashboard_bp
-    from routes.templates import templates_bp
+    from routes.dashboard   import dashboard_bp
+    from routes.templates   import templates_bp
+    from routes.transcribe  import transcribe_bp
 
     app.register_blueprint(auth_bp,         url_prefix='/api/auth')
     app.register_blueprint(users_bp,        url_prefix='/api/users')
@@ -75,6 +76,7 @@ def create_app():
     app.register_blueprint(inspections_bp,  url_prefix='/api/inspections')
     app.register_blueprint(dashboard_bp,    url_prefix='/api/dashboard')
     app.register_blueprint(templates_bp,    url_prefix='/api/templates')
+    app.register_blueprint(transcribe_bp,   url_prefix='/api/transcribe')
 
     with app.app_context():
         db.create_all()

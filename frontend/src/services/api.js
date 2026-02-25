@@ -105,6 +105,10 @@ const api = {
   deleteTemplate(id) { return axiosInstance.delete(`/api/templates/${id}`) },
   reorderSection(id, direction) { return axiosInstance.post(`/api/templates/sections/${id}/reorder`, { direction }) },
   reorderItem(id, direction) { return axiosInstance.post(`/api/templates/items/${id}/reorder`, { direction }) },
+
+  getTranscribeStatus() { return axiosInstance.get('/api/transcribe/status') },
+  transcribeItem(data) { return axiosInstance.post('/api/transcribe/item', data) },
+  transcribeFull(data) { return axiosInstance.post('/api/transcribe/full', data) },
 }
 
 export default api

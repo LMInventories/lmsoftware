@@ -1400,16 +1400,6 @@ function _blobToBase64(blob) {
   })
 }
 
-// Get the auth token from storage
-function _getToken() {
-  return localStorage.getItem('access_token') || localStorage.getItem('token') || ''
-}
-
-// Get base API URL — matches the logic in api.js
-function _getApiBase() {
-  return import.meta.env.VITE_API_URL || ''
-}
-
 // Per-item transcription — called immediately when a short clip stops
 async function _transcribeItem(rec, sectionId, rowId, itemLabel, roomName) {
   const key = `${sectionId}:${rowId}`
@@ -1421,28 +1411,16 @@ async function _transcribeItem(rec, sectionId, rowId, itemLabel, roomName) {
   try {
     const audioB64 = await _blobToBase64(rec.blob)
 
-    const response = await fetch(`${_getApiBase()}/api/transcribe/item`, {
-      method:  'POST',
-      headers: {
-        'Content-Type':  'application/json',
-        'Authorization': `Bearer ${_getToken()}`
-      },
-      body: JSON.stringify({
-        audio:     audioB64,
-        mimeType:  rec.mimeType || 'audio/webm',
-        itemLabel,
-        roomName,
-        sectionId,
-        rowId,
-      })
+    const response = await api.transcribeItem({
+      audio:     audioB64,
+      mimeType:  rec.mimeType || 'audio/webm',
+      itemLabel,
+      roomName,
+      sectionId,
+      rowId,
     })
 
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}))
-      throw new Error(err.error || `HTTP ${response.status}`)
-    }
-
-    const result = await response.json()
+    const result = response.data
 
     // Store transcript on the recording object for reference
     rec.transcript = result.transcript
@@ -1499,25 +1477,13 @@ async function transcribeFullInspection() {
     const audioB64 = await _blobToBase64(rec.blob)
     const templateStructure = _buildTemplateStructureForAI()
 
-    const response = await fetch(`${_getApiBase()}/api/transcribe/full`, {
-      method:  'POST',
-      headers: {
-        'Content-Type':  'application/json',
-        'Authorization': `Bearer ${_getToken()}`
-      },
-      body: JSON.stringify({
-        audio:    audioB64,
-        mimeType: rec.mimeType || 'audio/webm',
-        template: templateStructure,
-      })
+    const response = await api.transcribeFull({
+      audio:    audioB64,
+      mimeType: rec.mimeType || 'audio/webm',
+      template: templateStructure,
     })
 
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}))
-      throw new Error(err.error || `HTTP ${response.status}`)
-    }
-
-    const result  = await response.json()
+    const result  = response.data
     rec.transcript = result.transcript
 
     // Merge filled data — only overwrite empty fields

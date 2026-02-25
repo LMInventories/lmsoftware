@@ -679,7 +679,7 @@ onMounted(() => {
             <label>Property *</label>
             <select v-model="form.property_id" required :disabled="!form.client_id">
               <option :value="null" disabled>
-                {{ form.client_id ? 'Select a property...' : 'Please select a client first' }}
+                {{ form.client_id ? 'Select a property...' : 'Please select a portfolio first' }}
               </option>
               <option v-for="property in filteredProperties" :key="property.id" :value="property.id">
                 {{ property.address }}

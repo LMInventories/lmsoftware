@@ -607,24 +607,66 @@ function openGridSelectionInLightbox() {
 
 // Move selected grid photos to another section
 function gridMovePhotos(destSectionId, destRowId) {
-  const { sectionId, rowId } = photoGrid.value
+  const { sectionId, rowId, allSection } = photoGrid.value
   const indices = gridSelected.value.size > 0
     ? [...gridSelected.value].sort((a, b) => a - b)
     : []
   if (!indices.length) return
 
-  const srcArr = reportData.value[sectionId]?.[rowId]?._photos
-  if (!srcArr) return
-  const toMove = indices.map(i => srcArr[i])
-
-  // Add to destination
+  // Add to destination (shared for both modes)
   const dsid = destSectionId, drid = String(destRowId)
   if (!reportData.value[dsid]) reportData.value[dsid] = {}
   if (!reportData.value[dsid][drid]) reportData.value[dsid][drid] = {}
   if (!reportData.value[dsid][drid]._photos) reportData.value[dsid][drid]._photos = []
-  reportData.value[dsid][drid]._photos.push(...toMove)
+  const destArr = reportData.value[dsid][drid]._photos
 
-  // Remove from source in reverse order
+  if (allSection) {
+    // Each pgAllPhotos entry has { photo, sectionId, rowId, index }
+    // Collect photo data first, then group splices by source array
+    const bySource = {}
+    indices.forEach(i => {
+      const entry = pgAllPhotos.value[i]
+      if (!entry) return
+      destArr.push(entry.photo)  // collect photo data before any splicing
+      const key = entry.sectionId + '::' + entry.rowId
+      if (!bySource[key]) bySource[key] = { sectionId: entry.sectionId, rowId: entry.rowId, indices: [] }
+      bySource[key].indices.push(entry.index)
+    })
+    // Splice from each source in reverse-index order so positions don't shift
+    Object.values(bySource).forEach(({ sectionId: sid, rowId: rid, indices: idxs }) => {
+      const arr = reportData.value[sid]?.[rid]?._photos
+      if (!arr) return
+      ;[...new Set(idxs)].sort((a, b) => b - a).forEach(i => arr.splice(i, 1))
+    })
+    unsaved.value = true
+    const count = gridSelected.value.size
+    gridSelected.value = new Set()
+    // Rebuild flat photo list and keep grid open
+    // Re-trigger the allSection view so pgAllPhotos refreshes
+    const origSec = sectionId
+    const origLabel = photoGrid.value.label
+    // Recollect the photos for this section/room
+    const sec = fixedSections.value.find(s => s.id === origSec)
+    const room = rooms.value.find(r => r.id === origSec)
+    if (sec) {
+      const all = getSectionAllPhotos(sec)
+      pgAllPhotos.value = all
+      if (!all.length) { closePhotoGrid(); toast.success(count + ' photo(s) moved'); return }
+    } else if (room) {
+      const all = getRoomAllPhotos(room)
+      pgAllPhotos.value = all
+      if (!all.length) { closePhotoGrid(); toast.success(count + ' photo(s) moved'); return }
+    }
+    toast.success(count + ' photo(s) moved')
+    // pgMoving stays open, tree stays open
+    return
+  }
+
+  // Single-item mode
+  const srcArr = reportData.value[sectionId]?.[rowId]?._photos
+  if (!srcArr) return
+  const toMove = indices.map(i => srcArr[i])
+  destArr.push(...toMove)
   ;[...indices].reverse().forEach(i => srcArr.splice(i, 1))
   unsaved.value = true
   gridSelected.value = new Set()
@@ -684,12 +726,12 @@ const pgMoveTree = computed(() => {
 
 // ── Tree-style move destinations ──────────────────────────────────────
 // Groups destinations by parent section/room with expand/collapse
-const lbMoveTreeExpanded = ref(new Set())
+const lbTreeExpanded = ref(new Set())
 
-function lbMoveTreeToggle(key) {
-  const s = new Set(lbMoveTreeExpanded.value)
+function lbTreeToggle(key) {
+  const s = new Set(lbTreeExpanded.value)
   if (s.has(key)) s.delete(key); else s.add(key)
-  lbMoveTreeExpanded.value = s
+  lbTreeExpanded.value = s
 }
 
 function lbOpenMoveTree() {

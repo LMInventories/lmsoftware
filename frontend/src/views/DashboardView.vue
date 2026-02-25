@@ -99,7 +99,7 @@ onMounted(() => {
       <div class="totals-grid">
         <div class="total-card">
           <div class="total-number">{{ stats.totals.clients }}</div>
-          <div class="total-label">Total Clients</div>
+          <div class="total-label">Portfolio Accounts</div>
         </div>
 
         <div class="total-card">
@@ -121,15 +121,15 @@ onMounted(() => {
       <!-- Recent Inspections -->
       <div class="recent-section">
         <h2>Recent Inspections</h2>
-        
+
         <div v-if="stats.recent_inspections.length === 0" class="empty-state">
           No inspections yet. Create your first inspection to get started!
         </div>
 
         <div v-else class="inspections-list">
-          <div 
-            v-for="inspection in stats.recent_inspections" 
-            :key="inspection.id" 
+          <div
+            v-for="inspection in stats.recent_inspections"
+            :key="inspection.id"
             class="inspection-card"
             @click="viewInspection(inspection.id)"
           >
@@ -138,8 +138,8 @@ onMounted(() => {
                 <h3>{{ inspection.property_address }}</h3>
                 <p class="inspection-client">{{ inspection.client_name }}</p>
               </div>
-              <span 
-                class="status-badge" 
+              <span
+                class="status-badge"
                 :style="{ backgroundColor: statusColors[inspection.status] }"
               >
                 {{ inspection.status }}
@@ -192,29 +192,12 @@ h1 {
   border-left: 4px solid;
 }
 
-.stat-card.created {
-  border-left-color: #94a3b8;
-}
-
-.stat-card.assigned {
-  border-left-color: #3b82f6;
-}
-
-.stat-card.active {
-  border-left-color: #10b981;
-}
-
-.stat-card.processing {
-  border-left-color: #f59e0b;
-}
-
-.stat-card.review {
-  border-left-color: #8b5cf6;
-}
-
-.stat-card.complete {
-  border-left-color: #10b981;
-}
+.stat-card.created   { border-left-color: #94a3b8; }
+.stat-card.assigned  { border-left-color: #3b82f6; }
+.stat-card.active    { border-left-color: #10b981; }
+.stat-card.processing{ border-left-color: #f59e0b; }
+.stat-card.review    { border-left-color: #8b5cf6; }
+.stat-card.complete  { border-left-color: #10b981; }
 
 .stat-number {
   font-size: 48px;

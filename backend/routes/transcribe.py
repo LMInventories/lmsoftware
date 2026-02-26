@@ -23,12 +23,18 @@ def _whisper_transcribe(audio_bytes: bytes, mime_type: str) -> str:
         'audio/ogg':   'ogg',
         'audio/mp4':   'mp4',
         'audio/mpeg':  'mp3',
+        'audio/mp3':   'mp3',
         'audio/wav':   'wav',
         'audio/x-wav': 'wav',
         'audio/flac':  'flac',
         'audio/m4a':   'm4a',
+        'audio/aac':   'm4a',
+        'video/webm':  'webm',  # some browsers report video/webm for audio
     }
-    ext = ext_map.get(mime_type, 'webm')
+    # Strip codec suffix e.g. "audio/webm;codecs=opus" → "audio/webm"
+    mime_base = mime_type.split(';')[0].strip().lower() if mime_type else 'audio/webm'
+    ext = ext_map.get(mime_base, 'webm')
+    print(f'[transcribe/item] mime_base: {repr(mime_base)} → ext: {ext}')
 
     with tempfile.NamedTemporaryFile(suffix=f'.{ext}', delete=False) as tmp:
         tmp.write(audio_bytes)
@@ -292,6 +298,10 @@ def transcribe_item():
     if not audio_b64:
         return jsonify({'error': 'No audio data'}), 400
 
+    # Debug: log what we received
+    print(f'[transcribe/item] mimeType received: {repr(mime_type)}')
+    print(f'[transcribe/item] audio_b64 length: {len(audio_b64)}')
+
     if not os.environ.get('OPENAI_API_KEY'):
         return jsonify({'error': 'OPENAI_API_KEY not configured on server'}), 503
 
@@ -421,6 +431,10 @@ def transcribe_full():
 
     if not audio_b64:
         return jsonify({'error': 'No audio data'}), 400
+
+    # Debug: log what we received
+    print(f'[transcribe/item] mimeType received: {repr(mime_type)}')
+    print(f'[transcribe/item] audio_b64 length: {len(audio_b64)}')
 
     if not os.environ.get('OPENAI_API_KEY'):
         return jsonify({'error': 'OPENAI_API_KEY not configured on server'}), 503

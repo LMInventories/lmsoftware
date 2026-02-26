@@ -20,7 +20,7 @@ const BACKEND_LAN_IP = '192.168.50.2'  // ← your local PC IP for Android dev
 // If VITE_API_URL is baked in by the build system, use it.
 // Otherwise fall back to the hardcoded Render URL so production always works
 // regardless of build environment quirks.
-const RENDER_URL = 'https://lmsoftware.onrender.com'
+const RENDER_URL = 'http://localhost:5000'
 
 function getBaseURL() {
   // 1. Explicit env var (Vercel dashboard or local .env.local)

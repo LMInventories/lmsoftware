@@ -52,34 +52,127 @@ def _whisper_transcribe(audio_bytes: bytes, mime_type: str) -> str:
         os.unlink(tmp_path)
 
 
-def _claude_fill_item(transcript: str, item_label: str, room_name: str) -> dict:
+def _claude_fill_item(transcript: str, item_label: str, room_name: str, section_type: str = 'room') -> dict:
     """
-    Given a short transcript for a single item, return { description, condition }.
-    Uses claude-haiku-4-5 — fast and cheap for this structured task.
+    Given a short transcript for a single item, return the appropriate fields
+    based on section type. Uses claude-haiku-4-5.
+
+    Section types and their fields:
+    - room (default):        { description, condition }
+    - condition_summary:     { condition }
+    - cleaning_summary:      { notes }
+    - fire_door_safety:      { notes }
+    - health_safety:         { notes }
+    - keys:                  { description }
+    - meter_readings:        { locationSerial, reading }
     """
     client = anthropic.Anthropic(api_key=os.environ.get('ANTHROPIC_API_KEY'))
 
-    prompt = f"""You are processing a UK property inspection dictation for a single item.
+    # Shared formatting rules applied to all section types
+    formatting_rules = """
+FORMATTING RULES — apply to all output fields:
+- Convert spoken numbers to numerals: "two" → "2", "three" → "3", "one" → "1" etc.
+- Format quantities as "N x item": "two green curtains" → "2 x green curtains"
+- When multiple distinct items are listed, put each on its own line
+- For meter readings location: use line breaks for clarity, e.g.:
+    "Located to entrance hallway cupboard\nSerial Number: 123456"
+- Capitalise the first word of each line
+- Do NOT use bullet points or dashes — just line breaks between items
+- Keep each line concise"""
 
-Room: {room_name}
-Item: {item_label}
+    if section_type == 'meter_readings':
+        field_instructions = """Extract into these two fields:
+- locationSerial: where the meter is located and its serial number, formatted across lines:
+    "Located to [location]\nSerial Number: [number]"
+  If only location mentioned, just the location. If only serial, just the serial.
+- reading: the meter reading value only (e.g. "12345")
+Return ONLY valid JSON, no markdown:
+{"locationSerial": "...", "reading": ""}"""
 
-The clerk has dictated the following about this item:
-"{transcript}"
+    elif section_type == 'cleaning_summary':
+        field_instructions = """Put the complete transcript (cleaned of filler words only) into cleanlinessNotes.
+If multiple points are made, put each on its own line using \n.
+Return ONLY valid JSON, no markdown:
+{"cleanlinessNotes": "..."}"""
 
-Extract and structure this into:
-- description: the physical description of the item (what it is, material, colour, size if mentioned)
-- condition: the current condition (wear, marks, damage, cleanliness, or "Good condition" if no issues mentioned)
+    elif section_type in ('fire_door_safety', 'health_safety', 'smoke_alarms'):
+        field_instructions = """Put the complete transcript (cleaned of filler words only) into notes.
+If multiple points are made, put each on its own line using \n.
+Return ONLY valid JSON, no markdown:
+{"notes": "..."}"""
 
-Rules:
-- Be concise and professional — inventory report style
-- If the transcript only mentions condition (no physical description), leave description blank
-- If the transcript mentions both, split them appropriately
-- Do not invent information not present in the transcript
-- Use British English spelling
+    elif section_type == 'condition_summary':
+        field_instructions = """Put the complete transcript (cleaned of filler words only) into condition.
+If multiple points are made, put each on its own line.
+Return ONLY valid JSON, no markdown:
+{"condition": "..."}"""
+
+    elif section_type == 'keys':
+        field_instructions = """Put the complete transcript into the description field.
+Format rules:
+- Collection/return info goes on the first line (e.g. "Keys collected from and returned to agent")
+- Each key type goes on its own line using \n, formatted as "N x [key type]"
+  Example: "1 x Yale key\n1 x mailbox key\n2 x garage fob"
+- Convert spoken numbers to numerals: "one" → "1", "two" → "2"
+- Use "x" not "×" for quantities
+Return ONLY valid JSON, no markdown:
+{"description": "..."}"""
+
+    else:
+        field_instructions = """Extract and structure this into:
+- description: the physical appearance (material, colour, size, style, finish)
+- condition: the state or working order
+
+SPLITTING rules:
+- Condition phrases that signal the start of the condition field:
+  "in good order", "in fair order", "in poor order", "good order", "fair order",
+  "poor order", "as new", "as inventory", "in good condition"
+- Anything said AFTER a condition phrase is ALSO condition, not description.
+  Example: "two white metal radiators, in good order, appear complete"
+    description: "Two white metal radiators"
+    condition: "In good order, appear complete"
+- Functional observations like "appear complete", "tested for power", "appears working"
+  are ALWAYS condition, never description
+- If transcript only mentions condition, leave description blank
+
+MULTI-COMPONENT FORMATTING — this is critical:
+- If the description contains multiple distinct physical components, put EACH on its own line using \n
+- A "component" is a distinct element — different material, surface type, or fitting
+- ALWAYS use \n line breaks, NEVER commas to separate components
+  Example: "part white ceramic tile, part grey fitted carpet with silver metal threshold"
+    CORRECT:   "Part white ceramic tile\nPart grey fitted carpet\nSilver metal threshold"
+    INCORRECT: "Part white ceramic tile, part grey fitted carpet with silver metal threshold"
+  Example: "dark wood curtain rail, two green fabric floor length curtains"
+    CORRECT:   "Dark wood curtain rail\n2 x green fabric floor length curtains"
+    INCORRECT: "Dark wood curtain rail, two green fabric floor length curtains"
+- The same rule applies to condition if multiple condition points are made:
+  Example: "in good order, light indentations to tiles, light wear to carpet"
+    CORRECT:   "In good order\nLight indentations to tiles\nLight wear to carpet"
+    INCORRECT: "In good order, light indentations to tiles, light wear to carpet"
+- When in doubt: if you would use a comma to separate two ideas, use \n instead
 
 Return ONLY valid JSON, no markdown:
-{{"description": "...", "condition": "..."}}"""
+{"description": "...", "condition": ""}"""
+
+    prompt = f"""You are processing a UK property inspection dictation.
+
+Section type: {section_type}
+Item: {item_label}
+Room/Section: {room_name}
+
+The clerk has dictated:
+"{transcript}"
+
+CRITICAL LANGUAGE RULES:
+- Use the EXACT words and phrases the clerk spoke. Do not substitute synonyms.
+- "good order" stays "good order" — never change to "good condition"
+- "fair wear and tear" stays exactly that
+- This is a legal document — preserve all professional terminology exactly
+- Only clean up filler words (um, uh, er) and obvious repetition
+- Use British English spelling
+{formatting_rules}
+
+{field_instructions}"""
 
     message = client.messages.create(
         model='claude-haiku-4-5',
@@ -90,7 +183,6 @@ Return ONLY valid JSON, no markdown:
     raw = message.content[0].text.strip()
     raw = raw.replace('```json', '').replace('```', '').strip()
     return json.loads(raw)
-
 
 def _claude_fill_full_report(transcript: str, template_structure: dict) -> dict:
     """
@@ -116,8 +208,13 @@ Full transcript:
 Instructions:
 - Map the clerk's dictation to the correct items in the template
 - For each item, extract description and condition
-- Be concise and professional — inventory report style
-- Use British English spelling
+- CRITICAL: Use the EXACT words and phrases the clerk spoke. Do not substitute synonyms or rephrase.
+  Example: if the clerk says "good order", write "Good order" — NOT "Good condition"
+  Example: if the clerk says "fair wear and tear", write exactly that
+  Example: if the clerk says "as new" or "as inventory", preserve those exact phrases
+- The clerk's terminology is professional and intentional — this is a legal document
+- Only clean up filler words (um, uh, er) and obvious repetition
+- Use British English spelling for any connecting words you add
 - Only fill items that are mentioned in the transcript
 - If an item is not mentioned, omit it from the output entirely
 
@@ -183,12 +280,13 @@ def transcribe_item():
     if not data:
         return jsonify({'error': 'No data provided'}), 400
 
-    audio_b64  = data.get('audio')
-    mime_type  = data.get('mimeType', 'audio/webm')
-    item_label = data.get('itemLabel', 'Item')
-    room_name  = data.get('roomName', '')
-    section_id = data.get('sectionId')
-    row_id     = data.get('rowId')
+    audio_b64    = data.get('audio')
+    mime_type    = data.get('mimeType', 'audio/webm')
+    item_label   = data.get('itemLabel', 'Item')
+    room_name    = data.get('roomName', '')
+    section_id   = data.get('sectionId')
+    row_id       = data.get('rowId')
+    section_type = data.get('sectionType', 'room')  # room|condition_summary|cleaning_summary|keys|meter_readings|fire_door_safety|health_safety
 
     if not audio_b64:
         return jsonify({'error': 'No audio data'}), 400
@@ -210,14 +308,19 @@ def transcribe_item():
         if not transcript:
             return jsonify({'error': 'No speech detected in recording'}), 422
 
-        filled = _claude_fill_item(transcript, item_label, room_name)
+        filled = _claude_fill_item(transcript, item_label, room_name, section_type)
 
         return jsonify({
-            'transcript':  transcript,
-            'description': filled.get('description', ''),
-            'condition':   filled.get('condition', ''),
-            'sectionId':   section_id,
-            'rowId':       row_id,
+            'transcript':       transcript,
+            'description':      filled.get('description', ''),
+            'condition':        filled.get('condition', ''),
+            'notes':            filled.get('notes', ''),
+            'cleanlinessNotes': filled.get('cleanlinessNotes', ''),
+            'locationSerial':   filled.get('locationSerial', ''),
+            'reading':          filled.get('reading', ''),
+            'sectionId':        section_id,
+            'rowId':            row_id,
+            'sectionType':      section_type,
         })
 
     except Exception as e:

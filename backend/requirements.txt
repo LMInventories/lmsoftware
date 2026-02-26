@@ -18,5 +18,5 @@ python-dotenv==1.0.0
 SQLAlchemy==2.0.46
 typing_extensions==4.15.0
 Werkzeug==3.0.1
-openai==1.51.0
-anthropic==0.34.2
+openai==2.24.0
+anthropic==0.84.0

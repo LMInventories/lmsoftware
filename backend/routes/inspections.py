@@ -76,7 +76,10 @@ def inspection_detail(inspection):
             'name': inspection.typist.name,
             'email': inspection.typist.email,
             'phone': inspection.typist.phone,
+            'is_ai': inspection.typist.is_ai,
         }
+        result['typist_is_ai'] = inspection.typist.is_ai
+        result['typist_name'] = inspection.typist.name
 
     if inspection.template:
         result['template_name'] = inspection.template.name

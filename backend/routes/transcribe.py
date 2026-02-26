@@ -189,7 +189,7 @@ CRITICAL LANGUAGE RULES:
 
     raw = message.content[0].text.strip()
     raw = raw.replace('```json', '').replace('```', '').strip()
-    return json.loads(raw)
+    return json.loads(raw), message
 
 def _claude_fill_full_report(transcript: str, template_structure: dict) -> dict:
     """

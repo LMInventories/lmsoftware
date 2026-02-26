@@ -324,7 +324,9 @@ def transcribe_item():
         })
 
     except Exception as e:
+        import traceback
         print(f'[transcribe/item] Error: {e}')
+        print(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
 
 

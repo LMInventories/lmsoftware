@@ -3,6 +3,7 @@ import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useToast } from '../composables/useToast'
 import api from '../services/api'
+import { useAuthStore } from '../stores/auth'
 import CheckOutActionPicker from '../components/CheckOutActionPicker.vue'
 
 // v-click-outside directive (registered inline for this component)
@@ -17,6 +18,24 @@ const vClickOutside = {
 const route  = useRoute()
 const router = useRouter()
 const toast  = useToast()
+const authStore = useAuthStore()
+
+// ── Role-based permissions ─────────────────────────────────────────────────
+const canEdit = computed(() => {
+  if (authStore.isAdmin || authStore.isManager) return true
+  if (authStore.isTypist) return true
+  // Clerks can edit their own reports in active or review stage
+  if (authStore.isClerk) {
+    const editableStages = ['active', 'review']
+    return editableStages.includes(inspection.value?.status)
+  }
+  return false
+})
+const canDelete = computed(() => authStore.isAdmin || authStore.isManager)
+// Typist can move to Review only when inspection is in Processing
+const canMoveToReview = computed(() =>
+  authStore.isTypist && inspection.value?.status === 'processing'
+)
 
 // ── Auto-resize textarea directive ──────────────────────────────────────────
 function autoResizeEl(el) {
@@ -1678,6 +1697,18 @@ onBeforeUnmount(() => {
 })
 
 
+
+// ── Move to Review (typist only) ───────────────────────────────────────────
+async function moveToReview() {
+  if (!canMoveToReview.value) return
+  try {
+    await api.put(`/api/inspections/${inspection.value.id}`, { status: 'review' })
+    toast.success('Inspection moved to Review')
+    router.push('/inspections')
+  } catch (e) {
+    toast.error('Failed to move to review')
+  }
+}
 </script>
 
 <template>
@@ -1713,7 +1744,15 @@ onBeforeUnmount(() => {
         <span v-if="saving" class="chip chip-saving"><svg class="spin-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>Saving</span>
         <span v-else-if="savedTime && !unsaved" class="chip chip-saved"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>Saved {{ savedTime }}</span>
         <span v-else-if="unsaved" class="chip chip-unsaved">● Unsaved</span>
-        <button class="save-btn" :disabled="saving" @click="save()">Save</button>
+        <template v-if="canEdit">
+          <button class="save-btn" :disabled="saving" @click="save()">Save</button>
+        </template>
+        <template v-if="canMoveToReview">
+          <button class="review-btn" @click="moveToReview">Move to Review</button>
+        </template>
+        <template v-if="!canEdit">
+          <span class="chip chip-readonly">👁 Read Only</span>
+        </template>
       </div>
     </header>
 
@@ -1873,10 +1912,10 @@ onBeforeUnmount(() => {
                     <tr v-show="!isHidden(sec.id, row.id)">
                       <td class="td-drag"><span class="drag-handle" title="Drag to reorder">⠿</span></td>
                       <td class="td-name"><span class="sec-ref-badge">{{ fixedRowRef(sec, row.id) }}</span>{{ row.name }}</td>
-                      <td><textarea v-auto-resize class="fld-textarea" placeholder="Describe condition…" :value="get(sec.id,row.id,'condition')" @input="set(sec.id,row.id,'condition',$event.target.value)"></textarea></td>
+                      <td><textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" placeholder="Describe condition…" :value="get(sec.id,row.id,'condition')" @input="set(sec.id,row.id,'condition',$event.target.value)"></textarea></td>
                       <td class="td-cam"><button class="cam-btn" :class="{ 'cam-has': getPhotos(sec.id,row.id).length }" @click="togglePanel(sec.id,row.id)" :title="getPhotos(sec.id,row.id).length + ' photo(s)'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,row.id).length" class="cam-count">{{ getPhotos(sec.id,row.id).length }}</span></button></td>
                       <td class="td-cam"><button class="cam-btn mic-btn" :class="{ 'cam-has mic-active': isItemRecording(sec.id,row.id), 'mic-has': !isItemRecording(sec.id,row.id) && getItemRecordings(sec.id,row.id).length }" @click="toggleItemRecording(sec.id,row.id,fixedItemLabel(sec,row.id,row.name))" title="Record audio for this item"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span v-if="getItemRecordings(sec.id,row.id).length" class="cam-count mic-count">{{ getItemRecordings(sec.id,row.id).length }}</span></button></td>
-                      <td class="td-del"><button class="del-btn" @click="hideRow(sec.id,row.id)">×</button></td>
+                      <td class="td-del"><button v-if="canDelete" class="del-btn" @click="hideRow(sec.id,row.id)">×</button></td>
                     </tr>
                     <tr v-if="isPanelOpen(sec.id,row.id)" class="photo-panel-row">
                       <td colspan="6" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,row.id)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,row.id,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,row.id,pi)">×</button></div><button v-if="getPhotos(sec.id,row.id).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(sec.id,row.id,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,row.id,e.target.files)" /></label></div></td>
@@ -1885,11 +1924,11 @@ onBeforeUnmount(() => {
                   <template v-for="(ex,idx) in getExtra(sec.id)" :key="ex._eid">
                     <tr class="extra-row" draggable="true" @dragstart="onFixedDragStart(sec.id,idx)" @dragover.prevent @drop.prevent="onFixedDrop(sec.id,idx)">
                       <td class="td-drag"><span class="drag-handle">⠿</span></td>
-                      <td class="td-extra-name"><span class="sec-ref-badge sec-ref-extra">{{ fixedRowRef(sec, ex._eid) }}</span><input class="fld-input" type="text" placeholder="Item name…" :value="ex.name" @input="setExtraField(sec.id,ex._eid,'name',$event.target.value)" /></td>
-                      <td><textarea v-auto-resize class="fld-textarea" placeholder="Describe condition…" :value="ex.condition" @input="setExtraField(sec.id,ex._eid,'condition',$event.target.value)"></textarea></td>
+                      <td class="td-extra-name"><span class="sec-ref-badge sec-ref-extra">{{ fixedRowRef(sec, ex._eid) }}</span><input class="fld-input" type="text" :disabled="!canEdit" placeholder="Item name…" :value="ex.name" @input="setExtraField(sec.id,ex._eid,'name',$event.target.value)" /></td>
+                      <td><textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" placeholder="Describe condition…" :value="ex.condition" @input="setExtraField(sec.id,ex._eid,'condition',$event.target.value)"></textarea></td>
                       <td class="td-cam"><button class="cam-btn" :class="{ 'cam-has': getPhotos(sec.id,ex._eid).length }" @click="togglePanel(sec.id,ex._eid)" :title="getPhotos(sec.id,ex._eid).length + ' photo(s)'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,ex._eid).length" class="cam-count">{{ getPhotos(sec.id,ex._eid).length }}</span></button></td>
                       <td class="td-cam"><button class="cam-btn mic-btn" :class="{ 'mic-active': isItemRecording(sec.id,ex._eid), 'mic-has': !isItemRecording(sec.id,ex._eid) && getItemRecordings(sec.id,ex._eid).length, 'mic-ai': isItemAiProcessing(sec.id,ex._eid) }" @click.stop="toggleItemRecording(sec.id,ex._eid,fixedItemLabel(sec,ex._eid,(ex.name||'Item')))" title="Record"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span v-if="getItemRecordings(sec.id,ex._eid).length && !isItemRecording(sec.id,ex._eid)" class="cam-count mic-count">{{ getItemRecordings(sec.id,ex._eid).length }}</span></button></td>
-                      <td class="td-del"><button class="del-btn" @click="removeExtraRow(sec.id,ex._eid)">×</button></td>
+                      <td class="td-del"><button v-if="canDelete" class="del-btn" @click="removeExtraRow(sec.id,ex._eid)">×</button></td>
                     </tr>
                     <tr v-if="isPanelOpen(sec.id,ex._eid)" class="photo-panel-row">
                       <td colspan="5" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,ex._eid)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,ex._eid,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,ex._eid,pi)">×</button></div><button v-if="getPhotos(sec.id,ex._eid).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(sec.id,ex._eid,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,ex._eid,e.target.files)" /></label></div></td>
@@ -1897,7 +1936,7 @@ onBeforeUnmount(() => {
                   </template>
                 </tbody>
               </table>
-              <div class="add-row-bar"><button class="add-row-btn" @click="addExtraRow(sec.id,sec.type)">+ Add line</button></div>
+              <div class="add-row-bar"><button v-if="canEdit" class="add-row-btn" @click="addExtraRow(sec.id,sec.type)">+ Add line</button></div>
             </div>
 
             <!-- CLEANING SUMMARY -->
@@ -1910,28 +1949,28 @@ onBeforeUnmount(() => {
                       <td class="td-drag"><span class="drag-handle">⠿</span></td>
                       <td class="td-name"><span class="sec-ref-badge">{{ fixedRowRef(sec, row.id) }}</span>{{ row.name }}</td>
                       <td><select class="fld-input" :value="get(sec.id,row.id,'cleanliness')" @change="set(sec.id,row.id,'cleanliness',$event.target.value)"><option value="">Select…</option><option v-for="o in cleanlinessOpts" :key="o" :value="o">{{ o }}</option></select></td>
-                      <td><textarea v-auto-resize class="fld-textarea" placeholder="Additional notes…" :value="get(sec.id,row.id,'cleanlinessNotes')" @input="set(sec.id,row.id,'cleanlinessNotes',$event.target.value)"></textarea></td>
+                      <td><textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" placeholder="Additional notes…" :value="get(sec.id,row.id,'cleanlinessNotes')" @input="set(sec.id,row.id,'cleanlinessNotes',$event.target.value)"></textarea></td>
                       <td class="td-cam"><button class="cam-btn" :class="{ 'cam-has': getPhotos(sec.id,row.id).length }" @click="togglePanel(sec.id,row.id)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,row.id).length" class="cam-count">{{ getPhotos(sec.id,row.id).length }}</span></button></td>
                       <td class="td-cam"><button class="cam-btn mic-btn" :class="{ 'mic-active': isItemRecording(sec.id,row.id), 'mic-has': !isItemRecording(sec.id,row.id) && getItemRecordings(sec.id,row.id).length, 'mic-ai': isItemAiProcessing(sec.id,row.id) }" @click.stop="toggleItemRecording(sec.id,row.id,fixedItemLabel(sec,row.id,row.name))" title="Record"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span v-if="getItemRecordings(sec.id,row.id).length && !isItemRecording(sec.id,row.id)" class="cam-count mic-count">{{ getItemRecordings(sec.id,row.id).length }}</span></button></td>
-                      <td class="td-del"><button class="del-btn" @click="hideRow(sec.id,row.id)">×</button></td>
+                      <td class="td-del"><button v-if="canDelete" class="del-btn" @click="hideRow(sec.id,row.id)">×</button></td>
                     </tr>
                     <tr v-if="isPanelOpen(sec.id,row.id)" class="photo-panel-row"><td colspan="6" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,row.id)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,row.id,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,row.id,pi)">×</button></div><button v-if="getPhotos(sec.id,row.id).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(sec.id,row.id,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,row.id,e.target.files)" /></label></div></td></tr>
                   </template>
                   <template v-for="(ex,idx) in getExtra(sec.id)" :key="ex._eid">
                     <tr class="extra-row" draggable="true" @dragstart="onFixedDragStart(sec.id,idx)" @dragover.prevent @drop.prevent="onFixedDrop(sec.id,idx)">
                       <td class="td-drag"><span class="drag-handle">⠿</span></td>
-                      <td class="td-extra-name"><span class="sec-ref-badge sec-ref-extra">{{ fixedRowRef(sec, ex._eid) }}</span><input class="fld-input" type="text" placeholder="Area name…" :value="ex.name" @input="setExtraField(sec.id,ex._eid,'name',$event.target.value)" /></td>
+                      <td class="td-extra-name"><span class="sec-ref-badge sec-ref-extra">{{ fixedRowRef(sec, ex._eid) }}</span><input class="fld-input" type="text" :disabled="!canEdit" placeholder="Area name…" :value="ex.name" @input="setExtraField(sec.id,ex._eid,'name',$event.target.value)" /></td>
                       <td><select class="fld-input" :value="ex.cleanliness" @change="setExtraField(sec.id,ex._eid,'cleanliness',$event.target.value)"><option value="">Select…</option><option v-for="o in cleanlinessOpts" :key="o" :value="o">{{ o }}</option></select></td>
-                      <td><textarea v-auto-resize class="fld-textarea" placeholder="Notes…" :value="ex.cleanlinessNotes" @input="setExtraField(sec.id,ex._eid,'cleanlinessNotes',$event.target.value)"></textarea></td>
+                      <td><textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" placeholder="Notes…" :value="ex.cleanlinessNotes" @input="setExtraField(sec.id,ex._eid,'cleanlinessNotes',$event.target.value)"></textarea></td>
                       <td class="td-cam"><button class="cam-btn" :class="{ 'cam-has': getPhotos(sec.id,ex._eid).length }" @click="togglePanel(sec.id,ex._eid)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,ex._eid).length" class="cam-count">{{ getPhotos(sec.id,ex._eid).length }}</span></button></td>
                       <td class="td-cam"><button class="cam-btn mic-btn" :class="{ 'mic-active': isItemRecording(sec.id,ex._eid), 'mic-has': !isItemRecording(sec.id,ex._eid) && getItemRecordings(sec.id,ex._eid).length, 'mic-ai': isItemAiProcessing(sec.id,ex._eid) }" @click.stop="toggleItemRecording(sec.id,ex._eid,fixedItemLabel(sec,ex._eid,(ex.name||'Item')))" title="Record"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span v-if="getItemRecordings(sec.id,ex._eid).length && !isItemRecording(sec.id,ex._eid)" class="cam-count mic-count">{{ getItemRecordings(sec.id,ex._eid).length }}</span></button></td>
-                      <td class="td-del"><button class="del-btn" @click="removeExtraRow(sec.id,ex._eid)">×</button></td>
+                      <td class="td-del"><button v-if="canDelete" class="del-btn" @click="removeExtraRow(sec.id,ex._eid)">×</button></td>
                     </tr>
                     <tr v-if="isPanelOpen(sec.id,ex._eid)" class="photo-panel-row"><td colspan="6" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,ex._eid)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,ex._eid,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,ex._eid,pi)">×</button></div><button v-if="getPhotos(sec.id,ex._eid).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(sec.id,ex._eid,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,ex._eid,e.target.files)" /></label></div></td></tr>
                   </template>
                 </tbody>
               </table>
-              <div class="add-row-bar"><button class="add-row-btn" @click="addExtraRow(sec.id,sec.type)">+ Add line</button></div>
+              <div class="add-row-bar"><button v-if="canEdit" class="add-row-btn" @click="addExtraRow(sec.id,sec.type)">+ Add line</button></div>
             </div>
 
             <!-- KEYS -->
@@ -1943,27 +1982,27 @@ onBeforeUnmount(() => {
                     <tr v-show="!isHidden(sec.id, row.id)">
                       <td class="td-drag"><span class="drag-handle">⠿</span></td>
                       <td class="td-name"><span class="sec-ref-badge">{{ fixedRowRef(sec, row.id) }}</span>{{ row.name }}</td>
-                      <td><textarea v-auto-resize class="fld-textarea" placeholder="e.g. 2 × Yale keys" :value="get(sec.id,row.id,'description')" @input="set(sec.id,row.id,'description',$event.target.value)"></textarea></td>
+                      <td><textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" placeholder="e.g. 2 × Yale keys" :value="get(sec.id,row.id,'description')" @input="set(sec.id,row.id,'description',$event.target.value)"></textarea></td>
                       <td class="td-cam"><button class="cam-btn" :class="{ 'cam-has': getPhotos(sec.id,row.id).length }" @click="togglePanel(sec.id,row.id)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,row.id).length" class="cam-count">{{ getPhotos(sec.id,row.id).length }}</span></button></td>
                       <td class="td-cam"><button class="cam-btn mic-btn" :class="{ 'mic-active': isItemRecording(sec.id,row.id), 'mic-has': !isItemRecording(sec.id,row.id) && getItemRecordings(sec.id,row.id).length, 'mic-ai': isItemAiProcessing(sec.id,row.id) }" @click.stop="toggleItemRecording(sec.id,row.id,fixedItemLabel(sec,row.id,row.name))" title="Record"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span v-if="getItemRecordings(sec.id,row.id).length && !isItemRecording(sec.id,row.id)" class="cam-count mic-count">{{ getItemRecordings(sec.id,row.id).length }}</span></button></td>
-                      <td class="td-del"><button class="del-btn" @click="hideRow(sec.id,row.id)">×</button></td>
+                      <td class="td-del"><button v-if="canDelete" class="del-btn" @click="hideRow(sec.id,row.id)">×</button></td>
                     </tr>
                     <tr v-if="isPanelOpen(sec.id,row.id)" class="photo-panel-row"><td colspan="5" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,row.id)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,row.id,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,row.id,pi)">×</button></div><button v-if="getPhotos(sec.id,row.id).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(sec.id,row.id,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,row.id,e.target.files)" /></label></div></td></tr>
                   </template>
                   <template v-for="(ex,idx) in getExtra(sec.id)" :key="ex._eid">
                     <tr class="extra-row" draggable="true" @dragstart="onFixedDragStart(sec.id,idx)" @dragover.prevent @drop.prevent="onFixedDrop(sec.id,idx)">
                       <td class="td-drag"><span class="drag-handle">⠿</span></td>
-                      <td class="td-extra-name"><span class="sec-ref-badge sec-ref-extra">{{ fixedRowRef(sec, ex._eid) }}</span><input class="fld-input" type="text" placeholder="Key name…" :value="ex.name" @input="setExtraField(sec.id,ex._eid,'name',$event.target.value)" /></td>
-                      <td><textarea v-auto-resize class="fld-textarea" placeholder="Description…" :value="ex.description" @input="setExtraField(sec.id,ex._eid,'description',$event.target.value)"></textarea></td>
+                      <td class="td-extra-name"><span class="sec-ref-badge sec-ref-extra">{{ fixedRowRef(sec, ex._eid) }}</span><input class="fld-input" type="text" :disabled="!canEdit" placeholder="Key name…" :value="ex.name" @input="setExtraField(sec.id,ex._eid,'name',$event.target.value)" /></td>
+                      <td><textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" placeholder="Description…" :value="ex.description" @input="setExtraField(sec.id,ex._eid,'description',$event.target.value)"></textarea></td>
                       <td class="td-cam"><button class="cam-btn" :class="{ 'cam-has': getPhotos(sec.id,ex._eid).length }" @click="togglePanel(sec.id,ex._eid)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,ex._eid).length" class="cam-count">{{ getPhotos(sec.id,ex._eid).length }}</span></button></td>
                       <td class="td-cam"><button class="cam-btn mic-btn" :class="{ 'mic-active': isItemRecording(sec.id,ex._eid), 'mic-has': !isItemRecording(sec.id,ex._eid) && getItemRecordings(sec.id,ex._eid).length, 'mic-ai': isItemAiProcessing(sec.id,ex._eid) }" @click.stop="toggleItemRecording(sec.id,ex._eid,fixedItemLabel(sec,ex._eid,(ex.name||'Item')))" title="Record"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span v-if="getItemRecordings(sec.id,ex._eid).length && !isItemRecording(sec.id,ex._eid)" class="cam-count mic-count">{{ getItemRecordings(sec.id,ex._eid).length }}</span></button></td>
-                      <td class="td-del"><button class="del-btn" @click="removeExtraRow(sec.id,ex._eid)">×</button></td>
+                      <td class="td-del"><button v-if="canDelete" class="del-btn" @click="removeExtraRow(sec.id,ex._eid)">×</button></td>
                     </tr>
                     <tr v-if="isPanelOpen(sec.id,ex._eid)" class="photo-panel-row"><td colspan="5" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,ex._eid)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,ex._eid,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,ex._eid,pi)">×</button></div><button v-if="getPhotos(sec.id,ex._eid).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(sec.id,ex._eid,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,ex._eid,e.target.files)" /></label></div></td></tr>
                   </template>
                 </tbody>
               </table>
-              <div class="add-row-bar"><button class="add-row-btn" @click="addExtraRow(sec.id,sec.type)">+ Add line</button></div>
+              <div class="add-row-bar"><button v-if="canEdit" class="add-row-btn" @click="addExtraRow(sec.id,sec.type)">+ Add line</button></div>
             </div>
 
             <!-- SMOKE ALARMS / HEALTH & SAFETY -->
@@ -1974,7 +2013,7 @@ onBeforeUnmount(() => {
                     <span class="qa-question"><span class="sec-ref-badge">{{ fixedRowRef(sec, row.id) }}</span>{{ row.question }}</span>
                     <button class="cam-btn" :class="{ 'cam-has': getPhotos(sec.id,row.id).length }" @click="togglePanel(sec.id,row.id)" title="Photos"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,row.id).length" class="cam-count">{{ getPhotos(sec.id,row.id).length }}</span></button>
                     <button class="cam-btn mic-btn" :class="{ 'mic-active': isItemRecording(sec.id,row.id), 'mic-has': !isItemRecording(sec.id,row.id) && getItemRecordings(sec.id,row.id).length, 'mic-ai': isItemAiProcessing(sec.id,row.id) }" @click.stop="toggleItemRecording(sec.id,row.id,fixedItemLabel(sec,row.id,row.question))" title="Record"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span v-if="getItemRecordings(sec.id,row.id).length && !isItemRecording(sec.id,row.id)" class="cam-count mic-count">{{ getItemRecordings(sec.id,row.id).length }}</span></button>
-                    <button class="del-btn" @click="hideRow(sec.id,row.id)">×</button>
+                    <button v-if="canDelete" class="del-btn" @click="hideRow(sec.id,row.id)">×</button>
                   </div>
                   <p v-if="row.guidance" class="qa-guidance">{{ row.guidance }}</p>
                   <div class="qa-controls">
@@ -1982,7 +2021,7 @@ onBeforeUnmount(() => {
                       <option value="">Select…</option>
                       <option>Yes</option><option>No</option><option>N/A</option><option>Not Tested</option>
                     </select>
-                    <textarea v-auto-resize class="fld-textarea" style="flex:1" placeholder="Additional notes…" :value="get(sec.id,row.id,'notes')" @input="set(sec.id,row.id,'notes',$event.target.value)"></textarea>
+                    <textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" style="flex:1" placeholder="Additional notes…" :value="get(sec.id,row.id,'notes')" @input="set(sec.id,row.id,'notes',$event.target.value)"></textarea>
                   </div>
                   <div v-if="isPanelOpen(sec.id,row.id)" class="photo-panel-inline"><div v-for="(ph,pi) in getPhotos(sec.id,row.id)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,row.id,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,row.id,pi)">×</button></div><button v-if="getPhotos(sec.id,row.id).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(sec.id,row.id,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,row.id,e.target.files)" /></label></div>
                 </div>
@@ -1992,22 +2031,22 @@ onBeforeUnmount(() => {
                   <div class="qa-extra-header">
                     <span class="drag-handle">⠿</span>
                     <span class="sec-ref-badge sec-ref-extra">{{ fixedRowRef(sec, ex._eid) }}</span>
-                    <input class="fld-input" type="text" placeholder="Question…" :value="ex.question" @input="setExtraField(sec.id,ex._eid,'question',$event.target.value)" />
+                    <input class="fld-input" type="text" :disabled="!canEdit" placeholder="Question…" :value="ex.question" @input="setExtraField(sec.id,ex._eid,'question',$event.target.value)" />
                     <button class="cam-btn" :class="{ 'cam-has': getPhotos(sec.id,ex._eid).length }" @click="togglePanel(sec.id,ex._eid)" title="Photos"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,ex._eid).length" class="cam-count">{{ getPhotos(sec.id,ex._eid).length }}</span></button>
                     <button class="cam-btn mic-btn" :class="{ 'mic-active': isItemRecording(sec.id,ex._eid), 'mic-has': !isItemRecording(sec.id,ex._eid) && getItemRecordings(sec.id,ex._eid).length, 'mic-ai': isItemAiProcessing(sec.id,ex._eid) }" @click.stop="toggleItemRecording(sec.id,ex._eid,fixedItemLabel(sec,ex._eid,(ex.question||'Item')))" title="Record"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span v-if="getItemRecordings(sec.id,ex._eid).length && !isItemRecording(sec.id,ex._eid)" class="cam-count mic-count">{{ getItemRecordings(sec.id,ex._eid).length }}</span></button>
-                    <button class="del-btn" @click="removeExtraRow(sec.id,ex._eid)">×</button>
+                    <button v-if="canDelete" class="del-btn" @click="removeExtraRow(sec.id,ex._eid)">×</button>
                   </div>
                   <div class="qa-controls">
                     <select class="fld-input" style="width:180px" :value="ex.answer" @change="setExtraField(sec.id,ex._eid,'answer',$event.target.value)">
                       <option value="">Select…</option>
                       <option>Yes</option><option>No</option><option>N/A</option><option>Not Tested</option>
                     </select>
-                    <textarea v-auto-resize class="fld-textarea" style="flex:1" placeholder="Notes…" :value="ex.notes" @input="setExtraField(sec.id,ex._eid,'notes',$event.target.value)"></textarea>
+                    <textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" style="flex:1" placeholder="Notes…" :value="ex.notes" @input="setExtraField(sec.id,ex._eid,'notes',$event.target.value)"></textarea>
                   </div>
                   <div v-if="isPanelOpen(sec.id,ex._eid)" class="photo-panel-inline"><div v-for="(ph,pi) in getPhotos(sec.id,ex._eid)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,ex._eid,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,ex._eid,pi)">×</button></div><button v-if="getPhotos(sec.id,ex._eid).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(sec.id,ex._eid,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,ex._eid,e.target.files)" /></label></div>
                 </div>
               </template>
-              <div class="add-row-bar"><button class="add-row-btn" @click="addExtraRow(sec.id,sec.type)">+ Add line</button></div>
+              <div class="add-row-bar"><button v-if="canEdit" class="add-row-btn" @click="addExtraRow(sec.id,sec.type)">+ Add line</button></div>
             </div>
 
             <!-- FIRE DOOR SAFETY -->
@@ -2021,29 +2060,29 @@ onBeforeUnmount(() => {
                       <td class="td-name"><span class="sec-ref-badge">{{ fixedRowRef(sec, row.id) }}</span>{{ row.name }}</td>
                       <td>{{ row.question }}</td>
                       <td><select class="fld-input" :value="get(sec.id,row.id,'answer')" @change="set(sec.id,row.id,'answer',$event.target.value)"><option value="">Select…</option><option>Yes</option><option>No</option><option>N/A</option></select></td>
-                      <td><textarea v-auto-resize class="fld-textarea" placeholder="Notes…" :value="get(sec.id,row.id,'notes')" @input="set(sec.id,row.id,'notes',$event.target.value)"></textarea></td>
+                      <td><textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" placeholder="Notes…" :value="get(sec.id,row.id,'notes')" @input="set(sec.id,row.id,'notes',$event.target.value)"></textarea></td>
                       <td class="td-cam"><button class="cam-btn" :class="{ 'cam-has': getPhotos(sec.id,row.id).length }" @click="togglePanel(sec.id,row.id)" title="Photos"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,row.id).length" class="cam-count">{{ getPhotos(sec.id,row.id).length }}</span></button></td>
                       <td class="td-cam"><button class="cam-btn mic-btn" :class="{ 'mic-active': isItemRecording(sec.id,row.id), 'mic-has': !isItemRecording(sec.id,row.id) && getItemRecordings(sec.id,row.id).length, 'mic-ai': isItemAiProcessing(sec.id,row.id) }" @click.stop="toggleItemRecording(sec.id,row.id,fixedItemLabel(sec,row.id,row.name))" title="Record"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span v-if="getItemRecordings(sec.id,row.id).length && !isItemRecording(sec.id,row.id)" class="cam-count mic-count">{{ getItemRecordings(sec.id,row.id).length }}</span></button></td>
-                      <td class="td-del"><button class="del-btn" @click="hideRow(sec.id,row.id)">×</button></td>
+                      <td class="td-del"><button v-if="canDelete" class="del-btn" @click="hideRow(sec.id,row.id)">×</button></td>
                     </tr>
                     <tr v-if="isPanelOpen(sec.id,row.id)" class="photo-panel-row"><td colspan="7" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,row.id)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,row.id,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,row.id,pi)">×</button></div><button v-if="getPhotos(sec.id,row.id).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(sec.id,row.id,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,row.id,e.target.files)" /></label></div></td></tr>
                   </template>
                   <template v-for="(ex,idx) in getExtra(sec.id)" :key="ex._eid">
                     <tr class="extra-row" draggable="true" @dragstart="onFixedDragStart(sec.id,idx)" @dragover.prevent @drop.prevent="onFixedDrop(sec.id,idx)">
                       <td class="td-drag"><span class="drag-handle">⠿</span></td>
-                      <td class="td-extra-name"><span class="sec-ref-badge sec-ref-extra">{{ fixedRowRef(sec, ex._eid) }}</span><input class="fld-input" type="text" placeholder="Door name…" :value="ex.name" @input="setExtraField(sec.id,ex._eid,'name',$event.target.value)" /></td>
-                      <td><input class="fld-input" type="text" placeholder="Check…" :value="ex.question" @input="setExtraField(sec.id,ex._eid,'question',$event.target.value)" /></td>
+                      <td class="td-extra-name"><span class="sec-ref-badge sec-ref-extra">{{ fixedRowRef(sec, ex._eid) }}</span><input class="fld-input" type="text" :disabled="!canEdit" placeholder="Door name…" :value="ex.name" @input="setExtraField(sec.id,ex._eid,'name',$event.target.value)" /></td>
+                      <td><input class="fld-input" type="text" :disabled="!canEdit" placeholder="Check…" :value="ex.question" @input="setExtraField(sec.id,ex._eid,'question',$event.target.value)" /></td>
                       <td><select class="fld-input" :value="ex.answer" @change="setExtraField(sec.id,ex._eid,'answer',$event.target.value)"><option value="">Select…</option><option>Yes</option><option>No</option><option>N/A</option></select></td>
-                      <td><textarea v-auto-resize class="fld-textarea" placeholder="Notes…" :value="ex.notes" @input="setExtraField(sec.id,ex._eid,'notes',$event.target.value)"></textarea></td>
+                      <td><textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" placeholder="Notes…" :value="ex.notes" @input="setExtraField(sec.id,ex._eid,'notes',$event.target.value)"></textarea></td>
                       <td class="td-cam"><button class="cam-btn" :class="{ 'cam-has': getPhotos(sec.id,ex._eid).length }" @click="togglePanel(sec.id,ex._eid)" title="Photos"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,ex._eid).length" class="cam-count">{{ getPhotos(sec.id,ex._eid).length }}</span></button></td>
                       <td class="td-cam"><button class="cam-btn mic-btn" :class="{ 'mic-active': isItemRecording(sec.id,ex._eid), 'mic-has': !isItemRecording(sec.id,ex._eid) && getItemRecordings(sec.id,ex._eid).length, 'mic-ai': isItemAiProcessing(sec.id,ex._eid) }" @click.stop="toggleItemRecording(sec.id,ex._eid,fixedItemLabel(sec,ex._eid,(ex.name||'Item')))" title="Record"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span v-if="getItemRecordings(sec.id,ex._eid).length && !isItemRecording(sec.id,ex._eid)" class="cam-count mic-count">{{ getItemRecordings(sec.id,ex._eid).length }}</span></button></td>
-                      <td class="td-del"><button class="del-btn" @click="removeExtraRow(sec.id,ex._eid)">×</button></td>
+                      <td class="td-del"><button v-if="canDelete" class="del-btn" @click="removeExtraRow(sec.id,ex._eid)">×</button></td>
                     </tr>
                     <tr v-if="isPanelOpen(sec.id,ex._eid)" class="photo-panel-row"><td colspan="7" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,ex._eid)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,ex._eid,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,ex._eid,pi)">×</button></div><button v-if="getPhotos(sec.id,ex._eid).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(sec.id,ex._eid,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,ex._eid,e.target.files)" /></label></div></td></tr>
                   </template>
                 </tbody>
               </table>
-              <div class="add-row-bar"><button class="add-row-btn" @click="addExtraRow(sec.id,sec.type)">+ Add line</button></div>
+              <div class="add-row-bar"><button v-if="canEdit" class="add-row-btn" @click="addExtraRow(sec.id,sec.type)">+ Add line</button></div>
             </div>
 
             <!-- METER READINGS -->
@@ -2055,29 +2094,29 @@ onBeforeUnmount(() => {
                     <tr v-show="!isHidden(sec.id, row.id)">
                       <td class="td-drag"><span class="drag-handle">⠿</span></td>
                       <td class="td-name"><span class="sec-ref-badge">{{ fixedRowRef(sec, row.id) }}</span>{{ row.name }}</td>
-                      <td><textarea v-auto-resize class="fld-textarea" placeholder="e.g. Located to understairs cupboard&#10;Serial Number: 123456" :value="get(sec.id,row.id,'locationSerial')" @input="set(sec.id,row.id,'locationSerial',$event.target.value)"></textarea></td>
+                      <td><textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" placeholder="e.g. Located to understairs cupboard&#10;Serial Number: 123456" :value="get(sec.id,row.id,'locationSerial')" @input="set(sec.id,row.id,'locationSerial',$event.target.value)"></textarea></td>
                       <td><textarea v-auto-resize class="fld-textarea fld-mono" placeholder="e.g. 12345.6" :value="get(sec.id,row.id,'reading')" @input="set(sec.id,row.id,'reading',$event.target.value)"></textarea></td>
                       <td class="td-cam"><button class="cam-btn" :class="{ 'cam-has': getPhotos(sec.id,row.id).length }" @click="togglePanel(sec.id,row.id)" title="Photos"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,row.id).length" class="cam-count">{{ getPhotos(sec.id,row.id).length }}</span></button></td>
                       <td class="td-cam"><button class="cam-btn mic-btn" :class="{ 'mic-active': isItemRecording(sec.id,row.id), 'mic-has': !isItemRecording(sec.id,row.id) && getItemRecordings(sec.id,row.id).length, 'mic-ai': isItemAiProcessing(sec.id,row.id) }" @click.stop="toggleItemRecording(sec.id,row.id,fixedItemLabel(sec,row.id,row.name))" title="Record"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span v-if="getItemRecordings(sec.id,row.id).length && !isItemRecording(sec.id,row.id)" class="cam-count mic-count">{{ getItemRecordings(sec.id,row.id).length }}</span></button></td>
-                      <td class="td-del"><button class="del-btn" @click="hideRow(sec.id,row.id)">×</button></td>
+                      <td class="td-del"><button v-if="canDelete" class="del-btn" @click="hideRow(sec.id,row.id)">×</button></td>
                     </tr>
                     <tr v-if="isPanelOpen(sec.id,row.id)" class="photo-panel-row"><td colspan="6" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,row.id)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,row.id,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,row.id,pi)">×</button></div><button v-if="getPhotos(sec.id,row.id).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(sec.id,row.id,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,row.id,e.target.files)" /></label></div></td></tr>
                   </template>
                   <template v-for="(ex,idx) in getExtra(sec.id)" :key="ex._eid">
                     <tr class="extra-row" draggable="true" @dragstart="onFixedDragStart(sec.id,idx)" @dragover.prevent @drop.prevent="onFixedDrop(sec.id,idx)">
                       <td class="td-drag"><span class="drag-handle">⠿</span></td>
-                      <td class="td-extra-name"><span class="sec-ref-badge sec-ref-extra">{{ fixedRowRef(sec, ex._eid) }}</span><input class="fld-input" type="text" placeholder="Meter name…" :value="ex.name" @input="setExtraField(sec.id,ex._eid,'name',$event.target.value)" /></td>
-                      <td><textarea v-auto-resize class="fld-textarea" placeholder="Location & serial…" :value="ex.locationSerial" @input="setExtraField(sec.id,ex._eid,'locationSerial',$event.target.value)"></textarea></td>
+                      <td class="td-extra-name"><span class="sec-ref-badge sec-ref-extra">{{ fixedRowRef(sec, ex._eid) }}</span><input class="fld-input" type="text" :disabled="!canEdit" placeholder="Meter name…" :value="ex.name" @input="setExtraField(sec.id,ex._eid,'name',$event.target.value)" /></td>
+                      <td><textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" placeholder="Location & serial…" :value="ex.locationSerial" @input="setExtraField(sec.id,ex._eid,'locationSerial',$event.target.value)"></textarea></td>
                       <td><textarea v-auto-resize class="fld-textarea fld-mono" placeholder="Reading…" :value="ex.reading" @input="setExtraField(sec.id,ex._eid,'reading',$event.target.value)"></textarea></td>
                       <td class="td-cam"><button class="cam-btn" :class="{ 'cam-has': getPhotos(sec.id,ex._eid).length }" @click="togglePanel(sec.id,ex._eid)" title="Photos"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,ex._eid).length" class="cam-count">{{ getPhotos(sec.id,ex._eid).length }}</span></button></td>
                       <td class="td-cam"><button class="cam-btn mic-btn" :class="{ 'mic-active': isItemRecording(sec.id,ex._eid), 'mic-has': !isItemRecording(sec.id,ex._eid) && getItemRecordings(sec.id,ex._eid).length, 'mic-ai': isItemAiProcessing(sec.id,ex._eid) }" @click.stop="toggleItemRecording(sec.id,ex._eid,fixedItemLabel(sec,ex._eid,(ex.name||'Item')))" title="Record"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span v-if="getItemRecordings(sec.id,ex._eid).length && !isItemRecording(sec.id,ex._eid)" class="cam-count mic-count">{{ getItemRecordings(sec.id,ex._eid).length }}</span></button></td>
-                      <td class="td-del"><button class="del-btn" @click="removeExtraRow(sec.id,ex._eid)">×</button></td>
+                      <td class="td-del"><button v-if="canDelete" class="del-btn" @click="removeExtraRow(sec.id,ex._eid)">×</button></td>
                     </tr>
                     <tr v-if="isPanelOpen(sec.id,ex._eid)" class="photo-panel-row"><td colspan="6" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,ex._eid)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,ex._eid,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,ex._eid,pi)">×</button></div><button v-if="getPhotos(sec.id,ex._eid).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(sec.id,ex._eid,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,ex._eid,e.target.files)" /></label></div></td></tr>
                   </template>
                 </tbody>
               </table>
-              <div class="add-row-bar"><button class="add-row-btn" @click="addExtraRow(sec.id,sec.type)">+ Add line</button></div>
+              <div class="add-row-bar"><button v-if="canEdit" class="add-row-btn" @click="addExtraRow(sec.id,sec.type)">+ Add line</button></div>
             </div>
 
             <div v-else class="unknown-type">Unknown section type: {{ sec.type }}</div>
@@ -2160,14 +2199,14 @@ onBeforeUnmount(() => {
                     <template v-if="item._type === 'template'">
                       <div v-if="item.hasDescription" class="room-field-desc">
                         <label class="field-lbl">Description</label>
-                        <textarea v-auto-resize class="fld-textarea" rows="3" :placeholder="`Describe ${item.label.toLowerCase()}…`"
+                        <textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" rows="3" :placeholder="`Describe ${item.label.toLowerCase()}…`"
                           :value="get(room.id,item.id,'description')"
                           @input="set(room.id,item.id,'description',$event.target.value)"></textarea>
                       </div>
                       <div v-if="item.hasCondition" class="room-field-cond room-field-with-cam">
                         <div class="field-cond-inner">
                           <label class="field-lbl">Condition</label>
-                          <textarea v-auto-resize class="fld-textarea" rows="3" :placeholder="`Condition of ${item.label.toLowerCase()}…`"
+                          <textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" rows="3" :placeholder="`Condition of ${item.label.toLowerCase()}…`"
                             :value="get(room.id,item.id,'condition')"
                             @input="set(room.id,item.id,'condition',$event.target.value)"></textarea>
                         </div>
@@ -2200,7 +2239,7 @@ onBeforeUnmount(() => {
                       </div>
                       <div v-if="item.hasNotes" class="room-field-notes">
                         <label class="field-lbl">Notes</label>
-                        <textarea v-auto-resize class="fld-textarea" placeholder="Notes…"
+                        <textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" placeholder="Notes…"
                           :value="get(room.id,item.id,'notes')"
                           @input="set(room.id,item.id,'notes',$event.target.value)"></textarea>
                       </div>
@@ -2208,14 +2247,14 @@ onBeforeUnmount(() => {
                     <template v-else>
                       <div class="room-field-desc">
                         <label class="field-lbl">Description</label>
-                        <textarea v-auto-resize class="fld-textarea" rows="3" placeholder="Describe…"
+                        <textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" rows="3" placeholder="Describe…"
                           :value="item.description"
                           @input="setRoomExtraField(room.id,item._eid,'description',$event.target.value)"></textarea>
                       </div>
                       <div class="room-field-cond room-field-with-cam">
                         <div class="field-cond-inner">
                           <label class="field-lbl">Condition</label>
-                          <textarea v-auto-resize class="fld-textarea" rows="3" placeholder="Condition…"
+                          <textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" rows="3" placeholder="Condition…"
                             :value="item.condition"
                             @input="setRoomExtraField(room.id,item._eid,'condition',$event.target.value)"></textarea>
                         </div>
@@ -2261,7 +2300,7 @@ onBeforeUnmount(() => {
                     <div class="room-field-cond room-field-with-cam">
                       <div class="field-cond-inner">
                         <label class="field-lbl">Condition at Check Out</label>
-                        <textarea v-auto-resize class="fld-textarea" rows="3"
+                        <textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" rows="3"
                           placeholder="As Inventory &amp; Check In"
                           :value="item._type==='template'
                             ? (get(room.id,item.id,'checkOutCondition') || '')
@@ -2325,8 +2364,8 @@ onBeforeUnmount(() => {
                 <div v-if="item._type === 'template' && getSubs(room.id, item.id).length" class="sub-items">
                   <div v-for="sub in getSubs(room.id, item.id)" :key="sub._sid" class="sub-item">
                     <div class="sub-item-fields">
-                      <div class="room-field-desc"><label class="field-lbl">Description</label><textarea v-auto-resize class="fld-textarea" rows="2" placeholder="Describe…" :value="sub.description" @input="setSubField(room.id,item.id,sub._sid,'description',$event.target.value)"></textarea></div>
-                      <div class="room-field-cond"><label class="field-lbl">Condition</label><textarea v-auto-resize class="fld-textarea" rows="2" placeholder="Condition…" :value="sub.condition" @input="setSubField(room.id,item.id,sub._sid,'condition',$event.target.value)"></textarea></div>
+                      <div class="room-field-desc"><label class="field-lbl">Description</label><textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" rows="2" placeholder="Describe…" :value="sub.description" @input="setSubField(room.id,item.id,sub._sid,'description',$event.target.value)"></textarea></div>
+                      <div class="room-field-cond"><label class="field-lbl">Condition</label><textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" rows="2" placeholder="Condition…" :value="sub.condition" @input="setSubField(room.id,item.id,sub._sid,'condition',$event.target.value)"></textarea></div>
                     </div>
                     <button class="del-btn del-btn-sub" @click="removeSubItem(room.id,item.id,sub._sid)">×</button>
                   </div>
@@ -2935,6 +2974,10 @@ onBeforeUnmount(() => {
 .photo-btn{display:flex;align-items:center;gap:6px;padding:5px 11px;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.1);border-radius:5px;font-size:12px;color:#94a3b8;cursor:pointer;transition:all 0.15s}
 .photo-btn:hover{background:rgba(255,255,255,0.13);color:#e2e8f0}
 .save-btn{padding:6px 16px;background:#6366f1;color:white;border:none;border-radius:5px;font-size:13px;font-weight:700;cursor:pointer;transition:background 0.15s}
+.review-btn{padding:8px 20px;background:#16a34a;color:white;border:none;border-radius:6px;font-size:13px;font-weight:700;cursor:pointer;transition:background 0.15s}
+.review-btn:hover{background:#15803d}
+.chip-readonly{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;background:#f1f5f9;color:#64748b;border-radius:20px;font-size:12px;font-weight:500}
+.fld-textarea:disabled,.fld-input:disabled{background:#f8fafc;color:#64748b;cursor:default;border-color:#e2e8f0}
 .save-btn:hover:not(:disabled){background:#4f46e5}.save-btn:disabled{background:#1e3a5f;color:#475569;cursor:not-allowed}
 
 /* Body */

@@ -3,9 +3,11 @@ import { ref, onMounted, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../services/api'
 import { useToast } from '../composables/useToast'
+import { useAuthStore } from '../stores/auth'
 import FullCalendar from '@fullcalendar/vue3'
 
 const toast = useToast()
+const authStore = useAuthStore()
 import dayGridPlugin from '@fullcalendar/daygrid'
 import timeGridPlugin from '@fullcalendar/timegrid'
 import interactionPlugin from '@fullcalendar/interaction'
@@ -533,7 +535,7 @@ onMounted(() => {
   <div class="page">
     <div class="page-header">
       <h1>📋 Inspections</h1>
-      <button @click="openModal" class="btn-primary">➕ New Inspection</button>
+      <button v-if="authStore.isAdmin || authStore.isManager" @click="openModal" class="btn-primary">➕ New Inspection</button>
     </div>
 
     <!-- Tabs -->
@@ -549,7 +551,7 @@ onMounted(() => {
     <!-- List View -->
     <div v-if="activeTab === 'list'">
       <div class="filters-bar">
-        <div class="filter-group">
+        <div v-if="authStore.isAdmin || authStore.isManager" class="filter-group">
           <label>Portfolio</label>
           <select v-model="filters.client_id" class="filter-select">
             <option :value="null">All Portfolio</option>
@@ -566,7 +568,7 @@ onMounted(() => {
             <option v-for="option in statusOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
           </select>
         </div>
-        <div class="filter-group">
+        <div v-if="authStore.isAdmin || authStore.isManager" class="filter-group">
           <label>Clerk</label>
           <select v-model="filters.clerk_id" class="filter-select">
             <option :value="null">All Clerks</option>

@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from models import db, Inspection, Property, User, Template
+from permissions import get_current_user, require_admin_or_manager, filter_inspections_for_user, is_admin_or_manager
 from datetime import datetime
 import json
 
@@ -76,10 +77,7 @@ def inspection_detail(inspection):
             'name': inspection.typist.name,
             'email': inspection.typist.email,
             'phone': inspection.typist.phone,
-            'is_ai': inspection.typist.is_ai,
         }
-        result['typist_is_ai'] = inspection.typist.is_ai
-        result['typist_name'] = inspection.typist.name
 
     if inspection.template:
         result['template_name'] = inspection.template.name
@@ -93,7 +91,9 @@ def inspection_detail(inspection):
 @inspections_bp.route('', methods=['GET'])
 @jwt_required()
 def get_inspections():
-    inspections = Inspection.query.all()
+    user = get_current_user()
+    query = filter_inspections_for_user(Inspection.query, user)
+    inspections = query.all()
     return jsonify([{
         'id': i.id,
         'property_id': i.property_id,
@@ -120,7 +120,14 @@ def get_inspections():
 @inspections_bp.route('/<int:inspection_id>', methods=['GET'])
 @jwt_required()
 def get_inspection(inspection_id):
+    user = get_current_user()
     inspection = Inspection.query.get_or_404(inspection_id)
+    # Clerks can only view their own inspections
+    if user.role == 'clerk' and inspection.inspector_id != user.id:
+        return jsonify({'error': 'Forbidden'}), 403
+    # Typists can only view their own inspections in processing
+    if user.role == 'typist' and (inspection.typist_id != user.id or inspection.status != 'processing'):
+        return jsonify({'error': 'Forbidden'}), 403
     return jsonify(inspection_detail(inspection))
 
 
@@ -158,6 +165,9 @@ def get_property_history(property_id):
 @inspections_bp.route('', methods=['POST'])
 @jwt_required()
 def create_inspection():
+    user = get_current_user()
+    if not is_admin_or_manager(user):
+        return jsonify({'error': 'Forbidden'}), 403
     data = request.json
 
     # Use explicitly selected template, or fall back to default for the type
@@ -229,8 +239,24 @@ def create_inspection():
 @inspections_bp.route('/<int:inspection_id>', methods=['PUT'])
 @jwt_required()
 def update_inspection(inspection_id):
+    user = get_current_user()
     inspection = Inspection.query.get_or_404(inspection_id)
     data = request.json
+    # Clerks can only update their own inspections in active or review stage
+    if user.role == 'clerk':
+        if inspection.inspector_id != user.id:
+            return jsonify({'error': 'Forbidden'}), 403
+        if inspection.status not in ('active', 'review'):
+            return jsonify({'error': 'Clerks can only edit reports in active or review stage'}), 403
+    # Typists can only update report_data and move to review on their own processing inspections
+    if user.role == 'typist':
+        if inspection.typist_id != user.id or inspection.status != 'processing':
+            return jsonify({'error': 'Forbidden'}), 403
+        allowed_keys = {'report_data', 'status'}
+        if not set(data.keys()).issubset(allowed_keys):
+            return jsonify({'error': 'Typists can only update report data and status'}), 403
+        if 'status' in data and data['status'] not in ('processing', 'review'):
+            return jsonify({'error': 'Typists can only move inspection to review'}), 403
 
     if 'status' in data:
         inspection.status = data['status']
@@ -285,6 +311,9 @@ def update_inspection(inspection_id):
 @inspections_bp.route('/<int:inspection_id>', methods=['DELETE'])
 @jwt_required()
 def delete_inspection(inspection_id):
+    user = get_current_user()
+    if not is_admin_or_manager(user):
+        return jsonify({'error': 'Forbidden'}), 403
     inspection = Inspection.query.get_or_404(inspection_id)
     db.session.delete(inspection)
     db.session.commit()

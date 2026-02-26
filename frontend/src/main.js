@@ -22,3 +22,4 @@ if (Capacitor.isNativePlatform()) {
   const token = localStorage.getItem('token')
   router.replace(token ? '/mobile' : '/mobile/login')
 }
+// v2

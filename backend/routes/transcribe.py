@@ -342,10 +342,9 @@ def transcribe_item():
 
     except Exception as e:
         import traceback
-        tb = traceback.format_exc()
         print(f'[transcribe/item] Error: {e}')
-        print(tb)
-        return jsonify({'error': str(e), 'traceback': tb}), 500
+        print(traceback.format_exc())
+        return jsonify({'error': str(e)}), 500
 
 
 @transcribe_bp.route('/usage', methods=['GET'])

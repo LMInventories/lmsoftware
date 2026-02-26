@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "https://lmsoftware.onrender.com/api/$1"
+    }
+  ]
+}

@@ -93,6 +93,7 @@ async function load() {
       if (inspection.value.report_data) {
         try {
           reportData.value = JSON.parse(inspection.value.report_data)
+          delete reportData.value._recordings  // stored separately, restored by _restoreRecordings()
           // Restore imported source data if previously imported from PDF
           if (reportData.value._importedSource && Object.keys(sourceReportData.value).length === 0) {
             sourceReportData.value = reportData.value._importedSource
@@ -107,7 +108,10 @@ async function load() {
         template.value = tRes.data
       }
       if (inspection.value.report_data) {
-        try { reportData.value = JSON.parse(inspection.value.report_data) } catch { reportData.value = {} }
+        try {
+          reportData.value = JSON.parse(inspection.value.report_data)
+          delete reportData.value._recordings  // stored separately, restored by _restoreRecordings()
+        } catch { reportData.value = {} }
       }
     }
 
@@ -125,7 +129,39 @@ async function load() {
     await nextTick()
     if (allSections.value[0]) activeId.value = allSections.value[0].id
     checkAiTypist()
+    _restoreRecordings()
   }
+}
+
+// Restore recordings saved in reportData._recordings back into the recordings ref.
+// Base64 audio is converted back to Blob objects so playback works normally.
+function _restoreRecordings() {
+  const saved = reportData.value._recordings
+  if (!Array.isArray(saved) || !saved.length) return
+  recordings.value = saved
+    .filter(r => r.audioB64)
+    .map(r => {
+      const byteString = atob(r.audioB64)
+      const ab = new ArrayBuffer(byteString.length)
+      const ia = new Uint8Array(ab)
+      for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i)
+      const blob = new Blob([ab], { type: r.mimeType || 'audio/webm' })
+      const url  = URL.createObjectURL(blob)
+      return {
+        id:         r.id,
+        blob,
+        url,
+        _savedB64:  r.audioB64,  // cache so re-save doesn't re-encode
+        mimeType:   r.mimeType,
+        duration:   r.duration,
+        createdAt:  r.createdAt,
+        label:      r.label,
+        itemKey:    r.itemKey,
+        transcript: r.transcript,
+        gptResult:  r.gptResult,
+      }
+    })
+  if (recordings.value.length) loadRecording(recordings.value[0], true)
 }
 
 // Source Check In data (read-only reference for Check Out)
@@ -1118,7 +1154,30 @@ async function savePhoto() {
 async function save(feedback = true) {
   saving.value = true
   try {
-    await api.updateInspection(inspection.value.id, { report_data: JSON.stringify(reportData.value) })
+    // Serialise recordings as base64 into reportData._recordings so they
+    // survive page navigation. Blobs are in-memory only — must be converted.
+    const serialisedRecs = await Promise.all(
+      recordings.value.map(async (rec) => {
+        let audioB64 = rec._savedB64 || null
+        if (!audioB64 && rec.blob) {
+          audioB64 = await _blobToBase64(rec.blob)
+          rec._savedB64 = audioB64  // cache to avoid re-encoding on next save
+        }
+        return {
+          id:         rec.id,
+          audioB64,
+          mimeType:   rec.mimeType,
+          duration:   rec.duration,
+          createdAt:  rec.createdAt,
+          label:      rec.label,
+          itemKey:    rec.itemKey,
+          transcript: rec.transcript,
+          gptResult:  rec.gptResult,
+        }
+      })
+    )
+    const dataToSave = { ...reportData.value, _recordings: serialisedRecs }
+    await api.updateInspection(inspection.value.id, { report_data: JSON.stringify(dataToSave) })
     unsaved.value = false
     lastSaved.value = new Date()
     if (feedback) toast.success('Report saved')
@@ -1421,15 +1480,21 @@ async function _transcribeItem(rec, sectionId, rowId, itemLabel, roomName) {
     })
 
     const result = response.data
+    console.log('[AI transcribe] response:', result)
+    console.log('[AI transcribe] targeting sid:', sectionId, 'rid:', String(rowId))
+    console.log('[AI transcribe] reportData keys:', Object.keys(reportData.value))
 
     // Store transcript on the recording object for reference
     rec.transcript = result.transcript
     rec.gptResult  = { description: result.description, condition: result.condition }
 
     // Fill report fields — only fill if currently empty to preserve manual entry
-    const sid = sectionId
+    // Always use String() for rowId — keys in reportData are always strings
+    const sid = String(sectionId)
     const rid = String(rowId)
-    if (!reportData.value[sid])     reportData.value[sid]     = {}
+
+    // Ensure the nested path exists
+    if (!reportData.value[sid]) reportData.value[sid] = {}
     if (!reportData.value[sid][rid]) reportData.value[sid][rid] = {}
 
     let changed = false
@@ -1442,12 +1507,16 @@ async function _transcribeItem(rec, sectionId, rowId, itemLabel, roomName) {
       changed = true
     }
 
+    console.log('[AI transcribe] changed:', changed, 'data now:', reportData.value[sid][rid])
+
     if (changed) {
       unsaved.value = true
       await save(false)
+      toast.success(`✨ AI filled: ${itemLabel}`)
+    } else if (result.transcript) {
+      // Fields already had content — still show a success
+      toast.success(`✨ Transcribed: ${itemLabel} (fields already filled)`)
     }
-
-    toast.success(`✨ AI filled: ${itemLabel}`)
 
   } catch (err) {
     console.error('[AI transcribe item]', err)

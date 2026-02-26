@@ -20,7 +20,7 @@ const BACKEND_LAN_IP = '192.168.50.2'  // ← your local PC IP for Android dev
 // If VITE_API_URL is baked in by the build system, use it.
 // Otherwise fall back to the hardcoded Render URL so production always works
 // regardless of build environment quirks.
-const RENDER_URL = 'http://localhost:5000'
+const RENDER_URL = 'https://lmsoftware.onrender.com'
 
 function getBaseURL() {
   // 1. Explicit env var (Vercel dashboard or local .env.local)
@@ -117,6 +117,7 @@ const api = {
   reorderItem(id, direction) { return axiosInstance.post(`/api/templates/items/${id}/reorder`, { direction }) },
 
   getTranscribeStatus() { return axiosInstance.get('/api/transcribe/status') },
+  getTranscribeUsage(period = 30) { return axiosInstance.get(`/api/transcribe/usage?period=${period}`) },
   transcribeItem(data) { return axiosInstance.post('/api/transcribe/item', data) },
   transcribeFull(data) { return axiosInstance.post('/api/transcribe/full', data) },
 }

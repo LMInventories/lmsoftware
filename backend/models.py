@@ -188,3 +188,39 @@ class Template(db.Model):
             'created_at':      self.created_at.isoformat() if self.created_at else None,
             'updated_at':      self.updated_at.isoformat() if self.updated_at else None
         }
+
+class TranscriptionUsage(db.Model):
+    __tablename__ = 'transcription_usage'
+
+    id            = db.Column(db.Integer, primary_key=True)
+    created_at    = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    call_type     = db.Column(db.String(20), nullable=False)  # 'item' | 'full'
+    inspection_id = db.Column(db.Integer, db.ForeignKey('inspections.id', ondelete='SET NULL'), nullable=True)
+    user_id       = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
+    audio_seconds = db.Column(db.Float, default=0)   # whisper billing
+    input_tokens  = db.Column(db.Integer, default=0) # claude billing
+    output_tokens = db.Column(db.Integer, default=0) # claude billing
+    section_type  = db.Column(db.String(30), default='room')
+
+    def to_dict(self):
+        # Pricing (USD, converted to GBP at ~0.79)
+        USD_TO_GBP    = 0.79
+        WHISPER_PER_MIN_USD   = 0.006
+        HAIKU_IN_PER_1M_USD   = 0.80
+        HAIKU_OUT_PER_1M_USD  = 4.00
+
+        whisper_usd = (self.audio_seconds / 60) * WHISPER_PER_MIN_USD
+        claude_usd  = (self.input_tokens  / 1_000_000) * HAIKU_IN_PER_1M_USD +                       (self.output_tokens / 1_000_000) * HAIKU_OUT_PER_1M_USD
+        total_gbp   = (whisper_usd + claude_usd) * USD_TO_GBP
+
+        return {
+            'id':            self.id,
+            'created_at':    self.created_at.isoformat() if self.created_at else None,
+            'call_type':     self.call_type,
+            'inspection_id': self.inspection_id,
+            'audio_seconds': self.audio_seconds,
+            'input_tokens':  self.input_tokens,
+            'output_tokens': self.output_tokens,
+            'section_type':  self.section_type,
+            'cost_gbp':      round(total_gbp, 4),
+        }

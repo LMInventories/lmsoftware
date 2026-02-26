@@ -4,7 +4,8 @@ import tempfile
 import base64
 import anthropic
 from flask import Blueprint, request, jsonify
-from flask_jwt_extended import jwt_required
+from flask_jwt_extended import jwt_required, get_jwt_identity
+from models import db, TranscriptionUsage
 
 transcribe_bp = Blueprint('transcribe', __name__)
 
@@ -308,7 +309,23 @@ def transcribe_item():
         if not transcript:
             return jsonify({'error': 'No speech detected in recording'}), 422
 
-        filled = _claude_fill_item(transcript, item_label, room_name, section_type)
+        filled, filled_msg = _claude_fill_item(transcript, item_label, room_name, section_type)
+
+        # Log usage
+        try:
+            usage = TranscriptionUsage(
+                call_type     = 'item',
+                inspection_id = int(data.get('inspectionId')) if data.get('inspectionId') else None,
+                user_id       = int(get_jwt_identity()),
+                audio_seconds = len(audio_bytes) / 16000,  # rough estimate
+                input_tokens  = filled_msg.usage.input_tokens  if filled_msg and filled_msg.usage else 0,
+                output_tokens = filled_msg.usage.output_tokens if filled_msg and filled_msg.usage else 0,
+                section_type  = section_type,
+            )
+            db.session.add(usage)
+            db.session.commit()
+        except Exception:
+            pass  # never let logging break the response
 
         return jsonify({
             'transcript':       transcript,
@@ -329,6 +346,47 @@ def transcribe_item():
         print(f'[transcribe/item] Error: {e}')
         print(tb)
         return jsonify({'error': str(e), 'traceback': tb}), 500
+
+
+@transcribe_bp.route('/usage', methods=['GET'])
+@jwt_required()
+def transcribe_usage():
+    """Returns usage stats and cost estimates in GBP."""
+    from datetime import datetime, timedelta
+    from sqlalchemy import func
+
+    # Period filter
+    period = request.args.get('period', '30')  # days
+    since  = datetime.utcnow() - timedelta(days=int(period))
+
+    rows = TranscriptionUsage.query.filter(TranscriptionUsage.created_at >= since).all()
+
+    USD_TO_GBP           = 0.79
+    WHISPER_PER_MIN_USD  = 0.006
+    HAIKU_IN_PER_1M_USD  = 0.80
+    HAIKU_OUT_PER_1M_USD = 4.00
+
+    total_seconds = sum(r.audio_seconds for r in rows)
+    total_in      = sum(r.input_tokens  for r in rows)
+    total_out     = sum(r.output_tokens for r in rows)
+    item_count    = sum(1 for r in rows if r.call_type == 'item')
+    full_count    = sum(1 for r in rows if r.call_type == 'full')
+
+    whisper_usd = (total_seconds / 60) * WHISPER_PER_MIN_USD
+    claude_usd  = (total_in  / 1_000_000) * HAIKU_IN_PER_1M_USD +                   (total_out / 1_000_000) * HAIKU_OUT_PER_1M_USD
+    total_gbp   = (whisper_usd + claude_usd) * USD_TO_GBP
+
+    return jsonify({
+        'period_days':     int(period),
+        'item_calls':      item_count,
+        'full_calls':      full_count,
+        'total_calls':     len(rows),
+        'audio_minutes':   round(total_seconds / 60, 1),
+        'whisper_cost_gbp': round(whisper_usd * USD_TO_GBP, 4),
+        'claude_cost_gbp':  round(claude_usd  * USD_TO_GBP, 4),
+        'total_cost_gbp':   round(total_gbp, 4),
+        'recent':          [r.to_dict() for r in sorted(rows, key=lambda x: x.created_at, reverse=True)[:20]],
+    })
 
 
 @transcribe_bp.route('/full', methods=['POST'])

@@ -16,8 +16,14 @@ import axios from 'axios'
 //
 const BACKEND_LAN_IP = '192.168.50.2'  // ← your local PC IP for Android dev
 
+// ── PRODUCTION BACKEND URL ───────────────────────────────────────────────────
+// If VITE_API_URL is baked in by the build system, use it.
+// Otherwise fall back to the hardcoded Render URL so production always works
+// regardless of build environment quirks.
+const RENDER_URL = 'https://lmsoftware.onrender.com'
+
 function getBaseURL() {
-  // 1. Explicit env var (Vercel or local .env.local)
+  // 1. Explicit env var (Vercel dashboard or local .env.local)
   if (import.meta.env.VITE_API_URL) {
     return import.meta.env.VITE_API_URL
   }
@@ -27,7 +33,11 @@ function getBaseURL() {
       return `http://${BACKEND_LAN_IP}:5000`
     }
   } catch (_) {}
-  // 3. Relative (same origin)
+  // 3. If running on Vercel (not localhost), use Render URL directly
+  if (typeof window !== 'undefined' && !window.location.hostname.includes('localhost')) {
+    return RENDER_URL
+  }
+  // 4. Local dev — relative URL hits the Vite proxy
   return ''
 }
 

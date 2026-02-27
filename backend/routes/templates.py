@@ -13,19 +13,19 @@ def handle_options():
 def handle_options_with_id(template_id):
     return '', 204
 
-@templates_bp.route('/<int:id>', methods=['GET'])
+@templates_bp.route('', methods=['GET'])
 @jwt_required()
-def get_template(id):
-    # Allow all authenticated users to fetch a single template
-    template = Template.query.get_or_404(id)
-    return jsonify(template.to_dict())
+def get_templates():
+    user = get_current_user()
+    if not is_admin_or_manager(user):
+        return jsonify({'error': 'Forbidden'}), 403
+    templates = Template.query.all()
+    return jsonify([t.to_dict() for t in templates])
 
 @templates_bp.route('/<int:template_id>', methods=['GET'])
 @jwt_required()
 def get_template(template_id):
-    user = get_current_user()
-    if not is_admin_or_manager(user):
-        return jsonify({'error': 'Forbidden'}), 403
+    # All authenticated users can fetch a single template (needed by inspectors)
     template = Template.query.get_or_404(template_id)
     return jsonify(template.to_dict())
 

@@ -19,6 +19,9 @@ def create_app():
         # Render gives postgres:// but SQLAlchemy needs postgresql://
         if database_url.startswith('postgres://'):
             database_url = database_url.replace('postgres://', 'postgresql://', 1)
+        # Use psycopg3 driver (supports Python 3.14)
+        if 'postgresql://' in database_url and '+psycopg' not in database_url:
+            database_url = database_url.replace('postgresql://', 'postgresql+psycopg://', 1)
         app.config['SQLALCHEMY_DATABASE_URI'] = database_url
     else:
         # Local dev — SQLite
@@ -47,7 +50,6 @@ def create_app():
         'http://localhost:5173',
         'http://localhost:3000',
         'http://localhost:5000',
-        'http://localhost:8081',
     ]
 
     CORS(app, resources={

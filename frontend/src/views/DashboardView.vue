@@ -2,8 +2,10 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../services/api'
+import { useAuthStore } from '../stores/auth'
 
 const router = useRouter()
+const authStore = useAuthStore()
 
 const stats = ref({
   status_counts: {
@@ -97,24 +99,24 @@ onMounted(() => {
 
       <!-- Totals -->
       <div class="totals-grid">
-        <div class="total-card">
+        <div v-if="authStore.isAdmin || authStore.isManager" class="total-card">
           <div class="total-number">{{ stats.totals.clients }}</div>
           <div class="total-label">Portfolio Accounts</div>
         </div>
 
         <div class="total-card">
           <div class="total-number">{{ stats.totals.properties }}</div>
-          <div class="total-label">Total Properties</div>
+          <div class="total-label">{{ authStore.isAdmin || authStore.isManager ? 'Total Properties' : 'My Properties' }}</div>
         </div>
 
-        <div class="total-card">
+        <div v-if="authStore.isAdmin || authStore.isManager" class="total-card">
           <div class="total-number">{{ stats.totals.users }}</div>
           <div class="total-label">Total Users</div>
         </div>
 
         <div class="total-card">
           <div class="total-number">{{ stats.totals.inspections }}</div>
-          <div class="total-label">Total Inspections</div>
+          <div class="total-label">{{ authStore.isAdmin || authStore.isManager ? 'Total Inspections' : 'My Inspections' }}</div>
         </div>
       </div>
 

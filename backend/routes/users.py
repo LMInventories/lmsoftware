@@ -85,6 +85,33 @@ def update_user(user_id):
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
+@users_bp.route('/me/change-password', methods=['POST'])
+@jwt_required()
+def change_password():
+    import re
+    current = get_current_user()
+    data = request.json or {}
+
+    current_password = data.get('current_password', '')
+    new_password     = data.get('new_password', '')
+
+    if not current.check_password(current_password):
+        return jsonify({'error': 'Current password is incorrect'}), 400
+
+    if len(new_password) < 8:
+        return jsonify({'error': 'Password must be at least 8 characters'}), 400
+    if not re.search(r'[A-Z]', new_password):
+        return jsonify({'error': 'Password must contain at least one uppercase letter'}), 400
+    if not re.search(r'[a-z]', new_password):
+        return jsonify({'error': 'Password must contain at least one lowercase letter'}), 400
+    if not re.search(r'[0-9]', new_password):
+        return jsonify({'error': 'Password must contain at least one number'}), 400
+
+    current.set_password(new_password)
+    db.session.commit()
+    return jsonify({'message': 'Password changed successfully'})
+
+
 @users_bp.route('/<int:user_id>', methods=['DELETE'])
 @jwt_required()
 def delete_user(user_id):

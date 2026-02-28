@@ -1,55 +1,73 @@
 from flask import Blueprint, jsonify
 from flask_jwt_extended import jwt_required
 from models import db, Inspection, Client, Property, User
+from permissions import get_current_user
 
 dashboard_bp = Blueprint('dashboard', __name__)
 
 @dashboard_bp.route('/stats', methods=['GET'])
 @jwt_required()
 def get_dashboard_stats():
-    # Count inspections by status
-    created_count = Inspection.query.filter_by(status='created').count()
-    assigned_count = Inspection.query.filter_by(status='assigned').count()
-    active_count = Inspection.query.filter_by(status='active').count()
-    processing_count = Inspection.query.filter_by(status='processing').count()
-    review_count = Inspection.query.filter_by(status='review').count()
-    complete_count = Inspection.query.filter_by(status='complete').count()
-    
-    # Count totals
-    total_clients = Client.query.count()
-    total_properties = Property.query.count()
-    total_users = User.query.count()
-    total_inspections = Inspection.query.count()
-    
-    # Get recent inspections (last 5)
-    recent_inspections = Inspection.query.order_by(Inspection.created_at.desc()).limit(5).all()
-    
+    user = get_current_user()
+
+    # ── Base inspection query filtered by role ────────────────────────────
+    from permissions import filter_inspections_for_user
+    insp_query = filter_inspections_for_user(Inspection.query, user)
+    inspections = insp_query.all()
+
+    # Status counts (only over inspections this user can see)
+    status_counts = {
+        'created':    0,
+        'assigned':   0,
+        'active':     0,
+        'processing': 0,
+        'review':     0,
+        'complete':   0,
+    }
+    for i in inspections:
+        s = (i.status or '').lower()
+        if s in status_counts:
+            status_counts[s] += 1
+
+    # ── Totals — admin/manager see global counts, others see own ─────────
+    if user.role in ('admin', 'manager'):
+        totals = {
+            'clients':     Client.query.count(),
+            'properties':  Property.query.count(),
+            'users':       User.query.count(),
+            'inspections': Inspection.query.count(),
+        }
+    else:
+        # Clerk/typist — show only their own counts, hide portfolio/users
+        totals = {
+            'clients':     None,
+            'properties':  len(set(i.property_id for i in inspections)),
+            'users':       None,
+            'inspections': len(inspections),
+        }
+
+    # ── Recent inspections (most recent 10 the user can see) ─────────────
+    recent = (
+        insp_query
+        .order_by(Inspection.created_at.desc())
+        .limit(10)
+        .all()
+    )
+
     recent_list = []
-    for inspection in recent_inspections:
+    for i in recent:
         recent_list.append({
-            'id': inspection.id,
-            'property_address': inspection.property.address if inspection.property else 'Unknown',
-            'client_name': inspection.property.client.name if inspection.property and inspection.property.client else 'Unknown',
-            'inspection_type': inspection.inspection_type,
-            'status': inspection.status,
-            'conduct_date': inspection.conduct_date.isoformat() if inspection.conduct_date else None,
-            'created_at': inspection.created_at.isoformat() if inspection.created_at else None
+            'id':               i.id,
+            'property_address': i.property.address if i.property else '',
+            'inspection_type':  i.inspection_type,
+            'status':           i.status,
+            'created_at':       i.created_at.isoformat() if i.created_at else None,
+            'inspector_name':   i.inspector.name if i.inspector else None,
+            'typist_name':      i.typist.name if i.typist else None,
         })
-    
+
     return jsonify({
-        'status_counts': {
-            'created': created_count,
-            'assigned': assigned_count,
-            'active': active_count,
-            'processing': processing_count,
-            'review': review_count,
-            'complete': complete_count
-        },
-        'totals': {
-            'clients': total_clients,
-            'properties': total_properties,
-            'users': total_users,
-            'inspections': total_inspections
-        },
-        'recent_inspections': recent_list
+        'status_counts':      status_counts,
+        'totals':             totals,
+        'recent_inspections': recent_list,
     })

@@ -117,6 +117,7 @@ const api = {
   reorderItem(id, direction) { return axiosInstance.post(`/api/templates/items/${id}/reorder`, { direction }) },
 
   getTranscribeStatus() { return axiosInstance.get('/api/transcribe/status') },
+  changePassword(data) { return axiosInstance.post('/api/users/me/change-password', data) },
   getTranscribeUsage(period = 30) { return axiosInstance.get(`/api/transcribe/usage?period=${period}`) },
   transcribeItem(data) { return axiosInstance.post('/api/transcribe/item', data) },
   transcribeFull(data) { return axiosInstance.post('/api/transcribe/full', data) },

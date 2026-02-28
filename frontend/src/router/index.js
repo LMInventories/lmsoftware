@@ -109,6 +109,12 @@ const router = createRouter({
       component: MobileReportEditor,
       meta: { requiresMobileAuth: true },
     },
+	{
+	  path: '/change-password',
+      name: 'ChangePassword',
+      component: () => import('../views/ChangePasswordView.vue'),
+      meta: { requiresAuth: true }
+    },
   ]
 })
 

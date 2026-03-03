@@ -68,12 +68,12 @@ const router = createRouter({
         {
           path: 'settings/templates/new',
           name: 'TemplateNew',
-          component: () => import('../views/TemplateEditorView.vue')
+          component: () => import('../views/settings/TemplateEditorView.vue')
         },
         {
           path: 'settings/templates/:id',
           name: 'TemplateEdit',
-          component: () => import('../views/TemplateEditorView.vue')
+          component: () => import('../views/settings/TemplateEditorView.vue')
         },
         {
           path: 'change-password',

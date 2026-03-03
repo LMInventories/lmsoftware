@@ -579,25 +579,42 @@ onMounted(() => {
       <div v-if="loading" class="loading">Loading...</div>
 
       <div v-else class="inspections-list">
-        <div v-for="inspection in filteredInspections" :key="inspection.id" class="inspection-card">
-          <div class="inspection-header">
-            <div>
-              <h3>{{ inspection.property_address }}</h3>
-              <p class="inspection-type">{{ inspection.inspection_type.replace('_', ' ').toUpperCase() }}</p>
+        <div v-for="inspection in filteredInspections" :key="inspection.id" class="inspection-card" @click="viewInspection(inspection.id)">
+          <!-- Date banner -->
+          <div class="card-date-banner" v-if="inspection.conduct_date">
+            <div class="card-date-day">{{ new Date(inspection.conduct_date).toLocaleDateString('en-GB',{day:'2-digit'}) }}</div>
+            <div class="card-date-rest">
+              <span class="card-date-month">{{ new Date(inspection.conduct_date).toLocaleDateString('en-GB',{month:'short',year:'numeric'}) }}</span>
             </div>
-            <span class="status-badge" :style="{ backgroundColor: statusColors[inspection.status] }">
-              {{ inspection.status }}
-            </span>
           </div>
-          <div class="inspection-details">
-            <p v-if="inspection.client_name">🏢 {{ inspection.client_name }}</p>
-            <p v-if="inspection.inspector_name">👤 Clerk: {{ inspection.inspector_name }}</p>
-            <p v-if="inspection.conduct_date">📅 Conduct: {{ new Date(inspection.conduct_date).toLocaleDateString('en-GB') }}</p>
-            <p>🕐 Created: {{ new Date(inspection.created_at).toLocaleDateString('en-GB') }}</p>
+          <div class="card-date-banner card-date-unset" v-else>
+            <div class="card-date-day">—</div>
+            <div class="card-date-rest"><span class="card-date-month">No date set</span></div>
           </div>
-          <div class="inspection-actions">
-            <button @click="viewInspection(inspection.id)" class="btn-view">View Details</button>
-            <button @click="deleteInspection(inspection.id)" class="btn-delete">Delete</button>
+
+          <div class="card-body">
+            <div class="card-top">
+              <div class="card-type-badge">{{ inspection.inspection_type.replace(/_/g,' ').toUpperCase() }}</div>
+              <span class="status-badge" :style="{ backgroundColor: statusColors[inspection.status] }">{{ inspection.status }}</span>
+            </div>
+            <h3 class="card-address">{{ inspection.property_address }}</h3>
+            <div v-if="inspection.client_name" class="card-client">{{ inspection.client_name }}</div>
+
+            <div class="card-assignments">
+              <div v-if="inspection.inspector_name" class="assign-row">
+                <span class="assign-role">Clerk</span>
+                <span class="assign-name">{{ inspection.inspector_name }}</span>
+              </div>
+              <div v-if="inspection.typist_name" class="assign-row">
+                <span class="assign-role">Typist</span>
+                <span class="assign-name">{{ inspection.typist_name }}</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="card-footer">
+            <span class="card-created">Created {{ new Date(inspection.created_at).toLocaleDateString('en-GB') }}</span>
+            <button @click.stop="deleteInspection(inspection.id)" class="btn-delete-sm">✕</button>
           </div>
         </div>
         <div v-if="filteredInspections.length === 0" class="empty-state">
@@ -1000,89 +1017,141 @@ onMounted(() => {
 /* Inspections list */
 .inspections-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
 }
 
 .inspection-card {
   background: white;
   border: 1px solid #e2e8f0;
   border-radius: 10px;
-  padding: 20px;
-  transition: box-shadow 0.15s;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
-}
-.inspection-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
-
-.inspection-header {
+  overflow: hidden;
+  transition: box-shadow 0.15s, transform 0.12s;
+  cursor: pointer;
   display: flex;
+  flex-direction: column;
+}
+.inspection-card:hover {
+  box-shadow: 0 4px 14px rgba(0,0,0,0.08);
+  transform: translateY(-1px);
+}
+
+/* Date banner */
+.card-date-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: linear-gradient(135deg, #1e3a5f 0%, #1e293b 100%);
+  color: white;
+}
+.card-date-unset { background: #f1f5f9; }
+.card-date-unset .card-date-day { color: #94a3b8; }
+.card-date-unset .card-date-month { color: #94a3b8; }
+
+.card-date-day {
+  font-size: 26px;
+  font-weight: 800;
+  line-height: 1;
+  color: white;
+  min-width: 32px;
+}
+.card-date-rest { display: flex; flex-direction: column; gap: 1px; }
+.card-date-month { font-size: 11px; font-weight: 600; color: rgba(255,255,255,0.75); text-transform: uppercase; letter-spacing: 0.4px; }
+
+.card-body { padding: 12px 14px 8px; flex: 1; }
+
+.card-top {
+  display: flex;
+  align-items: center;
   justify-content: space-between;
-  align-items: flex-start;
-  gap: 12px;
-  margin-bottom: 12px;
+  gap: 8px;
+  margin-bottom: 7px;
 }
 
-.inspection-header h3 {
-  font-size: 15px;
+.card-type-badge {
+  font-size: 10px;
   font-weight: 700;
-  color: #1e293b;
-  line-height: 1.3;
-}
-
-.inspection-type {
-  font-size: 11px;
-  font-weight: 700;
+  background: #eef2ff;
   color: #6366f1;
-  margin-top: 3px;
+  padding: 2px 8px;
+  border-radius: 5px;
+  letter-spacing: 0.3px;
 }
 
 .status-badge {
-  padding: 3px 10px;
+  padding: 2px 9px;
   border-radius: 20px;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
   color: white;
   white-space: nowrap;
   flex-shrink: 0;
 }
 
-.inspection-details {
+.card-address {
+  font-size: 13px;
+  font-weight: 700;
+  color: #1e293b;
+  line-height: 1.35;
+  margin-bottom: 3px;
+}
+
+.card-client {
+  font-size: 11px;
+  color: #6366f1;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.card-assignments {
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  margin-bottom: 16px;
+  gap: 3px;
 }
-.inspection-details p { font-size: 13px; color: #64748b; }
 
-.inspection-actions {
+.assign-row {
   display: flex;
-  gap: 10px;
+  align-items: center;
+  gap: 6px;
 }
 
-.btn-view {
-  flex: 1;
-  padding: 8px 16px;
-  background: #6366f1;
-  color: white;
-  border: none;
-  border-radius: 6px;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
+.assign-role {
+  font-size: 10px;
+  font-weight: 700;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  min-width: 38px;
 }
-.btn-view:hover { background: #4f46e5; }
 
-.btn-delete {
-  padding: 8px 16px;
+.assign-name {
+  font-size: 12px;
+  color: #475569;
+}
+
+.card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  border-top: 1px solid #f1f5f9;
+  background: #fafbfc;
+}
+
+.card-created { font-size: 10px; color: #cbd5e1; }
+
+.btn-delete-sm {
   background: none;
-  color: #ef4444;
-  border: 1px solid #fca5a5;
-  border-radius: 6px;
-  font-size: 13px;
-  font-weight: 600;
+  border: none;
+  color: #fca5a5;
+  font-size: 12px;
   cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  line-height: 1;
 }
-.btn-delete:hover { background: #fef2f2; }
+.btn-delete-sm:hover { background: #fef2f2; color: #ef4444; }
 
 .empty-state {
   grid-column: 1 / -1;

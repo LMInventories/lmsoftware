@@ -367,10 +367,26 @@ onMounted(() => {
     <div v-else-if="inspection">
       <!-- Header -->
       <div class="detail-header">
-        <button @click="router.push('/inspections')" class="btn-back">
-          ← Back to Inspections
-        </button>
-        <h1>Inspection #{{ inspection.id }}</h1>
+        <button @click="router.push('/inspections')" class="btn-back">← Inspections</button>
+        <div class="header-center">
+          <div class="inspection-id-badge">#{{ inspection.id }}</div>
+          <div class="header-title-row">
+            <h1>{{ inspection.inspection_type?.replace(/_/g, ' ').toUpperCase() }}</h1>
+            <div v-if="inspection.conduct_date" class="header-date-chip">
+              {{ new Date(inspection.conduct_date).toLocaleDateString('en-GB', { weekday:'short', day:'2-digit', month:'short', year:'numeric' }) }}
+            </div>
+          </div>
+          <div class="header-address">{{ inspection.property_address }}</div>
+        </div>
+        <div class="header-branding">
+          <div v-if="previewBranding.logoUrl" class="client-logo-wrap">
+            <img :src="previewBranding.logoUrl" class="client-logo-img" :alt="previewBranding.clientName" />
+          </div>
+          <div v-else class="client-logo-initials" :style="{ background: previewBranding.primaryColor }">
+            {{ previewBranding.logoText }}
+          </div>
+          <div class="client-name-header">{{ previewBranding.clientName }}</div>
+        </div>
       </div>
 
       <!-- Status + Workflow Action Bar -->
@@ -1438,6 +1454,50 @@ textarea.input-field { resize: vertical; }
   font-weight: 600;
 }
 .btn-primary:hover { background: #4f46e5; }
+
+.detail-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin-bottom: 16px;
+  background: white;
+  border: 1px solid #e9ecef;
+  border-radius: 12px;
+  padding: 14px 18px;
+}
+.btn-back {
+  padding: 6px 12px; background: #f8fafc; color: #475569;
+  border: 1px solid #e2e8f0; border-radius: 6px; font-size: 12px;
+  font-weight: 600; cursor: pointer; white-space: nowrap;
+  transition: all 0.15s; align-self: flex-start; margin-top: 3px;
+}
+.btn-back:hover { background: #f1f5f9; }
+.header-center { flex: 1; min-width: 0; }
+.inspection-id-badge {
+  display: inline-block; font-size: 10px; font-weight: 700; color: #94a3b8;
+  background: #f1f5f9; padding: 2px 7px; border-radius: 4px;
+  margin-bottom: 4px; letter-spacing: 0.5px;
+}
+.header-title-row { display: flex; align-items: center; gap: 9px; margin-bottom: 3px; flex-wrap: wrap; }
+.detail-header h1 { font-size: 17px; font-weight: 800; color: #0f172a; letter-spacing: -0.2px; }
+.header-date-chip {
+  font-size: 11px; font-weight: 600; background: #eef2ff; color: #4338ca;
+  padding: 3px 10px; border-radius: 20px;
+}
+.header-address { font-size: 12px; color: #64748b; font-weight: 500; }
+.header-branding { display: flex; flex-direction: column; align-items: center; gap: 4px; flex-shrink: 0; min-width: 64px; }
+.client-logo-wrap { width: 48px; height: 48px; border-radius: 8px; overflow: hidden; border: 1px solid #e2e8f0; background: white; }
+.client-logo-img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.client-logo-initials {
+  width: 48px; height: 48px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 17px; font-weight: 800; color: white; letter-spacing: -1px;
+}
+.client-name-header {
+  font-size: 10px; font-weight: 600; color: #94a3b8;
+  text-align: center; max-width: 64px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 
 /* Responsive */
 @media (max-width: 1024px) {

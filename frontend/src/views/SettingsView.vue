@@ -1,140 +1,129 @@
 <script setup>
 import { ref } from 'vue'
-import TemplatesSettings from '../components/settings/TemplatesSettings.vue'
-import GeneralSettings from '../components/settings/GeneralSettings.vue'
-import ReportsSettings from '../components/settings/ReportsSettings.vue'
-import ActionsSettings from '../components/settings/ActionsSettings.vue'
+import TemplatesSettings     from '../components/settings/TemplatesSettings.vue'
+import GeneralSettings       from '../components/settings/GeneralSettings.vue'
+import ReportsSettings       from '../components/settings/ReportsSettings.vue'
+import ActionsSettings       from '../components/settings/ActionsSettings.vue'
 import TranscriptionSettings from '../components/settings/TranscriptionSettings.vue'
-import EmailsSettings from '../components/settings/EmailsSettings.vue'
+import EmailsSettings        from '../components/settings/EmailsSettings.vue'
 
 const activeTab = ref('general')
 
 const tabs = [
-  { id: 'general', label: 'General', icon: '⚙️' },
-  { id: 'reports', label: 'Reports', icon: '📄' },
-  { id: 'actions', label: 'Actions', icon: '🏷️' },
-  { id: 'templates', label: 'Templates', icon: '📋' },
-  { id: 'transcription', label: 'Transcription', icon: '✍️' },
-  { id: 'emails', label: 'Emails', icon: '📧' }
+  { id: 'general',       label: 'General',       icon: '⚙️' },
+  { id: 'reports',       label: 'Reports',        icon: '📄' },
+  { id: 'actions',       label: 'Actions',        icon: '🏷️' },
+  { id: 'templates',     label: 'Templates',      icon: '📋' },
+  { id: 'transcription', label: 'Transcription',  icon: '✍️' },
+  { id: 'emails',        label: 'Emails',         icon: '📧' },
 ]
 </script>
 
 <template>
   <div class="page">
     <div class="page-header">
-      <h1>⚙️ Settings</h1>
+      <h1>Settings</h1>
     </div>
 
-    <!-- Tabs Navigation -->
-    <div class="tabs-container">
-      <div class="tabs">
-        <button 
-          v-for="tab in tabs" 
+    <div class="settings-shell">
+      <!-- Tab rail -->
+      <div class="tab-rail">
+        <button
+          v-for="tab in tabs"
           :key="tab.id"
-          @click="activeTab = tab.id"
-          class="tab-button"
+          class="tab-btn"
           :class="{ active: activeTab === tab.id }"
+          @click="activeTab = tab.id"
         >
           <span class="tab-icon">{{ tab.icon }}</span>
           <span class="tab-label">{{ tab.label }}</span>
         </button>
       </div>
-    </div>
 
-    <!-- Tab Content -->
-    <div class="tab-content">
-      <GeneralSettings v-if="activeTab === 'general'" />
-      <ReportsSettings v-if="activeTab === 'reports'" />
-      <ActionsSettings v-if="activeTab === 'actions'" />
-      <TemplatesSettings v-if="activeTab === 'templates'" />
-      <TranscriptionSettings v-if="activeTab === 'transcription'" />
-      <EmailsSettings v-if="activeTab === 'emails'" />
+      <!-- Content pane -->
+      <div class="tab-pane">
+        <GeneralSettings       v-if="activeTab === 'general'"       />
+        <ReportsSettings       v-if="activeTab === 'reports'"       />
+        <ActionsSettings       v-if="activeTab === 'actions'"       />
+        <TemplatesSettings     v-if="activeTab === 'templates'"     />
+        <TranscriptionSettings v-if="activeTab === 'transcription'" />
+        <EmailsSettings        v-if="activeTab === 'emails'"        />
+      </div>
     </div>
   </div>
 </template>
 
 <style scoped>
 .page {
-  max-width: 1400px;
+  max-width: 1300px;
 }
 
 .page-header {
-  margin-bottom: 32px;
+  margin-bottom: 20px;
 }
 
 .page-header h1 {
-  font-size: 32px;
+  font-size: 22px;
   font-weight: 700;
   color: #1e293b;
 }
 
-.tabs-container {
+/* ── Shell ────────────────────────────────────────────────── */
+.settings-shell {
   background: white;
   border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-  margin-bottom: 24px;
-  padding: 8px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
-.tabs {
+/* ── Tab rail ─────────────────────────────────────────────── */
+.tab-rail {
   display: flex;
-  gap: 4px;
+  gap: 2px;
+  padding: 8px 10px;
+  border-bottom: 1px solid #f1f5f9;
+  background: #fafbfc;
   flex-wrap: wrap;
 }
 
-.tab-button {
-  flex: 1;
-  min-width: 140px;
+.tab-btn {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 14px 20px;
+  gap: 6px;
+  padding: 7px 14px;
   background: transparent;
   border: none;
-  border-radius: 8px;
-  font-size: 15px;
+  border-radius: 7px;
+  font-size: 13px;
   font-weight: 600;
   color: #64748b;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.15s;
+  white-space: nowrap;
 }
 
-.tab-button:hover {
+.tab-btn:hover {
   background: #f1f5f9;
   color: #1e293b;
 }
 
-.tab-button.active {
+.tab-btn.active {
   background: #6366f1;
   color: white;
 }
 
-.tab-icon {
-  font-size: 18px;
-}
+.tab-icon { font-size: 14px; }
 
-.tab-label {
-  white-space: nowrap;
-}
-
-.tab-content {
-  background: white;
-  border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-  padding: 32px;
+/* ── Pane ─────────────────────────────────────────────────── */
+.tab-pane {
+  padding: 24px 28px;
   min-height: 400px;
 }
 
 @media (max-width: 768px) {
-  .tab-button {
-    min-width: 100px;
-    padding: 12px 16px;
-    font-size: 14px;
-  }
-  
-  .tab-icon {
-    font-size: 16px;
-  }
+  .tab-btn { padding: 7px 10px; font-size: 12px; }
+  .tab-pane { padding: 18px; }
 }
 </style>

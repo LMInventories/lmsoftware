@@ -189,6 +189,7 @@ class Template(db.Model):
             'updated_at':      self.updated_at.isoformat() if self.updated_at else None
         }
 
+
 class TranscriptionUsage(db.Model):
     __tablename__ = 'transcription_usage'
 
@@ -203,14 +204,14 @@ class TranscriptionUsage(db.Model):
     section_type  = db.Column(db.String(30), default='room')
 
     def to_dict(self):
-        # Pricing (USD, converted to GBP at ~0.79)
-        USD_TO_GBP    = 0.79
-        WHISPER_PER_MIN_USD   = 0.006
-        HAIKU_IN_PER_1M_USD   = 0.80
-        HAIKU_OUT_PER_1M_USD  = 4.00
+        USD_TO_GBP           = 0.79
+        WHISPER_PER_MIN_USD  = 0.006
+        HAIKU_IN_PER_1M_USD  = 0.80
+        HAIKU_OUT_PER_1M_USD = 4.00
 
         whisper_usd = (self.audio_seconds / 60) * WHISPER_PER_MIN_USD
-        claude_usd  = (self.input_tokens  / 1_000_000) * HAIKU_IN_PER_1M_USD +                       (self.output_tokens / 1_000_000) * HAIKU_OUT_PER_1M_USD
+        claude_usd  = (self.input_tokens  / 1_000_000) * HAIKU_IN_PER_1M_USD + \
+                      (self.output_tokens / 1_000_000) * HAIKU_OUT_PER_1M_USD
         total_gbp   = (whisper_usd + claude_usd) * USD_TO_GBP
 
         return {
@@ -224,3 +225,11 @@ class TranscriptionUsage(db.Model):
             'section_type':  self.section_type,
             'cost_gbp':      round(total_gbp, 4),
         }
+
+
+class SystemSetting(db.Model):
+    __tablename__ = 'system_settings'
+
+    id    = db.Column(db.Integer, primary_key=True)
+    key   = db.Column(db.String(100), unique=True, nullable=False)
+    value = db.Column(db.Text)

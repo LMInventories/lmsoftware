@@ -123,6 +123,9 @@ const api = {
   getTranscribeUsage(period = 30) { return axiosInstance.get(`/api/transcribe/usage?period=${period}`) },
   transcribeItem(data) { return axiosInstance.post('/api/transcribe/item', data) },
   transcribeFull(data) { return axiosInstance.post('/api/transcribe/full', data) },
+
+  getActions()        { return axiosInstance.get('/api/actions') },
+  saveActions(data)   { return axiosInstance.put('/api/actions', data) },
 }
 
 export default api

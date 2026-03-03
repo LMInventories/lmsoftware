@@ -1,334 +1,473 @@
 <script setup>
 /**
  * CheckOutActionPicker
- * 
- * Renders a small warning-triangle (⚠) button next to a room item.
- * On click, opens a popover to add/remove Actions with Responsibility assignment.
- * 
+ *
+ * Used on each room item in the Check Out report editor.
+ * Shows assigned action tags as coloured pills; clicking opens an inline
+ * dropdown to add/remove tags and set a responsibility party.
+ *
  * Props:
- *   actions     - Array of current actions on this item
- *   roomId      - ID of the room
- *   itemId      - ID of the item (template id or extra eid)
+ *   actions  — array of assigned action objects: [{ actionId, responsibility, note }]
+ *   roomId   — string (for keying)
+ *   itemId   — string (for keying)
  *
  * Emits:
- *   update:actions - new actions array when changed
+ *   update:actions — new array of action objects
+ *
+ * Action object shape (stored in reportData):
+ *   { actionId: string, responsibility: string, note: string }
  */
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import api from '../services/api'
 
 const props = defineProps({
-  actions:    { type: Array,  default: () => [] },
-  roomId:     { required: true },
-  itemId:     { required: true },
+  actions:        { type: Array,  default: () => [] },
+  roomId:         { type: String, default: '' },
+  itemId:         { type: String, default: '' },
 })
 const emit = defineEmits(['update:actions'])
 
-// These should match your Settings → Actions configuration.
-// Hardcoded here for now; wire to API when ActionsSettings is fully built.
-const AVAILABLE_ACTIONS = [
-  { id: 'needs_cleaning',       name: 'Needs Cleaning',       color: '#d97706' },
-  { id: 'needs_maintenance',    name: 'Needs Maintenance',    color: '#dc2626' },
-  { id: 'needs_investigation',  name: 'Needs Investigation',  color: '#7c3aed' },
-  { id: 'needs_replacement',    name: 'Needs Replacement',    color: '#be123c' },
-  { id: 'fair_wear_tear',       name: 'Fair Wear & Tear',     color: '#4b5563' },
-]
+// ── Global action catalogue (loaded once per page) ────────────────────────
+// Shared across all picker instances via module-level cache
+const _catalogueCache = { loaded: false, actions: [], responsibilities: [] }
 
-const RESPONSIBILITIES = ['Tenant', 'Landlord', 'Agent', 'Contractor', 'Investigate']
+const catalogue      = ref([])
+const responsibilities = ref([])
 
-const open   = ref(false)
-const adding = ref(false)
+onMounted(async () => {
+  if (_catalogueCache.loaded) {
+    catalogue.value       = _catalogueCache.actions
+    responsibilities.value = _catalogueCache.responsibilities
+    return
+  }
+  try {
+    const res = await api.getActions()
+    catalogue.value       = res.data.actions         || []
+    responsibilities.value = res.data.responsibilities || []
+    _catalogueCache.actions          = catalogue.value
+    _catalogueCache.responsibilities = responsibilities.value
+    _catalogueCache.loaded           = true
+  } catch {
+    // fail silently — picker just won't show options
+  }
+})
 
-const newAction = ref({ actionId: '', responsibility: 'Tenant', note: '' })
+// ── Picker open/close ─────────────────────────────────────────────────────
+const open = ref(false)
+const pickerEl = ref(null)
 
-const hasActions = computed(() => props.actions.length > 0)
+function toggle() { open.value = !open.value }
 
-function toggleOpen() { open.value = !open.value; adding.value = false }
+function onClickOutside(e) {
+  if (pickerEl.value && !pickerEl.value.contains(e.target)) open.value = false
+}
+onMounted(() => document.addEventListener('mousedown', onClickOutside))
+onBeforeUnmount(() => document.removeEventListener('mousedown', onClickOutside))
 
-function startAdd() { newAction.value = { actionId: '', responsibility: 'Tenant', note: '' }; adding.value = true }
+// ── Assigned actions ──────────────────────────────────────────────────────
+// Internal copy — we emit on every change
+const assigned = computed(() => props.actions || [])
 
-function confirmAdd() {
-  if (!newAction.value.actionId) return
-  const def = AVAILABLE_ACTIONS.find(a => a.id === newAction.value.actionId)
-  const updated = [
-    ...props.actions,
-    {
-      id:             `act_${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
-      actionId:       newAction.value.actionId,
-      actionName:     def?.name || newAction.value.actionId,
-      actionColor:    def?.color || '#64748b',
-      responsibility: newAction.value.responsibility,
-      note:           newAction.value.note,
-    }
-  ]
-  emit('update:actions', updated)
-  adding.value = false
+function isAssigned(actionId) {
+  return assigned.value.some(a => a.actionId === actionId)
 }
 
-function removeAction(id) {
-  emit('update:actions', props.actions.filter(a => a.id !== id))
+function getAssigned(actionId) {
+  return assigned.value.find(a => a.actionId === actionId)
 }
 
-// Close on outside click
-const containerRef = ref(null)
-function onDocClick(e) {
-  if (open.value && containerRef.value && !containerRef.value.contains(e.target)) {
-    open.value = false
-    adding.value = false
+function toggleAction(actionId) {
+  if (isAssigned(actionId)) {
+    emit('update:actions', assigned.value.filter(a => a.actionId !== actionId))
+  } else {
+    emit('update:actions', [
+      ...assigned.value,
+      { actionId, responsibility: responsibilities.value[0] || '', note: '' }
+    ])
   }
 }
-onMounted(() => document.addEventListener('mousedown', onDocClick))
-onUnmounted(() => document.removeEventListener('mousedown', onDocClick))
+
+function setResponsibility(actionId, value) {
+  emit('update:actions', assigned.value.map(a =>
+    a.actionId === actionId ? { ...a, responsibility: value } : a
+  ))
+}
+
+function setNote(actionId, value) {
+  emit('update:actions', assigned.value.map(a =>
+    a.actionId === actionId ? { ...a, note: value } : a
+  ))
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────
+function getCatalogueItem(actionId) {
+  return catalogue.value.find(c => c.id === actionId)
+}
 </script>
 
 <template>
-  <div class="co-action-wrap" ref="containerRef">
-    <!-- Warning triangle trigger button -->
-    <button
-      class="warning-btn"
-      :class="{ 'has-actions': hasActions }"
-      @click="toggleOpen"
-      :title="hasActions ? `${actions.length} action(s) assigned` : 'Add action'"
-      type="button"
-    >
-      <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
-        <path d="M12 2L1 21h22L12 2zm0 3.5L20.5 19h-17L12 5.5zM11 10v4h2v-4h-2zm0 6v2h2v-2h-2z"/>
-      </svg>
-      <span v-if="hasActions" class="action-count">{{ actions.length }}</span>
-    </button>
+  <div class="cap-wrap" ref="pickerEl">
 
-    <!-- Popover panel -->
-    <div v-if="open" class="action-popover">
-      <div class="popover-header">
-        <span class="popover-title">Actions</span>
-        <button class="popover-close" @click="open = false" type="button">✕</button>
-      </div>
+    <!-- ── Assigned pills row ─────────────────────────────────────────── -->
+    <div class="cap-pills" :class="{ 'cap-pills-empty': !assigned.length }">
+      <template v-if="assigned.length">
+        <div
+          v-for="a in assigned"
+          :key="a.actionId"
+          class="cap-pill"
+          :style="{
+            background: (getCatalogueItem(a.actionId)?.color || '#64748b') + '20',
+            color:       getCatalogueItem(a.actionId)?.color || '#64748b',
+            borderColor: (getCatalogueItem(a.actionId)?.color || '#64748b') + '60',
+          }"
+        >
+          <span class="cap-pill-dot" :style="{ background: getCatalogueItem(a.actionId)?.color || '#64748b' }"></span>
+          <span class="cap-pill-name">{{ getCatalogueItem(a.actionId)?.name || a.actionId }}</span>
+          <span v-if="a.responsibility" class="cap-pill-resp">· {{ a.responsibility }}</span>
+          <button class="cap-pill-x" @click.stop="toggleAction(a.actionId)">×</button>
+        </div>
+      </template>
 
-      <!-- Existing actions list -->
-      <div v-if="actions.length" class="existing-actions">
-        <div v-for="act in actions" :key="act.id" class="action-pill">
-          <span class="pill-dot" :style="{ background: act.actionColor }"></span>
-          <span class="pill-name">{{ act.actionName }}</span>
-          <span class="pill-resp">{{ act.responsibility }}</span>
-          <span v-if="act.note" class="pill-note">{{ act.note }}</span>
-          <button class="pill-remove" @click="removeAction(act.id)" type="button" title="Remove">✕</button>
-        </div>
-      </div>
-      <p v-else class="no-actions-msg">No actions assigned.</p>
-
-      <!-- Add new action form -->
-      <div v-if="adding" class="add-form">
-        <div class="form-row">
-          <label>Action</label>
-          <select v-model="newAction.actionId" class="form-select">
-            <option value="" disabled>Select action…</option>
-            <option v-for="a in AVAILABLE_ACTIONS" :key="a.id" :value="a.id">{{ a.name }}</option>
-          </select>
-        </div>
-        <div class="form-row">
-          <label>Responsibility</label>
-          <select v-model="newAction.responsibility" class="form-select">
-            <option v-for="r in RESPONSIBILITIES" :key="r" :value="r">{{ r }}</option>
-          </select>
-        </div>
-        <div class="form-row">
-          <label>Note (optional)</label>
-          <input v-model="newAction.note" class="form-input" type="text" placeholder="Additional detail…" />
-        </div>
-        <div class="form-actions">
-          <button type="button" class="btn-cancel-add" @click="adding = false">Cancel</button>
-          <button type="button" class="btn-confirm-add" @click="confirmAdd" :disabled="!newAction.actionId">Add</button>
-        </div>
-      </div>
-
-      <button v-if="!adding" class="btn-add-action" type="button" @click="startAdd">
-        ＋ Add Action
+      <!-- Toggle button -->
+      <button
+        class="cap-toggle-btn"
+        :class="{ 'cap-toggle-has': assigned.length }"
+        @click="toggle"
+        title="Assign actions"
+      >
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path v-if="!open" d="M12 5v14M5 12h14"/>
+          <path v-else d="M5 12h14"/>
+        </svg>
+        <span>{{ assigned.length ? 'Edit' : 'Add action' }}</span>
       </button>
     </div>
+
+    <!-- ── Dropdown ───────────────────────────────────────────────────── -->
+    <transition name="cap-fade">
+      <div v-if="open" class="cap-dropdown">
+
+        <div v-if="!catalogue.length" class="cap-empty">
+          No actions configured — add them in Settings → Actions.
+        </div>
+
+        <template v-else>
+          <!-- Action toggle list -->
+          <div class="cap-section-lbl">Select actions</div>
+          <div class="cap-action-list">
+            <button
+              v-for="cat in catalogue"
+              :key="cat.id"
+              class="cap-action-btn"
+              :class="{ active: isAssigned(cat.id) }"
+              :style="isAssigned(cat.id) ? {
+                background:   cat.color + '18',
+                borderColor:  cat.color + '80',
+                color:        cat.color,
+              } : {}"
+              @click="toggleAction(cat.id)"
+            >
+              <span class="cap-action-dot" :style="{ background: cat.color }"></span>
+              {{ cat.name }}
+              <svg v-if="isAssigned(cat.id)" class="cap-check" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+            </button>
+          </div>
+
+          <!-- Per-action details (shown for assigned ones) -->
+          <template v-if="assigned.length">
+            <div class="cap-divider"></div>
+            <div class="cap-section-lbl">Details</div>
+
+            <div
+              v-for="a in assigned"
+              :key="a.actionId"
+              class="cap-detail-row"
+            >
+              <div
+                class="cap-detail-label"
+                :style="{ color: getCatalogueItem(a.actionId)?.color || '#64748b' }"
+              >
+                <span class="cap-action-dot" :style="{ background: getCatalogueItem(a.actionId)?.color || '#64748b' }"></span>
+                {{ getCatalogueItem(a.actionId)?.name || a.actionId }}
+              </div>
+
+              <!-- Responsibility -->
+              <div class="cap-detail-field" v-if="responsibilities.length">
+                <label class="cap-field-lbl">Responsibility</label>
+                <select
+                  class="cap-select"
+                  :value="a.responsibility"
+                  @change="setResponsibility(a.actionId, $event.target.value)"
+                >
+                  <option value="">— Select —</option>
+                  <option v-for="r in responsibilities" :key="r" :value="r">{{ r }}</option>
+                </select>
+              </div>
+
+              <!-- Optional note -->
+              <div class="cap-detail-field">
+                <label class="cap-field-lbl">Note <span class="cap-opt">(optional)</span></label>
+                <input
+                  class="cap-note-input"
+                  type="text"
+                  placeholder="e.g. Stain on carpet near window…"
+                  :value="a.note"
+                  @input="setNote(a.actionId, $event.target.value)"
+                  maxlength="200"
+                />
+              </div>
+            </div>
+          </template>
+
+          <!-- Done button -->
+          <div class="cap-footer">
+            <button class="cap-done-btn" @click="open = false">Done</button>
+          </div>
+        </template>
+      </div>
+    </transition>
+
   </div>
 </template>
 
 <style scoped>
-.co-action-wrap {
+.cap-wrap {
   position: relative;
-  display: inline-flex;
-  align-items: center;
 }
 
-/* The triangle button */
-.warning-btn {
+/* ── Pills row ─────────────────────────────────────────────────────────── */
+.cap-pills {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+}
+
+.cap-pill {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 7px;
-  border-radius: 6px;
-  border: 1.5px solid #e5e7eb;
-  background: #fafafa;
-  color: #94a3b8;
-  cursor: pointer;
+  gap: 5px;
+  padding: 3px 8px 3px 7px;
+  border-radius: 999px;
+  border: 1px solid;
   font-size: 12px;
-  transition: all 0.15s;
-  position: relative;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.cap-pill-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.cap-pill-name {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
-.warning-btn:hover {
-  border-color: #f59e0b;
-  background: #fffbeb;
-  color: #d97706;
+.cap-pill-resp {
+  opacity: 0.75;
+  font-weight: 500;
+  font-size: 11px;
 }
-.warning-btn.has-actions {
-  border-color: #f59e0b;
-  background: #fffbeb;
-  color: #d97706;
+.cap-pill-x {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 0 0 2px;
+  color: inherit;
+  opacity: 0.6;
+  margin-left: 2px;
 }
-.action-count {
+.cap-pill-x:hover { opacity: 1; }
+
+/* Toggle button */
+.cap-toggle-btn {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  background: #d97706;
-  color: white;
-  border-radius: 50%;
-  font-size: 10px;
-  font-weight: 700;
+  gap: 5px;
+  padding: 4px 10px;
+  background: #f1f5f9;
+  color: #64748b;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.cap-toggle-btn:hover {
+  background: #e0e7ff;
+  color: #4f46e5;
+  border-color: #c7d2fe;
+}
+.cap-toggle-btn.cap-toggle-has {
+  background: #eff6ff;
+  color: #3b82f6;
+  border-color: #bfdbfe;
 }
 
-/* Popover */
-.action-popover {
+/* ── Dropdown ──────────────────────────────────────────────────────────── */
+.cap-dropdown {
   position: absolute;
-  top: calc(100% + 8px);
+  top: calc(100% + 6px);
   left: 0;
-  z-index: 500;
+  z-index: 200;
   background: white;
   border: 1px solid #e2e8f0;
   border-radius: 12px;
-  box-shadow: 0 8px 30px rgba(0,0,0,0.12);
-  width: 320px;
-  padding: 0;
-  overflow: hidden;
-}
-
-.popover-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 12px 16px;
-  border-bottom: 1px solid #f1f5f9;
-  background: #fafafa;
-}
-.popover-title { font-size: 13px; font-weight: 700; color: #1e293b; }
-.popover-close {
-  background: none; border: none; cursor: pointer; color: #94a3b8;
-  font-size: 14px; padding: 2px 6px; border-radius: 4px;
-}
-.popover-close:hover { background: #f1f5f9; color: #475569; }
-
-.existing-actions {
-  padding: 10px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  max-height: 180px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+  padding: 14px;
+  width: 300px;
+  max-height: 480px;
   overflow-y: auto;
 }
-.no-actions-msg {
-  padding: 12px 16px;
-  font-size: 12px;
-  color: #94a3b8;
-  text-align: center;
+
+.cap-fade-enter-active,
+.cap-fade-leave-active {
+  transition: opacity 0.12s, transform 0.12s;
+}
+.cap-fade-enter-from,
+.cap-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
 }
 
-.action-pill {
+.cap-empty {
+  font-size: 13px;
+  color: #94a3b8;
+  font-style: italic;
+  text-align: center;
+  padding: 8px 0;
+}
+
+.cap-section-lbl {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #94a3b8;
+  margin-bottom: 8px;
+}
+
+/* Action toggle buttons */
+.cap-action-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 2px;
+}
+.cap-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  background: #f8fafc;
+  color: #475569;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.12s;
+  text-align: left;
+}
+.cap-action-btn:hover:not(.active) {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+}
+.cap-action-btn.active {
+  font-weight: 700;
+}
+.cap-action-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.cap-check {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* Detail rows */
+.cap-divider {
+  height: 1px;
+  background: #f1f5f9;
+  margin: 12px 0;
+}
+.cap-detail-row {
+  padding: 10px;
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+.cap-detail-label {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 10px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 10px;
 }
-.pill-dot {
-  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+.cap-detail-field {
+  margin-bottom: 8px;
 }
-.pill-name { font-weight: 600; color: #374151; flex: 1; min-width: 0; }
-.pill-resp {
-  padding: 1px 7px;
-  background: #e0e7ff; color: #4338ca;
-  border-radius: 8px; font-size: 10px; font-weight: 600; flex-shrink: 0;
+.cap-detail-field:last-child { margin-bottom: 0; }
+.cap-field-lbl {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: #94a3b8;
+  margin-bottom: 4px;
 }
-.pill-note { color: #6b7280; font-size: 11px; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pill-remove {
-  background: none; border: none; color: #94a3b8; cursor: pointer;
-  padding: 1px 4px; border-radius: 4px; font-size: 12px; flex-shrink: 0;
+.cap-opt {
+  font-weight: 400;
+  text-transform: none;
+  font-style: italic;
+  letter-spacing: 0;
 }
-.pill-remove:hover { background: #fee2e2; color: #dc2626; }
-
-/* Add form */
-.add-form {
-  padding: 12px 14px;
-  border-top: 1px solid #f1f5f9;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.form-row { display: flex; flex-direction: column; gap: 4px; }
-.form-row label { font-size: 11px; font-weight: 600; color: #64748b; }
-.form-select, .form-input {
+.cap-select,
+.cap-note-input {
   width: 100%;
-  padding: 6px 10px;
-  border: 1px solid #e2e8f0;
+  padding: 6px 9px;
+  border: 1px solid #cbd5e1;
   border-radius: 6px;
-  font-size: 12px;
-  font-family: inherit;
-  color: #1e293b;
+  font-size: 13px;
   background: white;
+  font-family: inherit;
 }
-.form-select:focus, .form-input:focus {
+.cap-select:focus,
+.cap-note-input:focus {
   outline: none;
   border-color: #6366f1;
   box-shadow: 0 0 0 2px rgba(99,102,241,0.1);
 }
-.form-actions {
+
+/* Footer */
+.cap-footer {
+  margin-top: 12px;
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
-  padding-top: 4px;
 }
-.btn-cancel-add {
-  padding: 5px 12px;
-  background: white;
-  border: 1px solid #e5e7eb;
-  border-radius: 6px;
-  font-size: 12px;
-  font-weight: 600;
-  color: #64748b;
-  cursor: pointer;
-}
-.btn-confirm-add {
-  padding: 5px 14px;
+.cap-done-btn {
+  padding: 7px 20px;
   background: #6366f1;
-  border: none;
-  border-radius: 6px;
-  font-size: 12px;
-  font-weight: 700;
   color: white;
-  cursor: pointer;
-}
-.btn-confirm-add:disabled { opacity: 0.4; cursor: not-allowed; }
-.btn-confirm-add:not(:disabled):hover { background: #4f46e5; }
-
-.btn-add-action {
-  width: 100%;
-  padding: 10px 14px;
-  background: none;
   border: none;
-  border-top: 1px solid #f1f5f9;
+  border-radius: 7px;
   font-size: 13px;
   font-weight: 600;
-  color: #6366f1;
   cursor: pointer;
-  text-align: left;
   transition: background 0.15s;
 }
-.btn-add-action:hover { background: #f5f3ff; }
+.cap-done-btn:hover { background: #4f46e5; }
 </style>

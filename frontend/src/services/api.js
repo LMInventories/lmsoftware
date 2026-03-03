@@ -118,8 +118,8 @@ const api = {
   getSectionPresets()                    { return http.get('/api/section-presets') },
   createSectionPreset(data)              { return http.post('/api/section-presets', data) },
   saveSectionAsPreset(sectionId, data)   { return http.post(`/api/section-presets/from-section/${sectionId}`, data) },
-  addPresetToTemplate(presetId, templateId) {
-    return http.post(`/api/section-presets/${presetId}/add-to-template/${templateId}`)
+  addPresetToTemplate(presetId, templateId, data = {}) {
+    return http.post(`/api/section-presets/${presetId}/add-to-template/${templateId}`, data)
   },
   updateSectionPreset(presetId, data)    { return http.put(`/api/section-presets/${presetId}`, data) },
   deleteSectionPreset(presetId)          { return http.delete(`/api/section-presets/${presetId}`) },

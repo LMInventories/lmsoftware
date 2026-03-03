@@ -1,1243 +1,652 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import api from '../services/api'
-import { useToast } from '../composables/useToast'
+import api from '../../services/api'
 
-const route = useRoute()
+const route  = useRoute()
 const router = useRouter()
-const toast = useToast()
 
-const loading = ref(true)
-const saving = ref(false)
+const template = ref(null)
+const loading  = ref(true)
+const saving   = ref(false)
 
-// Template metadata
-const templateName = ref('')
-const inspectionType = ref('check_in')
-const isDefault = ref(false)
+// ── Modal state ───────────────────────────────────────────────────────────────
+const showAddSectionModal  = ref(false)  // step 1: empty or from preset?
+const showPresetPicker     = ref(false)  // step 2: pick + rename presets
+const showSavePresetModal  = ref(null)   // section object being saved
+const showAddItemModal     = ref(null)   // section id
+const showEditItemModal    = ref(null)   // item object
 
-// Cleanliness dropdown options
-const cleanlinessOptions = [
-  'Professionally Cleaned',
-  'Professionally Cleaned - Receipt Seen',
-  'Professionally Cleaned with Omissions',
-  'Domestically Cleaned',
-  'Domestically Cleaned with Omissions',
-  'Not Clean'
-]
+// ── Preset picker state ───────────────────────────────────────────────────────
+const presets         = ref([])
+const presetsLoading  = ref(false)
+const presetSearch    = ref('')
+// selectedPresets: [{ preset, customName }]
+const selectedPresets = ref([])
+const addingFromPreset = ref(false)
 
-// Fixed sections with actual form fields
-const fixedSections = ref([
-  {
-    id: 'condition_summary',
-    name: 'Condition Summary',
-    enabled: true,
-    type: 'condition_summary',
-    rows: [
-      { id: 1, name: '', condition: '' },
-      { id: 2, name: '', condition: '' },
-      { id: 3, name: '', condition: '' }
-    ]
-  },
-  {
-    id: 'cleaning_summary',
-    name: 'Cleaning Summary',
-    enabled: true,
-    type: 'cleaning_summary',
-    rows: [
-      { id: 1, name: '', cleanliness: '', cleanlinessNotes: '' },
-      { id: 2, name: '', cleanliness: '', cleanlinessNotes: '' },
-      { id: 3, name: '', cleanliness: '', cleanlinessNotes: '' }
-    ]
-  },
-  {
-    id: 'smoke_alarms',
-    name: 'Smoke & Carbon Monoxide Alarms',
-    enabled: true,
-    type: 'smoke_alarms',
-    rows: [
-      { id: 1, question: '', answer: '', notes: '' },
-      { id: 2, question: '', answer: '', notes: '' },
-      { id: 3, question: '', answer: '', notes: '' },
-      { id: 4, question: '', answer: '', notes: '' },
-      { id: 5, question: '', answer: '', notes: '' }
-    ]
-  },
-  {
-    id: 'fire_door_safety',
-    name: 'Fire Door Safety',
-    enabled: true,
-    type: 'fire_door_safety',
-    rows: [
-      { id: 1, name: '', question: '', answer: '', notes: '' },
-      { id: 2, name: '', question: '', answer: '', notes: '' },
-      { id: 3, name: '', question: '', answer: '', notes: '' }
-    ]
-  },
-  {
-    id: 'health_safety',
-    name: 'Health & Safety',
-    enabled: true,
-    type: 'health_safety',
-    rows: [
-      { id: 1, question: '', answer: '', notes: '' },
-      { id: 2, question: '', answer: '', notes: '' },
-      { id: 3, question: '', answer: '', notes: '' },
-      { id: 4, question: '', answer: '', notes: '' },
-      { id: 5, question: '', answer: '', notes: '' },
-      { id: 6, question: '', answer: '', notes: '' },
-      { id: 7, question: '', answer: '', notes: '' }
-    ]
-  },
-  {
-    id: 'keys',
-    name: 'Keys & Access',
-    enabled: true,
-    type: 'keys',
-    rows: [
-      { id: 1, name: '', description: '' },
-      { id: 2, name: '', description: '' },
-      { id: 3, name: '', description: '' },
-      { id: 4, name: '', description: '' },
-      { id: 5, name: '', description: '' },
-      { id: 6, name: '', description: '' },
-      { id: 7, name: '', description: '' }
-    ]
-  },
-  {
-    id: 'meter_readings',
-    name: 'Utility Meter Readings',
-    enabled: true,
-    type: 'meter_readings',
-    rows: [
-      { id: 1, name: '', locationSerial: '', reading: '' },
-      { id: 2, name: '', locationSerial: '', reading: '' },
-      { id: 3, name: '', locationSerial: '', reading: '' }
-    ]
-  }
-])
+// ── Forms ─────────────────────────────────────────────────────────────────────
+const newSectionName = ref('')
 
-// Rooms - dynamic, can add/remove/reorder
-const rooms = ref([
-  {
-    id: 'entrance_hall',
-    name: 'Entrance Hall',
-    enabled: true,
-    sections: [
-      { id: 'walls', label: 'Walls', hasDescription: true, hasCondition: true },
-      { id: 'ceiling', label: 'Ceiling', hasDescription: true, hasCondition: true },
-      { id: 'floor', label: 'Floor/Flooring', hasDescription: true, hasCondition: true },
-      { id: 'doors', label: 'Doors', hasDescription: true, hasCondition: true },
-      { id: 'windows', label: 'Windows', hasDescription: true, hasCondition: true },
-      { id: 'lighting', label: 'Lighting', hasDescription: true, hasCondition: true },
-      { id: 'sockets', label: 'Sockets/Switches', hasDescription: true, hasCondition: true },
-      { id: 'heating', label: 'Heating', hasDescription: true, hasCondition: true },
-      { id: 'furniture', label: 'Furniture/Fixtures', hasDescription: true, hasCondition: true }
-    ]
-  },
-  {
-    id: 'living_room',
-    name: 'Living Room',
-    enabled: true,
-    sections: [
-      { id: 'walls', label: 'Walls', hasDescription: true, hasCondition: true },
-      { id: 'ceiling', label: 'Ceiling', hasDescription: true, hasCondition: true },
-      { id: 'floor', label: 'Floor/Flooring', hasDescription: true, hasCondition: true },
-      { id: 'doors', label: 'Doors', hasDescription: true, hasCondition: true },
-      { id: 'windows', label: 'Windows', hasDescription: true, hasCondition: true },
-      { id: 'curtains', label: 'Curtains/Blinds', hasDescription: true, hasCondition: true },
-      { id: 'lighting', label: 'Lighting', hasDescription: true, hasCondition: true },
-      { id: 'sockets', label: 'Sockets/Switches', hasDescription: true, hasCondition: true },
-      { id: 'heating', label: 'Heating', hasDescription: true, hasCondition: true },
-      { id: 'furniture', label: 'Furniture/Fixtures', hasDescription: true, hasCondition: true }
-    ]
-  },
-  {
-    id: 'kitchen',
-    name: 'Kitchen',
-    enabled: true,
-    sections: [
-      { id: 'walls', label: 'Walls/Tiles', hasDescription: true, hasCondition: true },
-      { id: 'ceiling', label: 'Ceiling', hasDescription: true, hasCondition: true },
-      { id: 'floor', label: 'Floor/Flooring', hasDescription: true, hasCondition: true },
-      { id: 'doors', label: 'Doors', hasDescription: true, hasCondition: true },
-      { id: 'windows', label: 'Windows', hasDescription: true, hasCondition: true },
-      { id: 'lighting', label: 'Lighting', hasDescription: true, hasCondition: true },
-      { id: 'sockets', label: 'Sockets/Switches', hasDescription: true, hasCondition: true },
-      { id: 'heating', label: 'Heating', hasDescription: true, hasCondition: true },
-      { id: 'kitchen_units', label: 'Kitchen Units', hasDescription: true, hasCondition: true },
-      { id: 'worktops', label: 'Worktops', hasDescription: true, hasCondition: true },
-      { id: 'sink', label: 'Sink & Taps', hasDescription: true, hasCondition: true },
-      { id: 'cooker', label: 'Cooker/Hob', hasDescription: true, hasCondition: true },
-      { id: 'oven', label: 'Oven', hasDescription: true, hasCondition: true },
-      { id: 'extractor', label: 'Extractor Hood', hasDescription: true, hasCondition: true },
-      { id: 'fridge', label: 'Fridge/Freezer', hasDescription: true, hasCondition: true },
-      { id: 'dishwasher', label: 'Dishwasher', hasDescription: true, hasCondition: true },
-      { id: 'washing_machine', label: 'Washing Machine', hasDescription: true, hasCondition: true }
-    ]
-  },
-  {
-    id: 'bathroom',
-    name: 'Bathroom',
-    enabled: true,
-    sections: [
-      { id: 'walls', label: 'Walls/Tiles', hasDescription: true, hasCondition: true },
-      { id: 'ceiling', label: 'Ceiling', hasDescription: true, hasCondition: true },
-      { id: 'floor', label: 'Floor/Flooring', hasDescription: true, hasCondition: true },
-      { id: 'doors', label: 'Doors', hasDescription: true, hasCondition: true },
-      { id: 'windows', label: 'Windows', hasDescription: true, hasCondition: true },
-      { id: 'lighting', label: 'Lighting', hasDescription: true, hasCondition: true },
-      { id: 'sockets', label: 'Sockets/Switches', hasDescription: true, hasCondition: true },
-      { id: 'heating', label: 'Heating/Towel Rail', hasDescription: true, hasCondition: true },
-      { id: 'bath', label: 'Bath', hasDescription: true, hasCondition: true },
-      { id: 'shower', label: 'Shower/Shower Screen', hasDescription: true, hasCondition: true },
-      { id: 'toilet', label: 'Toilet', hasDescription: true, hasCondition: true },
-      { id: 'basin', label: 'Basin & Taps', hasDescription: true, hasCondition: true },
-      { id: 'mirror', label: 'Mirror/Cabinet', hasDescription: true, hasCondition: true },
-      { id: 'extractor', label: 'Extractor Fan', hasDescription: true, hasCondition: true }
-    ]
-  },
-  {
-    id: 'bedroom_1',
-    name: 'Bedroom 1',
-    enabled: true,
-    sections: [
-      { id: 'walls', label: 'Walls', hasDescription: true, hasCondition: true },
-      { id: 'ceiling', label: 'Ceiling', hasDescription: true, hasCondition: true },
-      { id: 'floor', label: 'Floor/Flooring', hasDescription: true, hasCondition: true },
-      { id: 'doors', label: 'Doors', hasDescription: true, hasCondition: true },
-      { id: 'windows', label: 'Windows', hasDescription: true, hasCondition: true },
-      { id: 'curtains', label: 'Curtains/Blinds', hasDescription: true, hasCondition: true },
-      { id: 'lighting', label: 'Lighting', hasDescription: true, hasCondition: true },
-      { id: 'sockets', label: 'Sockets/Switches', hasDescription: true, hasCondition: true },
-      { id: 'heating', label: 'Heating', hasDescription: true, hasCondition: true },
-      { id: 'wardrobe', label: 'Wardrobe/Storage', hasDescription: true, hasCondition: true },
-      { id: 'furniture', label: 'Furniture/Fixtures', hasDescription: true, hasCondition: true }
-    ]
-  },
-  {
-    id: 'bedroom_2',
-    name: 'Bedroom 2',
-    enabled: true,
-    sections: [
-      { id: 'walls', label: 'Walls', hasDescription: true, hasCondition: true },
-      { id: 'ceiling', label: 'Ceiling', hasDescription: true, hasCondition: true },
-      { id: 'floor', label: 'Floor/Flooring', hasDescription: true, hasCondition: true },
-      { id: 'doors', label: 'Doors', hasDescription: true, hasCondition: true },
-      { id: 'windows', label: 'Windows', hasDescription: true, hasCondition: true },
-      { id: 'curtains', label: 'Curtains/Blinds', hasDescription: true, hasCondition: true },
-      { id: 'lighting', label: 'Lighting', hasDescription: true, hasCondition: true },
-      { id: 'sockets', label: 'Sockets/Switches', hasDescription: true, hasCondition: true },
-      { id: 'heating', label: 'Heating', hasDescription: true, hasCondition: true },
-      { id: 'wardrobe', label: 'Wardrobe/Storage', hasDescription: true, hasCondition: true },
-      { id: 'furniture', label: 'Furniture/Fixtures', hasDescription: true, hasCondition: true }
-    ]
-  }
-])
+const savePresetForm = ref({ name: '', description: '' })
 
-const isEditMode = computed(() => route.params.id !== undefined)
+const newItemForm = ref({
+  name: '', description: '', requires_photo: true, requires_condition: true
+})
+const editItemForm = ref({
+  id: null, name: '', description: '', requires_photo: true, requires_condition: true
+})
 
-// Dummy photo handler
-function handlePhotoClick(section, item = null) {
-  // Placeholder for future photo functionality
-  console.log('Photo button clicked for:', section, item)
-  toast.info('Photo capture will be available in the mobile app')
-}
+// ── Computed ──────────────────────────────────────────────────────────────────
+const roomSections = computed(() =>
+  template.value?.sections?.filter(s => s.section_type === 'room') ?? []
+)
+const fixedSections = computed(() =>
+  template.value?.sections?.filter(s => s.section_type === 'fixed') ?? []
+)
 
-// Load template if editing
-async function loadTemplate() {
-  if (!isEditMode.value) {
-    loading.value = false
-    return
-  }
+const filteredPresets = computed(() => {
+  const q = presetSearch.value.toLowerCase().trim()
+  if (!q) return presets.value
+  return presets.value.filter(p => p.name.toLowerCase().includes(q))
+})
 
+// ── Template ──────────────────────────────────────────────────────────────────
+async function fetchTemplate() {
+  loading.value = true
   try {
-    const response = await api.getTemplate(route.params.id)
-    const template = response.data
-    
-    templateName.value = template.name
-    inspectionType.value = template.inspection_type
-    isDefault.value = template.is_default
-    
-    // Parse content
-    const content = JSON.parse(template.content)
-    if (content.fixedSections) fixedSections.value = content.fixedSections
-    if (content.rooms) rooms.value = content.rooms
-  } catch (error) {
-    console.error('Failed to load template:', error)
-    toast.error('Failed to load template')
+    const res = await api.getTemplate(route.params.id)
+    template.value = res.data
+  } catch (err) {
+    console.error(err)
+    alert('Failed to load template')
+    router.push('/settings/templates')
   } finally {
     loading.value = false
   }
 }
 
-// Save template
-async function saveTemplate() {
-  if (!templateName.value.trim()) {
-    toast.warning('Please enter a template name')
-    return
-  }
-
+async function updateTemplateName() {
+  if (!template.value.name.trim()) return
   saving.value = true
-
-  const templateData = {
-    name: templateName.value,
-    inspection_type: inspectionType.value,
-    is_default: isDefault.value,
-    content: JSON.stringify({
-      fixedSections: fixedSections.value,
-      rooms: rooms.value
-    })
-  }
-
   try {
-    if (isEditMode.value) {
-      await api.updateTemplate(route.params.id, templateData)
-      toast.success('Template saved')
-    } else {
-      await api.createTemplate(templateData)
-      toast.success('Template created')
-    }
-    router.push('/settings')
-  } catch (error) {
-    console.error('Failed to save template:', error)
-    toast.error('Failed to save template')
+    await api.updateTemplate(template.value.id, {
+      name: template.value.name,
+      description: template.value.description,
+    })
+  } catch (err) {
+    console.error(err)
+    alert('Failed to update template name')
   } finally {
     saving.value = false
   }
 }
 
-// Fixed section row management
-function addRowToSection(sectionIndex) {
-  const section = fixedSections.value[sectionIndex]
-  const newId = section.rows.length > 0 ? Math.max(...section.rows.map(r => r.id)) + 1 : 1
-  
-  let newRow = { id: newId }
-  
-  if (section.type === 'condition_summary') {
-    newRow = { id: newId, name: '', condition: '' }
-  } else if (section.type === 'cleaning_summary') {
-    newRow = { id: newId, name: '', cleanliness: '', cleanlinessNotes: '' }
-  } else if (section.type === 'smoke_alarms') {
-    newRow = { id: newId, question: '', answer: '', notes: '' }
-  } else if (section.type === 'fire_door_safety') {
-    newRow = { id: newId, name: '', question: '', answer: '', notes: '' }
-  } else if (section.type === 'health_safety') {
-    newRow = { id: newId, question: '', answer: '', notes: '' }
-  } else if (section.type === 'keys') {
-    newRow = { id: newId, name: '', description: '' }
-  } else if (section.type === 'meter_readings') {
-    newRow = { id: newId, name: '', locationSerial: '', reading: '' }
+// ── Add Section — step 1 ──────────────────────────────────────────────────────
+function openAddSectionModal() {
+  newSectionName.value = ''
+  showAddSectionModal.value = true
+}
+
+async function handleAddBlankSection() {
+  if (!newSectionName.value.trim()) { alert('Section name is required'); return }
+  try {
+    const res = await api.addSection(template.value.id, {
+      name: newSectionName.value.trim(),
+      section_type: 'room',
+    })
+    template.value.sections.push(res.data)
+    showAddSectionModal.value = false
+  } catch (err) {
+    console.error(err)
+    alert('Failed to add section')
   }
-  
-  section.rows.push(newRow)
 }
 
-function deleteRowFromSection(sectionIndex, rowIndex) {
-  if (!confirm('Delete this row?')) return
-  fixedSections.value[sectionIndex].rows.splice(rowIndex, 1)
+// ── Add Section — step 2: preset picker ──────────────────────────────────────
+async function openPresetPicker() {
+  showAddSectionModal.value = false
+  showPresetPicker.value = true
+  selectedPresets.value = []
+  presetSearch.value = ''
+  presetsLoading.value = true
+  try {
+    const res = await api.getSectionPresets()
+    presets.value = res.data
+  } catch (err) {
+    console.error(err)
+    alert('Failed to load presets')
+  } finally {
+    presetsLoading.value = false
+  }
 }
 
-// Room management functions
-function addRoom() {
-  const roomNumber = rooms.value.length + 1
-  rooms.value.push({
-    id: `room_${Date.now()}`,
-    name: `Room ${roomNumber}`,
-    enabled: true,
-    sections: [
-      { id: 'walls', label: 'Walls', hasDescription: true, hasCondition: true },
-      { id: 'ceiling', label: 'Ceiling', hasDescription: true, hasCondition: true },
-      { id: 'floor', label: 'Floor/Flooring', hasDescription: true, hasCondition: true }
-    ]
-  })
+function isPresetSelected(preset) {
+  return selectedPresets.value.some(s => s.preset.id === preset.id)
 }
 
-function copyRoom(index) {
-  const original = rooms.value[index]
-  const copy = JSON.parse(JSON.stringify(original))
-  copy.id = `room_${Date.now()}`
-  copy.name = `${original.name} (Copy)`
-  rooms.value.splice(index + 1, 0, copy)
+function togglePreset(preset) {
+  const idx = selectedPresets.value.findIndex(s => s.preset.id === preset.id)
+  if (idx === -1) {
+    selectedPresets.value.push({ preset, customName: preset.name })
+  } else {
+    selectedPresets.value.splice(idx, 1)
+  }
 }
 
-function deleteRoom(index) {
-  if (!confirm('Delete this room?')) return
-  rooms.value.splice(index, 1)
+async function handleAddFromPresets() {
+  if (selectedPresets.value.length === 0) return
+  addingFromPreset.value = true
+  try {
+    for (const { preset, customName } of selectedPresets.value) {
+      const res = await api.addPresetToTemplate(preset.id, template.value.id, {
+        name: customName.trim() || preset.name,
+      })
+      template.value.sections.push(res.data)
+    }
+    showPresetPicker.value = false
+  } catch (err) {
+    console.error(err)
+    alert('Failed to add sections from presets')
+  } finally {
+    addingFromPreset.value = false
+  }
 }
 
-function moveRoomUp(index) {
-  if (index === 0) return
-  const room = rooms.value.splice(index, 1)[0]
-  rooms.value.splice(index - 1, 0, room)
+// ── Save section as preset ────────────────────────────────────────────────────
+function openSavePresetModal(section) {
+  savePresetForm.value = { name: section.name, description: '' }
+  showSavePresetModal.value = section
 }
 
-function moveRoomDown(index) {
-  if (index === rooms.value.length - 1) return
-  const room = rooms.value.splice(index, 1)[0]
-  rooms.value.splice(index + 1, 0, room)
+async function handleSaveAsPreset() {
+  const section = showSavePresetModal.value
+  if (!savePresetForm.value.name.trim()) { alert('Name is required'); return }
+  try {
+    await api.saveSectionAsPreset(section.id, {
+      name:        savePresetForm.value.name.trim(),
+      description: savePresetForm.value.description,
+    })
+    showSavePresetModal.value = null
+    alert(`"${savePresetForm.value.name}" saved to presets!`)
+  } catch (err) {
+    console.error(err)
+    alert('Failed to save preset')
+  }
 }
 
-// Section management within rooms
-function addSectionToRoom(roomIndex) {
-  rooms.value[roomIndex].sections.push({
-    id: `section_${Date.now()}`,
-    label: 'New Section',
-    hasDescription: true,
-    hasCondition: true
-  })
+// ── Section actions ───────────────────────────────────────────────────────────
+async function duplicateSection(section) {
+  if (!confirm(`Duplicate "${section.name}"?`)) return
+  try {
+    const res = await api.duplicateSection(section.id)
+    template.value.sections.push(res.data)
+    fetchTemplate()
+  } catch (err) { console.error(err); alert('Failed to duplicate section') }
 }
 
-function deleteSectionFromRoom(roomIndex, sectionIndex) {
-  if (!confirm('Delete this section?')) return
-  rooms.value[roomIndex].sections.splice(sectionIndex, 1)
+async function deleteSection(section) {
+  if (section.is_required) { alert('Cannot delete required sections'); return }
+  if (!confirm(`Delete "${section.name}"? This will remove all its items.`)) return
+  try {
+    await api.deleteSection(section.id)
+    template.value.sections = template.value.sections.filter(s => s.id !== section.id)
+  } catch (err) { console.error(err); alert('Failed to delete section') }
 }
 
-function moveSectionUp(roomIndex, sectionIndex) {
-  if (sectionIndex === 0) return
-  const section = rooms.value[roomIndex].sections.splice(sectionIndex, 1)[0]
-  rooms.value[roomIndex].sections.splice(sectionIndex - 1, 0, section)
+async function moveSectionUp(section) {
+  try { await api.reorderSection(section.id, 'up'); fetchTemplate() } catch (err) { console.error(err) }
+}
+async function moveSectionDown(section) {
+  try { await api.reorderSection(section.id, 'down'); fetchTemplate() } catch (err) { console.error(err) }
 }
 
-function moveSectionDown(roomIndex, sectionIndex) {
-  const room = rooms.value[roomIndex]
-  if (sectionIndex === room.sections.length - 1) return
-  const section = room.sections.splice(sectionIndex, 1)[0]
-  room.sections.splice(sectionIndex + 1, 0, section)
+// ── Item actions ──────────────────────────────────────────────────────────────
+function openAddItemModal(sectionId) {
+  newItemForm.value = { name: '', description: '', requires_photo: true, requires_condition: true }
+  showAddItemModal.value = sectionId
 }
 
-onMounted(() => {
-  loadTemplate()
-})
+async function handleAddItem() {
+  if (!newItemForm.value.name.trim()) { alert('Item name is required'); return }
+  try {
+    const res = await api.addItem(showAddItemModal.value, newItemForm.value)
+    const section = template.value.sections.find(s => s.id === showAddItemModal.value)
+    if (section) {
+      if (!section.items) section.items = []
+      section.items.push(res.data)
+    }
+    showAddItemModal.value = null
+  } catch (err) { console.error(err); alert('Failed to add item') }
+}
+
+function openEditItemModal(item) {
+  editItemForm.value = { ...item }
+  showEditItemModal.value = item
+}
+
+async function handleUpdateItem() {
+  if (!editItemForm.value.name.trim()) { alert('Item name is required'); return }
+  try {
+    await api.updateItem(editItemForm.value.id, {
+      name:               editItemForm.value.name,
+      description:        editItemForm.value.description,
+      requires_photo:     editItemForm.value.requires_photo,
+      requires_condition: editItemForm.value.requires_condition,
+    })
+    Object.assign(showEditItemModal.value, editItemForm.value)
+    showEditItemModal.value = null
+  } catch (err) { console.error(err); alert('Failed to update item') }
+}
+
+async function duplicateItem(item, section) {
+  try {
+    const res = await api.duplicateItem(item.id)
+    section.items.push(res.data)
+  } catch (err) { console.error(err); alert('Failed to duplicate item') }
+}
+
+async function deleteItem(item, section) {
+  if (!confirm(`Delete "${item.name}"?`)) return
+  try {
+    await api.deleteItem(item.id)
+    section.items = section.items.filter(i => i.id !== item.id)
+  } catch (err) { console.error(err); alert('Failed to delete item') }
+}
+
+async function moveItemUp(item) {
+  try { await api.reorderItem(item.id, 'up'); fetchTemplate() } catch (err) { console.error(err) }
+}
+async function moveItemDown(item) {
+  try { await api.reorderItem(item.id, 'down'); fetchTemplate() } catch (err) { console.error(err) }
+}
+
+onMounted(fetchTemplate)
 </script>
 
 <template>
-  <div class="page">
-    <div class="editor-header">
+  <div class="template-editor">
+
+    <!-- ── Header ──────────────────────────────────────────────────────────── -->
+    <div class="page-header">
       <div class="header-left">
-        <button @click="router.push('/settings')" class="btn-back">
-          ← Back to Settings
-        </button>
-        <h1>{{ isEditMode ? 'Edit Template' : 'Create New Template' }}</h1>
+        <button @click="router.push('/settings/templates')" class="btn-back">← Back</button>
+        <div v-if="!loading">
+          <input
+            v-model="template.name"
+            @blur="updateTemplateName"
+            class="template-name-input"
+            placeholder="Template Name"
+          />
+          <p class="subtitle">{{ template.inspection_type.replace('_', ' ').toUpperCase() }}</p>
+        </div>
       </div>
-      <div class="header-actions">
-        <button @click="saveTemplate" :disabled="saving" class="btn-save">
-          {{ saving ? 'Saving...' : '💾 Save Template' }}
-        </button>
-      </div>
+      <button @click="openAddSectionModal" class="btn-primary">＋ Add Section</button>
     </div>
 
-    <div v-if="loading" class="loading">Loading template...</div>
+    <div v-if="loading" class="loading">Loading template…</div>
 
     <div v-else class="editor-container">
-      <!-- Template Metadata -->
-      <div class="editor-section metadata-section">
-        <h2>Template Information</h2>
-        <div class="form-grid">
-          <div class="form-group">
-            <label>Template Name *</label>
-            <input 
-              v-model="templateName" 
-              type="text" 
-              class="input-field" 
-              placeholder="e.g. Standard Check-In Template"
-            />
-          </div>
-          
-          <div class="form-group">
-            <label>Inspection Type *</label>
-            <select v-model="inspectionType" class="input-field">
-              <option value="check_in">Check In</option>
-              <option value="check_out">Check Out</option>
-              <option value="interim">Interim Inspection</option>
-              <option value="inventory">Inventory Only</option>
-            </select>
-          </div>
-          
-          <div class="form-group checkbox-group">
-            <label>
-              <input type="checkbox" v-model="isDefault" />
-              <span>Set as default template for this inspection type</span>
-            </label>
-          </div>
-        </div>
-      </div>
 
       <!-- Fixed Sections -->
-      <div class="editor-section">
-        <h2>Report Sections</h2>
-        <p class="section-description">Configure the standard sections that appear in every inspection report</p>
-        
-        <div class="fixed-sections-list">
-          <!-- Condition Summary -->
-          <div class="fixed-section-card">
-            <div class="fixed-section-header">
-              <label class="section-toggle">
-                <input type="checkbox" v-model="fixedSections[0].enabled" />
-                <span class="section-name">Condition Summary</span>
-              </label>
-              <button @click="addRowToSection(0)" class="btn-add-row">➕ Add Row</button>
-            </div>
-            <div v-if="fixedSections[0].enabled" class="section-table-container">
-              <table class="section-table">
-                <thead>
-                  <tr>
-                    <th>Name</th>
-                    <th>Condition</th>
-                    <th style="width: 80px;">Photo</th>
-                    <th style="width: 60px;">Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="(row, rowIndex) in fixedSections[0].rows" :key="row.id">
-                    <td>
-                      <input v-model="row.name" type="text" class="table-input" placeholder="Name" />
-                    </td>
-                    <td>
-                      <input v-model="row.condition" type="text" class="table-input" placeholder="Condition" />
-                    </td>
-                    <td>
-                      <button @click="handlePhotoClick('condition_summary', row)" class="btn-photo">📷 Photo</button>
-                    </td>
-                    <td>
-                      <button @click="deleteRowFromSection(0, rowIndex)" class="btn-delete-row">🗑️</button>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <!-- Cleaning Summary -->
-          <div class="fixed-section-card">
-            <div class="fixed-section-header">
-              <label class="section-toggle">
-                <input type="checkbox" v-model="fixedSections[1].enabled" />
-                <span class="section-name">Cleaning Summary</span>
-              </label>
-              <button @click="addRowToSection(1)" class="btn-add-row">➕ Add Row</button>
-            </div>
-            <div v-if="fixedSections[1].enabled" class="section-table-container">
-              <table class="section-table">
-                <thead>
-                  <tr>
-                    <th>Name</th>
-                    <th>Cleanliness</th>
-                    <th>Cleanliness Notes</th>
-                    <th style="width: 80px;">Photo</th>
-                    <th style="width: 60px;">Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="(row, rowIndex) in fixedSections[1].rows" :key="row.id">
-                    <td>
-                      <input v-model="row.name" type="text" class="table-input" placeholder="Name" />
-                    </td>
-                    <td>
-                      <select v-model="row.cleanliness" class="table-select">
-                        <option value="">Select...</option>
-                        <option v-for="option in cleanlinessOptions" :key="option" :value="option">
-                          {{ option }}
-                        </option>
-                      </select>
-                    </td>
-                    <td>
-                      <input v-model="row.cleanlinessNotes" type="text" class="table-input" placeholder="Notes" />
-                    </td>
-                    <td>
-                      <button @click="handlePhotoClick('cleaning_summary', row)" class="btn-photo">📷 Photo</button>
-                    </td>
-                    <td>
-                      <button @click="deleteRowFromSection(1, rowIndex)" class="btn-delete-row">🗑️</button>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <!-- Smoke & Carbon Alarms -->
-          <div class="fixed-section-card">
-            <div class="fixed-section-header">
-              <label class="section-toggle">
-                <input type="checkbox" v-model="fixedSections[2].enabled" />
-                <span class="section-name">Smoke & Carbon Monoxide Alarms</span>
-              </label>
-              <button @click="addRowToSection(2)" class="btn-add-row">➕ Add Row</button>
-            </div>
-            <div v-if="fixedSections[2].enabled" class="section-table-container">
-              <table class="section-table">
-                <thead>
-                  <tr>
-                    <th>Question</th>
-                    <th style="width: 200px;">Answer</th>
-                    <th>Additional Notes</th>
-                    <th style="width: 80px;">Photo</th>
-                    <th style="width: 60px;">Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="(row, rowIndex) in fixedSections[2].rows" :key="row.id">
-                    <td>
-                      <input v-model="row.question" type="text" class="table-input" placeholder="Question" />
-                    </td>
-                    <td>
-                      <div class="answer-checkboxes">
-                        <label><input type="radio" :name="'smoke_' + row.id" :value="'Yes'" v-model="row.answer" /> Yes</label>
-                        <label><input type="radio" :name="'smoke_' + row.id" :value="'No'" v-model="row.answer" /> No</label>
-                        <label><input type="radio" :name="'smoke_' + row.id" :value="'N/A'" v-model="row.answer" /> N/A</label>
-                      </div>
-                    </td>
-                    <td>
-                      <input v-model="row.notes" type="text" class="table-input" placeholder="Notes" />
-                    </td>
-                    <td>
-                      <button @click="handlePhotoClick('smoke_alarms', row)" class="btn-photo">📷 Photo</button>
-                    </td>
-                    <td>
-                      <button @click="deleteRowFromSection(2, rowIndex)" class="btn-delete-row">🗑️</button>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <!-- Fire Door Safety -->
-          <div class="fixed-section-card">
-            <div class="fixed-section-header">
-              <label class="section-toggle">
-                <input type="checkbox" v-model="fixedSections[3].enabled" />
-                <span class="section-name">Fire Door Safety</span>
-              </label>
-              <button @click="addRowToSection(3)" class="btn-add-row">➕ Add Row</button>
-            </div>
-            <div v-if="fixedSections[3].enabled" class="section-table-container">
-              <table class="section-table">
-                <thead>
-                  <tr>
-                    <th>Name</th>
-                    <th>Question</th>
-                    <th style="width: 200px;">Answer</th>
-                    <th>Additional Notes</th>
-                    <th style="width: 80px;">Photo</th>
-                    <th style="width: 60px;">Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="(row, rowIndex) in fixedSections[3].rows" :key="row.id">
-                    <td>
-                      <input v-model="row.name" type="text" class="table-input" placeholder="Name" />
-                    </td>
-                    <td>
-                      <input v-model="row.question" type="text" class="table-input" placeholder="Question" />
-                    </td>
-                    <td>
-                      <div class="answer-checkboxes">
-                        <label><input type="radio" :name="'fire_' + row.id" :value="'Yes'" v-model="row.answer" /> Yes</label>
-                        <label><input type="radio" :name="'fire_' + row.id" :value="'No'" v-model="row.answer" /> No</label>
-                        <label><input type="radio" :name="'fire_' + row.id" :value="'N/A'" v-model="row.answer" /> N/A</label>
-                      </div>
-                    </td>
-                    <td>
-                      <input v-model="row.notes" type="text" class="table-input" placeholder="Notes" />
-                    </td>
-                    <td>
-                      <button @click="handlePhotoClick('fire_door_safety', row)" class="btn-photo">📷 Photo</button>
-                    </td>
-                    <td>
-                      <button @click="deleteRowFromSection(3, rowIndex)" class="btn-delete-row">🗑️</button>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <!-- Health & Safety -->
-          <div class="fixed-section-card">
-            <div class="fixed-section-header">
-              <label class="section-toggle">
-                <input type="checkbox" v-model="fixedSections[4].enabled" />
-                <span class="section-name">Health & Safety</span>
-              </label>
-              <button @click="addRowToSection(4)" class="btn-add-row">➕ Add Row</button>
-            </div>
-            <div v-if="fixedSections[4].enabled" class="section-table-container">
-              <table class="section-table">
-                <thead>
-                  <tr>
-                    <th>Question</th>
-                    <th style="width: 200px;">Answer</th>
-                    <th>Additional Notes</th>
-                    <th style="width: 80px;">Photo</th>
-                    <th style="width: 60px;">Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="(row, rowIndex) in fixedSections[4].rows" :key="row.id">
-                    <td>
-                      <input v-model="row.question" type="text" class="table-input" placeholder="Question" />
-                    </td>
-                    <td>
-                      <div class="answer-checkboxes">
-                        <label><input type="radio" :name="'health_' + row.id" :value="'Yes'" v-model="row.answer" /> Yes</label>
-                        <label><input type="radio" :name="'health_' + row.id" :value="'No'" v-model="row.answer" /> No</label>
-                        <label><input type="radio" :name="'health_' + row.id" :value="'N/A'" v-model="row.answer" /> N/A</label>
-                      </div>
-                    </td>
-                    <td>
-                      <input v-model="row.notes" type="text" class="table-input" placeholder="Notes" />
-                    </td>
-                    <td>
-                      <button @click="handlePhotoClick('health_safety', row)" class="btn-photo">📷 Photo</button>
-                    </td>
-                    <td>
-                      <button @click="deleteRowFromSection(4, rowIndex)" class="btn-delete-row">🗑️</button>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <!-- Keys & Access -->
-          <div class="fixed-section-card">
-            <div class="fixed-section-header">
-              <label class="section-toggle">
-                <input type="checkbox" v-model="fixedSections[5].enabled" />
-                <span class="section-name">Keys & Access</span>
-              </label>
-              <button @click="addRowToSection(5)" class="btn-add-row">➕ Add Row</button>
-            </div>
-            <div v-if="fixedSections[5].enabled" class="section-table-container">
-              <table class="section-table">
-                <thead>
-                  <tr>
-                    <th>Name</th>
-                    <th>Description</th>
-                    <th style="width: 80px;">Photo</th>
-                    <th style="width: 60px;">Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="(row, rowIndex) in fixedSections[5].rows" :key="row.id">
-                    <td>
-                      <input v-model="row.name" type="text" class="table-input" placeholder="Name" />
-                    </td>
-                    <td>
-                      <input v-model="row.description" type="text" class="table-input" placeholder="Description" />
-                    </td>
-                    <td>
-                      <button @click="handlePhotoClick('keys', row)" class="btn-photo">📷 Photo</button>
-                    </td>
-                    <td>
-                      <button @click="deleteRowFromSection(5, rowIndex)" class="btn-delete-row">🗑️</button>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <!-- Utility Meter Readings -->
-          <div class="fixed-section-card">
-            <div class="fixed-section-header">
-              <label class="section-toggle">
-                <input type="checkbox" v-model="fixedSections[6].enabled" />
-                <span class="section-name">Utility Meter Readings</span>
-              </label>
-              <button @click="addRowToSection(6)" class="btn-add-row">➕ Add Row</button>
-            </div>
-            <div v-if="fixedSections[6].enabled" class="section-table-container">
-              <table class="section-table">
-                <thead>
-                  <tr>
-                    <th>Name</th>
-                    <th>Location & Serial Number</th>
-                    <th>Reading</th>
-                    <th style="width: 80px;">Photo</th>
-                    <th style="width: 60px;">Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="(row, rowIndex) in fixedSections[6].rows" :key="row.id">
-                    <td>
-                      <input v-model="row.name" type="text" class="table-input" placeholder="Name" />
-                    </td>
-                    <td>
-                      <input v-model="row.locationSerial" type="text" class="table-input" placeholder="Location & Serial Number" />
-                    </td>
-                    <td>
-                      <input v-model="row.reading" type="text" class="table-input" placeholder="Reading" />
-                    </td>
-                    <td>
-                      <button @click="handlePhotoClick('meter_readings', row)" class="btn-photo">📷 Photo</button>
-                    </td>
-                    <td>
-                      <button @click="deleteRowFromSection(6, rowIndex)" class="btn-delete-row">🗑️</button>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
+      <div class="sections-group">
+        <h3 class="group-title">📄 Fixed Sections <span class="group-note">(Required)</span></h3>
+        <p class="group-description">These sections appear on every inspection report and cannot be removed.</p>
+        <div class="sections-list">
+          <div v-for="section in fixedSections" :key="section.id" class="section-card fixed">
+            <div class="section-header">
+              <span class="section-name">{{ section.name }}</span>
+              <span class="section-badge">Required</span>
             </div>
           </div>
         </div>
       </div>
 
-      <!-- Rooms -->
-      <div class="editor-section">
-        <div class="section-header-with-action">
-          <div>
-            <h2>Rooms</h2>
-            <p class="section-description">Add, edit, and organize rooms for the inspection</p>
+      <!-- Room Sections -->
+      <div class="sections-group">
+        <h3 class="group-title">🏠 Room Sections</h3>
+        <p class="group-description">Customise these sections for different property types.</p>
+
+        <div class="sections-list">
+          <div v-for="(section, index) in roomSections" :key="section.id" class="section-card">
+
+            <div class="section-header">
+              <span class="section-name">{{ section.name }}</span>
+              <div class="section-actions">
+                <button @click="moveSectionUp(section)"   :disabled="index === 0"                      class="btn-icon" title="Move Up">↑</button>
+                <button @click="moveSectionDown(section)" :disabled="index === roomSections.length - 1" class="btn-icon" title="Move Down">↓</button>
+                <button @click="openSavePresetModal(section)" class="btn-icon preset-btn" title="Save as Preset">💾</button>
+                <button @click="duplicateSection(section)" class="btn-icon" title="Duplicate">⧉</button>
+                <button @click="deleteSection(section)"   class="btn-icon danger" title="Delete">✕</button>
+              </div>
+            </div>
+
+            <div class="item-count-label">{{ (section.items || []).length }} item{{ (section.items || []).length !== 1 ? 's' : '' }}</div>
+
+            <div class="items-list">
+              <div v-for="(item, itemIndex) in section.items" :key="item.id" class="item-row">
+                <div class="item-info">
+                  <span class="item-name">{{ item.name }}</span>
+                  <div class="item-meta">
+                    <span v-if="item.requires_photo"     class="meta-badge photo">📷 Photo</span>
+                    <span v-if="item.requires_condition" class="meta-badge cond">✓ Condition</span>
+                  </div>
+                </div>
+                <div class="item-actions">
+                  <button @click="moveItemUp(item)"              :disabled="itemIndex === 0"                     class="btn-icon-sm" title="Up">↑</button>
+                  <button @click="moveItemDown(item)"            :disabled="itemIndex === section.items.length-1" class="btn-icon-sm" title="Down">↓</button>
+                  <button @click="openEditItemModal(item)"                                                        class="btn-icon-sm" title="Edit">✎</button>
+                  <button @click="duplicateItem(item, section)"                                                   class="btn-icon-sm" title="Duplicate">⧉</button>
+                  <button @click="deleteItem(item, section)"                                                      class="btn-icon-sm danger" title="Delete">✕</button>
+                </div>
+              </div>
+              <button @click="openAddItemModal(section.id)" class="btn-add-item">＋ Add Item</button>
+            </div>
           </div>
-          <button @click="addRoom" class="btn-add">
-            ➕ Add Room
-          </button>
-        </div>
 
-        <div class="rooms-list">
-          <div v-for="(room, roomIndex) in rooms" :key="room.id" class="room-card">
-            <div class="room-header">
-              <div class="room-title-section">
-                <label class="room-toggle">
-                  <input type="checkbox" v-model="room.enabled" />
-                </label>
-                <input 
-                  v-model="room.name" 
-                  type="text" 
-                  class="room-name-input"
-                  placeholder="Room name"
-                />
-              </div>
-              <div class="room-actions">
-                <button 
-                  @click="moveRoomUp(roomIndex)" 
-                  :disabled="roomIndex === 0"
-                  class="btn-icon"
-                  title="Move up"
-                >
-                  ↑
-                </button>
-                <button 
-                  @click="moveRoomDown(roomIndex)" 
-                  :disabled="roomIndex === rooms.length - 1"
-                  class="btn-icon"
-                  title="Move down"
-                >
-                  ↓
-                </button>
-                <button 
-                  @click="copyRoom(roomIndex)" 
-                  class="btn-icon"
-                  title="Copy room"
-                >
-                  📋
-                </button>
-                <button 
-                  @click="deleteRoom(roomIndex)" 
-                  class="btn-icon btn-delete"
-                  title="Delete room"
-                >
-                  🗑️
-                </button>
-              </div>
-            </div>
-
-            <div v-if="room.enabled" class="room-sections">
-              <div class="room-sections-header">
-                <h4>Sections</h4>
-                <button @click="addSectionToRoom(roomIndex)" class="btn-add-small">
-                  ➕ Add Section
-                </button>
-              </div>
-
-              <div class="sections-table">
-                <div class="table-header">
-                  <div class="col-section">Section Name</div>
-                  <div class="col-checkbox">Description</div>
-                  <div class="col-checkbox">Condition</div>
-                  <div class="col-photo">Photo</div>
-                  <div class="col-actions">Actions</div>
-                </div>
-
-                <div 
-                  v-for="(section, sectionIndex) in room.sections" 
-                  :key="section.id"
-                  class="table-row"
-                >
-                  <div class="col-section">
-                    <input 
-                      v-model="section.label" 
-                      type="text" 
-                      class="section-label-input"
-                      placeholder="Section name"
-                    />
-                  </div>
-                  <div class="col-checkbox">
-                    <input type="checkbox" v-model="section.hasDescription" />
-                  </div>
-                  <div class="col-checkbox">
-                    <input type="checkbox" v-model="section.hasCondition" />
-                  </div>
-                  <div class="col-photo">
-                    <button @click="handlePhotoClick('room_section', section)" class="btn-photo-small">📷</button>
-                  </div>
-                  <div class="col-actions">
-                    <button 
-                      @click="moveSectionUp(roomIndex, sectionIndex)" 
-                      :disabled="sectionIndex === 0"
-                      class="btn-icon-small"
-                      title="Move up"
-                    >
-                      ↑
-                    </button>
-                    <button 
-                      @click="moveSectionDown(roomIndex, sectionIndex)" 
-                      :disabled="sectionIndex === room.sections.length - 1"
-                      class="btn-icon-small"
-                      title="Move down"
-                    >
-                      ↓
-                    </button>
-                    <button 
-                      @click="deleteSectionFromRoom(roomIndex, sectionIndex)" 
-                      class="btn-icon-small btn-delete"
-                      title="Delete"
-                    >
-                      🗑️
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
+          <div v-if="roomSections.length === 0" class="empty-sections">
+            <p>No room sections yet.</p>
+            <button @click="openAddSectionModal" class="btn-primary" style="margin-top:12px">＋ Add Section</button>
           </div>
         </div>
       </div>
 
-      <!-- Save Button Bottom -->
-      <div class="editor-footer">
-        <button @click="router.push('/settings')" class="btn-cancel">
-          Cancel
-        </button>
-        <button @click="saveTemplate" :disabled="saving" class="btn-save-large">
-          {{ saving ? 'Saving...' : '💾 Save Template' }}
-        </button>
+    </div>
+
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         MODAL: Add Section — choose Empty or From Preset
+    ═══════════════════════════════════════════════════════════════════════════ -->
+    <div v-if="showAddSectionModal" class="modal-overlay" @click.self="showAddSectionModal = false">
+      <div class="modal modal-narrow">
+        <div class="modal-header">
+          <h2>Add Section</h2>
+          <button @click="showAddSectionModal = false" class="btn-close">✕</button>
+        </div>
+
+        <div class="modal-body">
+          <!-- Empty section -->
+          <div class="add-section-option" @click="() => {}">
+            <div class="option-label">Empty section</div>
+            <div class="option-row">
+              <input
+                v-model="newSectionName"
+                type="text"
+                placeholder="e.g. Balcony / Terrace"
+                class="option-input"
+                @keyup.enter="handleAddBlankSection"
+              />
+              <button @click="handleAddBlankSection" class="btn-primary btn-sm">Add</button>
+            </div>
+          </div>
+
+          <div class="option-divider">or</div>
+
+          <!-- From preset -->
+          <div class="add-section-option preset-option" @click="openPresetPicker">
+            <div class="option-label">From a saved preset</div>
+            <div class="option-hint">Choose one or more saved rooms to add with items pre-filled</div>
+            <button class="btn-library" style="margin-top:10px" @click.stop="openPresetPicker">
+              Browse Presets →
+            </button>
+          </div>
+        </div>
       </div>
     </div>
+
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         MODAL: Preset Picker — multi-select + rename
+    ═══════════════════════════════════════════════════════════════════════════ -->
+    <div v-if="showPresetPicker" class="modal-overlay" @click.self="showPresetPicker = false">
+      <div class="modal modal-wide">
+        <div class="modal-header">
+          <div>
+            <h2>Add from Presets</h2>
+            <p class="modal-subtitle">Select one or more saved rooms to add to this template.</p>
+          </div>
+          <button @click="showPresetPicker = false" class="btn-close">✕</button>
+        </div>
+
+        <div class="modal-body">
+
+          <!-- Search -->
+          <input
+            v-model="presetSearch"
+            type="text"
+            placeholder="Search presets…"
+            class="preset-search"
+          />
+
+          <!-- Loading -->
+          <div v-if="presetsLoading" class="picker-empty">Loading presets…</div>
+
+          <!-- No presets at all -->
+          <div v-else-if="presets.length === 0" class="picker-empty">
+            <div style="font-size:36px;margin-bottom:8px">📭</div>
+            <p>No presets saved yet.</p>
+            <p class="picker-empty-hint">Use the 💾 button on any room section to save it as a preset.</p>
+          </div>
+
+          <!-- No search match -->
+          <div v-else-if="filteredPresets.length === 0" class="picker-empty">
+            No presets matching "{{ presetSearch }}"
+          </div>
+
+          <!-- Preset list -->
+          <div v-else class="picker-list">
+            <div
+              v-for="preset in filteredPresets"
+              :key="preset.id"
+              class="picker-row"
+              :class="{ selected: isPresetSelected(preset) }"
+              @click="togglePreset(preset)"
+            >
+              <!-- Checkbox -->
+              <div class="picker-check">
+                <div class="check-box" :class="{ checked: isPresetSelected(preset) }">
+                  <span v-if="isPresetSelected(preset)">✓</span>
+                </div>
+              </div>
+
+              <!-- Preset info -->
+              <div class="picker-info">
+                <div class="picker-name">{{ preset.name }}</div>
+                <div class="picker-meta">{{ preset.item_count }} item{{ preset.item_count !== 1 ? 's' : '' }}
+                  <span v-if="preset.description" class="picker-desc"> · {{ preset.description }}</span>
+                </div>
+                <div class="picker-items-preview">
+                  <span v-for="(item, i) in (preset.items || []).slice(0, 4)" :key="i" class="preview-chip">
+                    {{ item.name }}
+                  </span>
+                  <span v-if="(preset.items || []).length > 4" class="preview-chip more">
+                    +{{ preset.items.length - 4 }} more
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Rename selected presets -->
+          <div v-if="selectedPresets.length > 0" class="rename-panel">
+            <div class="rename-panel-title">
+              {{ selectedPresets.length }} section{{ selectedPresets.length !== 1 ? 's' : '' }} selected — rename if needed:
+            </div>
+            <div
+              v-for="(sel, i) in selectedPresets"
+              :key="sel.preset.id"
+              class="rename-row"
+            >
+              <span class="rename-original">{{ sel.preset.name }}</span>
+              <span class="rename-arrow">→</span>
+              <input
+                v-model="selectedPresets[i].customName"
+                type="text"
+                class="rename-input"
+                :placeholder="sel.preset.name"
+              />
+            </div>
+          </div>
+
+        </div>
+
+        <div class="modal-footer">
+          <button @click="showPresetPicker = false" class="btn-secondary">Cancel</button>
+          <button
+            @click="handleAddFromPresets"
+            class="btn-primary"
+            :disabled="selectedPresets.length === 0 || addingFromPreset"
+          >
+            <span v-if="addingFromPreset">Adding…</span>
+            <span v-else>Add {{ selectedPresets.length > 0 ? selectedPresets.length : '' }} Section{{ selectedPresets.length !== 1 ? 's' : '' }}</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         MODAL: Save section as preset
+    ═══════════════════════════════════════════════════════════════════════════ -->
+    <div v-if="showSavePresetModal" class="modal-overlay" @click.self="showSavePresetModal = null">
+      <div class="modal modal-narrow">
+        <div class="modal-header">
+          <h2>💾 Save as Preset</h2>
+          <button @click="showSavePresetModal = null" class="btn-close">✕</button>
+        </div>
+        <div class="modal-body">
+          <p class="save-info">
+            Save <strong>{{ showSavePresetModal.name }}</strong> and its
+            {{ (showSavePresetModal.items || []).length }} item(s) as a reusable preset.
+          </p>
+          <div class="form-group">
+            <label>Preset name *</label>
+            <input v-model="savePresetForm.name" type="text" placeholder="e.g. Standard Bedroom" autofocus />
+          </div>
+          <div class="form-group">
+            <label>Notes <span class="optional">(optional)</span></label>
+            <input v-model="savePresetForm.description" type="text" placeholder="e.g. Double room with en-suite" />
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button @click="showSavePresetModal = null" class="btn-secondary">Cancel</button>
+          <button @click="handleSaveAsPreset" class="btn-primary">Save Preset</button>
+        </div>
+      </div>
+    </div>
+
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         MODAL: Add Item
+    ═══════════════════════════════════════════════════════════════════════════ -->
+    <div v-if="showAddItemModal" class="modal-overlay" @click.self="showAddItemModal = null">
+      <div class="modal modal-narrow">
+        <div class="modal-header">
+          <h2>Add Item</h2>
+          <button @click="showAddItemModal = null" class="btn-close">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Item name *</label>
+            <input v-model="newItemForm.name" type="text" placeholder="e.g. Door, Frame, Threshold & Furniture" autofocus />
+          </div>
+          <div class="form-group">
+            <label>Description</label>
+            <textarea v-model="newItemForm.description" rows="2" placeholder="Optional"></textarea>
+          </div>
+          <div class="form-group-inline">
+            <label class="checkbox-label"><input type="checkbox" v-model="newItemForm.requires_photo" /><span>Requires Photo</span></label>
+            <label class="checkbox-label"><input type="checkbox" v-model="newItemForm.requires_condition" /><span>Requires Condition</span></label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button @click="showAddItemModal = null" class="btn-secondary">Cancel</button>
+          <button @click="handleAddItem" class="btn-primary">Add Item</button>
+        </div>
+      </div>
+    </div>
+
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         MODAL: Edit Item
+    ═══════════════════════════════════════════════════════════════════════════ -->
+    <div v-if="showEditItemModal" class="modal-overlay" @click.self="showEditItemModal = null">
+      <div class="modal modal-narrow">
+        <div class="modal-header">
+          <h2>Edit Item</h2>
+          <button @click="showEditItemModal = null" class="btn-close">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Item name *</label>
+            <input v-model="editItemForm.name" type="text" />
+          </div>
+          <div class="form-group">
+            <label>Description</label>
+            <textarea v-model="editItemForm.description" rows="2"></textarea>
+          </div>
+          <div class="form-group-inline">
+            <label class="checkbox-label"><input type="checkbox" v-model="editItemForm.requires_photo" /><span>Requires Photo</span></label>
+            <label class="checkbox-label"><input type="checkbox" v-model="editItemForm.requires_condition" /><span>Requires Condition</span></label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button @click="showEditItemModal = null" class="btn-secondary">Cancel</button>
+          <button @click="handleUpdateItem" class="btn-primary">Update Item</button>
+        </div>
+      </div>
+    </div>
+
   </div>
 </template>
 
 <style scoped>
-.page {
-  max-width: 1600px;
-}
+.template-editor { max-width: 1400px; }
 
-.editor-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 32px;
-  gap: 20px;
-  flex-wrap: wrap;
-}
-
-.header-left {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.btn-back {
-  padding: 8px 16px;
-  background: #f1f5f9;
-  color: #475569;
-  border: none;
-  border-radius: 6px;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  width: fit-content;
-}
-
-.btn-back:hover {
-  background: #e2e8f0;
-}
-
-.editor-header h1 {
-  font-size: 32px;
-  font-weight: 700;
-  color: #1e293b;
-}
-
-.btn-save {
-  padding: 12px 24px;
-  background: #6366f1;
-  color: white;
-  border: none;
-  border-radius: 8px;
-  font-size: 15px;
-  font-weight: 600;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.btn-save:hover:not(:disabled) {
-  background: #4f46e5;
-}
-
-.btn-save:disabled {
-  background: #94a3b8;
-  cursor: not-allowed;
-}
-
-.loading {
-  text-align: center;
-  padding: 60px;
-  color: #64748b;
-  font-size: 16px;
-}
-
-.editor-container {
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-}
-
-.editor-section {
-  background: white;
-  border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-  padding: 32px;
-}
-
-.editor-section h2 {
-  font-size: 24px;
-  font-weight: 600;
-  color: #1e293b;
-  margin-bottom: 8px;
-}
-
-.section-description {
-  color: #64748b;
-  font-size: 14px;
-  margin-bottom: 24px;
-}
-
-.form-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 24px;
-}
-
-.form-group {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.form-group label {
-  font-weight: 600;
-  color: #475569;
-  font-size: 14px;
-}
-
-.input-field {
-  padding: 10px 14px;
-  border: 1px solid #cbd5e1;
-  border-radius: 6px;
-  font-size: 14px;
-  font-family: inherit;
-}
-
-.input-field:focus {
-  outline: none;
-  border-color: #6366f1;
-}
-
-.checkbox-group {
-  grid-column: 1 / -1;
-}
-
-.checkbox-group label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-}
-
-.checkbox-group input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
-  cursor: pointer;
-}
-
-/* Fixed Sections Styles */
-.fixed-sections-list {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-.fixed-section-card {
-  background: #f8fafc;
-  border: 2px solid #e5e7eb;
-  border-radius: 12px;
-  padding: 20px;
-}
-
-.fixed-section-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-}
-
-.section-toggle {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  cursor: pointer;
-}
-
-.section-toggle input[type="checkbox"] {
-  width: 20px;
-  height: 20px;
-  cursor: pointer;
-}
-
-.section-name {
-  font-weight: 600;
-  color: #1e293b;
-  font-size: 16px;
-}
-
-.btn-add-row {
-  padding: 6px 14px;
-  background: #6366f1;
-  color: white;
-  border: none;
-  border-radius: 6px;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.btn-add-row:hover {
-  background: #4f46e5;
-}
-
-.section-table-container {
-  background: white;
-  border-radius: 8px;
-  padding: 12px;
-  overflow-x: auto;
-}
-
-.section-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-.section-table thead {
-  background: #f1f5f9;
-}
-
-.section-table th {
-  padding: 12px;
-  text-align: left;
-  font-size: 13px;
-  font-weight: 600;
-  color: #475569;
-  border-bottom: 2px solid #e5e7eb;
-}
-
-.section-table td {
-  padding: 8px;
-  border-bottom: 1px solid #e5e7eb;
-}
-
-.table-input,
-.table-select {
-  width: 100%;
-  padding: 8px 10px;
-  border: 1px solid #cbd5e1;
-  border-radius: 4px;
-  font-size: 14px;
-  font-family: inherit;
-}
-
-.table-input:focus,
-.table-select:focus {
-  outline: none;
-  border-color: #6366f1;
-}
-
-.answer-checkboxes {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-}
-
-.answer-checkboxes label {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 13px;
-  color: #475569;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.answer-checkboxes input[type="radio"] {
-  cursor: pointer;
-}
-
-.btn-photo {
-  width: 100%;
-  padding: 6px 8px;
-  background: #dbeafe;
-  color: #1e40af;
-  border: 1px solid #93c5fd;
-  border-radius: 4px;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.btn-photo:hover {
-  background: #bfdbfe;
-}
-
-.btn-delete-row {
-  width: 32px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: #fee2e2;
-  border: 1px solid #fecaca;
-  border-radius: 6px;
-  font-size: 14px;
-  cursor: pointer;
-  margin: 0 auto;
-}
-
-.btn-delete-row:hover {
-  background: #fecaca;
-}
-
-/* Room Styles */
-.section-header-with-action {
+/* ── Header ──────────────────────────────────────────────────────────────── */
+.page-header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  margin-bottom: 24px;
+  margin-bottom: 32px;
+}
+.header-left { display: flex; align-items: center; gap: 20px; }
+
+.btn-back {
+  padding: 8px 14px;
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.btn-back:hover { background: #f8fafc; }
+
+.template-name-input {
+  font-size: 26px;
+  font-weight: 600;
+  color: #1e293b;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 4px 8px;
+  transition: border-color 0.2s;
+}
+.template-name-input:hover { border-bottom-color: #e5e7eb; }
+.template-name-input:focus { outline: none; border-bottom-color: #6366f1; }
+
+.subtitle {
+  color: #64748b;
+  font-size: 12px;
+  text-transform: uppercase;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  padding-left: 8px;
 }
 
-.btn-add {
+/* ── Buttons ─────────────────────────────────────────────────────────────── */
+.btn-primary {
   padding: 10px 20px;
   background: #6366f1;
   color: white;
@@ -1246,316 +655,409 @@ onMounted(() => {
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
-  white-space: nowrap;
+  transition: background 0.15s;
 }
+.btn-primary:hover:not(:disabled) { background: #4f46e5; }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
-.btn-add:hover {
-  background: #4f46e5;
-}
+.btn-sm { padding: 8px 14px; font-size: 13px; }
 
-.rooms-list {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-.room-card {
-  background: #f8fafc;
-  border: 2px solid #e5e7eb;
-  border-radius: 12px;
-  padding: 20px;
-}
-
-.room-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
-  gap: 16px;
-}
-
-.room-title-section {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex: 1;
-}
-
-.room-toggle input[type="checkbox"] {
-  width: 20px;
-  height: 20px;
-  cursor: pointer;
-}
-
-.room-name-input {
-  flex: 1;
-  padding: 10px 14px;
-  border: 1px solid #cbd5e1;
-  border-radius: 6px;
-  font-size: 16px;
-  font-weight: 600;
-  font-family: inherit;
-}
-
-.room-name-input:focus {
-  outline: none;
-  border-color: #6366f1;
-}
-
-.room-actions {
-  display: flex;
-  gap: 8px;
-}
-
-.btn-icon {
-  width: 36px;
-  height: 36px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.btn-library {
+  padding: 9px 18px;
   background: white;
-  border: 1px solid #cbd5e1;
-  border-radius: 6px;
-  font-size: 16px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.btn-icon:hover:not(:disabled) {
-  background: #f1f5f9;
-  border-color: #94a3b8;
-}
-
-.btn-icon:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.btn-icon.btn-delete {
-  background: #fee2e2;
-  border-color: #fecaca;
-}
-
-.btn-icon.btn-delete:hover {
-  background: #fecaca;
-}
-
-.room-sections {
-  background: white;
+  color: #374151;
+  border: 1.5px solid #d1d5db;
   border-radius: 8px;
-  padding: 20px;
-}
-
-.room-sections-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-}
-
-.room-sections-header h4 {
-  font-size: 16px;
-  font-weight: 600;
-  color: #1e293b;
-}
-
-.btn-add-small {
-  padding: 6px 14px;
-  background: #e0e7ff;
-  color: #3730a3;
-  border: none;
-  border-radius: 6px;
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
+  transition: all 0.15s;
+  display: inline-block;
 }
+.btn-library:hover { background: #f8fafc; border-color: #6366f1; color: #6366f1; }
 
-.btn-add-small:hover {
-  background: #c7d2fe;
-}
-
-.sections-table {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  background: #e5e7eb;
-  border-radius: 6px;
-  overflow: hidden;
-}
-
-.table-header,
-.table-row {
-  display: grid;
-  grid-template-columns: 2fr 100px 100px 80px 110px;
-  gap: 1px;
+.btn-secondary {
+  padding: 9px 18px;
   background: white;
-  align-items: center;
+  color: #64748b;
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.btn-secondary:hover { background: #f1f5f9; }
+
+/* ── Loading / empty ─────────────────────────────────────────────────────── */
+.loading { text-align: center; padding: 60px 20px; color: #94a3b8; font-size: 15px; }
+
+.empty-sections {
+  text-align: center;
+  padding: 48px 20px;
+  border: 2px dashed #e5e7eb;
+  border-radius: 10px;
+  color: #94a3b8;
 }
 
-.table-header {
+/* ── Editor layout ───────────────────────────────────────────────────────── */
+.editor-container { display: flex; flex-direction: column; gap: 40px; }
+
+.sections-group {
+  background: white;
+  padding: 28px;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+}
+
+.group-title { font-size: 17px; font-weight: 700; color: #1e293b; margin-bottom: 4px; }
+.group-note  { font-size: 13px; font-weight: 500; color: #94a3b8; }
+.group-description { color: #64748b; font-size: 13px; margin-bottom: 20px; }
+
+.sections-list { display: flex; flex-direction: column; gap: 12px; }
+
+/* ── Section cards ───────────────────────────────────────────────────────── */
+.section-card {
+  background: #f8fafc;
+  border: 1.5px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 16px 18px;
+  transition: border-color 0.15s;
+}
+.section-card:hover  { border-color: #c7d2fe; }
+.section-card.fixed  { background: #fffbeb; border-color: #fcd34d; }
+
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.section-name { font-size: 15px; font-weight: 700; color: #1e293b; }
+
+.section-badge {
+  padding: 3px 10px;
+  background: #fbbf24;
+  color: #78350f;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.section-actions { display: flex; gap: 6px; }
+
+.item-count-label {
+  font-size: 11px;
+  color: #94a3b8;
   font-weight: 600;
-  font-size: 12px;
-  color: #64748b;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  margin-bottom: 10px;
 }
 
-.table-header > div {
-  padding: 12px;
+/* ── Icon buttons ────────────────────────────────────────────────────────── */
+.btn-icon {
+  width: 30px; height: 30px;
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  color: #374151;
+  transition: all 0.15s;
+}
+.btn-icon:hover:not(:disabled) { background: #f1f5f9; border-color: #c7d2fe; color: #6366f1; }
+.btn-icon:disabled { opacity: 0.35; cursor: not-allowed; }
+.btn-icon.danger:hover { background: #fee2e2; border-color: #fecaca; color: #dc2626; }
+.btn-icon.preset-btn:hover { background: #ecfdf5 !important; border-color: #6ee7b7 !important; color: #059669 !important; }
+
+/* ── Items ───────────────────────────────────────────────────────────────── */
+.items-list { display: flex; flex-direction: column; gap: 6px; }
+
+.item-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 10px 14px;
+  background: white;
+  border-radius: 7px;
+  border: 1px solid #e9ecef;
+  transition: border-color 0.15s;
+}
+.item-row:hover { border-color: #c7d2fe; }
+
+.item-info { flex: 1; }
+.item-name { font-size: 13px; font-weight: 600; color: #1e293b; display: block; margin-bottom: 3px; }
+.item-meta { display: flex; gap: 6px; }
+.meta-badge { padding: 1px 7px; border-radius: 8px; font-size: 10px; font-weight: 700; }
+.meta-badge.photo { background: #e0e7ff; color: #4338ca; }
+.meta-badge.cond  { background: #dcfce7; color: #166534; }
+
+.item-actions { display: flex; gap: 4px; }
+
+.btn-icon-sm {
+  width: 26px; height: 26px;
   background: #f8fafc;
-}
-
-.table-row > div {
-  padding: 12px;
-}
-
-.col-section {
-  padding: 8px 12px;
-}
-
-.col-checkbox {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-}
-
-.col-checkbox input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
+  border: 1px solid #e5e7eb;
+  border-radius: 5px;
+  font-size: 12px; font-weight: 700;
   cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  color: #374151;
+  transition: all 0.15s;
 }
+.btn-icon-sm:hover:not(:disabled) { background: #f1f5f9; color: #6366f1; }
+.btn-icon-sm:disabled { opacity: 0.35; cursor: not-allowed; }
+.btn-icon-sm.danger:hover { background: #fee2e2; color: #dc2626; }
 
-.col-photo {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-}
-
-.btn-photo-small {
-  padding: 4px 10px;
-  background: #dbeafe;
-  color: #1e40af;
-  border: 1px solid #93c5fd;
-  border-radius: 4px;
-  font-size: 16px;
-  cursor: pointer;
-}
-
-.btn-photo-small:hover {
-  background: #bfdbfe;
-}
-
-.col-actions {
-  display: flex;
-  gap: 4px;
-  justify-content: center;
-}
-
-.section-label-input {
+.btn-add-item {
   width: 100%;
-  padding: 6px 10px;
+  padding: 9px;
+  background: white;
+  border: 1.5px dashed #cbd5e1;
+  border-radius: 7px;
+  font-size: 13px; font-weight: 600; color: #64748b;
+  cursor: pointer;
+  margin-top: 6px;
+  transition: all 0.15s;
+}
+.btn-add-item:hover { border-color: #6366f1; color: #6366f1; background: #f5f3ff; }
+
+/* ── Modal shared ────────────────────────────────────────────────────────── */
+.modal-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.45);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 1000;
+  padding: 20px;
+}
+
+.modal {
+  background: white;
+  border-radius: 12px;
+  width: 100%;
+  max-width: 520px;
+  max-height: 90vh;
+  overflow: hidden;
+  display: flex; flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.15);
+}
+.modal-narrow { max-width: 460px; }
+.modal-wide   { max-width: 680px; }
+
+.modal-header {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  padding: 20px 24px;
+  border-bottom: 1px solid #e5e7eb;
+  flex-shrink: 0;
+}
+.modal-header h2 { font-size: 18px; font-weight: 700; color: #1e293b; }
+.modal-subtitle { font-size: 13px; color: #64748b; margin-top: 2px; }
+
+.btn-close {
+  background: none; border: none;
+  font-size: 18px; color: #94a3b8; cursor: pointer;
+  width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 4px; flex-shrink: 0;
+}
+.btn-close:hover { background: #f1f5f9; color: #374151; }
+
+.modal-body { padding: 20px 24px; overflow-y: auto; flex: 1; }
+
+.modal-footer {
+  display: flex; justify-content: flex-end; gap: 10px;
+  padding: 16px 24px;
+  border-top: 1px solid #e5e7eb;
+  background: #f8fafc;
+  flex-shrink: 0;
+}
+
+/* ── Add Section modal ───────────────────────────────────────────────────── */
+.add-section-option {
+  padding: 16px;
+  border: 1.5px solid #e5e7eb;
+  border-radius: 10px;
+  margin-bottom: 4px;
+}
+
+.option-label { font-size: 14px; font-weight: 700; color: #1e293b; margin-bottom: 10px; }
+
+.option-row { display: flex; gap: 8px; }
+
+.option-input {
+  flex: 1;
+  padding: 9px 13px;
   border: 1px solid #cbd5e1;
-  border-radius: 4px;
+  border-radius: 7px;
   font-size: 14px;
   font-family: inherit;
 }
+.option-input:focus { outline: none; border-color: #6366f1; }
 
-.section-label-input:focus {
-  outline: none;
-  border-color: #6366f1;
+.option-hint { font-size: 13px; color: #64748b; }
+
+.preset-option { cursor: default; }
+
+.option-divider {
+  text-align: center;
+  font-size: 12px;
+  color: #94a3b8;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 10px 0;
 }
 
-.btn-icon-small {
-  width: 28px;
-  height: 28px;
+/* ── Preset picker modal ─────────────────────────────────────────────────── */
+.preset-search {
+  width: 100%;
+  padding: 9px 13px;
+  border: 1.5px solid #e5e7eb;
+  border-radius: 8px;
+  font-size: 14px;
+  box-sizing: border-box;
+  margin-bottom: 14px;
+  transition: border-color 0.15s;
+}
+.preset-search:focus { outline: none; border-color: #6366f1; }
+
+.picker-empty {
+  text-align: center;
+  padding: 32px 20px;
+  color: #94a3b8;
+  font-size: 14px;
+}
+.picker-empty-hint { font-size: 12px; margin-top: 6px; }
+
+.picker-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+
+.picker-row {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 12px 14px;
+  border: 1.5px solid #e5e7eb;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.15s;
+  user-select: none;
+}
+.picker-row:hover    { border-color: #a5b4fc; background: #fafafa; }
+.picker-row.selected { border-color: #6366f1; background: #f5f3ff; }
+
+.picker-check { padding-top: 1px; flex-shrink: 0; }
+
+.check-box {
+  width: 18px; height: 18px;
+  border: 2px solid #d1d5db;
+  border-radius: 4px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700;
+  transition: all 0.15s;
+}
+.check-box.checked { background: #6366f1; border-color: #6366f1; color: white; }
+
+.picker-info { flex: 1; min-width: 0; }
+.picker-name { font-size: 14px; font-weight: 700; color: #1e293b; margin-bottom: 2px; }
+.picker-meta { font-size: 12px; color: #94a3b8; margin-bottom: 6px; }
+.picker-desc { color: #64748b; }
+
+.picker-items-preview { display: flex; flex-wrap: wrap; gap: 4px; }
+
+.preview-chip {
+  padding: 2px 8px;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  font-size: 11px;
+  color: #475569;
+}
+.preview-chip.more { color: #94a3b8; font-style: italic; }
+
+/* ── Rename panel ────────────────────────────────────────────────────────── */
+.rename-panel {
+  margin-top: 16px;
+  padding: 16px;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 10px;
+}
+
+.rename-panel-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #166534;
+  margin-bottom: 12px;
+}
+
+.rename-row {
   display: flex;
   align-items: center;
-  justify-content: center;
-  background: #f1f5f9;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.rename-row:last-child { margin-bottom: 0; }
+
+.rename-original {
+  font-size: 13px;
+  color: #64748b;
+  min-width: 120px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rename-arrow { color: #94a3b8; font-size: 14px; flex-shrink: 0; }
+
+.rename-input {
+  flex: 1;
+  padding: 7px 11px;
+  border: 1px solid #a7f3d0;
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: inherit;
+  background: white;
+}
+.rename-input:focus { outline: none; border-color: #059669; }
+
+/* ── Save preset modal ───────────────────────────────────────────────────── */
+.save-info {
+  font-size: 13px; color: #475569;
+  margin-bottom: 18px;
+  padding: 10px 14px;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 7px;
+  line-height: 1.5;
+}
+
+/* ── Shared form styles ──────────────────────────────────────────────────── */
+.form-group { margin-bottom: 18px; }
+.form-group label {
+  display: block; margin-bottom: 6px;
+  font-weight: 600; color: #475569; font-size: 13px;
+}
+.form-group input,
+.form-group textarea {
+  width: 100%;
+  padding: 9px 13px;
   border: 1px solid #cbd5e1;
-  border-radius: 4px;
+  border-radius: 7px;
   font-size: 14px;
-  cursor: pointer;
-  transition: all 0.2s;
+  font-family: inherit;
+  box-sizing: border-box;
+  transition: border-color 0.15s;
 }
+.form-group input:focus,
+.form-group textarea:focus  { outline: none; border-color: #6366f1; }
+.form-group textarea        { resize: vertical; }
 
-.btn-icon-small:hover:not(:disabled) {
-  background: #e2e8f0;
+.form-group-inline { display: flex; gap: 20px; margin-bottom: 18px; }
+.checkbox-label {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 14px; color: #475569; cursor: pointer;
 }
+.checkbox-label input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; }
 
-.btn-icon-small:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.btn-icon-small.btn-delete {
-  background: #fee2e2;
-  border-color: #fecaca;
-}
-
-.btn-icon-small.btn-delete:hover {
-  background: #fecaca;
-}
-
-.editor-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 16px;
-  padding: 24px 0;
-}
-
-.btn-cancel {
-  padding: 12px 32px;
-  background: #f1f5f9;
-  color: #475569;
-  border: none;
-  border-radius: 8px;
-  font-size: 15px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.btn-cancel:hover {
-  background: #e2e8f0;
-}
-
-.btn-save-large {
-  padding: 12px 32px;
-  background: #6366f1;
-  color: white;
-  border: none;
-  border-radius: 8px;
-  font-size: 15px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.btn-save-large:hover:not(:disabled) {
-  background: #4f46e5;
-}
-
-.btn-save-large:disabled {
-  background: #94a3b8;
-  cursor: not-allowed;
-}
-
-@media (max-width: 768px) {
-  .form-grid {
-    grid-template-columns: 1fr;
-  }
-  
-  .table-header,
-  .table-row {
-    grid-template-columns: 1fr 60px 60px 60px 70px;
-    font-size: 12px;
-  }
-  
-  .table-header {
-    font-size: 10px;
-  }
-  
-  .section-table-container {
-    overflow-x: scroll;
-  }
-}
+.optional { font-weight: 400; color: #94a3b8; }
 </style>

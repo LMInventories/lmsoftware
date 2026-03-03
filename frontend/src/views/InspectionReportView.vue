@@ -2023,6 +2023,7 @@ async function moveToReview() {
                     </select>
                     <textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" style="flex:1" placeholder="Additional notes…" :value="get(sec.id,row.id,'notes')" @input="set(sec.id,row.id,'notes',$event.target.value)"></textarea>
                   </div>
+                  <p v-if="isCheckOut" class="co-section-note">ℹ️ Results carried from Check In — update answer and notes only if the status has changed at Check Out</p>
                   <div v-if="isPanelOpen(sec.id,row.id)" class="photo-panel-inline"><div v-for="(ph,pi) in getPhotos(sec.id,row.id)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,row.id,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,row.id,pi)">×</button></div><button v-if="getPhotos(sec.id,row.id).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(sec.id,row.id,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,row.id,e.target.files)" /></label></div>
                 </div>
               </template>
@@ -2060,7 +2061,10 @@ async function moveToReview() {
                       <td class="td-name"><span class="sec-ref-badge">{{ fixedRowRef(sec, row.id) }}</span>{{ row.name }}</td>
                       <td>{{ row.question }}</td>
                       <td><select class="fld-input" :value="get(sec.id,row.id,'answer')" @change="set(sec.id,row.id,'answer',$event.target.value)"><option value="">Select…</option><option>Yes</option><option>No</option><option>N/A</option></select></td>
-                      <td><textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" placeholder="Notes…" :value="get(sec.id,row.id,'notes')" @input="set(sec.id,row.id,'notes',$event.target.value)"></textarea></td>
+                      <td>
+                        <textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" placeholder="Notes…" :value="get(sec.id,row.id,'notes')" @input="set(sec.id,row.id,'notes',$event.target.value)"></textarea>
+                        <p v-if="isCheckOut" class="co-section-note co-section-note--inline">ℹ️ Carried from Check In — update only if status has changed</p>
+                      </td>
                       <td class="td-cam"><button class="cam-btn" :class="{ 'cam-has': getPhotos(sec.id,row.id).length }" @click="togglePanel(sec.id,row.id)" title="Photos"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,row.id).length" class="cam-count">{{ getPhotos(sec.id,row.id).length }}</span></button></td>
                       <td class="td-cam"><button class="cam-btn mic-btn" :class="{ 'mic-active': isItemRecording(sec.id,row.id), 'mic-has': !isItemRecording(sec.id,row.id) && getItemRecordings(sec.id,row.id).length, 'mic-ai': isItemAiProcessing(sec.id,row.id) }" @click.stop="toggleItemRecording(sec.id,row.id,fixedItemLabel(sec,row.id,row.name))" title="Record"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span v-if="getItemRecordings(sec.id,row.id).length && !isItemRecording(sec.id,row.id)" class="cam-count mic-count">{{ getItemRecordings(sec.id,row.id).length }}</span></button></td>
                       <td class="td-del"><button v-if="canDelete" class="del-btn" @click="hideRow(sec.id,row.id)">×</button></td>
@@ -2300,21 +2304,14 @@ async function moveToReview() {
                     <div class="room-field-cond room-field-with-cam">
                       <div class="field-cond-inner">
                         <label class="field-lbl">Condition at Check Out</label>
-                        <textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" rows="3"
-                          placeholder="As Inventory &amp; Check In"
+                        <textarea v-auto-resize
+                          class="fld-textarea"
+                          :class="{ 'co-cond-placeholder': !(item._type==='template' ? get(room.id,item.id,'checkOutCondition') : item.checkOutCondition) }"
+                          :disabled="!canEdit" rows="3"
+                          placeholder="As Inventory & Check In"
                           :value="item._type==='template'
                             ? (get(room.id,item.id,'checkOutCondition') || '')
                             : (item.checkOutCondition || '')"
-                          @focus="e => {
-                            const cur = item._type==='template'
-                              ? get(room.id,item.id,'checkOutCondition')
-                              : item.checkOutCondition
-                            if (!cur) {
-                              item._type==='template'
-                                ? set(room.id,item.id,'checkOutCondition','As Inventory & Check In')
-                                : setRoomExtraField(room.id,item._eid,'checkOutCondition','As Inventory & Check In')
-                            }
-                          }"
                           @input="item._type==='template'
                             ? set(room.id,item.id,'checkOutCondition',$event.target.value)
                             : setRoomExtraField(room.id,item._eid,'checkOutCondition',$event.target.value)"></textarea>
@@ -3552,4 +3549,34 @@ async function moveToReview() {
 /* Item mic button AI processing state — pulsing indigo */
 .mic-ai{background:rgba(99,102,241,0.15)!important;border-color:#6366f1!important;animation:mic-ai-pulse 1.2s ease-in-out infinite}
 @keyframes mic-ai-pulse{0%,100%{opacity:1}50%{opacity:0.5}}
+
+/* ── Check Out condition placeholder ──────────────────────────────── */
+/* Style the placeholder text italic+grey so it reads as a default, not real data */
+.co-cond-placeholder::placeholder {
+  color: #94a3b8;
+  font-style: italic;
+}
+.co-cond-placeholder {
+  border-color: #dde2ea;
+  background: #fafafa;
+}
+
+/* ── Non-editable "carried from Check In" notes ───────────────────── */
+/* Used in smoke_alarms, health_safety, and fire_door_safety sections */
+.co-section-note {
+  font-size: 11px;
+  color: #94a3b8;
+  font-style: italic;
+  margin: 6px 0 0;
+  padding: 5px 10px;
+  background: #f8fafc;
+  border-left: 3px solid #e2e8f0;
+  border-radius: 0 4px 4px 0;
+  line-height: 1.4;
+}
+/* Compact variant for inline use inside table cells */
+.co-section-note--inline {
+  margin-top: 5px;
+  font-size: 10.5px;
+}
 </style>

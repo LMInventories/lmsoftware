@@ -2,6 +2,51 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import api from '../../services/api'
 
+// ── Global report style settings (system-wide) ──────────────────────
+const globalSaving = ref(false)
+const globalSaved = ref(false)
+const globalLoading = ref(true)
+
+const globalForm = ref({
+  report_header_text_color: '#FFFFFF',
+  report_body_text_color:   '#1e293b',
+  report_orientation:       'portrait'
+})
+
+async function fetchGlobalSettings() {
+  globalLoading.value = true
+  try {
+    const res = await api.getSystemSettings()
+    const s = res.data || {}
+    globalForm.value.report_header_text_color = s.report_header_text_color || '#FFFFFF'
+    globalForm.value.report_body_text_color   = s.report_body_text_color   || '#1e293b'
+    globalForm.value.report_orientation       = s.report_orientation       || 'portrait'
+  } catch (err) {
+    console.error('Failed to load global report settings:', err)
+  } finally {
+    globalLoading.value = false
+  }
+}
+
+async function saveGlobalSettings() {
+  globalSaving.value = true
+  try {
+    await api.updateSystemSettings({
+      report_header_text_color: globalForm.value.report_header_text_color,
+      report_body_text_color:   globalForm.value.report_body_text_color,
+      report_orientation:       globalForm.value.report_orientation,
+    })
+    globalSaved.value = true
+    setTimeout(() => globalSaved.value = false, 2500)
+  } catch (err) {
+    console.error('Failed to save global settings:', err)
+    alert('Failed to save — please try again.')
+  } finally {
+    globalSaving.value = false
+  }
+}
+
+// ── Per-client settings (existing) ─────────────────────────────────
 const clients = ref([])
 const loadingClients = ref(true)
 const saving = ref(false)
@@ -10,14 +55,12 @@ const saved = ref(false)
 const selectedClientId = ref(null)
 const selectedClient = ref(null)
 
-// Report settings form — mirrors the fields on the Client model
 const form = ref({
   report_color_override: '',
   useColorOverride: false,
   report_disclaimer: ''
 })
 
-// Whether the override colour is active
 const effectiveColor = computed(() => {
   if (form.value.useColorOverride && form.value.report_color_override) {
     return form.value.report_color_override
@@ -48,41 +91,31 @@ async function fetchClients() {
 }
 
 async function selectClient(id) {
-  if (!id) {
-    selectedClient.value = null
-    return
-  }
-
+  if (!id) { selectedClient.value = null; return }
   try {
     const response = await api.getClient(id)
     selectedClient.value = response.data
-
-    // Populate form from client data
-    form.value.report_disclaimer = selectedClient.value.report_disclaimer || ''
+    form.value.report_disclaimer    = selectedClient.value.report_disclaimer    || ''
     form.value.report_color_override = selectedClient.value.report_color_override || selectedClient.value.primary_color || '#1E3A8A'
-    form.value.useColorOverride = !!selectedClient.value.report_color_override
+    form.value.useColorOverride      = !!selectedClient.value.report_color_override
   } catch (err) {
     console.error('Failed to load client:', err)
   }
 }
 
-watch(selectedClientId, (newId) => {
-  selectClient(newId)
-})
+watch(selectedClientId, (newId) => selectClient(newId))
 
 async function saveSettings() {
   if (!selectedClientId.value) return
   saving.value = true
-
   try {
     await api.updateClient(selectedClientId.value, {
-      report_disclaimer: form.value.report_disclaimer,
+      report_disclaimer:    form.value.report_disclaimer,
       report_color_override: form.value.useColorOverride ? form.value.report_color_override : null
     })
     saved.value = true
-    // Update local client data
     if (selectedClient.value) {
-      selectedClient.value.report_disclaimer = form.value.report_disclaimer
+      selectedClient.value.report_disclaimer    = form.value.report_disclaimer
       selectedClient.value.report_color_override = form.value.useColorOverride ? form.value.report_color_override : null
     }
     setTimeout(() => saved.value = false, 2500)
@@ -100,7 +133,13 @@ const presetColors = [
   '#DB2777', '#EA580C', '#374151', '#000000'
 ]
 
-onMounted(fetchClients)
+const headerTextPresets  = ['#FFFFFF', '#F1F5F9', '#1e293b', '#374151', '#000000']
+const bodyTextPresets    = ['#1e293b', '#374151', '#4b5563', '#6b7280', '#000000']
+
+onMounted(() => {
+  fetchClients()
+  fetchGlobalSettings()
+})
 </script>
 
 <template>
@@ -109,10 +148,192 @@ onMounted(fetchClients)
       <div>
         <h2>Report Customisation</h2>
         <p class="section-description">
-          Configure per-client report branding, cover page colours, and disclaimers. Logo and brand colour are set on the client record.
+          Configure global report style settings and per-client branding, cover page colours, and disclaimers.
         </p>
       </div>
     </div>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- GLOBAL REPORT STYLE                                         -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <div class="global-section">
+      <div class="global-section-title">
+        <span class="gs-icon">🌐</span>
+        Global Report Style
+        <span class="gs-badge">Applied to all reports</span>
+      </div>
+
+      <div v-if="globalLoading" class="loading-inline-sm">
+        <div class="spinner-sm"></div> Loading…
+      </div>
+
+      <div v-else class="global-panels">
+
+        <!-- Orientation -->
+        <div class="panel">
+          <div class="panel-title">
+            <span class="panel-icon">📐</span>
+            Report Orientation
+          </div>
+          <p class="panel-desc">Choose whether reports are generated in portrait or landscape format.</p>
+
+          <div class="orientation-toggle">
+            <button
+              class="orient-btn"
+              :class="{ active: globalForm.report_orientation === 'portrait' }"
+              @click="globalForm.report_orientation = 'portrait'"
+            >
+              <div class="orient-icon orient-icon--portrait">
+                <div class="orient-page orient-page--portrait">
+                  <div class="orient-lines">
+                    <div class="orient-line"></div>
+                    <div class="orient-line orient-line--short"></div>
+                    <div class="orient-line"></div>
+                  </div>
+                </div>
+              </div>
+              <span class="orient-label">Portrait</span>
+              <span class="orient-size">A4 · 210 × 297mm</span>
+            </button>
+            <button
+              class="orient-btn"
+              :class="{ active: globalForm.report_orientation === 'landscape' }"
+              @click="globalForm.report_orientation = 'landscape'"
+            >
+              <div class="orient-icon orient-icon--landscape">
+                <div class="orient-page orient-page--landscape">
+                  <div class="orient-lines">
+                    <div class="orient-line"></div>
+                    <div class="orient-line orient-line--short"></div>
+                    <div class="orient-line"></div>
+                  </div>
+                </div>
+              </div>
+              <span class="orient-label">Landscape</span>
+              <span class="orient-size">A4 · 297 × 210mm</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Text Colours -->
+        <div class="panel">
+          <div class="panel-title">
+            <span class="panel-icon">🖊️</span>
+            Report Text Colours
+          </div>
+          <p class="panel-desc">
+            Control the text colour within section headers (on top of the brand colour background) and the body text throughout the report.
+          </p>
+
+          <div class="text-color-grid">
+
+            <!-- Header text colour -->
+            <div class="text-color-row">
+              <div class="tcr-label-group">
+                <span class="tcr-label">Header Text</span>
+                <span class="tcr-desc">Text on section header bars (on top of brand colour)</span>
+              </div>
+              <div class="tcr-controls">
+                <div class="color-input-group">
+                  <input
+                    v-model="globalForm.report_header_text_color"
+                    type="color"
+                    class="color-native"
+                  />
+                  <input
+                    v-model="globalForm.report_header_text_color"
+                    type="text"
+                    class="input-field color-hex-input"
+                    placeholder="#FFFFFF"
+                    maxlength="7"
+                  />
+                </div>
+                <div class="color-presets">
+                  <div
+                    v-for="p in headerTextPresets"
+                    :key="p"
+                    class="color-preset-swatch"
+                    :class="{ active: globalForm.report_header_text_color === p, 'swatch-light': p === '#FFFFFF' || p === '#F1F5F9' }"
+                    :style="{ background: p }"
+                    :title="p"
+                    @click="globalForm.report_header_text_color = p"
+                  ></div>
+                </div>
+                <!-- Live preview chip -->
+                <div class="color-preview-chip" :style="{ background: '#1E3A8A' }">
+                  <span :style="{ color: globalForm.report_header_text_color }">Section Header</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="tcr-divider"></div>
+
+            <!-- Body text colour -->
+            <div class="text-color-row">
+              <div class="tcr-label-group">
+                <span class="tcr-label">Body Text</span>
+                <span class="tcr-desc">Main report body content, tables, and descriptions</span>
+              </div>
+              <div class="tcr-controls">
+                <div class="color-input-group">
+                  <input
+                    v-model="globalForm.report_body_text_color"
+                    type="color"
+                    class="color-native"
+                  />
+                  <input
+                    v-model="globalForm.report_body_text_color"
+                    type="text"
+                    class="input-field color-hex-input"
+                    placeholder="#1e293b"
+                    maxlength="7"
+                  />
+                </div>
+                <div class="color-presets">
+                  <div
+                    v-for="p in bodyTextPresets"
+                    :key="p"
+                    class="color-preset-swatch"
+                    :style="{ background: p }"
+                    :class="{ active: globalForm.report_body_text_color === p }"
+                    :title="p"
+                    @click="globalForm.report_body_text_color = p"
+                  ></div>
+                </div>
+                <!-- Live preview chip -->
+                <div class="color-preview-chip color-preview-chip--body">
+                  <span :style="{ color: globalForm.report_body_text_color }">Body text example</span>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- Global save -->
+        <div class="save-row">
+          <transition name="fade">
+            <div v-if="globalSaved" class="saved-badge">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+              Global style saved
+            </div>
+          </transition>
+          <button class="btn-save" :disabled="globalSaving" @click="saveGlobalSettings">
+            {{ globalSaving ? 'Saving…' : '💾  Save Style Settings' }}
+          </button>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Divider -->
+    <div class="section-divider">
+      <span class="divider-label">Per-Client Report Settings</span>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- PER-CLIENT SETTINGS (existing)                              -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
 
     <!-- Client selector -->
     <div class="client-selector-bar">
@@ -150,7 +371,7 @@ onMounted(fetchClients)
       <!-- LEFT: configuration panels -->
       <div class="config-panels">
 
-        <!-- 1. Client branding summary (read-only, links to client) -->
+        <!-- 1. Client branding summary (read-only) -->
         <div class="panel">
           <div class="panel-title">
             <span class="panel-icon">🏢</span>
@@ -197,18 +418,8 @@ onMounted(fetchClients)
 
           <div v-if="form.useColorOverride" class="color-override-section">
             <div class="color-input-group">
-              <input
-                v-model="form.report_color_override"
-                type="color"
-                class="color-native"
-              />
-              <input
-                v-model="form.report_color_override"
-                type="text"
-                class="input-field color-hex-input"
-                placeholder="#1E3A8A"
-                maxlength="7"
-              />
+              <input v-model="form.report_color_override" type="color" class="color-native" />
+              <input v-model="form.report_color_override" type="text" class="input-field color-hex-input" placeholder="#1E3A8A" maxlength="7" />
             </div>
             <div class="color-presets">
               <div
@@ -248,23 +459,21 @@ onMounted(fetchClients)
             <span class="panel-icon">📄</span>
             Report Disclaimer
           </div>
-          <p class="panel-desc">This text appears on the disclaimer page of every report generated for this client. It will be rendered in full on page 3.</p>
+          <p class="panel-desc">This text appears on the disclaimer page of every report generated for this client.</p>
           <textarea
             v-model="form.report_disclaimer"
             class="disclaimer-textarea"
             rows="10"
-            placeholder="Enter the disclaimer text for this client's reports.
-
-For example:
-This report has been prepared by [Company Name] on behalf of [Client Name]. The findings in this report are based on a visual inspection of the property carried out on the date stated. This report does not constitute a structural survey..."
+            placeholder="Enter the disclaimer text for this client's reports..."
           ></textarea>
           <div class="char-count">{{ form.report_disclaimer.length }} characters</div>
         </div>
 
         <!-- 4. Save -->
         <div class="save-row">
-          <div v-if="saved" class="saved-confirmation">
-            ✅ Settings saved for {{ selectedClient.company || selectedClient.name }}
+          <div v-if="saved" class="saved-badge">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            Settings saved for {{ selectedClient.company || selectedClient.name }}
           </div>
           <div v-else></div>
           <button @click="saveSettings" :disabled="saving" class="btn-save">
@@ -301,26 +510,26 @@ This report has been prepared by [Company Name] on behalf of [Client Name]. The 
           <div class="cp-info-grid">
             <div class="cp-info-item">
               <div class="cp-label">Property Address</div>
-              <div class="cp-value">12 Example Street, London</div>
+              <div class="cp-value" :style="{ color: globalForm.report_body_text_color }">12 Example Street, London</div>
             </div>
             <div class="cp-info-item">
               <div class="cp-label">Inspection Date</div>
-              <div class="cp-value">{{ today }}</div>
+              <div class="cp-value" :style="{ color: globalForm.report_body_text_color }">{{ today }}</div>
             </div>
             <div class="cp-info-item">
               <div class="cp-label">Inspector</div>
-              <div class="cp-value">Robyn Lee</div>
+              <div class="cp-value" :style="{ color: globalForm.report_body_text_color }">Robyn Lee</div>
             </div>
             <div class="cp-info-item">
               <div class="cp-label">Reference</div>
-              <div class="cp-value">CHK-2026-0001</div>
+              <div class="cp-value" :style="{ color: globalForm.report_body_text_color }">CHK-2026-0001</div>
             </div>
           </div>
 
           <!-- Footer -->
-          <div class="cp-footer">
-            <span>Prepared by L&amp;M Inventories</span>
-            <span>Confidential</span>
+          <div class="cp-footer" :style="{ background: effectiveColor }">
+            <span :style="{ color: globalForm.report_header_text_color }">Prepared by L&amp;M Inventories</span>
+            <span :style="{ color: globalForm.report_header_text_color }">Confidential</span>
           </div>
         </div>
 
@@ -328,14 +537,24 @@ This report has been prepared by [Company Name] on behalf of [Client Name]. The 
         <div class="section-header-preview">
           <div class="shp-label">Section header style:</div>
           <div class="shp-bar" :style="{ background: effectiveColor }">
-            <span class="shp-title">Condition Summary</span>
-            <span class="shp-logo">{{ clientInitials }}</span>
+            <span class="shp-title" :style="{ color: globalForm.report_header_text_color }">Condition Summary</span>
+            <span class="shp-logo" :style="{ color: globalForm.report_header_text_color }">{{ clientInitials }}</span>
           </div>
+        </div>
+
+        <!-- Orientation indicator -->
+        <div class="orient-indicator">
+          <div class="orient-pill" :class="{ 'orient-pill--landscape': globalForm.report_orientation === 'landscape' }">
+            <svg v-if="globalForm.report_orientation === 'portrait'" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2"/></svg>
+            <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/></svg>
+            {{ globalForm.report_orientation === 'portrait' ? 'Portrait' : 'Landscape' }}
+          </div>
+          <span class="orient-note">Global orientation setting</span>
         </div>
 
         <div class="preview-note">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-          This is how the report will look. To change the logo or base brand colour, edit the <a href="#" @click.prevent="$router.push('/clients')" class="link">client record</a>.
+          To change the logo or base brand colour, edit the <a href="#" @click.prevent="$router.push('/clients')" class="link">client record</a>.
         </div>
       </div>
 
@@ -357,9 +576,218 @@ This report has been prepared by [Company Name] on behalf of [Client Name]. The 
   line-height: 1.5;
 }
 
-.section-header {
-  margin-bottom: 28px;
+.section-header { margin-bottom: 28px; }
+
+/* ─── GLOBAL SECTION ─── */
+.global-section {
+  background: #fafbff;
+  border: 1px solid #e0e7ff;
+  border-radius: 14px;
+  padding: 24px;
+  margin-bottom: 32px;
 }
+
+.global-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 700;
+  color: #1e293b;
+  margin-bottom: 20px;
+}
+
+.gs-icon { font-size: 18px; }
+
+.gs-badge {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  background: #e0e7ff;
+  color: #4338ca;
+  border-radius: 20px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.loading-inline-sm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #94a3b8;
+  padding: 20px 0;
+}
+
+.spinner-sm {
+  width: 20px;
+  height: 20px;
+  border: 2px solid #e5e7eb;
+  border-top-color: #6366f1;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.global-panels {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* ─── ORIENTATION TOGGLE ─── */
+.orientation-toggle {
+  display: flex;
+  gap: 16px;
+  margin-top: 4px;
+}
+
+.orient-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 20px 16px;
+  border: 2px solid #e5e7eb;
+  border-radius: 12px;
+  background: white;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.orient-btn:hover { border-color: #a5b4fc; background: #fafaff; }
+.orient-btn.active {
+  border-color: #6366f1;
+  background: #eef2ff;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
+}
+
+.orient-icon { display: flex; align-items: center; justify-content: center; }
+
+.orient-page {
+  background: white;
+  border: 2px solid #94a3b8;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.orient-page--portrait  { width: 36px; height: 48px; }
+.orient-page--landscape { width: 48px; height: 36px; }
+
+.orient-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: 70%;
+}
+
+.orient-line {
+  height: 2px;
+  background: #cbd5e1;
+  border-radius: 1px;
+}
+
+.orient-line--short { width: 60%; }
+
+.orient-label {
+  font-size: 14px;
+  font-weight: 700;
+  color: #1e293b;
+}
+
+.orient-size {
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+/* ─── TEXT COLOUR GRID ─── */
+.text-color-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.text-color-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 24px;
+  padding: 16px 0;
+}
+
+.tcr-divider {
+  height: 1px;
+  background: #f1f5f9;
+}
+
+.tcr-label-group {
+  width: 200px;
+  flex-shrink: 0;
+}
+
+.tcr-label {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  color: #1e293b;
+  margin-bottom: 4px;
+}
+
+.tcr-desc {
+  display: block;
+  font-size: 12px;
+  color: #94a3b8;
+  line-height: 1.4;
+}
+
+.tcr-controls {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* ─── COLOUR PREVIEW CHIP ─── */
+.color-preview-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid #e5e7eb;
+  min-width: 160px;
+}
+
+.color-preview-chip--body {
+  background: #f9fafb;
+}
+
+/* ─── SECTION DIVIDER ─── */
+.section-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 0 28px;
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.section-divider::before, .section-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: #e5e7eb;
+}
+
+.divider-label { white-space: nowrap; }
 
 /* ─── CLIENT SELECTOR ─── */
 .client-selector-bar {
@@ -380,10 +808,7 @@ This report has been prepared by [Company Name] on behalf of [Client Name]. The 
   white-space: nowrap;
 }
 
-.selector-wrap {
-  flex: 1;
-  max-width: 320px;
-}
+.selector-wrap { flex: 1; max-width: 320px; }
 
 .client-select {
   width: 100%;
@@ -396,27 +821,20 @@ This report has been prepared by [Company Name] on behalf of [Client Name]. The 
   cursor: pointer;
 }
 
-.client-select:focus {
-  outline: none;
-  border-color: #6366f1;
-}
-
-.loading-inline {
-  font-size: 13px;
-  color: #94a3b8;
-}
+.client-select:focus { outline: none; border-color: #6366f1; }
+.loading-inline { font-size: 13px; color: #94a3b8; }
 
 /* ─── NO CLIENT ─── */
 .no-client-state {
   text-align: center;
-  padding: 80px 20px;
+  padding: 60px 20px;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 12px;
 }
 
-.no-client-icon { font-size: 56px; }
+.no-client-icon { font-size: 48px; }
 
 .no-client-state h3 {
   font-size: 18px;
@@ -434,8 +852,6 @@ This report has been prepared by [Company Name] on behalf of [Client Name]. The 
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
-
-@keyframes spin { to { transform: rotate(360deg); } }
 
 /* ─── SETTINGS LAYOUT ─── */
 .settings-layout {
@@ -473,38 +889,27 @@ This report has been prepared by [Company Name] on behalf of [Client Name]. The 
 
 .panel-badge {
   margin-left: auto;
-  padding: 3px 9px;
-  border-radius: 12px;
   font-size: 11px;
   font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
-.panel-badge--info {
-  background: #e0e7ff;
-  color: #3730a3;
-}
+.panel-badge--info { background: #e0f2fe; color: #0369a1; }
+.panel-desc { font-size: 13px; color: #64748b; margin-bottom: 16px; line-height: 1.5; }
 
-.panel-desc {
-  font-size: 13px;
-  color: #64748b;
-  margin-bottom: 14px;
-  line-height: 1.6;
-}
-
-/* Branding summary */
+/* ─── BRANDING SUMMARY ─── */
 .brand-logo-row {
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 12px;
-  background: #f8fafc;
-  border-radius: 8px;
-  border: 1px solid #e5e7eb;
 }
 
 .brand-logo-display {
-  width: 52px;
-  height: 52px;
+  width: 60px;
+  height: 60px;
   border-radius: 10px;
   display: flex;
   align-items: center;
@@ -513,13 +918,7 @@ This report has been prepared by [Company Name] on behalf of [Client Name]. The 
   overflow: hidden;
 }
 
-.brand-logo-img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  background: rgba(255,255,255,0.9);
-  padding: 4px;
-}
+.brand-logo-img { width: 100%; height: 100%; object-fit: contain; padding: 4px; }
 
 .brand-logo-initials {
   font-size: 18px;
@@ -527,12 +926,7 @@ This report has been prepared by [Company Name] on behalf of [Client Name]. The 
   color: white;
 }
 
-.brand-name {
-  font-size: 15px;
-  font-weight: 700;
-  color: #1e293b;
-  margin-bottom: 6px;
-}
+.brand-name { font-size: 15px; font-weight: 700; color: #1e293b; margin-bottom: 6px; }
 
 .brand-color-row {
   display: flex;
@@ -541,39 +935,13 @@ This report has been prepared by [Company Name] on behalf of [Client Name]. The 
   margin-bottom: 4px;
 }
 
-.brand-color-swatch {
-  width: 16px;
-  height: 16px;
-  border-radius: 3px;
-  border: 1px solid rgba(0,0,0,0.1);
-  flex-shrink: 0;
-}
+.brand-color-swatch { width: 14px; height: 14px; border-radius: 3px; }
+.brand-color-hex { font-size: 13px; font-family: monospace; font-weight: 600; color: #374151; }
+.brand-color-label { font-size: 12px; color: #94a3b8; }
+.brand-note { font-size: 12px; color: #f59e0b; margin-top: 4px; }
+.link { color: #6366f1; text-decoration: underline; cursor: pointer; }
 
-.brand-color-hex {
-  font-size: 12px;
-  font-family: 'Courier New', monospace;
-  font-weight: 600;
-  color: #1e293b;
-}
-
-.brand-color-label {
-  font-size: 11px;
-  color: #94a3b8;
-}
-
-.brand-note {
-  font-size: 12px;
-  color: #f59e0b;
-}
-
-.link {
-  color: #6366f1;
-  text-decoration: none;
-  font-weight: 600;
-}
-.link:hover { text-decoration: underline; }
-
-/* Toggle */
+/* ─── TOGGLE ─── */
 .toggle-row {
   display: flex;
   align-items: flex-start;
@@ -585,8 +953,8 @@ This report has been prepared by [Company Name] on behalf of [Client Name]. The 
 .toggle-switch {
   width: 44px;
   height: 24px;
-  background: #e2e8f0;
   border-radius: 12px;
+  background: #e5e7eb;
   position: relative;
   cursor: pointer;
   transition: background 0.2s;
@@ -594,40 +962,26 @@ This report has been prepared by [Company Name] on behalf of [Client Name]. The 
   margin-top: 2px;
 }
 
-.toggle-switch.active {
-  background: #6366f1;
-}
+.toggle-switch.active { background: #6366f1; }
 
 .toggle-thumb {
-  position: absolute;
   width: 18px;
   height: 18px;
-  background: white;
   border-radius: 50%;
+  background: white;
+  position: absolute;
   top: 3px;
   left: 3px;
   transition: transform 0.2s;
   box-shadow: 0 1px 3px rgba(0,0,0,0.2);
 }
 
-.toggle-switch.active .toggle-thumb {
-  transform: translateX(20px);
-}
+.toggle-switch.active .toggle-thumb { transform: translateX(20px); }
 
-.toggle-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: #1e293b;
-  display: block;
-  margin-bottom: 2px;
-}
+.toggle-title { font-size: 14px; font-weight: 600; color: #1e293b; display: block; margin-bottom: 2px; }
+.toggle-desc { font-size: 12px; color: #64748b; line-height: 1.4; }
 
-.toggle-desc {
-  font-size: 12px;
-  color: #64748b;
-  line-height: 1.4;
-}
-
+/* ─── COLOUR OVERRIDES ─── */
 .color-override-section {
   padding: 16px;
   background: #f8fafc;
@@ -638,11 +992,7 @@ This report has been prepared by [Company Name] on behalf of [Client Name]. The 
   gap: 12px;
 }
 
-.color-input-group {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
+.color-input-group { display: flex; align-items: center; gap: 10px; }
 
 .color-native {
   width: 44px;
@@ -663,10 +1013,7 @@ This report has been prepared by [Company Name] on behalf of [Client Name]. The 
   font-family: inherit;
 }
 
-.input-field:focus {
-  outline: none;
-  border-color: #6366f1;
-}
+.input-field:focus { outline: none; border-color: #6366f1; }
 
 .color-hex-input {
   width: 120px;
@@ -674,11 +1021,7 @@ This report has been prepared by [Company Name] on behalf of [Client Name]. The 
   font-weight: 600;
 }
 
-.color-presets {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
+.color-presets { display: flex; gap: 6px; flex-wrap: wrap; }
 
 .color-preset-swatch {
   width: 22px;
@@ -690,19 +1033,19 @@ This report has been prepared by [Company Name] on behalf of [Client Name]. The 
 }
 
 .color-preset-swatch:hover { transform: scale(1.2); }
+
 .color-preset-swatch.active {
   border-color: white;
   outline: 2px solid #6366f1;
 }
 
+.color-preset-swatch.swatch-light {
+  border: 2px solid #e5e7eb;
+}
+
 .override-note { margin-top: 4px; }
 
-.note-color-compare {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 12px;
-}
+.note-color-compare { display: flex; align-items: center; gap: 10px; font-size: 12px; }
 
 .compare-chip {
   display: flex;
@@ -717,13 +1060,7 @@ This report has been prepared by [Company Name] on behalf of [Client Name]. The 
   font-weight: 600;
 }
 
-.compare-dot {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
+.compare-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
 .compare-arrow { color: #94a3b8; font-size: 16px; }
 
 .using-brand-color {
@@ -737,262 +1074,205 @@ This report has been prepared by [Company Name] on behalf of [Client Name]. The 
   border-radius: 7px;
 }
 
-.using-dot {
-  width: 14px;
-  height: 14px;
-  border-radius: 3px;
-  flex-shrink: 0;
-}
+.using-dot { width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0; }
 
-/* Disclaimer */
+/* ─── DISCLAIMER ─── */
 .disclaimer-textarea {
   width: 100%;
-  padding: 12px 14px;
-  border: 1px solid #cbd5e1;
+  padding: 12px;
+  border: 1px solid #d1d5db;
   border-radius: 8px;
-  font-size: 13px;
   font-family: inherit;
-  line-height: 1.7;
+  font-size: 14px;
   resize: vertical;
-  min-height: 180px;
-  color: #334155;
+  color: #1e293b;
+  line-height: 1.6;
+  box-sizing: border-box;
 }
 
-.disclaimer-textarea:focus {
-  outline: none;
-  border-color: #6366f1;
-  box-shadow: 0 0 0 3px rgba(99,102,241,0.1);
-}
+.disclaimer-textarea:focus { outline: none; border-color: #6366f1; }
+.char-count { text-align: right; font-size: 12px; color: #94a3b8; margin-top: 6px; }
 
-.char-count {
-  font-size: 11px;
-  color: #94a3b8;
-  text-align: right;
-  margin-top: 4px;
-}
-
-/* Save row */
+/* ─── SAVE ROW ─── */
 .save-row {
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  justify-content: flex-end;
   gap: 16px;
 }
 
-.saved-confirmation {
+.saved-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 14px;
-  font-weight: 600;
   color: #16a34a;
+  font-weight: 600;
 }
 
 .btn-save {
-  padding: 12px 28px;
+  padding: 11px 28px;
   background: #6366f1;
   color: white;
   border: none;
-  border-radius: 8px;
+  border-radius: 9px;
   font-size: 15px;
-  font-weight: 600;
+  font-weight: 700;
   cursor: pointer;
   transition: background 0.15s;
-  white-space: nowrap;
 }
 
 .btn-save:hover:not(:disabled) { background: #4f46e5; }
-.btn-save:disabled { background: #94a3b8; cursor: not-allowed; }
+.btn-save:disabled { opacity: 0.6; cursor: not-allowed; }
 
-/* ─── PREVIEW PANEL ─── */
-.preview-panel {
-  position: sticky;
-  top: 80px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
+/* Fade */
+.fade-enter-active, .fade-leave-active { transition: opacity 0.3s; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
+
+/* ─── RIGHT: PREVIEW PANEL ─── */
+.preview-panel { position: sticky; top: 24px; }
 
 .preview-panel-title {
   font-size: 13px;
   font-weight: 700;
-  color: #1e293b;
+  color: #64748b;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.preview-panel-desc {
-  font-size: 12px;
-  color: #94a3b8;
-  margin-top: -8px;
+  letter-spacing: 0.05em;
   margin-bottom: 4px;
 }
 
-/* Mini A4 cover */
+.preview-panel-desc { font-size: 12px; color: #94a3b8; margin-bottom: 16px; }
+
+/* Cover mini-preview */
 .cover-preview {
-  width: 100%;
-  border-radius: 8px;
-  overflow: hidden;
   border: 1px solid #e5e7eb;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-  display: flex;
-  flex-direction: column;
+  border-radius: 10px;
+  overflow: hidden;
+  background: white;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+  font-size: 11px;
 }
 
 .cp-top {
   background: var(--brand);
-  padding: 16px 18px;
+  padding: 14px 16px 12px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-}
-
-.cp-logo-centered {
-  display: flex;
-  justify-content: center;
-  margin-bottom: 8px;
+  align-items: center;
+  gap: 8px;
 }
 
 .cp-logo {
-  width: 100%;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.2);
   display: flex;
+  align-items: center;
   justify-content: center;
+  overflow: hidden;
 }
 
-.cp-logo-img {
-  width: 100%;
-  height: auto;
-  display: block;
-  object-fit: contain;
-}
+.cp-logo-img { width: 100%; height: 100%; object-fit: contain; }
 
 .cp-logo-initials {
-  font-size: 18px;
-  font-weight: 700;
-  color: rgba(255,255,255,0.5);
-  padding: 12px 0;
-}
-
-.cp-client-name {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
   color: white;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .cp-type-badge {
-  font-size: 11px;
+  font-size: 9px;
+  font-weight: 700;
   color: rgba(255,255,255,0.85);
-  padding: 4px 10px;
-  background: rgba(255,255,255,0.15);
-  border-radius: 4px;
-  border: 1px solid rgba(255,255,255,0.25);
-  align-self: flex-start;
-  font-style: italic;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
 }
 
 .cp-photo {
+  height: 60px;
   background: #f1f5f9;
-  height: 100px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  font-size: 11px;
+  gap: 4px;
   color: #94a3b8;
+  font-size: 10px;
 }
 
 .cp-info-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  border-top: 2px solid var(--brand);
+  gap: 1px;
+  background: #f1f5f9;
 }
 
 .cp-info-item {
-  padding: 10px 14px;
-  border-right: 1px solid #f1f5f9;
-  border-bottom: 1px solid #f1f5f9;
+  background: white;
+  padding: 8px 10px;
 }
 
-.cp-info-item:nth-child(even) { border-right: none; }
-
-.cp-label {
-  font-size: 9px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: #94a3b8;
-  font-weight: 700;
-  margin-bottom: 2px;
-}
-
-.cp-value {
-  font-size: 11px;
-  font-weight: 600;
-  color: #1e293b;
-}
+.cp-label { font-size: 8px; color: #94a3b8; margin-bottom: 2px; font-weight: 600; }
+.cp-value { font-size: 10px; font-weight: 600; }
 
 .cp-footer {
-  background: var(--brand);
-  padding: 8px 14px;
   display: flex;
   justify-content: space-between;
-  font-size: 10px;
-  color: rgba(255,255,255,0.75);
+  padding: 8px 12px;
+  font-size: 8px;
+  font-weight: 600;
+  background: var(--brand);
 }
 
 /* Section header preview */
-.section-header-preview {
-  background: white;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  padding: 14px;
-}
-
-.shp-label {
-  font-size: 11px;
-  color: #94a3b8;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-bottom: 8px;
-}
+.section-header-preview { margin-top: 12px; }
+.shp-label { font-size: 11px; color: #94a3b8; margin-bottom: 6px; }
 
 .shp-bar {
-  border-radius: 5px;
-  padding: 8px 14px;
   display: flex;
-  justify-content: space-between;
   align-items: center;
-}
-
-.shp-title {
-  font-size: 12px;
-  font-weight: 700;
-  color: white;
-}
-
-.shp-logo {
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-radius: 6px;
   font-size: 11px;
-  font-weight: 700;
-  color: rgba(255,255,255,0.7);
 }
 
+.shp-title { font-weight: 700; }
+.shp-logo { font-size: 9px; font-weight: 600; opacity: 0.8; }
+
+/* Orientation indicator */
+.orient-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.orient-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  background: #eef2ff;
+  color: #4338ca;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.orient-note { font-size: 11px; color: #94a3b8; }
+
+/* Preview note */
 .preview-note {
   display: flex;
   align-items: flex-start;
-  gap: 6px;
+  gap: 7px;
+  margin-top: 14px;
   font-size: 12px;
-  color: #64748b;
+  color: #94a3b8;
   line-height: 1.5;
-  padding: 10px 12px;
-  background: #f8fafc;
-  border-radius: 7px;
-  border: 1px solid #e5e7eb;
 }
 
-.preview-note svg {
-  flex-shrink: 0;
-  margin-top: 1px;
-  color: #f59e0b;
-}
+.preview-note svg { flex-shrink: 0; margin-top: 1px; }
 </style>

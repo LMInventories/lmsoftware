@@ -126,6 +126,9 @@ const api = {
 
   getActions()        { return axiosInstance.get('/api/actions') },
   saveActions(data)   { return axiosInstance.put('/api/actions', data) },
+
+  getSystemSettings()       { return axiosInstance.get('/api/system-settings') },
+  updateSystemSettings(data) { return axiosInstance.put('/api/system-settings', data) },
 }
 
 export default api

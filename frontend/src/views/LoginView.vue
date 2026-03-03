@@ -39,7 +39,7 @@ async function handleLogin() {
   <div class="login-container">
     <div class="login-card">
       <div class="login-header">
-        <h1>🏠 L&M Inventories</h1>
+        <h1>InspectPro</h1>
         <p>Property Inspection Management</p>
       </div>
 

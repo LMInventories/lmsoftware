@@ -1,8 +1,10 @@
 from datetime import datetime
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_sqlalchemy import SQLAlchemy
+import json
 
 db = SQLAlchemy()
+
 
 class User(db.Model):
     __tablename__ = 'users'
@@ -32,7 +34,7 @@ class User(db.Model):
             'role':       self.role,
             'color':      self.color,
             'is_ai':      self.is_ai,
-            'created_at': self.created_at.isoformat() if self.created_at else None
+            'created_at': self.created_at.isoformat() if self.created_at else None,
         }
 
 
@@ -65,7 +67,7 @@ class Client(db.Model):
             'primary_color':         self.primary_color,
             'report_disclaimer':     self.report_disclaimer,
             'report_color_override': self.report_color_override,
-            'created_at':            self.created_at.isoformat() if self.created_at else None
+            'created_at':            self.created_at.isoformat() if self.created_at else None,
         }
 
 
@@ -82,7 +84,7 @@ class Property(db.Model):
     parking        = db.Column(db.Boolean, default=False)
     garden         = db.Column(db.Boolean, default=False)
     notes          = db.Column(db.Text)
-    overview_photo = db.Column(db.Text)  # base64 encoded overview photo
+    overview_photo = db.Column(db.Text)  # base64 encoded
     created_at     = db.Column(db.DateTime, default=datetime.utcnow)
 
     inspections = db.relationship('Inspection', backref='property', lazy=True, cascade='all, delete-orphan')
@@ -101,7 +103,7 @@ class Property(db.Model):
             'garden':         self.garden,
             'notes':          self.notes,
             'overview_photo': self.overview_photo,
-            'created_at':     self.created_at.isoformat() if self.created_at else None
+            'created_at':     self.created_at.isoformat() if self.created_at else None,
         }
 
 
@@ -128,7 +130,7 @@ class Inspection(db.Model):
     internal_notes          = db.Column(db.Text)
 
     notes       = db.Column(db.Text)
-    report_data = db.Column(db.Text)  # JSON — filled report content keyed by section/room/field
+    report_data = db.Column(db.Text)  # JSON
     created_at  = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at  = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -163,7 +165,7 @@ class Inspection(db.Model):
             'notes':                   self.notes,
             'report_data':             self.report_data,
             'created_at':              self.created_at.isoformat() if self.created_at else None,
-            'updated_at':              self.updated_at.isoformat() if self.updated_at else None
+            'updated_at':              self.updated_at.isoformat() if self.updated_at else None,
         }
 
 
@@ -173,10 +175,16 @@ class Template(db.Model):
     id              = db.Column(db.Integer, primary_key=True)
     name            = db.Column(db.String(100), nullable=False)
     inspection_type = db.Column(db.String(50), nullable=False)
-    content         = db.Column(db.Text, nullable=False)  # JSON string of template structure
+    content         = db.Column(db.Text, nullable=False, default='{}')  # legacy JSON fallback
     is_default      = db.Column(db.Boolean, default=False)
     created_at      = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at      = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    sections = db.relationship(
+        'Section', backref='template', lazy=True,
+        cascade='all, delete-orphan',
+        order_by='Section.order_index'
+    )
 
     def to_dict(self):
         return {
@@ -185,8 +193,89 @@ class Template(db.Model):
             'inspection_type': self.inspection_type,
             'content':         self.content,
             'is_default':      self.is_default,
+            'sections':        [s.to_dict() for s in self.sections],
             'created_at':      self.created_at.isoformat() if self.created_at else None,
-            'updated_at':      self.updated_at.isoformat() if self.updated_at else None
+            'updated_at':      self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class Section(db.Model):
+    __tablename__ = 'sections'
+
+    id           = db.Column(db.Integer, primary_key=True)
+    template_id  = db.Column(db.Integer, db.ForeignKey('templates.id'), nullable=False)
+    name         = db.Column(db.String(200), nullable=False)
+    section_type = db.Column(db.String(50), default='room')   # 'room' | 'fixed'
+    order_index  = db.Column(db.Integer, default=0)
+    is_required  = db.Column(db.Boolean, default=False)
+    created_at   = db.Column(db.DateTime, default=datetime.utcnow)
+
+    items = db.relationship(
+        'Item', backref='section', lazy=True,
+        cascade='all, delete-orphan',
+        order_by='Item.order_index'
+    )
+
+    def to_dict(self):
+        return {
+            'id':           self.id,
+            'template_id':  self.template_id,
+            'name':         self.name,
+            'section_type': self.section_type,
+            'order_index':  self.order_index,
+            'is_required':  self.is_required,
+            'items':        [i.to_dict() for i in self.items],
+        }
+
+
+class Item(db.Model):
+    __tablename__ = 'items'
+
+    id                 = db.Column(db.Integer, primary_key=True)
+    section_id         = db.Column(db.Integer, db.ForeignKey('sections.id'), nullable=False)
+    name               = db.Column(db.String(200), nullable=False)
+    description        = db.Column(db.Text, default='')
+    requires_photo     = db.Column(db.Boolean, default=True)
+    requires_condition = db.Column(db.Boolean, default=True)
+    order_index        = db.Column(db.Integer, default=0)
+    created_at         = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            'id':                 self.id,
+            'section_id':         self.section_id,
+            'name':               self.name,
+            'description':        self.description,
+            'requires_photo':     self.requires_photo,
+            'requires_condition': self.requires_condition,
+            'order_index':        self.order_index,
+        }
+
+
+class SectionPreset(db.Model):
+    """
+    A saved section snapshot — stores the section name, category, and a JSON
+    array of its items. Reusable building block when composing templates.
+    """
+    __tablename__ = 'section_presets'
+
+    id          = db.Column(db.Integer, primary_key=True)
+    name        = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text, default='')
+    category    = db.Column(db.String(50), default='room')  # 'room' | 'fixed'
+    items_json  = db.Column(db.Text, default='[]')          # JSON snapshot of items
+    created_at  = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        items = json.loads(self.items_json) if self.items_json else []
+        return {
+            'id':          self.id,
+            'name':        self.name,
+            'description': self.description,
+            'category':    self.category,
+            'items':       items,
+            'item_count':  len(items),
+            'created_at':  self.created_at.isoformat() if self.created_at else None,
         }
 
 
@@ -198,9 +287,9 @@ class TranscriptionUsage(db.Model):
     call_type     = db.Column(db.String(20), nullable=False)  # 'item' | 'full'
     inspection_id = db.Column(db.Integer, db.ForeignKey('inspections.id', ondelete='SET NULL'), nullable=True)
     user_id       = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
-    audio_seconds = db.Column(db.Float, default=0)   # whisper billing
-    input_tokens  = db.Column(db.Integer, default=0) # claude billing
-    output_tokens = db.Column(db.Integer, default=0) # claude billing
+    audio_seconds = db.Column(db.Float, default=0)
+    input_tokens  = db.Column(db.Integer, default=0)
+    output_tokens = db.Column(db.Integer, default=0)
     section_type  = db.Column(db.String(30), default='room')
 
     def to_dict(self):

@@ -107,6 +107,8 @@ const api = {
   getInspectionReport(id) { return axiosInstance.get(`/api/inspections/${id}/report`) },
   saveInspectionReport(id, data) { return axiosInstance.put(`/api/inspections/${id}/report`, data) },
   getLinkedCheckIn(id) { return axiosInstance.get(`/api/inspections/${id}/linked-checkin`) },
+  getPropertyHistory(propertyId) { return axiosInstance.get(`/api/inspections/property/${propertyId}/history`) },
+  applyPdfImport(inspectionId, parsedData) { return axiosInstance.post(`/api/inspections/${inspectionId}/apply-pdf-import`, parsedData) },
 
   getTemplates() { return axiosInstance.get('/api/templates') },
   getTemplate(id) { return axiosInstance.get(`/api/templates/${id}`) },

@@ -160,7 +160,10 @@ def get_property_history(property_id):
 
 # ─────────────────────────────────────────────────────────────────────────────
 # POST /api/inspections  — create inspection
-# Accepts optional source_inspection_id; if provided, seeds report_data
+# Accepts optional source_inspection_id; if provided, seeds report_data.
+# Works even when the source has no report_data yet — in that case the
+# source_inspection_id is stored so the report screen can load it live, and
+# report_data is left null (the frontend fetches sourceReportData on demand).
 # ─────────────────────────────────────────────────────────────────────────────
 @inspections_bp.route('', methods=['POST'])
 @jwt_required()
@@ -170,7 +173,7 @@ def create_inspection():
         return jsonify({'error': 'Forbidden'}), 403
     data = request.json
 
-    # Use explicitly selected template, or fall back to default for the type
+    # ── Template resolution ──────────────────────────────────────────────
     template_id = data.get('template_id')
     if not template_id:
         inspection_type = data.get('inspection_type', 'check_in')
@@ -180,14 +183,13 @@ def create_inspection():
         ).first()
         template_id = default_template.id if default_template else None
 
-        # If still no template found, inherit from source inspection's template
-        # (e.g. check_out inherits the check_in template — same structure, checkout columns added by frontend)
+        # If still no template, inherit from source inspection's template
         if not template_id and data.get('source_inspection_id'):
             source_insp = Inspection.query.get(data['source_inspection_id'])
             if source_insp and source_insp.template_id:
                 template_id = source_insp.template_id
 
-    # Parse conduct_date if provided
+    # ── Parse conduct_date ───────────────────────────────────────────────
     conduct_date = None
     if data.get('conduct_date'):
         try:
@@ -199,7 +201,11 @@ def create_inspection():
     include_photos = bool(data.get('include_photos', False))
     seeded_report_data = None
 
-    # If seeding from a previous inspection, transform that report_data
+    # ── Seed from source inspection ──────────────────────────────────────
+    # Only attempt transform when the source has actual report_data saved.
+    # If source exists but has no data yet, we store source_inspection_id
+    # and leave report_data null — the report screen fetches the source
+    # inspection live and displays it as read-only reference (sourceReportData).
     if source_id:
         source = Inspection.query.get(source_id)
         if source and source.report_data:
@@ -324,7 +330,6 @@ def delete_inspection(inspection_id):
 # GET /api/inspections/<id>/seed-preview
 # Returns the transformed report_data that would be applied if this inspection
 # were used as the source for a new Check Out or Check In.
-# The frontend calls this to let the user preview before confirming.
 # ─────────────────────────────────────────────────────────────────────────────
 @inspections_bp.route('/<int:inspection_id>/seed-preview', methods=['GET'])
 @jwt_required()
@@ -338,20 +343,147 @@ def seed_preview(inspection_id):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# POST /api/inspections/<id>/apply-pdf-import
+#
+# Called by the frontend after Claude has parsed a Check In PDF.
+# Receives the raw parsed JSON from Claude, maps it to the inspection's
+# template structure, and stores the result as _importedSource in report_data.
+#
+# This is the server-side equivalent of applyPdfImport() in InspectionReportView —
+# used when the PDF is uploaded at inspection creation time (before the user
+# has ever opened the report screen).
+#
+# Request body:
+#   {
+#     "rooms": [ { "name": "Lounge", "items": [ { "label": "...", "description": "...", "condition": "..." } ] } ],
+#     "fixedSections": { "keys": [...], "meter_readings": [...], ... }
+#   }
+#
+# The template is fetched from the inspection's assigned template_id.
+# ─────────────────────────────────────────────────────────────────────────────
+@inspections_bp.route('/<int:inspection_id>/apply-pdf-import', methods=['POST'])
+@jwt_required()
+def apply_pdf_import(inspection_id):
+    user = get_current_user()
+    if not is_admin_or_manager(user):
+        return jsonify({'error': 'Forbidden'}), 403
+
+    inspection = Inspection.query.get_or_404(inspection_id)
+    parsed = request.json  # { rooms: [...], fixedSections: {...} }
+
+    if not parsed:
+        return jsonify({'error': 'No parsed data provided'}), 400
+
+    # Load the template to map room/item names to real IDs
+    template = None
+    if inspection.template_id:
+        template = Template.query.get(inspection.template_id)
+    if not template:
+        # Fall back to default template for check_out (or any type)
+        template = Template.query.filter_by(is_default=True).first()
+        if not template:
+            template = Template.query.first()
+
+    built = {}
+
+    if template and template.content:
+        try:
+            tpl_content = json.loads(template.content)
+        except Exception:
+            tpl_content = {}
+    else:
+        tpl_content = {}
+
+    template_rooms  = [s for s in tpl_content.get('rooms', []) if s.get('enabled', True)]
+    template_fixed  = [s for s in tpl_content.get('fixedSections', []) if s.get('enabled', True)]
+
+    # ── Map imported rooms → template room IDs (fuzzy name match) ────────
+    for imported_room in (parsed.get('rooms') or []):
+        imp_name_norm = imported_room['name'].lower().replace(' ', '').replace('/', '')
+
+        match = None
+        for r in template_rooms:
+            r_name_norm = r['name'].lower().replace(' ', '').replace('/', '')
+            if r_name_norm in imp_name_norm or imp_name_norm in r_name_norm:
+                match = r
+                break
+
+        room_id = str(match['id']) if match else ('imp_rm_' + imported_room['name'].replace(' ', '_').lower())
+        built[room_id] = {}
+
+        t_items = (match.get('sections') or match.get('items') or []) if match else []
+
+        for imp_item in (imported_room.get('items') or []):
+            imp_label_norm = imp_item['label'].lower().replace(' ', '').replace(',', '').replace('&', '')
+
+            matched_item = None
+            for ti in t_items:
+                ti_label_norm = (ti.get('label') or '').lower().replace(' ', '').replace(',', '').replace('&', '')
+                if ti_label_norm and (ti_label_norm in imp_label_norm or imp_label_norm in ti_label_norm):
+                    matched_item = ti
+                    break
+
+            item_id = str(matched_item['id']) if matched_item else (
+                'imp_it_' + imp_item['label'].replace(' ', '_').lower()
+            )
+
+            # Store as Check In source data — description + condition
+            # The report screen reads this via getCI(sectionId, rowId, field)
+            built[room_id][item_id] = {
+                'description': imp_item.get('description') or '',
+                'condition':   imp_item.get('condition')   or '',
+            }
+
+    # ── Map fixed sections by type ────────────────────────────────────────
+    for sec_type, rows in (parsed.get('fixedSections') or {}).items():
+        if not isinstance(rows, list):
+            continue
+        sec = next((s for s in template_fixed if s.get('type') == sec_type), None)
+        if not sec:
+            continue
+        built[str(sec['id'])] = {}
+        t_rows = sec.get('rows') or []
+        for i, row in enumerate(rows):
+            t_row = t_rows[i] if i < len(t_rows) else None
+            row_id = str(t_row['id']) if t_row else ('imp_fx_' + str(i))
+            built[str(sec['id'])][row_id] = {k: v for k, v in row.items() if k != 'name'}
+
+    # ── Merge into inspection's report_data ───────────────────────────────
+    existing = {}
+    if inspection.report_data:
+        try:
+            existing = json.loads(inspection.report_data)
+        except Exception:
+            existing = {}
+
+    existing['_importedSource']   = built
+    existing['_importedFileName'] = parsed.get('_fileName', '')
+    inspection.report_data = json.dumps(existing)
+    db.session.commit()
+
+    room_count = len(parsed.get('rooms') or [])
+    item_count = sum(len(r.get('items') or []) for r in (parsed.get('rooms') or []))
+
+    return jsonify({
+        'message': f'PDF imported: {room_count} rooms, {item_count} items',
+        'room_count': room_count,
+        'item_count': item_count,
+        'importedSource': built,
+    }), 200
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # _transform_report_data
 # Core logic for seeding one inspection's data into the next.
 #
-# check_in  → check_out:
-#   For every room item, copy description into description,
-#   copy condition into inventoryCondition.
+# check_in / inventory → check_out:
+#   Copy description → description, condition → inventoryCondition.
 #   Leave checkOutCondition blank (defaults to "As Inventory & Check In" in UI).
 #   Clear actions.
 #
 # check_out → check_in:
-#   For every room item, copy checkOutCondition (or inventoryCondition) into condition.
-#   Copy description. This makes the new Check In start from the state the property
-#   was left in at Check Out.
-#   Fixed sections (meters, keys) are copied through as-is.
+#   Copy checkOutCondition (or inventoryCondition) → condition for the new CI.
+#   Fixed sections are passed through as-is.
 # ─────────────────────────────────────────────────────────────────────────────
 def _transform_report_data(source_type, target_type, raw, include_photos=False):
     try:
@@ -365,6 +497,10 @@ def _transform_report_data(source_type, target_type, raw, include_photos=False):
         if not isinstance(section_data, dict):
             continue
 
+        # Skip internal-only keys that should never be seeded forward
+        if section_id.startswith('_'):
+            continue
+
         new_section = {}
 
         # Carry through meta-keys unchanged
@@ -375,65 +511,56 @@ def _transform_report_data(source_type, target_type, raw, include_photos=False):
         if '_itemOrder' in section_data:
             new_section['_itemOrder'] = section_data['_itemOrder']
         if '_extra' in section_data:
-            # Transform extra room items too
             extras = []
             for ex in section_data['_extra']:
                 new_ex = dict(ex)
                 if source_type in ('check_in', 'inventory') and target_type == 'check_out':
-                    # Promote condition → inventoryCondition
                     new_ex['inventoryCondition'] = ex.get('condition', '')
                     new_ex['checkOutCondition'] = ''
                 elif source_type == 'check_out' and target_type in ('check_in', 'inventory'):
-                    # Promote checkOutCondition → condition for new CI
                     new_ex['condition'] = ex.get('checkOutCondition') or ex.get('inventoryCondition') or ex.get('condition', '')
                     new_ex.pop('checkOutCondition', None)
                     new_ex.pop('inventoryCondition', None)
-                # Strip actions from extras in all transitions
+                # Strip actions
                 new_ex = {k: v for k, v in new_ex.items() if not k.startswith('_actions_')}
                 extras.append(new_ex)
             new_section['_extra'] = extras
 
-        # Row-level data (keyed by string row ID)
+        # Row-level data
         for row_id, row_data in section_data.items():
             if row_id.startswith('_'):
-                continue  # already handled above
+                continue
             if not isinstance(row_data, dict):
                 continue
 
             new_row = {}
 
             if source_type in ('check_in', 'inventory') and target_type == 'check_out':
-                # Seed a Check Out from a Check In / Inventory
                 new_row['description'] = row_data.get('description', '')
                 new_row['inventoryCondition'] = row_data.get('condition', '')
                 new_row['checkOutCondition'] = ''
-                # Carry fixed-section fields straight through
-                for field in ('cleanliness', 'cleanlinessNotes', 'locationSerial', 'reading',
-                              'answer', 'notes', 'name'):
+                for field in ('cleanliness', 'cleanlinessNotes', 'locationSerial',
+                              'reading', 'answer', 'notes', 'name'):
                     if field in row_data:
                         new_row[field] = row_data[field]
-                # Carry photos if requested
                 if include_photos and 'photos' in row_data:
                     new_row['photos'] = row_data['photos']
-                # Do NOT carry _subs or actions
 
             elif source_type == 'check_out' and target_type in ('check_in', 'inventory'):
-                # Seed a Check In from a Check Out — start from the state left at departure
-                checkout_cond = row_data.get('checkOutCondition') or row_data.get('inventoryCondition') or row_data.get('condition', '')
+                checkout_cond = (row_data.get('checkOutCondition')
+                                 or row_data.get('inventoryCondition')
+                                 or row_data.get('condition', ''))
                 new_row['condition'] = checkout_cond
                 new_row['description'] = row_data.get('description', '')
-                # Carry fixed-section fields straight through
-                for field in ('cleanliness', 'cleanlinessNotes', 'locationSerial', 'reading',
-                              'answer', 'notes', 'name'):
+                for field in ('cleanliness', 'cleanlinessNotes', 'locationSerial',
+                              'reading', 'answer', 'notes', 'name'):
                     if field in row_data:
                         new_row[field] = row_data[field]
-                # Carry photos if requested
                 if include_photos and 'photos' in row_data:
                     new_row['photos'] = row_data['photos']
-                # Do NOT carry _subs or actions
 
             else:
-                # Same type → same type (inventory → inventory etc.) — copy as-is
+                # Same-type seeding — copy as-is, strip subs and actions
                 new_row = {k: v for k, v in row_data.items()
                            if k != '_subs' and not k.startswith('_actions_')}
 

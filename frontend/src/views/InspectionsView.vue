@@ -420,79 +420,77 @@ async function handleSubmit() {
           reader.readAsDataURL(pdfFile.value)
         })
 
-        const response = await fetch('https://api.anthropic.com/v1/messages', {
+        // ── Step 1: Ask Claude to parse the PDF into structured data ──────
+        // We don't have the template here (it was just assigned by the backend),
+        // so we extract raw structure and let the backend map it to template IDs.
+        const prompt = `You are parsing a UK property inspection report PDF (inventory or check-in) to extract structured data for a Check Out report system.
+
+Extract ALL rooms and items. For each item extract:
+- label: the item name exactly as written
+- description: the physical description of the item
+- condition: the condition recorded at check-in (NOT the check-out column if present)
+
+The PDF format is typically: [Ref] [Item Name] [Description] [Condition at Check In] [Condition at Check Out]
+Only extract the Check In condition — ignore the Check Out column.
+
+Also extract fixed sections: keys, meter readings, schedule of condition, cleaning summary, smoke alarms.
+
+Return ONLY valid JSON — no markdown, no explanation:
+{
+  "rooms": [
+    {
+      "name": "Lounge",
+      "items": [
+        { "label": "Door, Frame, Threshold & Furniture", "description": "White painted panel door with chrome effect fitment", "condition": "Appears in good condition" }
+      ]
+    }
+  ],
+  "fixedSections": {
+    "condition_summary": [{ "name": "General Cleanliness", "condition": "Appears in good condition" }],
+    "cleaning_summary": [{ "name": "General Cleanliness", "cleanliness": "Professionally Cleaned", "cleanlinessNotes": "" }],
+    "keys": [{ "name": "Front Door", "description": "2x Yale key, 1x deadlock key" }],
+    "meter_readings": [{ "name": "Gas Meter", "locationSerial": "Under stairs", "reading": "12345.6" }],
+    "smoke_alarms": [{ "question": "Smoke alarm present and tested?", "answer": "Yes", "notes": "Audible alarm noted" }]
+  }
+}`
+
+        const aiResponse = await fetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            model: 'claude-opus-4-6',
+            model: 'claude-sonnet-4-6',
             max_tokens: 8000,
             messages: [{
               role: 'user',
               content: [
                 { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } },
-                { type: 'text', text: `You are parsing a UK property inspection report PDF (inventory or check-in) to extract structured data for a Check Out system.
-
-Extract ALL rooms and items you find. For each item extract:
-- label: the item name/label
-- description: physical description
-- condition: condition at check-in
-
-The PDF format is typically rows like: [Room.Item] [Item Name] [Description] [Condition]
-
-Return ONLY valid JSON, no markdown:
-{
-  "rooms": [
-    { "name": "Lounge", "items": [{ "label": "Door, Frame & Furniture", "description": "White painted panel door", "condition": "Appears in good condition" }] }
-  ],
-  "fixedSections": {
-    "condition_summary": [{ "name": "General Condition", "condition": "Good overall" }],
-    "keys": [{ "name": "Front Door Key", "description": "2x Yale, 1x Deadlock" }],
-    "meter_readings": [{ "name": "Gas Meter", "locationSerial": "Under stairs SN123", "reading": "12345.6" }],
-    "cleaning_summary": [{ "name": "General Cleanliness", "cleanliness": "Professionally Cleaned", "cleanlinessNotes": "" }]
-  }
-}` }
+                { type: 'text', text: prompt }
               ]
             }]
           })
         })
 
-        if (response.ok) {
-          const apiData  = await response.json()
-          const rawText  = (apiData.content || []).map(b => b.text || '').join('')
-          const clean    = rawText.replace(/```json|```/g, '').trim()
-          const parsed   = JSON.parse(clean)
-
-          // Build sourceReportData keyed by synthetic room/item IDs
-          const built = {}
-          for (const room of (parsed.rooms || [])) {
-            const roomId = 'imp_rm_' + room.name.replace(/[^a-z0-9]/gi, '_').toLowerCase()
-            built[roomId] = { _importedName: room.name }
-            for (const item of (room.items || [])) {
-              const itemId = 'imp_it_' + item.label.replace(/[^a-z0-9]/gi, '_').toLowerCase()
-              built[roomId][itemId] = { description: item.description || '', condition: item.condition || '' }
-            }
-          }
-          for (const [type, rows] of Object.entries(parsed.fixedSections || {})) {
-            const secId = 'imp_fx_' + type
-            built[secId] = {}
-            for (const [i, row] of (rows || []).entries()) {
-              built[secId]['imp_fxr_' + i] = { ...row }
-            }
-          }
-
-          // Save to the new inspection's report_data
-          const reportDataPayload = { _importedSource: built, _importedFileName: pdfFileName.value }
-          await api.updateInspection(newId, { report_data: JSON.stringify(reportDataPayload) })
-
-          const roomCount = (parsed.rooms || []).length
-          const itemCount = (parsed.rooms || []).reduce((s, r) => s + (r.items || []).length, 0)
-          toast.success(`PDF imported: ${roomCount} rooms, ${itemCount} items loaded as Check In reference`)
-        } else {
-          toast.warning('Inspection created but PDF analysis failed — you can import it from the report screen')
+        if (!aiResponse.ok) {
+          throw new Error(`Claude API ${aiResponse.status}`)
         }
+
+        const aiData  = await aiResponse.json()
+        const rawText = (aiData.content || []).map(b => b.text || '').join('')
+        const clean   = rawText.replace(/```json[\s\S]*?```|```[\s\S]*?```/g, s => s.replace(/```json|```/g, '')).trim()
+        const parsed  = JSON.parse(clean)
+
+        // ── Step 2: Send parsed data to backend to map against template ───
+        // The backend knows the inspection's assigned template and maps
+        // room/item names to real template IDs, storing as _importedSource.
+        parsed._fileName = pdfFileName.value
+        const importRes = await api.applyPdfImport(newId, parsed)
+
+        const { room_count, item_count } = importRes.data
+        toast.success(`PDF imported: ${room_count} rooms, ${item_count} items loaded as Check In reference`)
+
       } catch (pdfErr) {
         console.error('PDF import error:', pdfErr)
-        toast.warning('Inspection created but PDF analysis failed — you can import it from the report screen')
+        toast.warning('Inspection created — PDF analysis failed. You can re-import from the report screen.')
       }
     } else {
       toast.success('Inspection created')

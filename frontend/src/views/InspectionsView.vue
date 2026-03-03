@@ -454,10 +454,7 @@ Return ONLY valid JSON — no markdown, no explanation:
   }
 }`
 
-        const aiResponse = await fetch('https://api.anthropic.com/v1/messages', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
+        const aiResponse = await api.claudeProxy({
             model: 'claude-sonnet-4-6',
             max_tokens: 8000,
             messages: [{
@@ -468,13 +465,9 @@ Return ONLY valid JSON — no markdown, no explanation:
               ]
             }]
           })
-        })
 
-        if (!aiResponse.ok) {
-          throw new Error(`Claude API ${aiResponse.status}`)
-        }
-
-        const aiData  = await aiResponse.json()
+        // api.claudeProxy uses axios — throws on non-2xx, data is already parsed
+        const aiData  = aiResponse.data
         const rawText = (aiData.content || []).map(b => b.text || '').join('')
         const clean   = rawText.replace(/```json[\s\S]*?```|```[\s\S]*?```/g, s => s.replace(/```json|```/g, '')).trim()
         const parsed  = JSON.parse(clean)

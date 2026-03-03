@@ -1,54 +1,31 @@
 import axios from 'axios'
 
-// ── API BASE URL ─────────────────────────────────────────────────────────────
+// ── BASE URL RESOLUTION ───────────────────────────────────────────────────────
+// Priority: VITE_API_URL env var → Android LAN → Render production → local dev
 //
-// Priority order:
-//  1. VITE_API_URL env var — set this in Vercel dashboard to your Render URL
-//     e.g. https://your-app.onrender.com
-//  2. Android LAN detection — Capacitor native platform
-//  3. Relative URL — works when frontend and backend are on same origin
+// Local dev:  create frontend/.env.local  →  VITE_API_URL=http://localhost:5000
+// Vercel:     Settings → Environment Variables  →  VITE_API_URL=https://lmsoftware.onrender.com
 //
-// For LOCAL DEV: create frontend/.env.local with:
-//   VITE_API_URL=http://localhost:5000
-//
-// For VERCEL PRODUCTION: add in Vercel dashboard → Settings → Environment Variables:
-//   VITE_API_URL = https://your-backend-name.onrender.com
-//
-const BACKEND_LAN_IP = '192.168.50.2'  // ← your local PC IP for Android dev
-
-// ── PRODUCTION BACKEND URL ───────────────────────────────────────────────────
-// If VITE_API_URL is baked in by the build system, use it.
-// Otherwise fall back to the hardcoded Render URL so production always works
-// regardless of build environment quirks.
-const RENDER_URL = 'https://lmsoftware.onrender.com'
+const BACKEND_LAN_IP = '192.168.50.2'
+const RENDER_URL     = 'https://lmsoftware.onrender.com'
 
 function getBaseURL() {
-  // 1. Explicit env var (Vercel dashboard or local .env.local)
-  if (import.meta.env.VITE_API_URL) {
-    return import.meta.env.VITE_API_URL
-  }
-  // 2. Android native
+  if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL
   try {
-    if (window.Capacitor?.isNativePlatform?.()) {
-      return `http://${BACKEND_LAN_IP}:5000`
-    }
+    if (window.Capacitor?.isNativePlatform?.()) return `http://${BACKEND_LAN_IP}:5000`
   } catch (_) {}
-  // 3. If running on Vercel (not localhost), use Render URL directly
-  if (typeof window !== 'undefined' && !window.location.hostname.includes('localhost')) {
-    return RENDER_URL
-  }
-  // 4. Local dev — relative URL hits the Vite proxy
+  if (typeof window !== 'undefined' && !window.location.hostname.includes('localhost')) return RENDER_URL
   return ''
 }
 
-const API_URL = getBaseURL()
-
-const axiosInstance = axios.create({
-  baseURL: API_URL,
-  timeout: 30000,  // 30s — accounts for Render free-tier cold start (~15-20s)
+// ── AXIOS INSTANCE ────────────────────────────────────────────────────────────
+const http = axios.create({
+  baseURL: getBaseURL(),
+  timeout: 30000,  // 30s — covers Render free-tier cold start
 })
 
-axiosInstance.interceptors.request.use(
+// Attach JWT to every outgoing request
+http.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('token')
     if (token) config.headers.Authorization = `Bearer ${token}`
@@ -57,7 +34,8 @@ axiosInstance.interceptors.request.use(
   (error) => Promise.reject(error)
 )
 
-axiosInstance.interceptors.response.use(
+// Force re-login on any 401
+http.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
@@ -69,66 +47,109 @@ axiosInstance.interceptors.response.use(
   }
 )
 
+// ── API ───────────────────────────────────────────────────────────────────────
 const api = {
-  getToken() { return localStorage.getItem('token') },
-  setToken(token) { localStorage.setItem('token', token) },
-  removeToken() { localStorage.removeItem('token'); localStorage.removeItem('user') },
 
-  login(credentials) { return axiosInstance.post('/api/auth/login', credentials) },
-  register(userData) { return axiosInstance.post('/api/auth/register', userData) },
-  getCurrentUser() { return axiosInstance.get('/api/auth/me') },
+  // Token management
+  getToken()      { return localStorage.getItem('token') },
+  setToken(t)     { localStorage.setItem('token', t) },
+  removeToken()   { localStorage.removeItem('token'); localStorage.removeItem('user') },
 
-  getDashboardStats() { return axiosInstance.get('/api/dashboard/stats') },
+  // ── Auth ──────────────────────────────────────────────────────────────────
+  login(data)         { return http.post('/api/auth/login', data) },
+  register(data)      { return http.post('/api/auth/register', data) },
+  getCurrentUser()    { return http.get('/api/auth/me') },
+  changePassword(data){ return http.post('/api/users/me/change-password', data) },
 
-  getUsers() { return axiosInstance.get('/api/users') },
-  getUser(id) { return axiosInstance.get(`/api/users/${id}`) },
-  createUser(data) { return axiosInstance.post('/api/users', data) },
-  updateUser(id, data) { return axiosInstance.put(`/api/users/${id}`, data) },
-  deleteUser(id) { return axiosInstance.delete(`/api/users/${id}`) },
+  // ── Dashboard ─────────────────────────────────────────────────────────────
+  getDashboardStats() { return http.get('/api/dashboard/stats') },
 
-  getClients() { return axiosInstance.get('/api/clients') },
-  getClient(id) { return axiosInstance.get(`/api/clients/${id}`) },
-  createClient(data) { return axiosInstance.post('/api/clients', data) },
-  updateClient(id, data) { return axiosInstance.put(`/api/clients/${id}`, data) },
-  deleteClient(id) { return axiosInstance.delete(`/api/clients/${id}`) },
+  // ── Users ─────────────────────────────────────────────────────────────────
+  getUsers()            { return http.get('/api/users') },
+  getUser(id)           { return http.get(`/api/users/${id}`) },
+  createUser(data)      { return http.post('/api/users', data) },
+  updateUser(id, data)  { return http.put(`/api/users/${id}`, data) },
+  deleteUser(id)        { return http.delete(`/api/users/${id}`) },
 
-  getProperties() { return axiosInstance.get('/api/properties') },
-  getProperty(id) { return axiosInstance.get(`/api/properties/${id}`) },
-  createProperty(data) { return axiosInstance.post('/api/properties', data) },
-  updateProperty(id, data) { return axiosInstance.put(`/api/properties/${id}`, data) },
-  deleteProperty(id) { return axiosInstance.delete(`/api/properties/${id}`) },
+  // ── Clients ───────────────────────────────────────────────────────────────
+  getClients()            { return http.get('/api/clients') },
+  getClient(id)           { return http.get(`/api/clients/${id}`) },
+  createClient(data)      { return http.post('/api/clients', data) },
+  updateClient(id, data)  { return http.put(`/api/clients/${id}`, data) },
+  deleteClient(id)        { return http.delete(`/api/clients/${id}`) },
 
-  getInspections(params) { return axiosInstance.get('/api/inspections', { params }) },
-  getInspection(id) { return axiosInstance.get(`/api/inspections/${id}`) },
-  createInspection(data) { return axiosInstance.post('/api/inspections', data) },
-  updateInspection(id, data) { return axiosInstance.put(`/api/inspections/${id}`, data) },
-  deleteInspection(id) { return axiosInstance.delete(`/api/inspections/${id}`) },
-  updateInspectionStatus(id, status) { return axiosInstance.patch(`/api/inspections/${id}/status`, { status }) },
-  getInspectionReport(id) { return axiosInstance.get(`/api/inspections/${id}/report`) },
-  saveInspectionReport(id, data) { return axiosInstance.put(`/api/inspections/${id}/report`, data) },
-  getLinkedCheckIn(id) { return axiosInstance.get(`/api/inspections/${id}/linked-checkin`) },
-  getPropertyHistory(propertyId) { return axiosInstance.get(`/api/inspections/property/${propertyId}/history`) },
-  applyPdfImport(inspectionId, parsedData) { return axiosInstance.post(`/api/inspections/${inspectionId}/apply-pdf-import`, parsedData) },
+  // ── Properties ────────────────────────────────────────────────────────────
+  getProperties()           { return http.get('/api/properties') },
+  getProperty(id)           { return http.get(`/api/properties/${id}`) },
+  createProperty(data)      { return http.post('/api/properties', data) },
+  updateProperty(id, data)  { return http.put(`/api/properties/${id}`, data) },
+  deleteProperty(id)        { return http.delete(`/api/properties/${id}`) },
 
-  getTemplates() { return axiosInstance.get('/api/templates') },
-  getTemplate(id) { return axiosInstance.get(`/api/templates/${id}`) },
-  createTemplate(data) { return axiosInstance.post('/api/templates', data) },
-  updateTemplate(id, data) { return axiosInstance.put(`/api/templates/${id}`, data) },
-  deleteTemplate(id) { return axiosInstance.delete(`/api/templates/${id}`) },
-  reorderSection(id, direction) { return axiosInstance.post(`/api/templates/sections/${id}/reorder`, { direction }) },
-  reorderItem(id, direction) { return axiosInstance.post(`/api/templates/items/${id}/reorder`, { direction }) },
+  // ── Inspections ───────────────────────────────────────────────────────────
+  getInspections(params)             { return http.get('/api/inspections', { params }) },
+  getInspection(id)                  { return http.get(`/api/inspections/${id}`) },
+  createInspection(data)             { return http.post('/api/inspections', data) },
+  updateInspection(id, data)         { return http.put(`/api/inspections/${id}`, data) },
+  deleteInspection(id)               { return http.delete(`/api/inspections/${id}`) },
+  updateInspectionStatus(id, status) { return http.patch(`/api/inspections/${id}/status`, { status }) },
+  getInspectionReport(id)            { return http.get(`/api/inspections/${id}/report`) },
+  saveInspectionReport(id, data)     { return http.put(`/api/inspections/${id}/report`, data) },
+  getLinkedCheckIn(id)               { return http.get(`/api/inspections/${id}/linked-checkin`) },
+  getPropertyHistory(propertyId)     { return http.get(`/api/inspections/property/${propertyId}/history`) },
+  applyPdfImport(id, data)           { return http.post(`/api/inspections/${id}/apply-pdf-import`, data) },
 
-  getTranscribeStatus() { return axiosInstance.get('/api/transcribe/status') },
-  changePassword(data) { return axiosInstance.post('/api/users/me/change-password', data) },
-  getTranscribeUsage(period = 30) { return axiosInstance.get(`/api/transcribe/usage?period=${period}`) },
-  transcribeItem(data) { return axiosInstance.post('/api/transcribe/item', data) },
-  transcribeFull(data) { return axiosInstance.post('/api/transcribe/full', data) },
+  // ── Templates ─────────────────────────────────────────────────────────────
+  getTemplates()            { return http.get('/api/templates') },
+  getTemplate(id)           { return http.get(`/api/templates/${id}`) },
+  createTemplate(data)      { return http.post('/api/templates', data) },
+  updateTemplate(id, data)  { return http.put(`/api/templates/${id}`, data) },
+  deleteTemplate(id)        { return http.delete(`/api/templates/${id}`) },
+  reorderSection(id, dir)   { return http.post(`/api/templates/sections/${id}/reorder`, { direction: dir }) },
+  reorderItem(id, dir)      { return http.post(`/api/templates/items/${id}/reorder`, { direction: dir }) },
 
-  getActions()        { return axiosInstance.get('/api/actions') },
-  saveActions(data)   { return axiosInstance.put('/api/actions', data) },
+  // ── Transcription ─────────────────────────────────────────────────────────
+  getTranscribeStatus()           { return http.get('/api/transcribe/status') },
+  getTranscribeUsage(period = 30) { return http.get(`/api/transcribe/usage?period=${period}`) },
+  transcribeItem(data)            { return http.post('/api/transcribe/item', data) },
+  transcribeFull(data)            { return http.post('/api/transcribe/full', data) },
 
-  getSystemSettings()       { return axiosInstance.get('/api/system-settings') },
-  updateSystemSettings(data) { return axiosInstance.put('/api/system-settings', data) },
+  // ── Actions ───────────────────────────────────────────────────────────────
+  getActions()       { return http.get('/api/actions') },
+  saveActions(data)  { return http.put('/api/actions', data) },
+
+  // ── System settings ───────────────────────────────────────────────────────
+  getSystemSettings()        { return http.get('/api/system-settings') },
+  updateSystemSettings(data) { return http.put('/api/system-settings', data) },
+
+  // ── AI proxy ──────────────────────────────────────────────────────────────
+  // All Claude / Whisper calls must go through the Flask backend.
+  // Direct browser → api.anthropic.com calls are blocked by Anthropic CORS policy.
+  // The API keys live on Render (env vars ANTHROPIC_API_KEY / OPENAI_API_KEY).
+  //
+  // claudeProxy({ model?, max_tokens?, messages, system? })
+  //   → response.data is the raw Anthropic JSON (content array, usage, etc.)
+  claudeProxy(payload) {
+    return http.post('/api/ai/claude', payload, { timeout: 120000 })
+  },
+
+  // transcribeAudio(audioBlob, prompt?)
+  //   audioBlob — Blob or File: webm / mp4 / wav / m4a
+  //   prompt    — optional vocabulary hint string for Whisper
+  //   → response.data.text is the transcript string
+  transcribeAudio(audioBlob, prompt = '') {
+    const form = new FormData()
+    form.append('file', audioBlob, audioBlob.name || 'audio.webm')
+    if (prompt) form.append('prompt', prompt)
+    return http.post('/api/ai/transcribe', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 90000,
+    })
+  },
+
+  // checkAiStatus()
+  //   → { anthropic_key_set: bool, openai_key_set: bool }
+  //   Use this to verify keys are configured on Render before testing features.
+  checkAiStatus() { return http.get('/api/ai/status') },
 }
 
 export default api

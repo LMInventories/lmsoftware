@@ -51,15 +51,15 @@ http.interceptors.response.use(
 const api = {
 
   // Token management
-  getToken()      { return localStorage.getItem('token') },
-  setToken(t)     { localStorage.setItem('token', t) },
-  removeToken()   { localStorage.removeItem('token'); localStorage.removeItem('user') },
+  getToken()    { return localStorage.getItem('token') },
+  setToken(t)   { localStorage.setItem('token', t) },
+  removeToken() { localStorage.removeItem('token'); localStorage.removeItem('user') },
 
   // ── Auth ──────────────────────────────────────────────────────────────────
-  login(data)         { return http.post('/api/auth/login', data) },
-  register(data)      { return http.post('/api/auth/register', data) },
-  getCurrentUser()    { return http.get('/api/auth/me') },
-  changePassword(data){ return http.post('/api/users/me/change-password', data) },
+  login(data)          { return http.post('/api/auth/login', data) },
+  register(data)       { return http.post('/api/auth/register', data) },
+  getCurrentUser()     { return http.get('/api/auth/me') },
+  changePassword(data) { return http.post('/api/users/me/change-password', data) },
 
   // ── Dashboard ─────────────────────────────────────────────────────────────
   getDashboardStats() { return http.get('/api/dashboard/stats') },
@@ -106,6 +106,23 @@ const api = {
   deleteTemplate(id)        { return http.delete(`/api/templates/${id}`) },
   reorderSection(id, dir)   { return http.post(`/api/templates/sections/${id}/reorder`, { direction: dir }) },
   reorderItem(id, dir)      { return http.post(`/api/templates/items/${id}/reorder`, { direction: dir }) },
+  addSection(templateId, data)   { return http.post(`/api/templates/${templateId}/sections`, data) },
+  duplicateSection(sectionId)    { return http.post(`/api/templates/sections/${sectionId}/duplicate`) },
+  deleteSection(sectionId)       { return http.delete(`/api/templates/sections/${sectionId}`) },
+  addItem(sectionId, data)       { return http.post(`/api/templates/sections/${sectionId}/items`, data) },
+  updateItem(itemId, data)       { return http.put(`/api/templates/items/${itemId}`, data) },
+  duplicateItem(itemId)          { return http.post(`/api/templates/items/${itemId}/duplicate`) },
+  deleteItem(itemId)             { return http.delete(`/api/templates/items/${itemId}`) },
+
+  // ── Section Library (presets) ─────────────────────────────────────────────
+  getSectionPresets()                    { return http.get('/api/section-presets') },
+  createSectionPreset(data)              { return http.post('/api/section-presets', data) },
+  saveSectionAsPreset(sectionId, data)   { return http.post(`/api/section-presets/from-section/${sectionId}`, data) },
+  addPresetToTemplate(presetId, templateId) {
+    return http.post(`/api/section-presets/${presetId}/add-to-template/${templateId}`)
+  },
+  updateSectionPreset(presetId, data)    { return http.put(`/api/section-presets/${presetId}`, data) },
+  deleteSectionPreset(presetId)          { return http.delete(`/api/section-presets/${presetId}`) },
 
   // ── Transcription ─────────────────────────────────────────────────────────
   getTranscribeStatus()           { return http.get('/api/transcribe/status') },
@@ -125,7 +142,7 @@ const api = {
   // All Claude / Whisper calls must go through the Flask backend.
   // Direct browser → api.anthropic.com calls are blocked by Anthropic CORS policy.
   // The API keys live on Render (env vars ANTHROPIC_API_KEY / OPENAI_API_KEY).
-  //
+
   // claudeProxy({ model?, max_tokens?, messages, system? })
   //   → response.data is the raw Anthropic JSON (content array, usage, etc.)
   claudeProxy(payload) {
@@ -134,7 +151,7 @@ const api = {
 
   // transcribeAudio(audioBlob, prompt?)
   //   audioBlob — Blob or File: webm / mp4 / wav / m4a
-  //   prompt    — optional vocabulary hint string for Whisper
+  //   prompt    — optional vocabulary hint for Whisper
   //   → response.data.text is the transcript string
   transcribeAudio(audioBlob, prompt = '') {
     const form = new FormData()
@@ -146,9 +163,7 @@ const api = {
     })
   },
 
-  // checkAiStatus()
-  //   → { anthropic_key_set: bool, openai_key_set: bool }
-  //   Use this to verify keys are configured on Render before testing features.
+  // checkAiStatus() → { anthropic_key_set: bool, openai_key_set: bool }
   checkAiStatus() { return http.get('/api/ai/status') },
 }
 

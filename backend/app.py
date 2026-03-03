@@ -50,6 +50,7 @@ def create_app():
     from routes.dashboard   import dashboard_bp
     from routes.templates   import templates_bp
     from routes.ai          import ai_bp
+    from routes.section_presets import section_presets_bp
 
     app.register_blueprint(auth_bp,        url_prefix="/api/auth")
     app.register_blueprint(users_bp,       url_prefix="/api/users")
@@ -59,6 +60,7 @@ def create_app():
     app.register_blueprint(dashboard_bp,   url_prefix="/api/dashboard")
     app.register_blueprint(templates_bp,   url_prefix="/api/templates")
     app.register_blueprint(ai_bp,          url_prefix="/api/ai")
+    app.register_blueprint(section_presets_bp, url_prefix='/api/section-presets')
 
     try:
         from routes.system_settings import system_settings_bp

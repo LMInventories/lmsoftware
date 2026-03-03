@@ -6,6 +6,6 @@ Flask-JWT-Extended==4.6.0
 python-dotenv==1.0.0
 werkzeug==3.0.1
 gunicorn==21.2.0
-psycopg[binary]
+psycopg2-binary
 openai
 anthropic

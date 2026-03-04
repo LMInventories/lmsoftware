@@ -138,7 +138,7 @@ const api = {
   getSystemSettings()        { return http.get('/api/system-settings') },
   updateSystemSettings(data) { return http.put('/api/system-settings', data) },
 
-  // ── Fixed sections ────────────────────────────────────────────────────────
+  // ── Fixed sections (system-wide, Settings → Fixed Sections) ──────────────
   getFixedSections()         { return http.get('/api/fixed-sections') },
   updateFixedSections(data)  { return http.put('/api/fixed-sections', data) },
 

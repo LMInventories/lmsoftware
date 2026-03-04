@@ -76,6 +76,11 @@ const router = createRouter({
           component: () => import('../views/settings/TemplateEditorView.vue')
         },
         {
+          path: 'settings/fixed-sections',
+          name: 'FixedSections',
+          component: () => import('../views/settings/FixedSectionsSettings.vue')
+        },
+        {
           path: 'change-password',
           name: 'ChangePassword',
           component: () => import('../views/ChangePasswordView.vue')

@@ -6,16 +6,18 @@ import ReportsSettings       from '../components/settings/ReportsSettings.vue'
 import ActionsSettings       from '../components/settings/ActionsSettings.vue'
 import TranscriptionSettings from '../components/settings/TranscriptionSettings.vue'
 import EmailsSettings        from '../components/settings/EmailsSettings.vue'
+import FixedSectionsSettings from './settings/FixedSectionsSettings.vue'
 
 const activeTab = ref('general')
 
 const tabs = [
-  { id: 'general',       label: 'General',       icon: '⚙️' },
-  { id: 'reports',       label: 'Reports',        icon: '📄' },
-  { id: 'actions',       label: 'Actions',        icon: '🏷️' },
-  { id: 'templates',     label: 'Templates',      icon: '📋' },
-  { id: 'transcription', label: 'Transcription',  icon: '✍️' },
-  { id: 'emails',        label: 'Emails',         icon: '📧' },
+  { id: 'general',        label: 'General',          icon: '⚙️' },
+  { id: 'reports',        label: 'Reports',           icon: '📄' },
+  { id: 'actions',        label: 'Actions',           icon: '🏷️' },
+  { id: 'templates',      label: 'Templates',         icon: '📋' },
+  { id: 'fixed-sections', label: 'Fixed Sections',    icon: '📌' },
+  { id: 'transcription',  label: 'Transcription',     icon: '✍️' },
+  { id: 'emails',         label: 'Emails',            icon: '📧' },
 ]
 </script>
 
@@ -42,12 +44,13 @@ const tabs = [
 
       <!-- Content pane -->
       <div class="tab-pane">
-        <GeneralSettings       v-if="activeTab === 'general'"       />
-        <ReportsSettings       v-if="activeTab === 'reports'"       />
-        <ActionsSettings       v-if="activeTab === 'actions'"       />
-        <TemplatesSettings     v-if="activeTab === 'templates'"     />
-        <TranscriptionSettings v-if="activeTab === 'transcription'" />
-        <EmailsSettings        v-if="activeTab === 'emails'"        />
+        <GeneralSettings        v-if="activeTab === 'general'"         />
+        <ReportsSettings        v-if="activeTab === 'reports'"         />
+        <ActionsSettings        v-if="activeTab === 'actions'"         />
+        <TemplatesSettings      v-if="activeTab === 'templates'"       />
+        <FixedSectionsSettings  v-if="activeTab === 'fixed-sections'"  />
+        <TranscriptionSettings  v-if="activeTab === 'transcription'"   />
+        <EmailsSettings         v-if="activeTab === 'emails'"          />
       </div>
     </div>
   </div>

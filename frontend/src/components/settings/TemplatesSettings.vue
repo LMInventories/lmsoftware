@@ -4,41 +4,70 @@ import { useRouter } from 'vue-router'
 import api from '../../services/api'
 import TemplatePreviewModal from './TemplatePreviewModal.vue'
 
-const router = useRouter()
+const router    = useRouter()
 const templates = ref([])
-const loading = ref(true)
+const loading   = ref(false)
 
-// Preview state
+// Preview
 const previewTemplate = ref(null)
-const showPreview = ref(false)
+const showPreview     = ref(false)
+
+// Create modal
+const showCreateModal = ref(false)
+const creating        = ref(false)
+const createForm      = ref({ name: '', inspection_type: 'check_in' })
 
 async function fetchTemplates() {
   loading.value = true
   try {
-    const response = await api.getTemplates()
-    templates.value = response.data
-  } catch (error) {
-    console.error('Failed to fetch templates:', error)
+    const res = await api.getTemplates()
+    templates.value = res.data
+  } catch (e) {
+    console.error(e)
   } finally {
     loading.value = false
   }
 }
 
-function createNewTemplate() {
-  router.push('/settings/templates/new')
+// ── Create ────────────────────────────────────────────────────────────────────
+function openCreateModal() {
+  createForm.value = { name: '', inspection_type: 'check_in' }
+  showCreateModal.value = true
 }
 
+async function handleCreate() {
+  if (!createForm.value.name.trim()) { alert('Template name is required'); return }
+  creating.value = true
+  try {
+    const res = await api.createTemplate({
+      name:            createForm.value.name.trim(),
+      inspection_type: createForm.value.inspection_type,
+      content:         '{}',
+      is_default:      false,
+    })
+    showCreateModal.value = false
+    // Navigate to the real id returned by the server
+    router.push(`/settings/templates/${res.data.id}`)
+  } catch (e) {
+    console.error(e)
+    alert('Failed to create template')
+  } finally {
+    creating.value = false
+  }
+}
+
+// ── Edit / preview ────────────────────────────────────────────────────────────
 function editTemplate(id) {
   router.push(`/settings/templates/${id}`)
 }
 
 async function openPreview(id) {
   try {
-    const response = await api.getTemplate(id)
-    previewTemplate.value = response.data
+    const res = await api.getTemplate(id)
+    previewTemplate.value = res.data
     showPreview.value = true
-  } catch (error) {
-    console.error('Failed to load template for preview:', error)
+  } catch (e) {
+    console.error(e)
     alert('Failed to load template')
   }
 }
@@ -48,45 +77,37 @@ function closePreview() {
   previewTemplate.value = null
 }
 
-async function copyTemplate(templateId) {
+// ── Copy ──────────────────────────────────────────────────────────────────────
+async function copyTemplate(template) {
+  if (!confirm(`Create a copy of "${template.name}"?`)) return
   try {
-    const response = await api.getTemplate(templateId)
-    const template = response.data
-
-    if (!confirm(`Create a copy of "${template.name}"?`)) return
-
-    const newTemplate = {
-      name: `${template.name} (Copy)`,
+    const res = await api.createTemplate({
+      name:            `${template.name} (Copy)`,
       inspection_type: template.inspection_type,
-      is_default: false,
-      content: template.content
-    }
-
-    await api.createTemplate(newTemplate)
+      content:         template.content || '{}',
+      is_default:      false,
+    })
     await fetchTemplates()
-    alert('Template copied successfully!')
-  } catch (error) {
-    console.error('Copy error:', error)
+    router.push(`/settings/templates/${res.data.id}`)
+  } catch (e) {
+    console.error(e)
     alert('Failed to copy template')
   }
 }
 
-async function deleteTemplate(id) {
-  if (!confirm('Delete this template? This action cannot be undone.')) return
-
+// ── Delete ────────────────────────────────────────────────────────────────────
+async function deleteTemplate(template) {
+  if (!confirm(`Delete "${template.name}"? This cannot be undone.`)) return
   try {
-    await api.deleteTemplate(id)
-    alert('Template deleted!')
-    fetchTemplates()
-  } catch (error) {
-    console.error('Failed to delete template:', error)
+    await api.deleteTemplate(template.id)
+    templates.value = templates.value.filter(t => t.id !== template.id)
+  } catch (e) {
+    console.error(e)
     alert('Failed to delete template')
   }
 }
 
-onMounted(() => {
-  fetchTemplates()
-})
+onMounted(fetchTemplates)
 </script>
 
 <template>
@@ -95,23 +116,19 @@ onMounted(() => {
       <div>
         <h2>Inspection Templates</h2>
         <p class="section-description">
-          Create and manage templates for different inspection types. Templates define the structure and fields for inspection reports.
+          Create and manage templates for different inspection types.
         </p>
       </div>
-      <button @click="createNewTemplate" class="btn-create">
-        ➕ Create New Template
-      </button>
+      <button @click="openCreateModal" class="btn-create">➕ Create New Template</button>
     </div>
 
-    <div v-if="loading" class="loading">Loading templates...</div>
+    <div v-if="loading" class="loading">Loading templates…</div>
 
     <div v-else-if="templates.length === 0" class="empty-state">
       <span class="empty-icon">📋</span>
       <h3>No templates yet</h3>
       <p>Create your first inspection template to get started</p>
-      <button @click="createNewTemplate" class="btn-create-empty">
-        ➕ Create Template
-      </button>
+      <button @click="openCreateModal" class="btn-create">➕ Create Template</button>
     </div>
 
     <div v-else class="templates-grid">
@@ -125,31 +142,62 @@ onMounted(() => {
         </div>
 
         <div class="template-meta">
-          <p>📅 Created: {{ new Date(template.created_at).toLocaleDateString('en-GB') }}</p>
-          <p v-if="template.updated_at !== template.created_at">
-            ✏️ Updated: {{ new Date(template.updated_at).toLocaleDateString('en-GB') }}
+          <p>📅 {{ new Date(template.created_at).toLocaleDateString('en-GB') }}</p>
+          <p v-if="template.sections?.length">
+            🏠 {{ template.sections.length }} section{{ template.sections.length !== 1 ? 's' : '' }}
           </p>
         </div>
 
         <div class="template-actions">
-          <button @click="editTemplate(template.id)" class="btn-action btn-edit">
-            ✏️ Edit
-          </button>
-          <button @click="openPreview(template.id)" class="btn-action btn-preview">
-            👁️ Preview
-          </button>
-          <button @click="copyTemplate(template.id)" class="btn-action btn-copy">
-            📋 Copy
-          </button>
-          <button @click="deleteTemplate(template.id)" class="btn-action btn-delete">
-            🗑️ Delete
-          </button>
+          <button @click="editTemplate(template.id)"   class="btn-action btn-edit">✏️ Edit</button>
+          <button @click="openPreview(template.id)"    class="btn-action btn-preview">👁️ Preview</button>
+          <button @click="copyTemplate(template)"      class="btn-action btn-copy">📋 Copy</button>
+          <button @click="deleteTemplate(template)"    class="btn-action btn-delete">🗑️ Delete</button>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- Preview Modal — rendered at root level via Teleport to escape stacking contexts -->
+  <!-- Create modal -->
+  <Teleport to="body">
+    <div v-if="showCreateModal" class="modal-overlay" @click.self="showCreateModal = false">
+      <div class="modal">
+        <div class="modal-header">
+          <h2>New Template</h2>
+          <button @click="showCreateModal = false" class="btn-close">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Template name *</label>
+            <input
+              v-model="createForm.name"
+              type="text"
+              placeholder="e.g. Standard 2 Bed Flat"
+              autofocus
+              @keyup.enter="handleCreate"
+            />
+          </div>
+          <div class="form-group">
+            <label>Inspection type *</label>
+            <select v-model="createForm.inspection_type">
+              <option value="check_in">Check In</option>
+              <option value="check_out">Check Out</option>
+              <option value="interim">Interim</option>
+              <option value="inventory">Inventory</option>
+            </select>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button @click="showCreateModal = false" class="btn-secondary">Cancel</button>
+          <button @click="handleCreate" class="btn-primary" :disabled="creating">
+            {{ creating ? 'Creating…' : 'Create & Edit' }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </Teleport>
+
+  <!-- Preview modal -->
   <Teleport to="body">
     <TemplatePreviewModal
       v-if="showPreview && previewTemplate"
@@ -160,9 +208,7 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.settings-section {
-  min-height: auto;
-}
+.settings-section { min-height: auto; }
 
 .section-header {
   display: flex;
@@ -172,172 +218,148 @@ onMounted(() => {
   gap: 20px;
 }
 
-.settings-section h2 {
-  font-size: 24px;
-  font-weight: 600;
-  color: #1e293b;
-  margin-bottom: 8px;
-}
-
-.section-description {
-  color: #64748b;
-  font-size: 15px;
-  line-height: 1.5;
-}
+.settings-section h2 { font-size: 22px; font-weight: 700; color: #1e293b; margin-bottom: 6px; }
+.section-description  { color: #64748b; font-size: 14px; }
 
 .btn-create {
-  padding: 12px 24px;
+  padding: 10px 20px;
   background: #6366f1;
   color: white;
   border: none;
   border-radius: 8px;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
-  transition: all 0.2s;
+  transition: background 0.15s;
 }
+.btn-create:hover { background: #4f46e5; }
 
-.btn-create:hover {
-  background: #4f46e5;
-}
-
-.loading {
-  text-align: center;
-  padding: 60px;
-  color: #64748b;
-}
+.loading { text-align: center; padding: 60px; color: #94a3b8; }
 
 .empty-state {
   text-align: center;
   padding: 80px 20px;
 }
-
-.empty-icon {
-  font-size: 64px;
-  display: block;
-  margin-bottom: 16px;
-}
-
-.empty-state h3 {
-  font-size: 20px;
-  font-weight: 600;
-  color: #1e293b;
-  margin-bottom: 8px;
-}
-
-.empty-state p {
-  color: #64748b;
-  margin-bottom: 24px;
-}
-
-.btn-create-empty {
-  padding: 12px 32px;
-  background: #6366f1;
-  color: white;
-  border: none;
-  border-radius: 8px;
-  font-size: 15px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.btn-create-empty:hover {
-  background: #4f46e5;
-}
+.empty-icon { font-size: 56px; display: block; margin-bottom: 12px; }
+.empty-state h3 { font-size: 18px; font-weight: 600; color: #1e293b; margin-bottom: 6px; }
+.empty-state p  { color: #64748b; margin-bottom: 20px; }
 
 .templates-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 20px;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
 }
 
 .template-card {
-  background: #f8fafc;
-  border: 2px solid #e5e7eb;
-  border-radius: 12px;
-  padding: 24px;
-  transition: all 0.2s;
+  border: 1.5px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 18px;
+  background: white;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
-
-.template-card:hover {
-  border-color: #cbd5e1;
-  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
-}
+.template-card:hover { border-color: #c7d2fe; box-shadow: 0 2px 8px rgba(99,102,241,0.08); }
 
 .template-header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  margin-bottom: 16px;
-  gap: 12px;
+  margin-bottom: 10px;
 }
-
-.template-card h3 {
-  font-size: 18px;
-  font-weight: 600;
-  color: #1e293b;
-  margin-bottom: 6px;
-}
+.template-header h3 { font-size: 15px; font-weight: 700; color: #1e293b; margin-bottom: 4px; }
 
 .template-type {
   display: inline-block;
-  padding: 4px 10px;
-  background: #dbeafe;
-  color: #1e40af;
-  border-radius: 12px;
-  font-size: 11px;
+  padding: 2px 8px;
+  background: #e0e7ff;
+  color: #4338ca;
+  border-radius: 6px;
+  font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.5px;
 }
 
 .badge-default {
-  padding: 4px 10px;
+  padding: 2px 8px;
   background: #dcfce7;
   color: #166534;
-  border-radius: 12px;
-  font-size: 11px;
+  border-radius: 6px;
+  font-size: 10px;
   font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  white-space: nowrap;
 }
 
-.template-meta {
-  margin-bottom: 20px;
-}
+.template-meta { font-size: 12px; color: #94a3b8; margin-bottom: 14px; }
+.template-meta p { margin-bottom: 2px; }
 
-.template-meta p {
-  font-size: 13px;
-  color: #64748b;
-  margin: 4px 0;
-}
-
-.template-actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-}
+.template-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 
 .btn-action {
-  padding: 10px 16px;
-  border: none;
+  padding: 6px 10px;
   border-radius: 6px;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.2s;
+  border: 1px solid #e5e7eb;
+  background: white;
+  color: #374151;
+  transition: all 0.15s;
+}
+.btn-action:hover   { background: #f1f5f9; }
+.btn-edit:hover     { background: #e0e7ff; border-color: #a5b4fc; color: #4338ca; }
+.btn-preview:hover  { background: #f0fdf4; border-color: #a7f3d0; color: #166534; }
+.btn-copy:hover     { background: #fefce8; border-color: #fde68a; color: #854d0e; }
+.btn-delete:hover   { background: #fee2e2; border-color: #fca5a5; color: #dc2626; }
+
+/* ── Modal ─────────────────────────────────────────────────────────────────── */
+.modal-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.45);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 1000; padding: 20px;
+}
+.modal {
+  background: white; border-radius: 12px; width: 100%; max-width: 440px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.15);
+}
+.modal-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 18px 22px; border-bottom: 1px solid #e5e7eb;
+}
+.modal-header h2 { font-size: 17px; font-weight: 700; color: #1e293b; }
+.btn-close {
+  background: none; border: none; font-size: 17px; color: #94a3b8;
+  cursor: pointer; width: 28px; height: 28px; border-radius: 4px;
+}
+.btn-close:hover { background: #f1f5f9; color: #374151; }
+.modal-body { padding: 20px 22px; }
+.modal-footer {
+  display: flex; justify-content: flex-end; gap: 10px;
+  padding: 14px 22px; border-top: 1px solid #e5e7eb; background: #f8fafc;
+  border-radius: 0 0 12px 12px;
 }
 
-.btn-edit { background: #dbeafe; color: #1e40af; }
-.btn-edit:hover { background: #bfdbfe; }
+.form-group { margin-bottom: 16px; }
+.form-group label { display: block; margin-bottom: 6px; font-weight: 600; font-size: 13px; color: #475569; }
+.form-group input,
+.form-group select {
+  width: 100%; padding: 9px 12px;
+  border: 1px solid #cbd5e1; border-radius: 7px;
+  font-size: 14px; font-family: inherit; box-sizing: border-box;
+}
+.form-group input:focus,
+.form-group select:focus { outline: none; border-color: #6366f1; }
 
-.btn-preview { background: #e0e7ff; color: #3730a3; }
-.btn-preview:hover { background: #c7d2fe; }
+.btn-primary {
+  padding: 9px 20px; background: #6366f1; color: white;
+  border: none; border-radius: 7px; font-size: 14px; font-weight: 600;
+  cursor: pointer; transition: background 0.15s;
+}
+.btn-primary:hover:not(:disabled) { background: #4f46e5; }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
-.btn-copy { background: #ddd6fe; color: #5b21b6; }
-.btn-copy:hover { background: #c4b5fd; }
-
-.btn-delete { background: #fee2e2; color: #991b1b; }
-.btn-delete:hover { background: #fecaca; }
+.btn-secondary {
+  padding: 9px 18px; background: white; color: #64748b;
+  border: 1px solid #cbd5e1; border-radius: 7px; font-size: 14px;
+  font-weight: 600; cursor: pointer;
+}
+.btn-secondary:hover { background: #f1f5f9; }
 </style>

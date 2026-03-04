@@ -138,9 +138,9 @@ const api = {
   getSystemSettings()        { return http.get('/api/system-settings') },
   updateSystemSettings(data) { return http.put('/api/system-settings', data) },
 
-  // ── Fixed Sections ─────────────────────────────────────────────────────────
-  getFixedSections()        { return http.get('/api/fixed-sections') },
-  updateFixedSections(data) { return http.put('/api/fixed-sections', data) },
+  // ── Fixed sections ────────────────────────────────────────────────────────
+  getFixedSections()         { return http.get('/api/fixed-sections') },
+  updateFixedSections(data)  { return http.put('/api/fixed-sections', data) },
 
   // ── AI proxy ──────────────────────────────────────────────────────────────
   // All Claude / Whisper calls must go through the Flask backend.

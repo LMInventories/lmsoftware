@@ -5,58 +5,70 @@ import json
 
 fixed_sections_bp = Blueprint('fixed_sections', __name__)
 
+VALID_COLUMNS = {
+    'name', 'question', 'answer', 'cleanliness', 'description',
+    'condition', 'additional_notes', 'location_serial', 'reading'
+}
+
 DEFAULT_FIXED_SECTIONS = [
     {
         "name": "Condition Summary",
         "enabled": True,
+        "columns": ["name", "condition", "additional_notes"],
         "items": []
     },
     {
         "name": "Cleaning Summary",
         "enabled": True,
+        "columns": ["name", "cleanliness", "additional_notes"],
         "items": []
     },
     {
         "name": "Smoke & Carbon Alarms",
         "enabled": True,
+        "columns": ["name", "answer", "condition"],
         "items": [
-            {"name": "Smoke Alarm — Hallway",        "description": "", "requires_photo": True,  "requires_condition": True},
-            {"name": "Smoke Alarm — Landing",        "description": "", "requires_photo": True,  "requires_condition": True},
-            {"name": "Carbon Monoxide Detector",     "description": "", "requires_photo": True,  "requires_condition": True},
-            {"name": "Heat Alarm — Kitchen",         "description": "", "requires_photo": True,  "requires_condition": True},
+            {"name": "Smoke Alarm — Hallway",    "answer": "Yes", "condition": ""},
+            {"name": "Smoke Alarm — Landing",    "answer": "Yes", "condition": ""},
+            {"name": "Carbon Monoxide Detector", "answer": "Yes", "condition": ""},
+            {"name": "Heat Alarm — Kitchen",     "answer": "Yes", "condition": ""},
         ]
     },
     {
         "name": "Fire Door Safety",
         "enabled": True,
+        "columns": ["name", "answer", "condition"],
         "items": [
-            {"name": "Front Door — Self Closing",    "description": "", "requires_photo": True,  "requires_condition": True},
-            {"name": "Fire Door Signage",            "description": "", "requires_photo": True,  "requires_condition": False},
+            {"name": "Front Door — Self Closing", "answer": "Yes", "condition": ""},
+            {"name": "Fire Door Signage",         "answer": "Yes", "condition": ""},
         ]
     },
     {
         "name": "Health & Safety",
         "enabled": True,
+        "columns": ["name", "answer", "description"],
         "items": [
-            {"name": "Electrical Consumer Unit",     "description": "", "requires_photo": True,  "requires_condition": True},
-            {"name": "Water Stop Tap Location",      "description": "", "requires_photo": True,  "requires_condition": False},
+            {"name": "Electrical Consumer Unit",  "answer": "Yes", "description": ""},
+            {"name": "Water Stop Tap Location",   "answer": "Yes", "description": ""},
         ]
     },
     {
         "name": "Keys",
         "enabled": True,
+        "columns": ["name", "description"],
         "items": [
-            {"name": "Full Sets",                    "description": "", "requires_photo": False, "requires_condition": False},
-            {"name": "Access at Check Out",          "description": "", "requires_photo": True,  "requires_condition": False},
+            {"name": "Full Sets",           "description": ""},
+            {"name": "Access at Check Out", "description": ""},
         ]
     },
     {
         "name": "Utility Meter Readings",
         "enabled": True,
+        "columns": ["name", "location_serial", "reading"],
         "items": [
-            {"name": "Gas Meter",                    "description": "", "requires_photo": True,  "requires_condition": False},
-            {"name": "Electric Meter",               "description": "", "requires_photo": True,  "requires_condition": False},
-            {"name": "Water Meter",                  "description": "", "requires_photo": True,  "requires_condition": False},
+            {"name": "Gas Meter",      "location_serial": "", "reading": ""},
+            {"name": "Electric Meter", "location_serial": "", "reading": ""},
+            {"name": "Water Meter",    "location_serial": "", "reading": ""},
         ]
     },
 ]
@@ -104,20 +116,23 @@ def update_fixed_sections():
         name = str(s.get('name', '')).strip()
         if not name:
             continue
+
+        # Sanitise columns — keep only valid keys, at least one
+        raw_cols = s.get('columns') or ['name']
+        cols = [c for c in raw_cols if c in VALID_COLUMNS] or ['name']
+
+        # Sanitise items — only keep keys that match the section's columns
         items = []
         for item in (s.get('items') or []):
-            item_name = str(item.get('name', '')).strip()
-            if not item_name:
-                continue
-            items.append({
-                'name':               item_name,
-                'description':        str(item.get('description', '')),
-                'requires_photo':     bool(item.get('requires_photo', True)),
-                'requires_condition': bool(item.get('requires_condition', True)),
-            })
+            cleaned_item = {}
+            for col in cols:
+                cleaned_item[col] = str(item.get(col, ''))
+            items.append(cleaned_item)
+
         cleaned.append({
             'name':    name,
             'enabled': bool(s.get('enabled', True)),
+            'columns': cols,
             'items':   items,
         })
 

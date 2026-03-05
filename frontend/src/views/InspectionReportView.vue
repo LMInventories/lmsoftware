@@ -15,6 +15,9 @@ const vClickOutside = {
   unmounted(el) { document.removeEventListener('mousedown', el._clickOutside) }
 }
 
+// v-focus: auto-focus an element when mounted (used for inline rename inputs)
+const vFocus = { mounted: (el) => nextTick(() => el.focus()) }
+
 const route  = useRoute()
 const router = useRouter()
 const toast  = useToast()
@@ -1145,6 +1148,8 @@ const rooms = computed(() => {
       .filter(s => s.section_type === 'room')
       .map(s => ({
         ...s,
+        // Apply any saved name override from reportData._roomNames
+        name: reportData.value._roomNames?.[String(s.id)] ?? s.name,
         sections: (s.items || []).map(item => ({
           ...item,
           label:          item.name || item.label || '',
@@ -1307,6 +1312,35 @@ function removeSubItem(roomId, itemId, sid) {
   if (!reportData.value[roomId]?.[itemId]?._subs) return
   reportData.value[roomId][itemId]._subs = reportData.value[roomId][itemId]._subs.filter(s => s._sid !== sid)
   unsaved.value = true
+}
+
+// ── Room name overrides ────────────────────────────────────────────────────
+// Stored in reportData._roomNames: { [roomId]: customName }
+// Only used in the report editor — does NOT affect the template.
+function getRoomName(room) {
+  return reportData.value._roomNames?.[String(room.id)] ?? room.name
+}
+const renamingRoomId = ref(null)
+const renamingRoomVal = ref('')
+
+function startRenameRoom(room) {
+  renamingRoomId.value  = String(room.id)
+  renamingRoomVal.value = getRoomName(room)
+}
+function commitRenameRoom(room) {
+  const val = renamingRoomVal.value.trim()
+  if (val && val !== room.name) {
+    if (!reportData.value._roomNames) reportData.value._roomNames = {}
+    reportData.value._roomNames[String(room.id)] = val
+    unsaved.value = true
+  } else if (!val) {
+    // Empty → remove override, revert to template name
+    if (reportData.value._roomNames) delete reportData.value._roomNames[String(room.id)]
+  }
+  renamingRoomId.value = null
+}
+function cancelRenameRoom() {
+  renamingRoomId.value = null
 }
 
 
@@ -2354,7 +2388,22 @@ async function moveToReview() {
             <div class="card-hd card-hd-room">
               <h2 class="card-title">
                 <span class="room-number">{{ roomIndexMap[room.id] }}.</span>
-                {{ room.name }}
+                <template v-if="renamingRoomId === String(room.id)">
+                  <input
+                    class="room-name-input"
+                    v-model="renamingRoomVal"
+                    @blur="commitRenameRoom(room)"
+                    @keyup.enter="commitRenameRoom(room)"
+                    @keyup.escape="cancelRenameRoom"
+                    v-focus
+                  />
+                </template>
+                <span
+                  v-else
+                  class="room-name-editable"
+                  @click="startRenameRoom(room)"
+                  title="Click to rename for this report"
+                >{{ getRoomName(room) }} <span class="room-rename-hint">✎</span></span>
               </h2>
               <div class="card-hd-right">
                 <span v-if="isCheckOut" class="co-badge">Check Out</span>
@@ -2592,7 +2641,34 @@ async function moveToReview() {
                   <div v-for="sub in getSubs(room.id, item.id)" :key="sub._sid" class="sub-item">
                     <div class="sub-item-fields">
                       <div class="room-field-desc"><label class="field-lbl">Description</label><textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" rows="2" placeholder="Describe…" :value="sub.description" @input="setSubField(room.id,item.id,sub._sid,'description',$event.target.value)"></textarea></div>
-                      <div class="room-field-cond"><label class="field-lbl">Condition</label><textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" rows="2" placeholder="Condition…" :value="sub.condition" @input="setSubField(room.id,item.id,sub._sid,'condition',$event.target.value)"></textarea></div>
+                      <div class="room-field-cond room-field-with-cam">
+                        <div class="field-cond-inner"><label class="field-lbl">Condition</label><textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" rows="2" placeholder="Condition…" :value="sub.condition" @input="setSubField(room.id,item.id,sub._sid,'condition',$event.target.value)"></textarea></div>
+                        <div class="room-btn-stack">
+                          <button class="cam-btn cam-btn-room" :class="{ 'cam-has': getPhotos(room.id, sub._sid).length }" @click="togglePanel(room.id, sub._sid)" title="Photos">
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                            <span v-if="getPhotos(room.id, sub._sid).length" class="cam-count">{{ getPhotos(room.id, sub._sid).length }}</span>
+                          </button>
+                          <button class="cam-btn cam-btn-room mic-btn"
+                            :class="{ 'mic-active': isItemRecording(room.id, sub._sid), 'mic-has': !isItemRecording(room.id, sub._sid) && getItemRecordings(room.id, sub._sid).length, 'mic-ai': isItemAiProcessing(room.id, sub._sid) }"
+                            @click.stop="toggleItemRecording(room.id, sub._sid, room.name + ' — ' + item.label + ' (sub)')"
+                            title="Record audio">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+                            <span v-if="getItemRecordings(room.id, sub._sid).length && !isItemRecording(room.id, sub._sid)" class="cam-count mic-count">{{ getItemRecordings(room.id, sub._sid).length }}</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                    <!-- Sub-item inline photo panel -->
+                    <div v-if="isPanelOpen(room.id, sub._sid)" class="photo-panel-inline photo-panel-sub">
+                      <div v-for="(ph,pi) in getPhotos(room.id, sub._sid)" :key="pi" class="ph-thumb ph-thumb-lg" style="cursor:pointer" @click="openLightbox(room.id, sub._sid, pi)">
+                        <img :src="ph" class="ph-img-click" />
+                        <button class="ph-del" @click="removePhoto(room.id, sub._sid, pi)">×</button>
+                      </div>
+                      <label class="ph-upload-btn">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                        Upload photos
+                        <input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(room.id, sub._sid, e.target.files)" />
+                      </label>
                     </div>
                     <button class="del-btn del-btn-sub" @click="removeSubItem(room.id,item.id,sub._sid)">×</button>
                   </div>
@@ -3262,7 +3338,12 @@ async function moveToReview() {
 /* Delete */
 .del-btn{width:24px;height:24px;background:none;border:1px solid #fca5a5;border-radius:4px;font-size:14px;color:#ef4444;cursor:pointer;transition:all 0.12s;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0}
 .del-btn:hover{background:#fef2f2;border-color:#ef4444}
-.del-btn-sub{margin-top:20px}
+.del-btn-sub{margin-top:8px}
+.room-name-editable{cursor:pointer;border-radius:4px;padding:1px 4px;transition:background 0.15s;display:inline}
+.room-name-editable:hover{background:rgba(255,255,255,0.15)}
+.room-rename-hint{font-size:12px;opacity:0.55}
+.room-name-input{font-size:18px;font-weight:700;color:white;background:rgba(255,255,255,0.15);border:2px solid rgba(255,255,255,0.6);border-radius:6px;padding:2px 8px;outline:none;min-width:160px;max-width:400px}
+.photo-panel-sub{margin-top:6px;margin-left:0}
 
 /* Q&A */
 .qa-row{padding:16px 20px;border-bottom:1px solid #f1f5f9;display:flex;flex-direction:column;gap:10px}

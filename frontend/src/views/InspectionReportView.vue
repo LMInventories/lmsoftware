@@ -1482,8 +1482,17 @@ function checkAiTypist() {
 async function checkAiKeys() {
   try {
     const res = await api.checkAiStatus()
+    console.log('[AI] status:', res.data)
+    // Only Anthropic key is required for item transcription (Claude fills fields)
+    // OpenAI/Whisper is also needed for audio — require both for full AI typist
     aiKeysAvailable.value = !!(res.data.anthropic_key_set && res.data.openai_key_set)
-  } catch { aiKeysAvailable.value = false }
+    if (!aiKeysAvailable.value) {
+      console.warn('[AI] keys missing — anthropic:', res.data.anthropic_key_set, 'openai:', res.data.openai_key_set)
+    }
+  } catch (e) {
+    console.warn('[AI] checkAiKeys failed:', e.message)
+    aiKeysAvailable.value = false
+  }
 }
 
 function isItemAiProcessing(sid, rid) {

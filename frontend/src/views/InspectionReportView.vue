@@ -174,6 +174,7 @@ async function load() {
     await nextTick()
     if (allSections.value[0]) activeId.value = allSections.value[0].id
     checkAiTypist()
+    checkAiKeys()
     _restoreRecordings()
   }
 }
@@ -1378,8 +1379,17 @@ const hasAiTypist      = ref(false)       // true if this inspection is assigned
 
 function checkAiTypist() {
   if (!inspection.value) return
+  // typist info is nested under inspection.value.typist.name (not typist_name)
   hasAiTypist.value = inspection.value.typist_is_ai === true ||
+                      inspection.value.typist?.name === 'AI Typist' ||
                       inspection.value.typist_name === 'AI Typist'
+}
+
+async function checkAiKeys() {
+  try {
+    const res = await api.checkAiStatus()
+    aiKeysAvailable.value = !!(res.data.anthropic_key_set && res.data.openai_key_set)
+  } catch { aiKeysAvailable.value = false }
 }
 
 function isItemAiProcessing(sid, rid) {
@@ -1462,7 +1472,7 @@ async function _startRecording(label, itemKey = null) {
       // ── AI: per-item auto-transcribe ──────────────────────────────────
       // If this was a per-item recording and AI typist is assigned,
       // immediately send to Whisper + Claude
-      if (itemKey && hasAiTypist.value) {
+      if (itemKey && (hasAiTypist.value || aiKeysAvailable.value)) {
         const parts     = itemKey.split(':')
         const sid       = parts[0]
         const rid       = parts.slice(1).join(':')
@@ -3005,7 +3015,7 @@ async function moveToReview() {
         <span>⚠ {{ aiError }}</span>
         <button class="am-ai-error-dismiss" @click="aiError = ''">×</button>
       </div>
-      <div v-else-if="hasAiTypist" class="am-ai-status am-ai-ready">
+      <div v-else-if="hasAiTypist || aiKeysAvailable" class="am-ai-status am-ai-ready">
         <span>✨ AI Typist active — item recordings fill automatically</span>
         <button
           v-if="recordings.filter(r => !r.itemKey).length"

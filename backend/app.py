@@ -13,15 +13,11 @@ def create_app():
     os.makedirs(instance_path, exist_ok=True)
 
     # ── Database ──────────────────────────────────────────────────────────────
-    # Always prefer DATABASE_URL env var (PostgreSQL on Render).
-    # Falls back to local SQLite ONLY for local dev — never in production.
     database_url = os.environ.get('DATABASE_URL')
     if database_url:
-        # SQLAlchemy requires postgresql+psycopg:// for psycopg v3
-        if database_url.startswith('postgres://'):
-            database_url = database_url.replace('postgres://', 'postgresql+psycopg://', 1)
-        elif database_url.startswith('postgresql://') and '+psycopg' not in database_url:
-            database_url = database_url.replace('postgresql://', 'postgresql+psycopg://', 1)
+        # Render provides postgres:// — rewrite to postgresql+psycopg2://
+        database_url = database_url.replace('postgres://', 'postgresql+psycopg2://')
+        database_url = database_url.replace('postgresql://', 'postgresql+psycopg2://')
         app.config['SQLALCHEMY_DATABASE_URI'] = database_url
     else:
         db_path = os.path.join(instance_path, 'inspection_system.db')

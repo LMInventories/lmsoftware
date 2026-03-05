@@ -1760,8 +1760,7 @@ async function _transcribeItem(rec, sectionId, rowId, itemLabel, roomName, secti
     }
     function writeField(field, value) {
       if (editMode === 'append' && row[field]) {
-        row[field] = row[field].trimEnd() + '
-' + value
+        row[field] = row[field].trimEnd() + '\n' + value
       } else {
         row[field] = value
       }

@@ -169,6 +169,12 @@ const api = {
 
   // checkAiStatus() → { anthropic_key_set: bool, openai_key_set: bool }
   checkAiStatus() { return http.get('/api/ai/status') },
+
+  // pdfImport({ pdf: base64string, templateStructure: string|null })
+  //   → response.data is { rooms: [...], fixedSections: {...} }
+  pdfImport(data) {
+    return http.post('/api/ai/pdf-import', data, { timeout: 120000 })
+  },
 }
 
 export default api

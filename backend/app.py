@@ -33,7 +33,6 @@ def create_app():
         'http://localhost:3000',
         'http://localhost:8081',
         'https://app.lminventories.co.uk',
-        'https://lmsoftware-tau.vercel.app',
     ]
     # Allow any Vercel preview URL for the project
     CORS(app, resources={
@@ -59,6 +58,7 @@ def create_app():
     from routes.fixed_sections import fixed_sections_bp
     from routes.ai             import ai_bp
     from routes.transcribe     import transcribe_bp
+    from routes.pdf_import     import pdf_import_bp
 
     app.register_blueprint(auth_bp,           url_prefix='/api/auth')
     app.register_blueprint(users_bp,          url_prefix='/api/users')
@@ -70,6 +70,7 @@ def create_app():
     app.register_blueprint(fixed_sections_bp, url_prefix='/api/fixed-sections')
     app.register_blueprint(ai_bp,             url_prefix='/api/ai')
     app.register_blueprint(transcribe_bp,     url_prefix='/api/transcribe')
+    app.register_blueprint(pdf_import_bp,     url_prefix='/api/ai')
 
     # Optional blueprints — register only if the file exists
     _optional = [

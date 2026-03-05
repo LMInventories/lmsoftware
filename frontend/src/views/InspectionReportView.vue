@@ -174,7 +174,6 @@ async function load() {
     await nextTick()
     if (allSections.value[0]) activeId.value = allSections.value[0].id
     checkAiTypist()
-    checkAiKeys()
     _restoreRecordings()
   }
 }
@@ -182,6 +181,7 @@ async function load() {
 // Restore recordings saved in reportData._recordings back into the recordings ref.
 // Base64 audio is converted back to Blob objects so playback works normally.
 function _restoreRecordings() {
+  // _importedRooms is already in reportData — rooms computed reads it reactively, no extra restore needed
   const saved = reportData.value._recordings
   if (!Array.isArray(saved) || !saved.length) return
   recordings.value = saved
@@ -334,56 +334,137 @@ async function applyPdfImport() {
     } catch { /* silent */ }
   }
 
-  const built = {}
-  const templateRooms = (template.value?.sections || []).filter(s => s.is_room)
-  const templateFixed = (template.value?.sections || []).filter(s => !s.is_room)
+  const sourceBuilt  = {}   // goes into sourceReportData (Check In column)
+  const reportBuilt  = {}   // goes into reportData (editable Check Out fields)
+  const importedRooms = []  // rooms from PDF with no template match
 
-  // Map imported rooms → template room IDs (fuzzy name match)
+  const templateRooms = (template.value?.sections || []).filter(s => s.section_type === 'room')
+  const templateFixed = (template.value?.sections || []).filter(s => s.section_type !== 'room')
+
+  // ── Rooms ────────────────────────────────────────────────────────────
+  let matchedCount   = 0
+  let unmatchedCount = 0
+
   for (const importedRoom of (parsed.rooms || [])) {
-    const match = templateRooms.find(r =>
-      r.name.toLowerCase().replace(/\s+/g,'').includes(importedRoom.name.toLowerCase().replace(/\s+/g,'')) ||
-      importedRoom.name.toLowerCase().replace(/\s+/g,'').includes(r.name.toLowerCase().replace(/\s+/g,''))
-    )
-    const roomId = match?.id || ('imp_rm_' + importedRoom.name.replace(/[^a-z0-9]/gi,'_').toLowerCase())
-    built[roomId] = {}
-    const tItems = match?.sections || match?.items || []
-    for (const imp of (importedRoom.items || [])) {
-      const matchItem = tItems.find(i => {
-        const a = (i.label || '').toLowerCase().replace(/[^a-z0-9]/g,'')
-        const b = imp.label.toLowerCase().replace(/[^a-z0-9]/g,'')
-        return a.includes(b) || b.includes(a)
-      })
-      const itemId = matchItem?.id || ('imp_it_' + imp.label.replace(/[^a-z0-9]/gi,'_').toLowerCase())
-      built[roomId][String(itemId)] = {
-        description: imp.description || '',
-        condition:   imp.condition   || '',
+    const normImport = importedRoom.name.toLowerCase().replace(/[^a-z0-9]/g,'')
+
+    // Fuzzy match: room names share a meaningful substring
+    const match = templateRooms.find(r => {
+      const normTemplate = r.name.toLowerCase().replace(/[^a-z0-9]/g,'')
+      return normTemplate.includes(normImport) || normImport.includes(normTemplate)
+    })
+
+    if (match) {
+      // ── Matched room → map items to template item IDs ──────────────
+      matchedCount++
+      const roomId = match.id
+      sourceBuilt[roomId] = {}
+      const tItems = (match.items || match.sections || [])
+
+      for (const imp of (importedRoom.items || [])) {
+        const normImp = imp.label.toLowerCase().replace(/[^a-z0-9]/g,'')
+
+        // Try to match individual items within the room
+        const matchItem = tItems.find(i => {
+          const normT = (i.label || i.name || '').toLowerCase().replace(/[^a-z0-9]/g,'')
+          return normT.includes(normImp) || normImp.includes(normT)
+        })
+
+        if (matchItem) {
+          // Matched item — store under template item ID
+          sourceBuilt[roomId][String(matchItem.id)] = {
+            description: imp.description || '',
+            condition:   imp.condition   || '',
+          }
+        } else {
+          // Unmatched item within a matched room — add as _extra to source
+          if (!sourceBuilt[roomId]._extra) sourceBuilt[roomId]._extra = []
+          const eid = `rex_${Date.now()}_${Math.random().toString(36).slice(2,6)}`
+          sourceBuilt[roomId]._extra.push({
+            _eid:        eid,
+            label:       imp.label       || '',
+            description: imp.description || '',
+            condition:   imp.condition   || '',
+          })
+          // Also create empty editable row in reportData
+          if (!reportBuilt[roomId]) reportBuilt[roomId] = {}
+          if (!reportBuilt[roomId]._extra) reportBuilt[roomId]._extra = []
+          reportBuilt[roomId]._extra.push({ _eid: eid, label: imp.label || '', description: '', condition: '' })
+        }
+      }
+    } else {
+      // ── Unmatched room → create imported room with _extra items ────
+      unmatchedCount++
+      const roomId = 'imp_rm_' + importedRoom.name.replace(/[^a-z0-9]/gi,'_').toLowerCase() + '_' + Date.now()
+
+      // Register as an imported room so rooms computed includes it
+      importedRooms.push({ id: roomId, name: importedRoom.name, section_type: 'room' })
+
+      // Source data: all items become _extra (Check In reference column)
+      sourceBuilt[roomId] = { _extra: [] }
+      // Report data: all items become editable _extra rows
+      reportBuilt[roomId] = { _extra: [] }
+
+      for (const imp of (importedRoom.items || [])) {
+        const eid = `rex_${Date.now()}_${Math.random().toString(36).slice(2,6)}`
+        sourceBuilt[roomId]._extra.push({
+          _eid:        eid,
+          label:       imp.label       || '',
+          description: imp.description || '',
+          condition:   imp.condition   || '',
+        })
+        reportBuilt[roomId]._extra.push({
+          _eid:        eid,
+          label:       imp.label || '',
+          description: '',
+          condition:   '',
+        })
       }
     }
   }
 
-  // Map fixed sections by type
+  // ── Fixed sections ───────────────────────────────────────────────────
   for (const [type, rows] of Object.entries(parsed.fixedSections || {})) {
     const sec = templateFixed.find(s => s.type === type)
     if (!sec || !Array.isArray(rows)) continue
-    built[sec.id] = {}
+    sourceBuilt[sec.id] = {}
     for (const [i, row] of rows.entries()) {
-      const templateRow = sec.rows?.[i]
+      const templateRow = (sec.rows || [])[i]
       const rowId = templateRow?.id || ('imp_fx_' + i)
-      built[sec.id][String(rowId)] = { ...row }
+      sourceBuilt[sec.id][String(rowId)] = { ...row }
     }
   }
 
-  sourceReportData.value = built
-  // Persist so it survives page reload
-  reportData.value._importedSource = built
+  // ── Apply ────────────────────────────────────────────────────────────
+  sourceReportData.value = sourceBuilt
+
+  // Merge reportBuilt into existing reportData (don't wipe existing entries)
+  for (const [sid, sData] of Object.entries(reportBuilt)) {
+    if (!reportData.value[sid]) reportData.value[sid] = {}
+    Object.assign(reportData.value[sid], sData)
+  }
+
+  // Persist imported source + imported room definitions
+  reportData.value._importedSource = sourceBuilt
+  reportData.value._importedRooms  = [
+    ...(reportData.value._importedRooms || []).filter(r => !importedRooms.find(nr => nr.id === r.id)),
+    ...importedRooms,
+  ]
+
   unsaved.value = true
   await save(false)
 
   pdfImport.value.applied = true
   pdfImport.value.show    = false
+
   const roomCount = (parsed.rooms || []).length
   const itemCount = (parsed.rooms || []).reduce((s, r) => s + (r.items || []).length, 0)
-  toast.success(`Imported ${roomCount} rooms, ${itemCount} items from PDF`)
+
+  if (unmatchedCount > 0) {
+    toast.success(`Imported ${roomCount} rooms (${matchedCount} matched template, ${unmatchedCount} added as new), ${itemCount} items`)
+  } else {
+    toast.success(`Imported ${roomCount} rooms, ${itemCount} items from PDF`)
+  }
 }
 
 // ── Check In photo viewer (for Check Out clerks) ──────────────────────
@@ -1051,24 +1132,35 @@ const fixedSections = computed(() =>
 // Rooms come from the template's relational sections (section_type === 'room')
 // The room renderer expects room.sections as the list of items
 const rooms = computed(() => {
+  let templateRooms = []
   if (!template.value?.sections) {
     // Fallback: try legacy JSON blob
     try {
       const parsed = JSON.parse(template.value?.content || '{}')
-      return (parsed.rooms || []).filter(r => r.enabled !== false)
-    } catch { return [] }
+      templateRooms = (parsed.rooms || []).filter(r => r.enabled !== false)
+    } catch { templateRooms = [] }
+  } else {
+    templateRooms = template.value.sections
+      .filter(s => s.section_type === 'room')
+      .map(s => ({
+        ...s,
+        sections: (s.items || []).map(item => ({
+          ...item,
+          label:          item.name || item.label || '',
+          hasDescription: true,
+          hasCondition:   item.requires_condition !== false,
+        })),
+      }))
   }
-  return template.value.sections
-    .filter(s => s.section_type === 'room')
-    .map(s => ({
-      ...s,
-      sections: (s.items || []).map(item => ({
-        ...item,
-        label:          item.name || item.label || '',
-        hasDescription: true,
-        hasCondition:   item.requires_condition !== false,
-      })),
-    }))
+
+  // Append any rooms imported from PDF that didn't match the template
+  const importedRooms = (reportData.value._importedRooms || []).map(r => ({
+    ...r,
+    _isImported: true,
+    sections:    [],   // items are stored as _extra in reportData
+  }))
+
+  return [...templateRooms, ...importedRooms]
 })
 const allSections   = computed(() => [...fixedSections.value, ...rooms.value])
 
@@ -1379,17 +1471,8 @@ const hasAiTypist      = ref(false)       // true if this inspection is assigned
 
 function checkAiTypist() {
   if (!inspection.value) return
-  // typist info is nested under inspection.value.typist.name (not typist_name)
   hasAiTypist.value = inspection.value.typist_is_ai === true ||
-                      inspection.value.typist?.name === 'AI Typist' ||
                       inspection.value.typist_name === 'AI Typist'
-}
-
-async function checkAiKeys() {
-  try {
-    const res = await api.checkAiStatus()
-    aiKeysAvailable.value = !!(res.data.anthropic_key_set && res.data.openai_key_set)
-  } catch { aiKeysAvailable.value = false }
 }
 
 function isItemAiProcessing(sid, rid) {
@@ -1472,7 +1555,7 @@ async function _startRecording(label, itemKey = null) {
       // ── AI: per-item auto-transcribe ──────────────────────────────────
       // If this was a per-item recording and AI typist is assigned,
       // immediately send to Whisper + Claude
-      if (itemKey && (hasAiTypist.value || aiKeysAvailable.value)) {
+      if (itemKey && hasAiTypist.value) {
         const parts     = itemKey.split(':')
         const sid       = parts[0]
         const rid       = parts.slice(1).join(':')
@@ -3015,7 +3098,7 @@ async function moveToReview() {
         <span>⚠ {{ aiError }}</span>
         <button class="am-ai-error-dismiss" @click="aiError = ''">×</button>
       </div>
-      <div v-else-if="hasAiTypist || aiKeysAvailable" class="am-ai-status am-ai-ready">
+      <div v-else-if="hasAiTypist" class="am-ai-status am-ai-ready">
         <span>✨ AI Typist active — item recordings fill automatically</span>
         <button
           v-if="recordings.filter(r => !r.itemKey).length"

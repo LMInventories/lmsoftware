@@ -33,6 +33,7 @@ def create_app():
         'http://localhost:3000',
         'http://localhost:8081',
         'https://app.lminventories.co.uk',
+        'https://lmsoftware-tau.vercel.app',
     ]
     # Allow any Vercel preview URL for the project
     CORS(app, resources={

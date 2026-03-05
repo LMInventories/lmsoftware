@@ -108,6 +108,7 @@ const api = {
   reorderItem(id, dir)      { return http.post(`/api/templates/items/${id}/reorder`, { direction: dir }) },
   addSection(templateId, data)   { return http.post(`/api/templates/${templateId}/sections`, data) },
   duplicateSection(sectionId)    { return http.post(`/api/templates/sections/${sectionId}/duplicate`) },
+  updateSection(sectionId, data) { return http.put(`/api/templates/sections/${sectionId}`, data) },
   deleteSection(sectionId)       { return http.delete(`/api/templates/sections/${sectionId}`) },
   addItem(sectionId, data)       { return http.post(`/api/templates/sections/${sectionId}/items`, data) },
   updateItem(itemId, data)       { return http.put(`/api/templates/items/${itemId}`, data) },

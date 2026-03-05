@@ -35,7 +35,6 @@ def create_app():
         'https://app.lminventories.co.uk',
         'https://lmsoftware-tau.vercel.app',
     ]
-    # Allow any Vercel preview URL for the project
     CORS(app, resources={
         r'/api/*': {
             'origins': allowed_origins,
@@ -49,29 +48,31 @@ def create_app():
     JWTManager(app)
 
     # ── Blueprints ────────────────────────────────────────────────────────────
-    from routes.auth           import auth_bp
-    from routes.users          import users_bp
-    from routes.clients        import clients_bp
-    from routes.properties     import properties_bp
-    from routes.inspections    import inspections_bp
-    from routes.dashboard      import dashboard_bp
-    from routes.templates      import templates_bp
-    from routes.fixed_sections import fixed_sections_bp
-    from routes.ai             import ai_bp
-    from routes.transcribe     import transcribe_bp
-    from routes.pdf_import     import pdf_import_bp
+    from routes.auth            import auth_bp
+    from routes.users           import users_bp
+    from routes.clients         import clients_bp
+    from routes.properties      import properties_bp
+    from routes.inspections     import inspections_bp
+    from routes.dashboard       import dashboard_bp
+    from routes.templates       import templates_bp
+    from routes.fixed_sections  import fixed_sections_bp
+    from routes.ai              import ai_bp
+    from routes.transcribe      import transcribe_bp
+    from routes.pdf_import      import pdf_import_bp
+    from routes.section_presets import section_presets_bp  # ← added
 
-    app.register_blueprint(auth_bp,           url_prefix='/api/auth')
-    app.register_blueprint(users_bp,          url_prefix='/api/users')
-    app.register_blueprint(clients_bp,        url_prefix='/api/clients')
-    app.register_blueprint(properties_bp,     url_prefix='/api/properties')
-    app.register_blueprint(inspections_bp,    url_prefix='/api/inspections')
-    app.register_blueprint(dashboard_bp,      url_prefix='/api/dashboard')
-    app.register_blueprint(templates_bp,      url_prefix='/api/templates')
-    app.register_blueprint(fixed_sections_bp, url_prefix='/api/fixed-sections')
-    app.register_blueprint(ai_bp,             url_prefix='/api/ai')
-    app.register_blueprint(transcribe_bp,     url_prefix='/api/transcribe')
-    app.register_blueprint(pdf_import_bp,     url_prefix='/api/ai')
+    app.register_blueprint(auth_bp,            url_prefix='/api/auth')
+    app.register_blueprint(users_bp,           url_prefix='/api/users')
+    app.register_blueprint(clients_bp,         url_prefix='/api/clients')
+    app.register_blueprint(properties_bp,      url_prefix='/api/properties')
+    app.register_blueprint(inspections_bp,     url_prefix='/api/inspections')
+    app.register_blueprint(dashboard_bp,       url_prefix='/api/dashboard')
+    app.register_blueprint(templates_bp,       url_prefix='/api/templates')
+    app.register_blueprint(fixed_sections_bp,  url_prefix='/api/fixed-sections')
+    app.register_blueprint(ai_bp,              url_prefix='/api/ai')
+    app.register_blueprint(transcribe_bp,      url_prefix='/api/transcribe')
+    app.register_blueprint(pdf_import_bp,      url_prefix='/api/ai')
+    app.register_blueprint(section_presets_bp, url_prefix='/api/section-presets')  # ← added
 
     # Optional blueprints — register only if the file exists
     _optional = [

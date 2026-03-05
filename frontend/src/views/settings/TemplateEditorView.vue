@@ -6,6 +6,9 @@ import api from '../../services/api'
 const route  = useRoute()
 const router = useRouter()
 
+// Auto-focus directive for inline rename input
+const vFocus = { mounted: (el) => el.focus() }
+
 const template = ref(null)
 const loading  = ref(true)
 const saving   = ref(false)
@@ -16,6 +19,34 @@ const showPresetPicker     = ref(false)  // step 2: pick + rename presets
 const showSavePresetModal  = ref(null)   // section object being saved
 const showAddItemModal     = ref(null)   // section id
 const showEditItemModal    = ref(null)   // item object
+
+// ── Inline section rename ─────────────────────────────────────────────────────
+// renamingSection: { id, name } — the section currently being renamed inline
+const renamingSection = ref(null)
+
+function startRenameSection(section) {
+  renamingSection.value = { id: section.id, name: section.name }
+}
+
+async function commitRenameSection(section) {
+  if (!renamingSection.value || renamingSection.value.id !== section.id) return
+  const newName = renamingSection.value.name.trim()
+  if (!newName) { renamingSection.value = null; return }
+  if (newName === section.name) { renamingSection.value = null; return }
+  try {
+    await api.updateSection(section.id, { name: newName })
+    section.name = newName
+  } catch (err) {
+    console.error(err)
+    alert('Failed to rename section')
+  } finally {
+    renamingSection.value = null
+  }
+}
+
+function cancelRenameSection() {
+  renamingSection.value = null
+}
 
 // ── Preset picker state ───────────────────────────────────────────────────────
 const presets         = ref([])
@@ -311,7 +342,23 @@ onMounted(fetchTemplate)
           <div v-for="(section, index) in roomSections" :key="section.id" class="section-card">
 
             <div class="section-header">
-              <span class="section-name">{{ section.name }}</span>
+              <!-- Inline rename: click the name to edit, blur/enter to save, Escape to cancel -->
+              <template v-if="renamingSection && renamingSection.id === section.id">
+                <input
+                  class="section-name-input"
+                  v-model="renamingSection.name"
+                  @blur="commitRenameSection(section)"
+                  @keyup.enter="commitRenameSection(section)"
+                  @keyup.escape="cancelRenameSection"
+                  v-focus
+                />
+              </template>
+              <span
+                v-else
+                class="section-name section-name-editable"
+                @click="startRenameSection(section)"
+                title="Click to rename"
+              >{{ section.name }} ✎</span>
               <div class="section-actions">
                 <button @click="moveSectionUp(section)"   :disabled="index === 0"                      class="btn-icon" title="Move Up">↑</button>
                 <button @click="moveSectionDown(section)" :disabled="index === roomSections.length - 1" class="btn-icon" title="Move Down">↓</button>
@@ -734,6 +781,28 @@ onMounted(fetchTemplate)
   margin-bottom: 6px;
 }
 
+.section-name-editable {
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 2px 4px;
+  transition: background 0.15s;
+}
+.section-name-editable:hover {
+  background: rgba(99, 102, 241, 0.08);
+  color: #6366f1;
+}
+.section-name-input {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1e293b;
+  border: 2px solid #6366f1;
+  border-radius: 6px;
+  padding: 3px 8px;
+  outline: none;
+  flex: 1;
+  min-width: 0;
+  background: white;
+}
 .section-name { font-size: 15px; font-weight: 700; color: #1e293b; }
 
 .section-badge {

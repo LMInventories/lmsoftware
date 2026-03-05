@@ -1745,24 +1745,46 @@ async function _transcribeItem(rec, sectionId, rowId, itemLabel, roomName, secti
     const row = reportData.value[sid][rid]
     const st  = result.sectionType || sectionType
 
-    // Map returned fields to the correct reportData fields for this section type
+    // ── Edit mode helpers ─────────────────────────────────────────────────
+    // editMode:  'normal' | 'overwrite' | 'append'
+    // editField: 'description' | 'condition' | null
+    const editMode  = result.editMode  || 'normal'
+    const editField = result.editField || null
+
+    function shouldWrite(field, value) {
+      if (!value) return false
+      if (editMode === 'normal')    return !row[field]           // only if empty
+      if (editMode === 'overwrite') return editField === field   // overwrite target field
+      if (editMode === 'append')    return editField === field   // append to target field
+      return false
+    }
+    function writeField(field, value) {
+      if (editMode === 'append' && row[field]) {
+        row[field] = row[field].trimEnd() + '
+' + value
+      } else {
+        row[field] = value
+      }
+      changed = true
+    }
+
+    // ── Map returned fields to the correct reportData fields ───────────
     if (st === 'meter_readings') {
       if (result.locationSerial && !row.locationSerial) { row.locationSerial = result.locationSerial; changed = true }
       if (result.reading        && !row.reading)        { row.reading        = result.reading;        changed = true }
     } else if (st === 'keys') {
-      if (result.description && !row.description) { row.description = result.description; changed = true }
+      if (shouldWrite('description', result.description)) writeField('description', result.description)
     } else if (st === 'condition_summary') {
-      if (result.condition && !row.condition) { row.condition = result.condition; changed = true }
+      if (shouldWrite('condition', result.condition)) writeField('condition', result.condition)
     } else if (st === 'cleaning_summary') {
-      // cleaning uses cleanlinessNotes field, not notes
       const cn = result.cleanlinessNotes || result.notes
       if (cn && !row.cleanlinessNotes) { row.cleanlinessNotes = cn; changed = true }
     } else if (st === 'fire_door_safety' || st === 'health_safety' || st === 'smoke_alarms') {
       if (result.notes && !row.notes) { row.notes = result.notes; changed = true }
     } else {
       // Default room item — description + condition
-      if (result.description && !row.description) { row.description = result.description; changed = true }
-      if (result.condition   && !row.condition)   { row.condition   = result.condition;   changed = true }
+      if (shouldWrite('description', result.description)) writeField('description', result.description)
+      if (shouldWrite('condition',   result.condition))   writeField('condition',   result.condition)
     }
 
     console.log('[AI transcribe] changed:', changed, 'data now:', reportData.value[sid][rid])
@@ -1770,10 +1792,15 @@ async function _transcribeItem(rec, sectionId, rowId, itemLabel, roomName, secti
     if (changed) {
       unsaved.value = true
       await save(false)
-      toast.success(`✨ AI filled: ${itemLabel}`)
+      if (editMode === 'overwrite') {
+        toast.success(`✏️ Amended: ${itemLabel}`)
+      } else if (editMode === 'append') {
+        toast.success(`➕ Added to: ${itemLabel}`)
+      } else {
+        toast.success(`✨ AI filled: ${itemLabel}`)
+      }
     } else if (result.transcript) {
-      // Fields already had content — still show a success
-      toast.success(`✨ Transcribed: ${itemLabel} (fields already filled)`)
+      toast.info(`✨ Transcribed: ${itemLabel} (no changes made)`)
     }
 
   } catch (err) {

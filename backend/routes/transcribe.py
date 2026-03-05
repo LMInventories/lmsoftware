@@ -10,6 +10,44 @@ from models import db, TranscriptionUsage
 transcribe_bp = Blueprint('transcribe', __name__)
 
 
+# ── Edit-mode detection ────────────────────────────────────────────────────
+# Clerks can prefix a recording with trigger phrases to amend existing fields
+# rather than filling only-if-empty.
+#
+#   "Amend description ..." → overwrite description field
+#   "Amend condition ..."   → overwrite condition field
+#   "Add to description ..."→ append to description field
+#   "Add to condition ..."  → append to condition field
+
+_EDIT_TRIGGERS = [
+    ('amend description',     'overwrite', 'description'),
+    ('amend the description',  'overwrite', 'description'),
+    ('amend condition',        'overwrite', 'condition'),
+    ('amend the condition',    'overwrite', 'condition'),
+    ('add to description',     'append',    'description'),
+    ('add to the description', 'append',    'description'),
+    ('add to condition',       'append',    'condition'),
+    ('add to the condition',   'append',    'condition'),
+    ('add to conditions',      'append',    'condition'),
+    ('add to the conditions',  'append',    'condition'),
+]
+
+def _detect_edit_mode(transcript: str):
+    """
+    Check if transcript starts with an edit-mode trigger phrase.
+    Returns (mode, field, cleaned_transcript).
+      mode:    'overwrite' | 'append' | 'normal'
+      field:   'description' | 'condition' | None
+      cleaned: transcript with trigger phrase stripped
+    """
+    lower = transcript.lower().strip()
+    for phrase, mode, field in _EDIT_TRIGGERS:
+        if lower.startswith(phrase):
+            cleaned = transcript[len(phrase):].lstrip(' ,.:-').strip()
+            return mode, field, cleaned
+    return 'normal', None, transcript
+
+
 # ── Helpers ────────────────────────────────────────────────────────────────
 
 def _whisper_transcribe(audio_bytes: bytes, mime_type: str) -> str:
@@ -315,10 +353,14 @@ def transcribe_item():
         return jsonify({'error': 'Invalid base64 audio data'}), 400
 
     try:
-        transcript = _whisper_transcribe(audio_bytes, mime_type)
+        raw_transcript = _whisper_transcribe(audio_bytes, mime_type)
 
-        if not transcript:
+        if not raw_transcript:
             return jsonify({'error': 'No speech detected in recording'}), 422
+
+        # Detect edit-mode trigger phrases before passing to Claude
+        edit_mode, edit_field, transcript = _detect_edit_mode(raw_transcript)
+        print(f'[transcribe/item] edit_mode={edit_mode!r} field={edit_field!r} transcript={transcript[:60]!r}')
 
         filled, filled_msg = _claude_fill_item(transcript, item_label, room_name, section_type)
 
@@ -339,7 +381,7 @@ def transcribe_item():
             pass  # never let logging break the response
 
         return jsonify({
-            'transcript':       transcript,
+            'transcript':       raw_transcript,   # return original for reference
             'description':      filled.get('description', ''),
             'condition':        filled.get('condition', ''),
             'notes':            filled.get('notes', ''),
@@ -349,6 +391,8 @@ def transcribe_item():
             'sectionId':        section_id,
             'rowId':            row_id,
             'sectionType':      section_type,
+            'editMode':         edit_mode,    # 'normal' | 'overwrite' | 'append'
+            'editField':        edit_field,   # 'description' | 'condition' | None
         })
 
     except Exception as e:

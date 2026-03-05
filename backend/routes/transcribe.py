@@ -141,6 +141,7 @@ SPLITTING rules:
 - Functional observations like "appear complete", "tested for power", "appears working"
   are ALWAYS condition, never description
 - If transcript only mentions condition, leave description blank
+- If the clerk mentions NO condition at all, default condition to "In good order"
 
 MULTI-COMPONENT FORMATTING — this is critical:
 - If the description contains multiple distinct physical components, put EACH on its own line using \n
@@ -159,7 +160,7 @@ MULTI-COMPONENT FORMATTING — this is critical:
 - When in doubt: if you would use a comma to separate two ideas, use \n instead
 
 Return ONLY valid JSON, no markdown:
-{"description": "...", "condition": ""}"""
+{"description": "...", "condition": "In good order"}"""
 
     prompt = f"""You are processing a UK property inspection dictation.
 

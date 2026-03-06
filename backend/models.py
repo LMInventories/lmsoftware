@@ -51,6 +51,7 @@ class Client(db.Model):
     primary_color         = db.Column(db.String(7), default='#1E3A8A')
     report_disclaimer     = db.Column(db.Text)
     report_color_override = db.Column(db.String(7))
+    report_photo_settings = db.Column(db.Text)             # JSON: photo placement prefs
     created_at            = db.Column(db.DateTime, default=datetime.utcnow)
 
     properties = db.relationship('Property', backref='client', lazy=True, cascade='all, delete-orphan')
@@ -66,8 +67,9 @@ class Client(db.Model):
             'logo':                  self.logo,
             'primary_color':         self.primary_color,
             'report_disclaimer':     self.report_disclaimer,
-            'report_color_override': self.report_color_override,
-            'created_at':            self.created_at.isoformat() if self.created_at else None,
+            'report_color_override':  self.report_color_override,
+            'report_photo_settings':  self.report_photo_settings,
+            'created_at':             self.created_at.isoformat() if self.created_at else None,
         }
 
 

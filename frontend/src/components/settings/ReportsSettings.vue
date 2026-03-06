@@ -18,6 +18,10 @@ const form = ref({
   report_header_text_color:   '#FFFFFF',
   report_body_text_color:     '#1e293b',
   report_orientation:         'portrait',
+  // Photo position settings
+  photo_property_overview:    'cover',        // always 'cover' — fixed, shown for clarity
+  photo_room_overview:        'above',        // 'above' | 'below'
+  photo_room_item:            'below',        // 'above' | 'below' | 'hyperlink'
 })
 
 const effectiveColor = computed(() => {
@@ -60,6 +64,12 @@ async function selectClient(id) {
     form.value.report_header_text_color   = selectedClient.value.report_header_text_color   || '#FFFFFF'
     form.value.report_body_text_color     = selectedClient.value.report_body_text_color     || '#1e293b'
     form.value.report_orientation         = selectedClient.value.report_orientation         || 'portrait'
+    // Photo settings — stored as JSON in report_photo_settings
+    const ps = (() => {
+      try { return JSON.parse(selectedClient.value.report_photo_settings || '{}') } catch { return {} }
+    })()
+    form.value.photo_room_overview = ps.photo_room_overview || 'above'
+    form.value.photo_room_item     = ps.photo_room_item     || 'below'
   } catch (err) {
     console.error('Failed to load client:', err)
   }
@@ -77,6 +87,10 @@ async function saveSettings() {
       report_header_text_color:   form.value.report_header_text_color,
       report_body_text_color:     form.value.report_body_text_color,
       report_orientation:         form.value.report_orientation,
+      report_photo_settings:      JSON.stringify({
+        photo_room_overview: form.value.photo_room_overview,
+        photo_room_item:     form.value.photo_room_item,
+      }),
     })
     saved.value = true
     if (selectedClient.value) {
@@ -85,6 +99,10 @@ async function saveSettings() {
       selectedClient.value.report_header_text_color = form.value.report_header_text_color
       selectedClient.value.report_body_text_color   = form.value.report_body_text_color
       selectedClient.value.report_orientation       = form.value.report_orientation
+      selectedClient.value.report_photo_settings     = JSON.stringify({
+        photo_room_overview: form.value.photo_room_overview,
+        photo_room_item:     form.value.photo_room_item,
+      })
     }
     setTimeout(() => saved.value = false, 2500)
   } catch (err) {
@@ -300,6 +318,109 @@ onMounted(() => fetchClients())
                   :style="{ background: p }" @click="form.report_body_text_color = p" :title="p"></div>
               </div>
             </div>
+          </div>
+        </div>
+
+        <!-- Photo Position -->
+        <div class="panel">
+          <div class="panel-hd">
+            <span class="panel-icon">📷</span>
+            Photo Placement
+          </div>
+          <p class="panel-desc">
+            Control where photos appear in compiled reports. Photos are always laid out 4 per row.
+          </p>
+
+          <!-- Property overview — fixed -->
+          <div class="photo-setting-row">
+            <div class="photo-setting-meta">
+              <span class="photo-setting-label">Property Overview Photo</span>
+              <span class="photo-setting-desc">The main exterior/property photo</span>
+            </div>
+            <div class="photo-setting-fixed">
+              <span class="photo-fixed-badge">📌 Always on cover page</span>
+            </div>
+          </div>
+
+          <div class="photo-setting-divider"></div>
+
+          <!-- Room overview photos -->
+          <div class="photo-setting-row">
+            <div class="photo-setting-meta">
+              <span class="photo-setting-label">Room Overview Photos</span>
+              <span class="photo-setting-desc">Wide shots of each room, uploaded per-room</span>
+            </div>
+            <div class="photo-pos-btns">
+              <button class="pos-btn" :class="{ active: form.photo_room_overview === 'above' }"
+                @click="form.photo_room_overview = 'above'">
+                <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+                  <rect x="2" y="2" width="24" height="7" rx="2" :fill="form.photo_room_overview === 'above' ? '#6366f1' : '#e2e8f0'"/>
+                  <rect x="2" y="12" width="24" height="3" rx="1" fill="#cbd5e1"/>
+                  <rect x="2" y="17" width="18" height="3" rx="1" fill="#e2e8f0"/>
+                  <rect x="2" y="22" width="21" height="3" rx="1" fill="#e2e8f0"/>
+                </svg>
+                <span>Above data</span>
+              </button>
+              <button class="pos-btn" :class="{ active: form.photo_room_overview === 'below' }"
+                @click="form.photo_room_overview = 'below'">
+                <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+                  <rect x="2" y="2" width="24" height="3" rx="1" fill="#cbd5e1"/>
+                  <rect x="2" y="7" width="18" height="3" rx="1" fill="#e2e8f0"/>
+                  <rect x="2" y="12" width="21" height="3" rx="1" fill="#e2e8f0"/>
+                  <rect x="2" y="19" width="24" height="7" rx="2" :fill="form.photo_room_overview === 'below' ? '#6366f1' : '#e2e8f0'"/>
+                </svg>
+                <span>Below data</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="photo-setting-divider"></div>
+
+          <!-- Room item photos -->
+          <div class="photo-setting-row">
+            <div class="photo-setting-meta">
+              <span class="photo-setting-label">Room Item Photos</span>
+              <span class="photo-setting-desc">Photos attached to individual items (door, window, etc.)</span>
+            </div>
+            <div class="photo-pos-btns">
+              <button class="pos-btn" :class="{ active: form.photo_room_item === 'above' }"
+                @click="form.photo_room_item = 'above'">
+                <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+                  <rect x="2" y="2" width="24" height="7" rx="2" :fill="form.photo_room_item === 'above' ? '#6366f1' : '#e2e8f0'"/>
+                  <rect x="2" y="12" width="24" height="3" rx="1" fill="#cbd5e1"/>
+                  <rect x="2" y="17" width="18" height="3" rx="1" fill="#e2e8f0"/>
+                  <rect x="2" y="22" width="21" height="3" rx="1" fill="#e2e8f0"/>
+                </svg>
+                <span>Above data</span>
+              </button>
+              <button class="pos-btn" :class="{ active: form.photo_room_item === 'below' }"
+                @click="form.photo_room_item = 'below'">
+                <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+                  <rect x="2" y="2" width="24" height="3" rx="1" fill="#cbd5e1"/>
+                  <rect x="2" y="7" width="18" height="3" rx="1" fill="#e2e8f0"/>
+                  <rect x="2" y="12" width="21" height="3" rx="1" fill="#e2e8f0"/>
+                  <rect x="2" y="19" width="24" height="7" rx="2" :fill="form.photo_room_item === 'below' ? '#6366f1' : '#e2e8f0'"/>
+                </svg>
+                <span>Below data</span>
+              </button>
+              <button class="pos-btn pos-btn--link" :class="{ active: form.photo_room_item === 'hyperlink' }"
+                @click="form.photo_room_item = 'hyperlink'">
+                <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+                  <rect x="2" y="2" width="24" height="3" rx="1" fill="#cbd5e1"/>
+                  <rect x="2" y="7" width="18" height="3" rx="1" fill="#e2e8f0"/>
+                  <rect x="2" y="12" width="21" height="3" rx="1" fill="#e2e8f0"/>
+                  <path d="M4 22 Q8 18 12 22 Q16 26 20 22" :stroke="form.photo_room_item === 'hyperlink' ? '#6366f1' : '#94a3b8'" stroke-width="2" fill="none" stroke-linecap="round"/>
+                  <circle cx="4" cy="22" r="1.5" :fill="form.photo_room_item === 'hyperlink' ? '#6366f1' : '#94a3b8'"/>
+                  <circle cx="20" cy="22" r="1.5" :fill="form.photo_room_item === 'hyperlink' ? '#6366f1' : '#94a3b8'"/>
+                </svg>
+                <span>Hyperlink</span>
+              </button>
+            </div>
+          </div>
+
+          <div v-if="form.photo_room_item === 'hyperlink'" class="hyperlink-notice">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            Hyperlink mode is a placeholder — photo linking will be configured once the storage server is set up. Photos will still be saved to the inspection; they just won't be embedded in the PDF.
           </div>
         </div>
 
@@ -785,6 +906,87 @@ onMounted(() => fetchClients())
 
 .fade-enter-active, .fade-leave-active { transition: opacity 0.3s; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
+
+/* ── Photo placement ──────────────────────────────────────── */
+.photo-setting-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 0;
+}
+
+.photo-setting-meta { flex: 1; min-width: 0; }
+.photo-setting-label { display: block; font-size: 13px; font-weight: 600; color: #1e293b; margin-bottom: 3px; }
+.photo-setting-desc  { display: block; font-size: 11px; color: #94a3b8; line-height: 1.4; }
+.photo-setting-divider { height: 1px; background: #f1f5f9; margin: 2px 0; }
+
+.photo-setting-fixed {
+  flex-shrink: 0;
+}
+
+.photo-fixed-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 11px;
+  background: #f0fdf4;
+  color: #166534;
+  border: 1px solid #bbf7d0;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.photo-pos-btns {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.pos-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 10px;
+  border: 2px solid #e5e7eb;
+  border-radius: 8px;
+  background: white;
+  cursor: pointer;
+  transition: all 0.15s;
+  min-width: 68px;
+}
+
+.pos-btn span {
+  font-size: 10px;
+  font-weight: 600;
+  color: #64748b;
+  white-space: nowrap;
+}
+
+.pos-btn:hover { border-color: #a5b4fc; background: #fafaff; }
+.pos-btn.active { border-color: #6366f1; background: #eef2ff; }
+.pos-btn.active span { color: #4338ca; }
+
+.pos-btn--link { min-width: 76px; }
+
+.hyperlink-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: #fefce8;
+  border: 1px solid #fde68a;
+  border-radius: 7px;
+  font-size: 12px;
+  color: #92400e;
+  line-height: 1.5;
+}
+
+.hyperlink-notice svg { flex-shrink: 0; margin-top: 1px; color: #d97706; }
 
 /* ── Preview column ───────────────────────────────────────── */
 .preview-col { position: sticky; top: 24px; }

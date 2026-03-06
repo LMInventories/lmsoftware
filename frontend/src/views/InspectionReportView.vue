@@ -283,60 +283,8 @@ async function runPdfImport() {
         .map(r => ({ id: r.id, name: r.name, items: (r.sections || r.items || []).map(i => ({ id: i.id, label: i.label })) }))
     }, null, 2) : 'No template — infer structure from PDF'
 
-    const prompt = `You are parsing a UK property inspection report PDF (inventory or check-in) to extract structured data for a Check Out system.
-
-Template structure available to match against:
-${templateStructure}
-
-Extract ALL rooms and items. For each item:
-- label: the item name
-- description: physical description of the item
-- condition: condition at time of check-in
-
-PDF format is typically: [Room.Item] [Item Name] [Description] [Condition at Check In] [Condition at Check Out]
-
-Return ONLY valid JSON — no markdown, no explanation:
-{
-  "rooms": [
-    {
-      "name": "Lounge",
-      "items": [
-        { "label": "Door, Frame, Threshold & Furniture", "description": "White painted panel door with chrome handle", "condition": "Appears in good condition" }
-      ]
-    }
-  ],
-  "fixedSections": {
-    "condition_summary": [{ "name": "General Condition", "condition": "Good overall" }],
-    "keys": [{ "name": "Front Door Key", "description": "2x Yale, 1x Deadlock" }],
-    "meter_readings": [{ "name": "Gas Meter", "locationSerial": "Under stairs SN123", "reading": "12345.6" }],
-    "cleaning_summary": [{ "name": "General Cleanliness", "cleanliness": "Professionally Cleaned", "cleanlinessNotes": "" }]
-  }
-}`
-
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model:      'claude-sonnet-4-6',
-        max_tokens: 8000,
-        messages: [{
-          role:    'user',
-          content: [
-            { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } },
-            { type: 'text',     text:   prompt }
-          ]
-        }]
-      })
-    })
-
-    if (!response.ok) {
-      const errBody = await response.text()
-      throw new Error(`API ${response.status}: ${errBody.slice(0, 200)}`)
-    }
-    const apiData = await response.json()
-    const rawText = (apiData.content || []).map(b => b.text || '').join('')
-    const clean   = rawText.replace(/```json[\s\S]*?```|```[\s\S]*?```/g, s => s.replace(/```json|```/g, '')).trim()
-    const parsed  = JSON.parse(clean)
+    const response = await api.pdfImport({ pdf: base64, templateStructure })
+    const parsed = response.data
     pdfImport.value.preview = parsed
   } catch (err) {
     console.error('PDF import error:', err)

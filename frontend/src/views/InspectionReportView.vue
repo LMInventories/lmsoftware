@@ -137,7 +137,16 @@ async function load() {
           delete reportData.value._recordings  // stored separately, restored by _restoreRecordings()
           // Restore imported source data if previously imported from PDF
           if (reportData.value._importedSource && Object.keys(sourceReportData.value).length === 0) {
-            sourceReportData.value = reportData.value._importedSource
+            const src = reportData.value._importedSource
+            // Rebuild _eid direct keys so getCI(roomId, eid, field) works after reload
+            for (const roomData of Object.values(src)) {
+              if (Array.isArray(roomData._extra)) {
+                for (const entry of roomData._extra) {
+                  if (entry._eid) roomData[entry._eid] = entry
+                }
+              }
+            }
+            sourceReportData.value = src
           }
         } catch { reportData.value = {} }
       }
@@ -274,9 +283,60 @@ async function runPdfImport() {
         .map(r => ({ id: r.id, name: r.name, items: (r.sections || r.items || []).map(i => ({ id: i.id, label: i.label })) }))
     }, null, 2) : 'No template — infer structure from PDF'
 
-    const response = await api.pdfImport({ pdf: base64, templateStructure })
+    const prompt = `You are parsing a UK property inspection report PDF (inventory or check-in) to extract structured data for a Check Out system.
 
-    const parsed = response.data
+Template structure available to match against:
+${templateStructure}
+
+Extract ALL rooms and items. For each item:
+- label: the item name
+- description: physical description of the item
+- condition: condition at time of check-in
+
+PDF format is typically: [Room.Item] [Item Name] [Description] [Condition at Check In] [Condition at Check Out]
+
+Return ONLY valid JSON — no markdown, no explanation:
+{
+  "rooms": [
+    {
+      "name": "Lounge",
+      "items": [
+        { "label": "Door, Frame, Threshold & Furniture", "description": "White painted panel door with chrome handle", "condition": "Appears in good condition" }
+      ]
+    }
+  ],
+  "fixedSections": {
+    "condition_summary": [{ "name": "General Condition", "condition": "Good overall" }],
+    "keys": [{ "name": "Front Door Key", "description": "2x Yale, 1x Deadlock" }],
+    "meter_readings": [{ "name": "Gas Meter", "locationSerial": "Under stairs SN123", "reading": "12345.6" }],
+    "cleaning_summary": [{ "name": "General Cleanliness", "cleanliness": "Professionally Cleaned", "cleanlinessNotes": "" }]
+  }
+}`
+
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model:      'claude-sonnet-4-6',
+        max_tokens: 8000,
+        messages: [{
+          role:    'user',
+          content: [
+            { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } },
+            { type: 'text',     text:   prompt }
+          ]
+        }]
+      })
+    })
+
+    if (!response.ok) {
+      const errBody = await response.text()
+      throw new Error(`API ${response.status}: ${errBody.slice(0, 200)}`)
+    }
+    const apiData = await response.json()
+    const rawText = (apiData.content || []).map(b => b.text || '').join('')
+    const clean   = rawText.replace(/```json[\s\S]*?```|```[\s\S]*?```/g, s => s.replace(/```json|```/g, '')).trim()
+    const parsed  = JSON.parse(clean)
     pdfImport.value.preview = parsed
   } catch (err) {
     console.error('PDF import error:', err)
@@ -345,12 +405,15 @@ async function applyPdfImport() {
           // Unmatched item within a matched room — add as _extra to source
           if (!sourceBuilt[roomId]._extra) sourceBuilt[roomId]._extra = []
           const eid = `rex_${Date.now()}_${Math.random().toString(36).slice(2,6)}`
-          sourceBuilt[roomId]._extra.push({
+          const extraEntry = {
             _eid:        eid,
             label:       imp.label       || '',
             description: imp.description || '',
             condition:   imp.condition   || '',
-          })
+          }
+          sourceBuilt[roomId]._extra.push(extraEntry)
+          // Also key by _eid directly so getCI(roomId, eid, field) works
+          sourceBuilt[roomId][eid] = extraEntry
           // Also create empty editable row in reportData
           if (!reportBuilt[roomId]) reportBuilt[roomId] = {}
           if (!reportBuilt[roomId]._extra) reportBuilt[roomId]._extra = []
@@ -372,12 +435,15 @@ async function applyPdfImport() {
 
       for (const imp of (importedRoom.items || [])) {
         const eid = `rex_${Date.now()}_${Math.random().toString(36).slice(2,6)}`
-        sourceBuilt[roomId]._extra.push({
+        const extraEntry = {
           _eid:        eid,
           label:       imp.label       || '',
           description: imp.description || '',
           condition:   imp.condition   || '',
-        })
+        }
+        sourceBuilt[roomId]._extra.push(extraEntry)
+        // Also key by _eid directly so getCI(roomId, eid, field) works
+        sourceBuilt[roomId][eid] = extraEntry
         reportBuilt[roomId]._extra.push({
           _eid:        eid,
           label:       imp.label || '',

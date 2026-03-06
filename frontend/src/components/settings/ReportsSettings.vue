@@ -22,6 +22,7 @@ const form = ref({
   photo_property_overview:    'cover',        // always 'cover' — fixed, shown for clarity
   photo_room_overview:        'above',        // 'above' | 'below'
   photo_room_item:            'below',        // 'above' | 'below' | 'hyperlink'
+  show_photo_timestamp:       false,          // overlay timestamp on enlarged photos
 })
 
 const effectiveColor = computed(() => {
@@ -68,8 +69,9 @@ async function selectClient(id) {
     const ps = (() => {
       try { return JSON.parse(selectedClient.value.report_photo_settings || '{}') } catch { return {} }
     })()
-    form.value.photo_room_overview = ps.photo_room_overview || 'above'
-    form.value.photo_room_item     = ps.photo_room_item     || 'below'
+    form.value.photo_room_overview    = ps.photo_room_overview    || 'above'
+    form.value.photo_room_item        = ps.photo_room_item        || 'below'
+    form.value.show_photo_timestamp   = ps.show_photo_timestamp   || false
   } catch (err) {
     console.error('Failed to load client:', err)
   }
@@ -88,8 +90,9 @@ async function saveSettings() {
       report_body_text_color:     form.value.report_body_text_color,
       report_orientation:         form.value.report_orientation,
       report_photo_settings:      JSON.stringify({
-        photo_room_overview: form.value.photo_room_overview,
-        photo_room_item:     form.value.photo_room_item,
+        photo_room_overview:   form.value.photo_room_overview,
+        photo_room_item:       form.value.photo_room_item,
+        show_photo_timestamp:  form.value.show_photo_timestamp,
       }),
     })
     saved.value = true
@@ -421,6 +424,22 @@ onMounted(() => fetchClients())
           <div v-if="form.photo_room_item === 'hyperlink'" class="hyperlink-notice">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
             Hyperlink mode is a placeholder — photo linking will be configured once the storage server is set up. Photos will still be saved to the inspection; they just won't be embedded in the PDF.
+          </div>
+
+          <div class="photo-setting-divider" style="margin-top:10px"></div>
+
+          <!-- Timestamp overlay -->
+          <div class="photo-setting-row" style="padding-top:14px">
+            <div class="photo-setting-meta">
+              <span class="photo-setting-label">Photo Timestamps</span>
+              <span class="photo-setting-desc">Show date &amp; time overlay on enlarged photos — useful for deposit disputes</span>
+            </div>
+            <label class="toggle-row" style="margin-bottom:0">
+              <div class="toggle" :class="{ on: form.show_photo_timestamp }" @click="form.show_photo_timestamp = !form.show_photo_timestamp">
+                <div class="toggle-thumb"></div>
+              </div>
+              <span class="toggle-title" style="font-size:12px">{{ form.show_photo_timestamp ? 'On' : 'Off' }}</span>
+            </label>
           </div>
         </div>
 

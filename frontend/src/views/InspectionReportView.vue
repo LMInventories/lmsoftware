@@ -163,6 +163,14 @@ async function load() {
       } catch {}
     }
 
+    // Load client photo settings (for timestamp overlay etc.)
+    if (inspection.value.client_id) {
+      try {
+        const cRes = await api.getClient(inspection.value.client_id)
+        clientPhotoSettings.value = JSON.parse(cRes.data.report_photo_settings || '{}')
+      } catch { clientPhotoSettings.value = {} }
+    }
+
     // Load system-wide fixed sections (configured in Settings → Fixed Sections)
     try {
       const fsRes = await api.getFixedSections()
@@ -511,6 +519,10 @@ function addPhotos(sectionId, rowId, files) {
     const reader = new FileReader()
     reader.onload = ev => {
       reportData.value[sid][rid]._photos.push(ev.target.result)
+      if (!reportData.value[sid][rid]._photoTs) reportData.value[sid][rid]._photoTs = []
+      // Pad _photoTs to match _photos length, then set timestamp for this photo
+      const idx = reportData.value[sid][rid]._photos.length - 1
+      reportData.value[sid][rid]._photoTs[idx] = new Date().toISOString()
       unsaved.value = true
     }
     reader.readAsDataURL(file)
@@ -569,6 +581,9 @@ const photoViewer = ref({
   show: false, photos: [], index: 0, ref: '', label: '',
   sectionId: null, rowId: null, // source location for move/delete
 })
+// Client photo settings — loaded from report_photo_settings JSON on the client record
+const clientPhotoSettings = ref({})
+const showPhotoTimestamp = computed(() => clientPhotoSettings.value.show_photo_timestamp === true)
 // Multi-select state: set of selected indices
 const lbSelected  = ref(new Set())
 const lbMoving    = ref(false)   // whether move-picker is open
@@ -2858,6 +2873,13 @@ async function moveToReview() {
             <div v-if="lbSelected.has(photoViewer.index)" class="lb-img-check">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="white" stroke="white" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
             </div>
+            <!-- Timestamp overlay -->
+            <div
+              v-if="showPhotoTimestamp && photoViewer.sectionId && reportData[photoViewer.sectionId]?.[photoViewer.rowId]?._photoTs?.[photoViewer.index]"
+              class="lb-timestamp"
+            >
+              {{ new Date(reportData[photoViewer.sectionId][photoViewer.rowId]._photoTs[photoViewer.index]).toLocaleString('en-GB', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' }) }}
+            </div>
           </div>
 
           <button class="ci-nav ci-nav-next" @click="photoViewerNext" :disabled="photoViewer.index === photoViewer.photos.length - 1">›</button>
@@ -3860,4 +3882,20 @@ async function moveToReview() {
 /* Item mic button AI processing state — pulsing indigo */
 .mic-ai{background:rgba(99,102,241,0.15)!important;border-color:#6366f1!important;animation:mic-ai-pulse 1.2s ease-in-out infinite}
 @keyframes mic-ai-pulse{0%,100%{opacity:1}50%{opacity:0.5}}
+
+/* ── Photo timestamp overlay ─────────────────────────────────────────────── */
+.lb-timestamp {
+  position: absolute;
+  bottom: 10px;
+  right: 10px;
+  background: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 9px;
+  border-radius: 5px;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+  font-family: 'Courier New', monospace;
+}
 </style>

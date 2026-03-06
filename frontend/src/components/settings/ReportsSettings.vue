@@ -23,6 +23,7 @@ const form = ref({
   photo_room_overview:        'above',        // 'above' | 'below'
   photo_room_item:            'below',        // 'above' | 'below' | 'hyperlink'
   show_photo_timestamp:       false,          // overlay timestamp on enlarged photos
+  action_summary_position:    'bottom',       // 'top' | 'bottom' | 'none'
 })
 
 const effectiveColor = computed(() => {
@@ -71,7 +72,8 @@ async function selectClient(id) {
     })()
     form.value.photo_room_overview    = ps.photo_room_overview    || 'above'
     form.value.photo_room_item        = ps.photo_room_item        || 'below'
-    form.value.show_photo_timestamp   = ps.show_photo_timestamp   || false
+    form.value.show_photo_timestamp      = ps.show_photo_timestamp      || false
+    form.value.action_summary_position  = ps.action_summary_position  || 'bottom'
   } catch (err) {
     console.error('Failed to load client:', err)
   }
@@ -92,7 +94,8 @@ async function saveSettings() {
       report_photo_settings:      JSON.stringify({
         photo_room_overview:   form.value.photo_room_overview,
         photo_room_item:       form.value.photo_room_item,
-        show_photo_timestamp:  form.value.show_photo_timestamp,
+        show_photo_timestamp:      form.value.show_photo_timestamp,
+        action_summary_position:  form.value.action_summary_position,
       }),
     })
     saved.value = true
@@ -103,8 +106,10 @@ async function saveSettings() {
       selectedClient.value.report_body_text_color   = form.value.report_body_text_color
       selectedClient.value.report_orientation       = form.value.report_orientation
       selectedClient.value.report_photo_settings     = JSON.stringify({
-        photo_room_overview: form.value.photo_room_overview,
-        photo_room_item:     form.value.photo_room_item,
+        photo_room_overview:      form.value.photo_room_overview,
+        photo_room_item:          form.value.photo_room_item,
+        show_photo_timestamp:     form.value.show_photo_timestamp,
+        action_summary_position:  form.value.action_summary_position,
       })
     }
     setTimeout(() => saved.value = false, 2500)
@@ -440,6 +445,49 @@ onMounted(() => fetchClients())
               </div>
               <span class="toggle-title" style="font-size:12px">{{ form.show_photo_timestamp ? 'On' : 'Off' }}</span>
             </label>
+          </div>
+        </div>
+
+        <!-- Action Summary -->
+        <div class="panel">
+          <div class="panel-hd">
+            <span class="panel-icon">📋</span>
+            Check Out Action Summary
+          </div>
+          <p class="panel-desc">
+            Adds a summary page to Check Out reports listing all flagged items grouped by their assigned action — e.g. Repair, Replace, Clean. Helps clients see what needs doing and by whom at a glance.
+          </p>
+
+          <div class="action-pos-row">
+            <button class="action-pos-btn" :class="{ active: form.action_summary_position === 'top' }" @click="form.action_summary_position = 'top'">
+              <div class="action-pos-diagram">
+                <div class="apd-bar apd-bar--summary" :class="{ lit: form.action_summary_position === 'top' }">Summary</div>
+                <div class="apd-bar apd-bar--fixed">Fixed sections</div>
+                <div class="apd-bar apd-bar--room">Rooms</div>
+              </div>
+              <span class="action-pos-label">Top of report</span>
+              <span class="action-pos-desc">Before fixed sections</span>
+            </button>
+
+            <button class="action-pos-btn" :class="{ active: form.action_summary_position === 'bottom' }" @click="form.action_summary_position = 'bottom'">
+              <div class="action-pos-diagram">
+                <div class="apd-bar apd-bar--fixed">Fixed sections</div>
+                <div class="apd-bar apd-bar--room">Rooms</div>
+                <div class="apd-bar apd-bar--summary" :class="{ lit: form.action_summary_position === 'bottom' }">Summary</div>
+              </div>
+              <span class="action-pos-label">Bottom of report</span>
+              <span class="action-pos-desc">After all rooms</span>
+            </button>
+
+            <button class="action-pos-btn" :class="{ active: form.action_summary_position === 'none' }" @click="form.action_summary_position = 'none'">
+              <div class="action-pos-diagram">
+                <div class="apd-bar apd-bar--fixed">Fixed sections</div>
+                <div class="apd-bar apd-bar--room">Rooms</div>
+                <div class="apd-bar apd-bar--none">No summary</div>
+              </div>
+              <span class="action-pos-label">Don't include</span>
+              <span class="action-pos-desc">No summary page</span>
+            </button>
           </div>
         </div>
 
@@ -925,6 +973,46 @@ onMounted(() => fetchClients())
 
 .fade-enter-active, .fade-leave-active { transition: opacity 0.3s; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
+
+/* ── Action summary position ──────────────────────────────── */
+.action-pos-row { display: flex; gap: 10px; }
+
+.action-pos-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 10px;
+  border: 2px solid #e5e7eb;
+  border-radius: 10px;
+  background: white;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: center;
+}
+.action-pos-btn:hover { border-color: #a5b4fc; background: #fafaff; }
+.action-pos-btn.active { border-color: #6366f1; background: #eef2ff; }
+
+.action-pos-diagram { display: flex; flex-direction: column; gap: 3px; width: 100%; }
+
+.apd-bar {
+  border-radius: 3px;
+  padding: 3px 0;
+  font-size: 9px;
+  font-weight: 700;
+  text-align: center;
+  letter-spacing: 0.02em;
+}
+.apd-bar--fixed   { background: #e2e8f0; color: #64748b; }
+.apd-bar--room    { background: #dbeafe; color: #1d4ed8; }
+.apd-bar--summary { background: #fde68a; color: #92400e; transition: background 0.15s, color 0.15s; }
+.apd-bar--summary.lit { background: #f59e0b; color: white; }
+.apd-bar--none    { background: #f1f5f9; color: #cbd5e1; font-style: italic; }
+
+.action-pos-label { font-size: 12px; font-weight: 700; color: #1e293b; }
+.action-pos-btn.active .action-pos-label { color: #4338ca; }
+.action-pos-desc  { font-size: 10px; color: #94a3b8; }
 
 /* ── Photo placement ──────────────────────────────────────── */
 .photo-setting-row {

@@ -163,13 +163,17 @@ async function load() {
       } catch {}
     }
 
-    // Load client photo settings (for timestamp overlay etc.)
+    // Load client photo settings (for timestamp overlay etc.) and action catalogue
     if (inspection.value.client_id) {
       try {
         const cRes = await api.getClient(inspection.value.client_id)
         clientPhotoSettings.value = JSON.parse(cRes.data.report_photo_settings || '{}')
       } catch { clientPhotoSettings.value = {} }
     }
+    try {
+      const aRes = await api.getActions()
+      actionCatalogue.value = aRes.data.actions || []
+    } catch { actionCatalogue.value = [] }
 
     // Load system-wide fixed sections (configured in Settings → Fixed Sections)
     try {
@@ -583,7 +587,56 @@ const photoViewer = ref({
 })
 // Client photo settings — loaded from report_photo_settings JSON on the client record
 const clientPhotoSettings = ref({})
-const showPhotoTimestamp = computed(() => clientPhotoSettings.value.show_photo_timestamp === true)
+const showPhotoTimestamp       = computed(() => clientPhotoSettings.value.show_photo_timestamp === true)
+const actionSummaryPosition    = computed(() => clientPhotoSettings.value.action_summary_position || 'bottom')
+// Action catalogue — names + colours for the summary panel
+const actionCatalogue = ref([])
+
+// Build the Check Out action summary: items grouped by actionId
+const actionSummaryGroups = computed(() => {
+  if (!isCheckOut.value) return []
+  if (actionSummaryPosition.value === 'none') return []
+
+  const groups = {}  // actionId → { name, color, items[] }
+
+  for (const room of rooms.value) {
+    const roomData = reportData.value[String(room.id)] || {}
+    const roomName = getRoomName(room)
+    const orderedItems = getOrderedRoomItems(room)
+
+    for (const item of orderedItems) {
+      const itemKey = item._type === 'extra' ? item._eid : String(item.id)
+      const actKey  = `_actions_${itemKey}`
+      const actions = roomData[actKey]
+      if (!Array.isArray(actions) || !actions.length) continue
+
+      const itemLabel = item.label || item.name || 'Item'
+      const refNum    = itemRef(room.id, orderedItems, itemKey)
+
+      for (const a of actions) {
+        if (!a.actionId) continue
+        if (!groups[a.actionId]) {
+          const cat = actionCatalogue.value.find(c => c.id === a.actionId)
+          groups[a.actionId] = {
+            actionId: a.actionId,
+            name:     cat?.name  || a.actionId,
+            color:    cat?.color || '#64748b',
+            items:    [],
+          }
+        }
+        groups[a.actionId].items.push({
+          roomName:       roomName,
+          itemLabel:      itemLabel,
+          ref:            refNum,
+          responsibility: a.responsibility || '',
+          note:           a.note           || '',
+        })
+      }
+    }
+  }
+
+  return Object.values(groups)
+})
 // Multi-select state: set of selected indices
 const lbSelected  = ref(new Set())
 const lbMoving    = ref(false)   // whether move-picker is open
@@ -2156,6 +2209,55 @@ async function moveToReview() {
 
         <div v-if="template">
 
+          <template v-if="actionSummaryPosition === 'top'">
+          <!-- ═══ ACTION SUMMARY (Check Out only) ════════════════════ -->
+          <div
+            v-if="isCheckOut && actionSummaryGroups.length"
+            class="card card-action-summary"
+          >
+            <div class="card-hd card-hd-summary">
+              <h2 class="card-title">
+                <span class="summary-icon">📋</span>
+                Actions Summary
+              </h2>
+              <span class="card-hint">{{ actionSummaryGroups.reduce((n,g) => n + g.items.length, 0) }} item{{ actionSummaryGroups.reduce((n,g) => n + g.items.length, 0) !== 1 ? 's' : '' }} flagged</span>
+            </div>
+
+            <div class="summary-groups">
+              <div v-for="group in actionSummaryGroups" :key="group.actionId" class="summary-group">
+                <div class="summary-group-hd" :style="{ borderLeftColor: group.color }">
+                  <span class="summary-group-dot" :style="{ background: group.color }"></span>
+                  <span class="summary-group-name">{{ group.name }}</span>
+                  <span class="summary-group-count">{{ group.items.length }} item{{ group.items.length !== 1 ? 's' : '' }}</span>
+                </div>
+                <table class="summary-tbl">
+                  <thead>
+                    <tr>
+                      <th class="stbl-ref">Ref</th>
+                      <th class="stbl-room">Room</th>
+                      <th class="stbl-item">Item</th>
+                      <th class="stbl-resp">Responsibility</th>
+                      <th class="stbl-note">Note</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(item, i) in group.items" :key="i">
+                      <td class="stbl-ref">{{ item.ref }}</td>
+                      <td class="stbl-room">{{ item.roomName }}</td>
+                      <td class="stbl-item">{{ item.itemLabel }}</td>
+                      <td class="stbl-resp">
+                        <span v-if="item.responsibility" class="resp-badge" :style="{ background: group.color + '18', color: group.color, borderColor: group.color + '50' }">{{ item.responsibility }}</span>
+                        <span v-else class="resp-none">—</span>
+                      </td>
+                      <td class="stbl-note">{{ item.note || '—' }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          </template>
+
           <!-- ═══ FIXED SECTIONS ═══════════════════════════════════ -->
           <div v-for="sec in fixedSections" :key="sec.id" :id="`sec-${sec.id}`" class="card">
             <div class="card-hd">
@@ -2725,6 +2827,55 @@ async function moveToReview() {
               <button class="add-row-btn add-row-btn-room" @click="addRoomExtraItem(room.id)">+ Add line</button>
             </div>
           </div>
+
+          <template v-if="actionSummaryPosition === 'bottom'">
+          <!-- ═══ ACTION SUMMARY (Check Out only) ════════════════════ -->
+          <div
+            v-if="isCheckOut && actionSummaryGroups.length"
+            class="card card-action-summary"
+          >
+            <div class="card-hd card-hd-summary">
+              <h2 class="card-title">
+                <span class="summary-icon">📋</span>
+                Actions Summary
+              </h2>
+              <span class="card-hint">{{ actionSummaryGroups.reduce((n,g) => n + g.items.length, 0) }} item{{ actionSummaryGroups.reduce((n,g) => n + g.items.length, 0) !== 1 ? 's' : '' }} flagged</span>
+            </div>
+
+            <div class="summary-groups">
+              <div v-for="group in actionSummaryGroups" :key="group.actionId" class="summary-group">
+                <div class="summary-group-hd" :style="{ borderLeftColor: group.color }">
+                  <span class="summary-group-dot" :style="{ background: group.color }"></span>
+                  <span class="summary-group-name">{{ group.name }}</span>
+                  <span class="summary-group-count">{{ group.items.length }} item{{ group.items.length !== 1 ? 's' : '' }}</span>
+                </div>
+                <table class="summary-tbl">
+                  <thead>
+                    <tr>
+                      <th class="stbl-ref">Ref</th>
+                      <th class="stbl-room">Room</th>
+                      <th class="stbl-item">Item</th>
+                      <th class="stbl-resp">Responsibility</th>
+                      <th class="stbl-note">Note</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(item, i) in group.items" :key="i">
+                      <td class="stbl-ref">{{ item.ref }}</td>
+                      <td class="stbl-room">{{ item.roomName }}</td>
+                      <td class="stbl-item">{{ item.itemLabel }}</td>
+                      <td class="stbl-resp">
+                        <span v-if="item.responsibility" class="resp-badge" :style="{ background: group.color + '18', color: group.color, borderColor: group.color + '50' }">{{ item.responsibility }}</span>
+                        <span v-else class="resp-none">—</span>
+                      </td>
+                      <td class="stbl-note">{{ item.note || '—' }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          </template>
 
           <div class="foot">
             <button class="btn-ghost" @click="exit">← Back to Overview</button>
@@ -3898,4 +4049,61 @@ async function moveToReview() {
   pointer-events: none;
   font-family: 'Courier New', monospace;
 }
+
+/* ── Action Summary card ─────────────────────────────────────────────────── */
+.card-action-summary { border-top: 3px solid #f59e0b; }
+.card-hd-summary { background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%); }
+.summary-icon { font-size: 16px; margin-right: 2px; }
+.summary-groups { display: flex; flex-direction: column; gap: 18px; padding: 4px 0; }
+
+.summary-group-hd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #f8fafc;
+  border-left: 4px solid;
+  border-radius: 0 6px 6px 0;
+  margin-bottom: 8px;
+}
+.summary-group-dot  { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+.summary-group-name { font-size: 14px; font-weight: 700; color: #1e293b; flex: 1; }
+.summary-group-count { font-size: 11px; color: #64748b; font-weight: 600; }
+
+.summary-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+.summary-tbl th {
+  padding: 7px 10px;
+  text-align: left;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #94a3b8;
+  background: #f8fafc;
+  border-bottom: 1px solid #e5e7eb;
+}
+.summary-tbl td {
+  padding: 8px 10px;
+  border-bottom: 1px solid #f1f5f9;
+  color: #1e293b;
+  vertical-align: top;
+}
+.summary-tbl tr:last-child td { border-bottom: none; }
+.summary-tbl tr:hover td { background: #fafafa; }
+
+.stbl-ref  { width: 54px; color: #64748b; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.stbl-room { width: 160px; font-weight: 600; }
+.stbl-resp { width: 130px; }
+.stbl-note { width: 200px; color: #64748b; font-size: 12px; }
+
+.resp-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.resp-none { color: #cbd5e1; font-size: 12px; }
 </style>

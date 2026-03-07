@@ -13,11 +13,19 @@ const showModal = ref(false)
 const editingProperty = ref(null)
 const activeTab = ref('grid')
 
-// Address lookup
-const addressQuery = ref('')
-const addressResults = ref([])
-const addressSearching = ref(false)
+// ── Address Lookup ────────────────────────────────────────────────────────────
+// Mode A — postcode entered  → fetch full address list, show picker
+// Mode B — street/number     → autocomplete suggestions, select → fetch postcode list
+const addressQuery        = ref('')
+const addressResults      = ref([])   // [{line1,line2,line3,city,county}] for postcode mode
+const autocompleteResults = ref([])   // [{address, url}] for text autocomplete mode
+const addressSearching    = ref(false)
 const showAddressDropdown = ref(false)
+const lookupMode          = ref(null) // 'postcode' | 'autocomplete'
+const lookupPostcode      = ref('')   // postcode resolved from autocomplete selection
+
+const PC_RE = /^[A-Z]{1,2}[0-9][0-9A-Z]?\s?[0-9][A-Z]{2}$/i
+let autocompleteTimer = null
 
 const filters = ref({ client_id: null, postcode: '' })
 
@@ -36,41 +44,24 @@ function buildAddress() {
   return parts.join(', ')
 }
 
-// UK address lookup via postcodes.io for postcode → address, or nominatim for text
-async function lookupAddress() {
+// Debounced autocomplete as user types (text mode only)
+function onAddressInput() {
   const q = addressQuery.value.trim()
-  if (!q || q.length < 3) return
-  addressSearching.value = true
+  showAddressDropdown.value = false
+  autocompleteResults.value = []
   addressResults.value = []
+  if (!q || q.length < 3) return
+  if (PC_RE.test(q)) return  // postcode — wait for explicit Search
+  clearTimeout(autocompleteTimer)
+  autocompleteTimer = setTimeout(() => runAutocomplete(q), 350)
+}
+
+async function runAutocomplete(q) {
+  addressSearching.value = true
   try {
-    // Try postcode lookup first
-    const isPostcode = /^[A-Z]{1,2}[0-9][0-9A-Z]?\s?[0-9][A-Z]{2}$/i.test(q)
-    if (isPostcode) {
-      const pc = q.replace(/\s/g, '').toUpperCase()
-      const res = await fetch(`https://api.postcodes.io/postcodes/${pc}`)
-      const data = await res.json()
-      if (data.status === 200 && data.result) {
-        const r = data.result
-        addressResults.value = [{
-          line1: '', line2: '', city: r.admin_district || r.parish || '',
-          postcode: r.postcode, display: `${r.postcode} — ${r.admin_district || ''}`
-        }]
-      }
-    } else {
-      // Free-text search via Nominatim (UK biased)
-      const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&countrycodes=gb&format=json&addressdetails=1&limit=6`, {
-        headers: { 'Accept-Language': 'en' }
-      })
-      const data = await res.json()
-      addressResults.value = data.map(item => {
-        const a = item.address || {}
-        const line1 = [a.house_number, a.road].filter(Boolean).join(' ')
-        const line2 = a.suburb || a.quarter || ''
-        const city = a.city || a.town || a.village || a.county || ''
-        const postcode = a.postcode || ''
-        return { line1, line2, city, postcode, display: item.display_name }
-      }).slice(0, 6)
-    }
+    const res = await api.addressAutocomplete(q)
+    autocompleteResults.value = res.data.suggestions || []
+    lookupMode.value = 'autocomplete'
     showAddressDropdown.value = true
   } catch (e) {
     toast.error('Address lookup failed')
@@ -79,15 +70,62 @@ async function lookupAddress() {
   }
 }
 
-function selectAddress(result) {
-  form.value.address_line1 = result.line1
-  form.value.address_line2 = result.line2
-  form.value.city = result.city
-  form.value.postcode = result.postcode
-  addressQuery.value = ''
-  showAddressDropdown.value = false
+// Search button — postcode → full list, text → autocomplete
+async function searchAddress() {
+  const q = addressQuery.value.trim()
+  if (!q || q.length < 2) return
+  addressSearching.value = true
   addressResults.value = []
+  autocompleteResults.value = []
+  showAddressDropdown.value = false
+
+  if (PC_RE.test(q)) {
+    try {
+      const res = await api.addressFindByPostcode(q)
+      addressResults.value = res.data.addresses || []
+      lookupPostcode.value  = res.data.postcode  || q.toUpperCase()
+      lookupMode.value = 'postcode'
+      showAddressDropdown.value = true
+      if (!addressResults.value.length) toast.warning('No addresses found for that postcode')
+    } catch (e) {
+      toast.error('Postcode lookup failed')
+    } finally { addressSearching.value = false }
+  } else {
+    await runAutocomplete(q)
+  }
 }
+
+// Autocomplete suggestion selected — extract postcode and do full lookup
+async function selectAutocomplete(suggestion) {
+  const pcMatch = suggestion.address.match(/([A-Z]{1,2}[0-9][0-9A-Z]?\s?[0-9][A-Z]{2})\s*$/i)
+  if (pcMatch) {
+    addressQuery.value = pcMatch[1].toUpperCase()
+    autocompleteResults.value = []
+    await searchAddress()
+  } else {
+    const parts = suggestion.address.split(',').map(s => s.trim())
+    form.value.address_line1 = parts[0] || ''
+    form.value.address_line2 = parts[1] || ''
+    form.value.city          = parts[3] || parts[2] || ''
+    form.value.postcode      = ''
+    showAddressDropdown.value = false
+    addressQuery.value = ''
+  }
+}
+
+// Full address selected from postcode list
+function selectAddress(addr) {
+  form.value.address_line1 = addr.line1
+  form.value.address_line2 = [addr.line2, addr.line3].filter(Boolean).join(', ')
+  form.value.city          = addr.city
+  form.value.postcode      = lookupPostcode.value
+  addressQuery.value       = ''
+  showAddressDropdown.value = false
+  addressResults.value     = []
+  autocompleteResults.value = []
+}
+
+function closeDropdown() { showAddressDropdown.value = false }
 
 async function fetchProperties() {
   loading.value = true
@@ -351,21 +389,57 @@ onMounted(() => { fetchProperties(); fetchClients() })
               </div>
 
               <!-- Address lookup -->
-              <div class="form-group">
+              <div class="form-group" style="position:relative">
                 <label>Address Lookup</label>
+                <div class="addr-hint">Enter a postcode for a full address list, or start typing a street name.</div>
                 <div class="addr-lookup-row">
-                  <input v-model="addressQuery" type="text" placeholder="Search by address or postcode…" class="addr-search-input" @keydown.enter.prevent="lookupAddress" />
-                  <button type="button" class="btn-lookup" @click="lookupAddress" :disabled="addressSearching">
+                  <input
+                    v-model="addressQuery"
+                    type="text"
+                    placeholder="e.g. SW1A 1AA  or  10 Downing Street"
+                    class="addr-search-input"
+                    @input="onAddressInput"
+                    @keydown.enter.prevent="searchAddress"
+                    autocomplete="off"
+                  />
+                  <button type="button" class="btn-lookup" @click="searchAddress" :disabled="addressSearching">
                     <span v-if="addressSearching">…</span>
                     <span v-else>Search</span>
                   </button>
                 </div>
-                <div v-if="showAddressDropdown && addressResults.length" class="addr-dropdown">
-                  <div v-for="(r, i) in addressResults" :key="i" class="addr-option" @click="selectAddress(r)">
-                    {{ r.display }}
+
+                <!-- Autocomplete suggestions (text mode) -->
+                <div v-if="showAddressDropdown && lookupMode === 'autocomplete' && autocompleteResults.length" class="addr-dropdown">
+                  <div class="addr-dropdown-header">Select an address to find its postcode</div>
+                  <div
+                    v-for="(s, i) in autocompleteResults"
+                    :key="i"
+                    class="addr-option"
+                    @click="selectAutocomplete(s)"
+                  >
+                    {{ s.address }}
                   </div>
                 </div>
-                <div v-if="showAddressDropdown && addressResults.length === 0 && !addressSearching" class="addr-no-results">No results found</div>
+
+                <!-- Full address list (postcode mode) -->
+                <div v-if="showAddressDropdown && lookupMode === 'postcode' && addressResults.length" class="addr-dropdown">
+                  <div class="addr-dropdown-header">{{ addressResults.length }} addresses found for {{ lookupPostcode }}</div>
+                  <div
+                    v-for="(a, i) in addressResults"
+                    :key="i"
+                    class="addr-option"
+                    @click="selectAddress(a)"
+                  >
+                    <span class="addr-line1">{{ a.line1 }}</span>
+                    <span v-if="a.line2" class="addr-line2">, {{ a.line2 }}</span>
+                    <span v-if="a.line3" class="addr-line2">, {{ a.line3 }}</span>
+                  </div>
+                </div>
+
+                <div v-if="showAddressDropdown && !addressSearching && !autocompleteResults.length && !addressResults.length" class="addr-no-results">No results found</div>
+
+                <!-- Backdrop to close dropdown -->
+                <div v-if="showAddressDropdown" class="addr-backdrop" @click="closeDropdown"></div>
               </div>
 
               <!-- Structured address -->
@@ -611,17 +685,22 @@ h1 { font-size: 21px; font-weight: 700; color: #0f172a; margin: 0 0 2px; }
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 
 /* Address lookup */
+.addr-hint { font-size: 11px; color: #94a3b8; margin-bottom: 5px; }
 .addr-lookup-row { display: flex; gap: 6px; }
 .addr-search-input { flex: 1; padding: 7px 10px; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 13px; font-family: inherit; color: #1e293b; }
 .addr-search-input:focus { outline: none; border-color: #6366f1; }
 .btn-lookup { padding: 7px 14px; background: #6366f1; color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
 .btn-lookup:hover:not(:disabled) { background: #4f46e5; }
 .btn-lookup:disabled { background: #94a3b8; cursor: not-allowed; }
-.addr-dropdown { margin-top: 4px; background: white; border: 1px solid #e2e8f0; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.12); overflow: hidden; max-height: 200px; overflow-y: auto; }
+.addr-dropdown { position: absolute; left: 0; right: 0; top: calc(100% - 2px); z-index: 300; margin-top: 4px; background: white; border: 1px solid #c7d2fe; border-radius: 8px; box-shadow: 0 8px 24px rgba(99,102,241,0.12); overflow: hidden; max-height: 240px; overflow-y: auto; }
+.addr-dropdown-header { padding: 7px 12px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #6366f1; background: #f5f3ff; border-bottom: 1px solid #e0e7ff; }
 .addr-option { padding: 9px 12px; font-size: 12px; color: #1e293b; cursor: pointer; border-bottom: 1px solid #f8fafc; line-height: 1.4; }
 .addr-option:hover { background: #f0f4ff; color: #4338ca; }
 .addr-option:last-child { border-bottom: none; }
+.addr-line1 { font-weight: 600; }
+.addr-line2 { color: #64748b; }
 .addr-no-results { padding: 10px 12px; font-size: 12px; color: #94a3b8; font-style: italic; }
+.addr-backdrop { position: fixed; inset: 0; z-index: 299; }
 
 /* Toggles */
 .toggle-group { display: flex; flex-direction: column; gap: 8px; padding: 4px 0; }

@@ -86,6 +86,10 @@ const api = {
   deleteProperty(id)             { return http.delete(`/api/properties/${id}`) },
   uploadPropertyPhoto(id, photo) { return http.post(`/api/properties/${id}/photo`, { photo }) },
 
+  // ── Address Lookup (proxied via backend to keep API key server-side) ──────
+  addressFindByPostcode(postcode) { return http.get(`/api/address/find/${encodeURIComponent(postcode)}`) },
+  addressAutocomplete(q)          { return http.get('/api/address/autocomplete', { params: { q } }) },
+
   // ── Inspections ───────────────────────────────────────────────────────────
   getInspections(params)             { return http.get('/api/inspections', { params }) },
   getInspection(id)                  { return http.get(`/api/inspections/${id}`) },

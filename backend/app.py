@@ -60,6 +60,7 @@ def create_app():
     from routes.transcribe      import transcribe_bp
     from routes.pdf_import      import pdf_import_bp
     from routes.section_presets import section_presets_bp  # ← added
+    from routes.address_lookup  import address_lookup_bp
 
     app.register_blueprint(auth_bp,            url_prefix='/api/auth')
     app.register_blueprint(users_bp,           url_prefix='/api/users')
@@ -73,6 +74,7 @@ def create_app():
     app.register_blueprint(transcribe_bp,      url_prefix='/api/transcribe')
     app.register_blueprint(pdf_import_bp,      url_prefix='/api/ai')
     app.register_blueprint(section_presets_bp, url_prefix='/api/section-presets')  # ← added
+    app.register_blueprint(address_lookup_bp,  url_prefix='/api/address')
 
     # Optional blueprints — register only if the file exists
     _optional = [

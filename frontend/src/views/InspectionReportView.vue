@@ -66,6 +66,12 @@ const saving       = ref(false)
 const lastSaved    = ref(null)
 const unsaved      = ref(false)
 const activeId     = ref(null)
+const mobileNavOpen = ref(false)
+
+function scrollToMobile(id) {
+  scrollTo(id)
+  mobileNavOpen.value = false
+}
 const showPhotoModal = ref(false)
 const photoUploading = ref(false)
 const currentPhoto   = ref(null)
@@ -2025,6 +2031,10 @@ async function moveToReview() {
         </div>
       </div>
       <div class="topbar-r">
+        <!-- Mobile nav toggle -->
+        <button class="mob-nav-toggle" @click="mobileNavOpen = !mobileNavOpen" :class="{ active: mobileNavOpen }" title="Sections">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        </button>
         <div v-if="allSections.length" class="prog">
           <div class="prog-track"><div class="prog-fill" :style="{ width: `${Math.round(startedCount/allSections.length*100)}%` }"></div></div>
           <span class="prog-lbl">{{ startedCount }}/{{ allSections.length }}</span>
@@ -2051,6 +2061,38 @@ async function moveToReview() {
 
 
     <div class="body">
+      <!-- Mobile nav drawer — slides down over content -->
+      <transition name="mob-nav">
+        <div v-if="mobileNavOpen" class="mob-nav-drawer" @click.self="mobileNavOpen = false">
+          <div class="mob-nav-inner">
+            <div v-if="template">
+              <div v-if="fixedSections.length" class="mob-nav-grp">
+                <p class="mob-nav-lbl">Report Sections</p>
+                <div class="mob-nav-pills">
+                  <button v-for="s in fixedSections" :key="s.id"
+                    class="mob-nav-pill" :class="{ active: activeId===s.id, done: sectionStarted(s.id) }"
+                    @click="scrollToMobile(s.id)">
+                    <span class="mob-dot" :class="{ done: sectionStarted(s.id) }"></span>
+                    {{ s.name }}
+                  </button>
+                </div>
+              </div>
+              <div v-if="rooms.length" class="mob-nav-grp">
+                <p class="mob-nav-lbl">Rooms</p>
+                <div class="mob-nav-pills">
+                  <button v-for="r in rooms" :key="r.id"
+                    class="mob-nav-pill" :class="{ active: activeId===r.id, done: sectionStarted(r.id) }"
+                    @click="scrollToMobile(r.id)">
+                    <span class="mob-dot" :class="{ done: sectionStarted(r.id) }"></span>
+                    {{ r.name }}
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div v-else class="mob-nav-empty">No template assigned</div>
+          </div>
+        </div>
+      </transition>
       <nav class="sidebar">
         <div v-if="template">
           <div v-if="fixedSections.length" class="nav-grp">
@@ -3386,7 +3428,7 @@ async function moveToReview() {
 *{box-sizing:border-box}
 
 /* Layout */
-.shell{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:#f1f5f9}
+.shell{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:#f1f5f9;position:relative}
 .loading-screen{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:14px;background:#f8fafc}
 .loading-screen p{font-size:14px;color:#64748b}
 .ring{width:36px;height:36px;border:3px solid #e2e8f0;border-top-color:#6366f1;border-radius:50%;animation:spin 0.7s linear infinite}
@@ -4104,4 +4146,134 @@ async function moveToReview() {
   white-space: nowrap;
 }
 .resp-none { color: #cbd5e1; font-size: 12px; }
+
+/* ── Mobile nav toggle button (hidden on desktop) ── */
+.mob-nav-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 34px; height: 34px;
+  background: rgba(255,255,255,0.07);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 6px;
+  color: #94a3b8;
+  cursor: pointer;
+  transition: all 0.15s;
+  flex-shrink: 0;
+}
+.mob-nav-toggle:hover { background: rgba(255,255,255,0.13); color: #e2e8f0; }
+.mob-nav-toggle.active { background: rgba(99,102,241,0.25); border-color: #6366f1; color: #a5b4fc; }
+
+/* ── Mobile nav drawer ── */
+.mob-nav-drawer {
+  position: absolute;
+  top: 52px; left: 0; right: 0;
+  z-index: 200;
+  background: rgba(0,0,0,0.4);
+  padding-bottom: 20px;
+}
+.mob-nav-inner {
+  background: #172033;
+  border-bottom: 1px solid #0d1726;
+  padding: 12px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.mob-nav-grp { display: flex; flex-direction: column; gap: 6px; }
+.mob-nav-lbl { font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: 1.2px; color: #2d4a6b; padding: 4px 0 2px; }
+.mob-nav-pills { display: flex; flex-wrap: wrap; gap: 6px; }
+.mob-nav-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 20px;
+  font-size: 12px; font-weight: 500; color: #64748b;
+  cursor: pointer; transition: all 0.12s;
+  white-space: nowrap;
+}
+.mob-nav-pill:hover { background: rgba(255,255,255,0.08); color: #94a3b8; }
+.mob-nav-pill.active { background: rgba(99,102,241,0.15); border-color: #4f46e5; color: #a5b4fc; font-weight: 600; }
+.mob-nav-pill.done { border-color: rgba(34,197,94,0.3); }
+.mob-dot { width: 6px; height: 6px; border-radius: 50%; background: transparent; border: 1.5px solid #2d4a6b; flex-shrink: 0; }
+.mob-dot.done { background: #22c55e; border-color: #22c55e; }
+.mob-nav-empty { font-size: 12px; color: #4b6282; padding: 8px 0; }
+
+/* Drawer slide animation */
+.mob-nav-enter-active, .mob-nav-leave-active { transition: opacity 0.18s, transform 0.18s; }
+.mob-nav-enter-from, .mob-nav-leave-to { opacity: 0; transform: translateY(-8px); }
+
+/* ── RESPONSIVE BREAKPOINTS ── */
+@media (max-width: 768px) {
+
+  /* Show mobile toggle, hide progress bar text clutter */
+  .mob-nav-toggle { display: inline-flex; }
+  .prog-lbl { display: none; }
+  .prog-track { width: 50px; }
+  .crumb-who { display: none; }
+  .crumb-dot:last-of-type { display: none; }
+  .photo-btn span { display: none; } /* icon only */
+
+  /* Collapse sidebar — hidden on mobile, drawer used instead */
+  .body { grid-template-columns: 1fr; position: relative; }
+  .sidebar { display: none; }
+
+  /* Reduce main padding */
+  .main { padding: 16px 12px 120px; gap: 16px; }
+
+  /* Cards */
+  .card { border-radius: 8px; }
+  .card-hd { padding: 12px 14px; }
+
+  /* Item header bar */
+  .item-header-bar { padding: 10px 12px 6px; }
+
+  /* Stack desc + condition vertically on mobile */
+  .item-fields-row { padding: 8px 12px 8px; }
+  .item-fields-main { grid-template-columns: 1fr !important; }
+  .room-field-desc,
+  .room-field-cond,
+  .room-field-inv,
+  .room-field-notes,
+  .room-field-actions,
+  .room-field-ci-photos { grid-column: 1 !important; }
+
+  /* Shrink button column */
+  .item-btn-col { padding-left: 8px; padding-top: 22px; gap: 8px; }
+
+  /* Sub-items */
+  .sub-fields-row { padding: 8px 12px 8px 20px !important; }
+
+  /* Fixed section tables — allow horizontal scroll */
+  .section-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+  /* Topbar: tighten up */
+  .topbar { padding: 0 12px; gap: 8px; }
+  .back-btn span { display: none; } /* arrow only on very small */
+  .save-btn { padding: 6px 12px; font-size: 12px; }
+  .review-btn { padding: 6px 14px; font-size: 12px; }
+
+  /* Room header */
+  .card-hd-room { padding: 10px 12px; }
+  .room-name-input { font-size: 15px; }
+
+  /* Action summary table — scrollable */
+  .summary-tbl { font-size: 12px; }
+  .stbl-note { display: none; }
+
+  /* photo panel */
+  .photo-panel-inline { padding: 8px 12px; gap: 6px; }
+  .ph-thumb-lg { width: 60px; height: 60px; }
+}
+
+@media (max-width: 480px) {
+  .crumb-addr { max-width: 140px; }
+  .crumb-type { display: none; }
+  .main { padding: 12px 8px 120px; }
+  .item-fields-row { padding: 8px 10px; }
+  .item-header-bar { padding: 9px 10px 5px; }
+}
 </style>

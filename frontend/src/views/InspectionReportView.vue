@@ -2534,97 +2534,98 @@ async function moveToReview() {
               @dragover.prevent
               @drop.prevent="onRoomDrop(room, idx)"
             >
-              <!-- Label column — with item ref number + mic -->
-              <div class="room-row-label">
+              <!-- ── Item header bar ── -->
+              <div class="item-header-bar">
                 <span class="drag-handle drag-handle-room">⠿</span>
                 <span class="item-ref-num">{{ itemRef(room.id, getOrderedRoomItems(room), item._type === 'extra' ? item._eid : item.id) }}</span>
                 <template v-if="item._type === 'extra'">
-                  <input class="fld-input label-input" type="text" placeholder="Item name…"
+                  <input class="fld-input label-input item-header-name" type="text" placeholder="Item name…"
                     :value="item.label"
                     @input="setRoomExtraField(room.id, item._eid, 'label', $event.target.value)" />
                 </template>
-                <template v-else>{{ item.label }}</template>
+                <template v-else><span class="item-header-name">{{ item.label }}</span></template>
               </div>
 
-              <!-- Fields column -->
+              <!-- ── Item body ── -->
               <div class="room-row-right">
                 <div class="room-row-fields" :class="{ 'co-layout': isCheckOut }">
 
                   <!-- ── STANDARD layout (Check In / Interim / Inventory) ── -->
                   <template v-if="!isCheckOut">
                     <template v-if="item._type === 'template'">
-                      <div v-if="item.hasDescription" class="room-field-desc">
-                        <label class="field-lbl">Description</label>
-                        <textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" rows="3" :placeholder="`Describe ${item.label.toLowerCase()}…`"
-                          :value="get(room.id,item.id,'description')"
-                          @input="set(room.id,item.id,'description',$event.target.value)"></textarea>
-                      </div>
-                      <div v-if="item.hasCondition" class="room-field-cond room-field-with-cam">
-                        <div class="field-cond-inner">
-                          <label class="field-lbl">Condition</label>
-                          <textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" rows="3" :placeholder="`Condition of ${item.label.toLowerCase()}…`"
-                            :value="get(room.id,item.id,'condition')"
-                            @input="set(room.id,item.id,'condition',$event.target.value)"></textarea>
+                      <!-- Desc + Condition side by side, buttons on right -->
+                      <div class="item-fields-row">
+                        <div class="item-fields-main">
+                          <div v-if="item.hasDescription" class="room-field-desc">
+                            <label class="field-lbl">Description</label>
+                            <textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" rows="3" :placeholder="`Describe ${item.label.toLowerCase()}…`"
+                              :value="get(room.id,item.id,'description')"
+                              @input="set(room.id,item.id,'description',$event.target.value)"></textarea>
+                            <button v-if="canEdit" class="add-sub-btn add-sub-inline" @click="addSubItem(room.id, item.id)">+ Add sub-item</button>
+                          </div>
+                          <div v-if="item.hasCondition" class="room-field-cond">
+                            <label class="field-lbl">Condition</label>
+                            <textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" rows="3" :placeholder="`Condition of ${item.label.toLowerCase()}…`"
+                              :value="get(room.id,item.id,'condition')"
+                              @input="set(room.id,item.id,'condition',$event.target.value)"></textarea>
+                          </div>
+                          <div v-if="item.hasNotes" class="room-field-notes">
+                            <label class="field-lbl">Notes</label>
+                            <textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" placeholder="Notes…"
+                              :value="get(room.id,item.id,'notes')"
+                              @input="set(room.id,item.id,'notes',$event.target.value)"></textarea>
+                          </div>
                         </div>
-                        <div class="room-btn-stack">
-                          <button class="cam-btn cam-btn-room" :class="{ 'cam-has': getPhotos(room.id, item.id).length }" @click="togglePanel(room.id, item.id)" title="Photos">
+                        <!-- Buttons stacked to the right -->
+                        <div class="item-btn-col" v-if="item.hasCondition || item.hasDescription || (!item.hasCondition && !item.hasDescription)">
+                          <button class="cam-btn cam-btn-item" :class="{ 'cam-has': getPhotos(room.id, item.id).length }" @click="togglePanel(room.id, item.id)" title="Photos">
                             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
                             <span v-if="getPhotos(room.id, item.id).length" class="cam-count">{{ getPhotos(room.id, item.id).length }}</span>
                           </button>
-                          <button class="cam-btn cam-btn-room mic-btn"
+                          <button class="cam-btn cam-btn-item mic-btn"
                             :class="{ 'mic-active': isItemRecording(room.id, item.id), 'mic-has': !isItemRecording(room.id, item.id) && getItemRecordings(room.id, item.id).length, 'mic-ai': isItemAiProcessing(room.id, item.id) }"
                             @click.stop="toggleItemRecording(room.id, item.id, room.name + ' — ' + item.label)"
                             title="Record audio">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
                             <span v-if="getItemRecordings(room.id, item.id).length && !isItemRecording(room.id, item.id)" class="cam-count mic-count">{{ getItemRecordings(room.id, item.id).length }}</span>
                           </button>
+                          <button v-if="canEdit" class="del-item-icon-btn" @click="hideItem(room.id, item.id)" title="Remove item">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+                          </button>
                         </div>
-                      </div>
-                      <div v-else-if="!item.hasCondition && !item.hasDescription" class="room-field-cam-only">
-                        <button class="cam-btn cam-btn-room" :class="{ 'cam-has': getPhotos(room.id, item.id).length }" @click="togglePanel(room.id, item.id)" title="Photos">
-                          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-                          <span v-if="getPhotos(room.id, item.id).length" class="cam-count">{{ getPhotos(room.id, item.id).length }}</span>
-                        </button>
-                        <button class="cam-btn cam-btn-room mic-btn"
-                          :class="{ 'mic-active': isItemRecording(room.id, item.id), 'mic-has': !isItemRecording(room.id, item.id) && getItemRecordings(room.id, item.id).length, 'mic-ai': isItemAiProcessing(room.id, item.id) }"
-                          @click.stop="toggleItemRecording(room.id, item.id, room.name + ' — ' + item.label)"
-                          title="Record audio">
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-                          <span v-if="getItemRecordings(room.id, item.id).length && !isItemRecording(room.id, item.id)" class="cam-count mic-count">{{ getItemRecordings(room.id, item.id).length }}</span>
-                        </button>
-                      </div>
-                      <div v-if="item.hasNotes" class="room-field-notes">
-                        <label class="field-lbl">Notes</label>
-                        <textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" placeholder="Notes…"
-                          :value="get(room.id,item.id,'notes')"
-                          @input="set(room.id,item.id,'notes',$event.target.value)"></textarea>
                       </div>
                     </template>
                     <template v-else>
-                      <div class="room-field-desc">
-                        <label class="field-lbl">Description</label>
-                        <textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" rows="3" placeholder="Describe…"
-                          :value="item.description"
-                          @input="setRoomExtraField(room.id,item._eid,'description',$event.target.value)"></textarea>
-                      </div>
-                      <div class="room-field-cond room-field-with-cam">
-                        <div class="field-cond-inner">
-                          <label class="field-lbl">Condition</label>
-                          <textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" rows="3" placeholder="Condition…"
-                            :value="item.condition"
-                            @input="setRoomExtraField(room.id,item._eid,'condition',$event.target.value)"></textarea>
+                      <!-- Extra (non-template) item -->
+                      <div class="item-fields-row">
+                        <div class="item-fields-main">
+                          <div class="room-field-desc">
+                            <label class="field-lbl">Description</label>
+                            <textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" rows="3" placeholder="Describe…"
+                              :value="item.description"
+                              @input="setRoomExtraField(room.id,item._eid,'description',$event.target.value)"></textarea>
+                          </div>
+                          <div class="room-field-cond">
+                            <label class="field-lbl">Condition</label>
+                            <textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" rows="3" placeholder="Condition…"
+                              :value="item.condition"
+                              @input="setRoomExtraField(room.id,item._eid,'condition',$event.target.value)"></textarea>
+                          </div>
                         </div>
-                        <div class="room-btn-stack">
-                          <button class="cam-btn cam-btn-room" :class="{ 'cam-has': getPhotos(room.id, item._eid).length }" @click="togglePanel(room.id, item._eid)" title="Photos">
+                        <div class="item-btn-col">
+                          <button class="cam-btn cam-btn-item" :class="{ 'cam-has': getPhotos(room.id, item._eid).length }" @click="togglePanel(room.id, item._eid)" title="Photos">
                             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
                             <span v-if="getPhotos(room.id, item._eid).length" class="cam-count">{{ getPhotos(room.id, item._eid).length }}</span>
                           </button>
-                          <button class="cam-btn cam-btn-room mic-btn"
+                          <button class="cam-btn cam-btn-item mic-btn"
                             :class="{ 'mic-active': isItemRecording(room.id, item._eid), 'mic-has': !isItemRecording(room.id, item._eid) && getItemRecordings(room.id, item._eid).length }"
                             @click.stop="toggleItemRecording(room.id, item._eid, room.name + ' — ' + (item.label || 'Item'))"
                             title="Record audio">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
                             <span v-if="getItemRecordings(room.id, item._eid).length && !isItemRecording(room.id, item._eid)" class="cam-count mic-count">{{ getItemRecordings(room.id, item._eid).length }}</span>
+                          </button>
+                          <button v-if="canEdit" class="del-item-icon-btn" @click="removeRoomExtraItem(room.id, item._eid)" title="Remove item">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
                           </button>
                         </div>
                       </div>
@@ -2633,84 +2634,90 @@ async function moveToReview() {
 
                   <!-- ── CHECK OUT layout ── -->
                   <template v-else>
-                    <!-- Description — read from Check In (read-only reference) -->
-                    <div class="room-field-desc">
-                      <label class="field-lbl">Description</label>
-                      <div class="co-inv-value" :class="{ 'co-inv-empty': !getCI(room.id, item._type==='template' ? item.id : item._eid, 'description') }">
-                        {{ getCI(room.id, item._type==='template' ? item.id : item._eid, 'description') || item.label || '—' }}
+                    <div class="item-fields-row co-fields-row">
+                      <div class="item-fields-main">
+                        <!-- Description — read from Check In (read-only reference) -->
+                        <div class="room-field-desc">
+                          <label class="field-lbl">Description</label>
+                          <div class="co-inv-value" :class="{ 'co-inv-empty': !getCI(room.id, item._type==='template' ? item.id : item._eid, 'description') }">
+                            {{ getCI(room.id, item._type==='template' ? item.id : item._eid, 'description') || item.label || '—' }}
+                          </div>
+                        </div>
+                        <!-- Condition at Check In — read-only -->
+                        <div class="room-field-inv">
+                          <label class="field-lbl co-inv-lbl">
+                            Condition at Check In
+                            <span class="co-inv-badge">Inventory</span>
+                          </label>
+                          <div class="co-inv-value" :class="{ 'co-inv-empty': !getCI(room.id, item._type==='template' ? item.id : item._eid, 'condition') }">
+                            {{ getCI(room.id, item._type==='template' ? item.id : item._eid, 'condition') || '—' }}
+                          </div>
+                        </div>
+                        <!-- Condition at Check Out — editable -->
+                        <div class="room-field-cond">
+                          <label class="field-lbl">Condition at Check Out</label>
+                          <textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" rows="3"
+                            placeholder="As Inventory &amp; Check In"
+                            :value="item._type==='template'
+                              ? (get(room.id,item.id,'checkOutCondition') || '')
+                              : (item.checkOutCondition || '')"
+                            @focus="e => {
+                              const cur = item._type==='template'
+                                ? get(room.id,item.id,'checkOutCondition')
+                                : item.checkOutCondition
+                              if (!cur) {
+                                item._type==='template'
+                                  ? set(room.id,item.id,'checkOutCondition','As Inventory & Check In')
+                                  : setRoomExtraField(room.id,item._eid,'checkOutCondition','As Inventory & Check In')
+                              }
+                            }"
+                            @input="item._type==='template'
+                              ? set(room.id,item.id,'checkOutCondition',$event.target.value)
+                              : setRoomExtraField(room.id,item._eid,'checkOutCondition',$event.target.value)"></textarea>
+                        </div>
+                        <!-- Actions picker -->
+                        <div class="room-field-actions">
+                          <label class="field-lbl">Actions</label>
+                          <CheckOutActionPicker
+                            :actions="getItemActions(room.id, item._type==='extra' ? item._eid : item.id)"
+                            :room-id="room.id"
+                            :item-id="item._type==='extra' ? item._eid : item.id"
+                            @update:actions="val => setItemActions(room.id, item._type==='extra' ? item._eid : item.id, val)"
+                          />
+                        </div>
+                        <!-- View Check In photos link -->
+                        <div class="room-field-ci-photos">
+                          <button class="btn-ci-photos" @click="openCIPhotos(room.id, item._type==='template' ? item.id : item._eid, item.label)">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                            View Check In photos
+                            <span v-if="(sourceReportData[room.id]?.[String(item._type==='template' ? item.id : item._eid)]?._photos || []).length" class="ci-photo-count">
+                              {{ (sourceReportData[room.id]?.[String(item._type==='template' ? item.id : item._eid)]?._photos || []).length }}
+                            </span>
+                          </button>
+                        </div>
                       </div>
-                    </div>
-
-                    <!-- Condition at Check In — read-only from source Check In report_data -->
-                    <div class="room-field-inv">
-                      <label class="field-lbl co-inv-lbl">
-                        Condition at Check In
-                        <span class="co-inv-badge">Inventory</span>
-                      </label>
-                      <div class="co-inv-value" :class="{ 'co-inv-empty': !getCI(room.id, item._type==='template' ? item.id : item._eid, 'condition') }">
-                        {{ getCI(room.id, item._type==='template' ? item.id : item._eid, 'condition') || '—' }}
+                      <!-- Buttons stacked to the right -->
+                      <div class="item-btn-col">
+                        <button class="cam-btn cam-btn-item"
+                          :class="{ 'cam-has': getPhotos(room.id, item._type==='template' ? item.id : item._eid).length }"
+                          @click="togglePanel(room.id, item._type==='template' ? item.id : item._eid)"
+                          title="Photos">
+                          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                          <span v-if="getPhotos(room.id, item._type==='template' ? item.id : item._eid).length" class="cam-count">{{ getPhotos(room.id, item._type==='template' ? item.id : item._eid).length }}</span>
+                        </button>
+                        <button class="cam-btn cam-btn-item mic-btn"
+                          :class="{ 'mic-active': isItemRecording(room.id, item._type==='template' ? item.id : item._eid), 'mic-has': !isItemRecording(room.id, item._type==='template' ? item.id : item._eid) && getItemRecordings(room.id, item._type==='template' ? item.id : item._eid).length, 'mic-ai': isItemAiProcessing(room.id, item._type==='template' ? item.id : item._eid) }"
+                          @click.stop="toggleItemRecording(room.id, item._type==='template' ? item.id : item._eid, room.name + ' — ' + (item.label || 'Item'))"
+                          title="Record audio">
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+                          <span v-if="getItemRecordings(room.id, item._type==='template' ? item.id : item._eid).length && !isItemRecording(room.id, item._type==='template' ? item.id : item._eid)" class="cam-count mic-count">{{ getItemRecordings(room.id, item._type==='template' ? item.id : item._eid).length }}</span>
+                        </button>
+                        <button v-if="canEdit" class="del-item-icon-btn"
+                          @click="item._type==='template' ? hideItem(room.id, item.id) : removeRoomExtraItem(room.id, item._eid)"
+                          title="Remove item">
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+                        </button>
                       </div>
-                    </div>
-
-                    <!-- Condition at Check Out — editable, with camera inline -->
-                    <div class="room-field-cond room-field-with-cam">
-                      <div class="field-cond-inner">
-                        <label class="field-lbl">Condition at Check Out</label>
-                        <textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" rows="3"
-                          placeholder="As Inventory &amp; Check In"
-                          :value="item._type==='template'
-                            ? (get(room.id,item.id,'checkOutCondition') || '')
-                            : (item.checkOutCondition || '')"
-                          @focus="e => {
-                            const cur = item._type==='template'
-                              ? get(room.id,item.id,'checkOutCondition')
-                              : item.checkOutCondition
-                            if (!cur) {
-                              item._type==='template'
-                                ? set(room.id,item.id,'checkOutCondition','As Inventory & Check In')
-                                : setRoomExtraField(room.id,item._eid,'checkOutCondition','As Inventory & Check In')
-                            }
-                          }"
-                          @input="item._type==='template'
-                            ? set(room.id,item.id,'checkOutCondition',$event.target.value)
-                            : setRoomExtraField(room.id,item._eid,'checkOutCondition',$event.target.value)"></textarea>
-                      </div>
-                      <button class="cam-btn cam-btn-room"
-                        :class="{ 'cam-has': getPhotos(room.id, item._type==='template' ? item.id : item._eid).length }"
-                        @click="togglePanel(room.id, item._type==='template' ? item.id : item._eid)"
-                        title="Photos">
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-                        <span v-if="getPhotos(room.id, item._type==='template' ? item.id : item._eid).length" class="cam-count">{{ getPhotos(room.id, item._type==='template' ? item.id : item._eid).length }}</span>
-                      </button>
-                      <button class="cam-btn cam-btn-room mic-btn"
-                        :class="{ 'mic-active': isItemRecording(room.id, item._type==='template' ? item.id : item._eid), 'mic-has': !isItemRecording(room.id, item._type==='template' ? item.id : item._eid) && getItemRecordings(room.id, item._type==='template' ? item.id : item._eid).length, 'mic-ai': isItemAiProcessing(room.id, item._type==='template' ? item.id : item._eid) }"
-                        @click.stop="toggleItemRecording(room.id, item._type==='template' ? item.id : item._eid, room.name + ' — ' + (item.label || 'Item'))"
-                        title="Record audio">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-                        <span v-if="getItemRecordings(room.id, item._type==='template' ? item.id : item._eid).length && !isItemRecording(room.id, item._type==='template' ? item.id : item._eid)" class="cam-count mic-count">{{ getItemRecordings(room.id, item._type==='template' ? item.id : item._eid).length }}</span>
-                      </button>
-                    </div>
-
-                    <!-- ⚠ Action picker -->
-                    <div class="room-field-actions">
-                      <label class="field-lbl">Actions</label>
-                      <CheckOutActionPicker
-                        :actions="getItemActions(room.id, item._type==='extra' ? item._eid : item.id)"
-                        :room-id="room.id"
-                        :item-id="item._type==='extra' ? item._eid : item.id"
-                        @update:actions="val => setItemActions(room.id, item._type==='extra' ? item._eid : item.id, val)"
-                      />
-                    </div>
-
-                    <!-- View Check In photos link -->
-                    <div class="room-field-ci-photos">
-                      <button class="btn-ci-photos" @click="openCIPhotos(room.id, item._type==='template' ? item.id : item._eid, item.label)">
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-                        View Check In photos
-                        <span v-if="(sourceReportData[room.id]?.[String(item._type==='template' ? item.id : item._eid)]?._photos || []).length" class="ci-photo-count">
-                          {{ (sourceReportData[room.id]?.[String(item._type==='template' ? item.id : item._eid)]?._photos || []).length }}
-                        </span>
-                      </button>
                     </div>
                   </template>
 
@@ -2719,23 +2726,32 @@ async function moveToReview() {
                 <!-- Sub-items (template items only) -->
                 <div v-if="item._type === 'template' && getSubs(room.id, item.id).length" class="sub-items">
                   <div v-for="sub in getSubs(room.id, item.id)" :key="sub._sid" class="sub-item">
-                    <div class="sub-item-fields">
-                      <div class="room-field-desc"><label class="field-lbl">Description</label><textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" rows="2" placeholder="Describe…" :value="sub.description" @input="setSubField(room.id,item.id,sub._sid,'description',$event.target.value)"></textarea></div>
-                      <div class="room-field-cond room-field-with-cam">
-                        <div class="field-cond-inner"><label class="field-lbl">Condition</label><textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" rows="2" placeholder="Condition…" :value="sub.condition" @input="setSubField(room.id,item.id,sub._sid,'condition',$event.target.value)"></textarea></div>
-                        <div class="room-btn-stack">
-                          <button class="cam-btn cam-btn-room" :class="{ 'cam-has': getPhotos(room.id, sub._sid).length }" @click="togglePanel(room.id, sub._sid)" title="Photos">
-                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-                            <span v-if="getPhotos(room.id, sub._sid).length" class="cam-count">{{ getPhotos(room.id, sub._sid).length }}</span>
-                          </button>
-                          <button class="cam-btn cam-btn-room mic-btn"
-                            :class="{ 'mic-active': isItemRecording(room.id, sub._sid), 'mic-has': !isItemRecording(room.id, sub._sid) && getItemRecordings(room.id, sub._sid).length, 'mic-ai': isItemAiProcessing(room.id, sub._sid) }"
-                            @click.stop="toggleItemRecording(room.id, sub._sid, room.name + ' — ' + item.label + ' (sub)')"
-                            title="Record audio">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-                            <span v-if="getItemRecordings(room.id, sub._sid).length && !isItemRecording(room.id, sub._sid)" class="cam-count mic-count">{{ getItemRecordings(room.id, sub._sid).length }}</span>
-                          </button>
+                    <div class="item-fields-row sub-fields-row">
+                      <div class="item-fields-main">
+                        <div class="room-field-desc">
+                          <label class="field-lbl">Description</label>
+                          <textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" rows="2" placeholder="Describe…" :value="sub.description" @input="setSubField(room.id,item.id,sub._sid,'description',$event.target.value)"></textarea>
                         </div>
+                        <div class="room-field-cond">
+                          <label class="field-lbl">Condition</label>
+                          <textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" rows="2" placeholder="Condition…" :value="sub.condition" @input="setSubField(room.id,item.id,sub._sid,'condition',$event.target.value)"></textarea>
+                        </div>
+                      </div>
+                      <div class="item-btn-col">
+                        <button class="cam-btn cam-btn-item" :class="{ 'cam-has': getPhotos(room.id, sub._sid).length }" @click="togglePanel(room.id, sub._sid)" title="Photos">
+                          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                          <span v-if="getPhotos(room.id, sub._sid).length" class="cam-count">{{ getPhotos(room.id, sub._sid).length }}</span>
+                        </button>
+                        <button class="cam-btn cam-btn-item mic-btn"
+                          :class="{ 'mic-active': isItemRecording(room.id, sub._sid), 'mic-has': !isItemRecording(room.id, sub._sid) && getItemRecordings(room.id, sub._sid).length, 'mic-ai': isItemAiProcessing(room.id, sub._sid) }"
+                          @click.stop="toggleItemRecording(room.id, sub._sid, room.name + ' — ' + item.label + ' (sub)')"
+                          title="Record audio">
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+                          <span v-if="getItemRecordings(room.id, sub._sid).length && !isItemRecording(room.id, sub._sid)" class="cam-count mic-count">{{ getItemRecordings(room.id, sub._sid).length }}</span>
+                        </button>
+                        <button class="del-item-icon-btn" @click="removeSubItem(room.id,item.id,sub._sid)" title="Remove sub-item">
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+                        </button>
                       </div>
                     </div>
                     <!-- Sub-item inline photo panel -->
@@ -2750,7 +2766,6 @@ async function moveToReview() {
                         <input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(room.id, sub._sid, e.target.files)" />
                       </label>
                     </div>
-                    <button class="del-btn del-btn-sub" @click="removeSubItem(room.id,item.id,sub._sid)">×</button>
                   </div>
                 </div>
 
@@ -2769,20 +2784,7 @@ async function moveToReview() {
                   <span class="ph-ref-label">Ref {{ itemRef(room.id, getOrderedRoomItems(room), item._type==='template' ? item.id : item._eid) }}</span>
                 </div>
 
-                <!-- Action bar -->
-                <div class="item-action-bar">
-                  <button v-if="item._type === 'template'" class="add-sub-btn" @click="addSubItem(room.id, item.id)">+ Add sub-item</button>
-                  <button
-                    v-if="item._type === 'template'"
-                    class="del-item-btn"
-                    @click="hideItem(room.id, item.id)"
-                  >× Remove item</button>
-                  <button
-                    v-else
-                    class="del-item-btn"
-                    @click="removeRoomExtraItem(room.id, item._eid)"
-                  >× Remove item</button>
-                </div>
+                <!-- Action bar removed — buttons now inline in item-btn-col -->
               </div>
             </div>
 
@@ -3490,37 +3492,70 @@ async function moveToReview() {
 .qa-guidance{font-size:12px;color:#64748b;line-height:1.5;background:#fffbeb;border-left:3px solid #fbbf24;padding:8px 12px;border-radius:0 4px 4px 0}
 .qa-controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 
-/* Room rows */
-.room-row{display:grid;grid-template-columns:190px 1fr;border-bottom:1px solid #f1f5f9}
+/* Room rows — new layout */
+.room-row{border-bottom:1px solid #f1f5f9;background:white}
 .room-row:last-child{border-bottom:none}
-.room-row-label{display:flex;align-items:flex-start;padding:14px 10px;font-size:13px;font-weight:700;color:#374151;border-right:1px solid #f1f5f9;background:#fafbfd;line-height:1.3;gap:5px;flex-wrap:wrap}
-.label-input{font-weight:700;font-size:13px}
+
+/* Item header bar — full width, contains drag handle + ref + name */
+.item-header-bar{display:flex;align-items:center;gap:8px;padding:10px 16px 6px;border-bottom:1px solid #f8fafc;background:#fafbfd}
+.item-header-name{font-size:13px;font-weight:700;color:#1e293b;flex:1}
+.item-header-name.fld-input{font-weight:700;font-size:13px;border:none;background:transparent;padding:0;outline:none}
+.item-header-name.fld-input:focus{background:#f8fafc;border:1px solid #e2e8f0;border-radius:4px;padding:2px 6px}
+
+/* Item body — fields + button column */
 .room-row-right{display:flex;flex-direction:column}
 
-/* Standard layout (2-col: description + condition) */
-.room-row-fields{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:12px 16px;align-items:start}
-.room-field-desc{grid-column:1}.room-field-cond{grid-column:2}.room-field-notes{grid-column:1/-1}
+/* Main fields row: textareas left, buttons right */
+.item-fields-row{display:flex;align-items:flex-start;gap:0;padding:10px 16px 8px}
+.item-fields-main{display:grid;grid-template-columns:1fr 1fr;gap:12px;flex:1;min-width:0}
+.room-field-desc{grid-column:1}
+.room-field-cond{grid-column:2}
+.room-field-inv{grid-column:1}
+.room-field-notes{grid-column:1/-1}
+.room-field-actions{grid-column:1/-1}
+.room-field-ci-photos{grid-column:1/-1}
 
-/* Check Out layout (4-col: description | check-in | check-out | actions) */
-.co-layout{grid-template-columns:1fr 1fr 1fr auto;gap:8px}
-.room-field-inv{}
+/* Check Out: 3 stacked read-only + editable fields */
+.co-fields-row .item-fields-main{grid-template-columns:1fr 1fr;gap:10px}
+.co-fields-row .room-field-inv{grid-column:2}
+.co-fields-row .room-field-cond{grid-column:1/-1}
+
+/* Button column — stacked to the right */
+.item-btn-col{display:flex;flex-direction:column;gap:6px;padding-left:12px;padding-top:18px;flex-shrink:0;align-items:center}
+.cam-btn-item{width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;color:#94a3b8;cursor:pointer;transition:all 0.15s;position:relative;flex-shrink:0}
+.cam-btn-item:hover{background:#f1f5f9;border-color:#94a3b8;color:#475569}
+.cam-btn-item.cam-has{background:#eff6ff;border-color:#93c5fd;color:#2563eb}
+.cam-btn-item.mic-btn{color:#64748b}
+.cam-btn-item.mic-btn:hover{background:#fdf4ff;border-color:#d8b4fe;color:#7c3aed}
+.cam-btn-item.mic-btn.mic-has{background:#fdf4ff;border-color:#d8b4fe;color:#7c3aed}
+.cam-btn-item.mic-btn.mic-active{background:#7c3aed;border-color:#7c3aed;color:white;animation:mic-pulse 1s ease-in-out infinite}
+.cam-btn-item.mic-btn.mic-ai{background:#fdf4ff;border-color:#d8b4fe;color:#7c3aed;animation:mic-pulse 1.5s ease-in-out infinite}
+
+/* Delete icon button */
+.del-item-icon-btn{width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center;background:none;border:1px solid #fca5a5;border-radius:6px;color:#ef4444;cursor:pointer;transition:all 0.12s;flex-shrink:0}
+.del-item-icon-btn:hover{background:#fef2f2;border-color:#ef4444}
+
+/* Add sub-item link — sits below description box */
+.add-sub-inline{display:block;background:none;border:none;color:#7c3aed;font-size:11px;font-weight:600;cursor:pointer;padding:4px 0 0;text-align:left;width:100%}
+.add-sub-inline:hover{text-decoration:underline}
+
+/* room-row-fields is a passthrough wrapper */
+.room-row-fields{display:contents}
+
+/* Field labels */
+.field-lbl{display:block;margin-bottom:4px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#94a3b8}
+
+/* Check Out read-only values */
 .co-inv-lbl{display:flex;align-items:center;gap:6px;margin-bottom:4px}
 .co-inv-badge{padding:1px 7px;background:#e0e7ff;color:#4338ca;border-radius:8px;font-size:10px;font-weight:600;flex-shrink:0}
 .co-inv-value{padding:8px 10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;font-size:13px;color:#64748b;min-height:60px;line-height:1.5;white-space:pre-wrap}
-.room-field-actions{display:flex;flex-direction:column;padding-top:0}
-.field-lbl{display:block;margin-bottom:4px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#94a3b8}
-
-/* Item action bar */
-.item-action-bar{display:flex;align-items:center;gap:12px;padding:6px 16px 10px;border-top:1px solid #f8fafc}
-.add-sub-btn{background:none;border:none;color:#7c3aed;font-size:12px;font-weight:600;cursor:pointer;padding:2px 0}
-.add-sub-btn:hover{text-decoration:underline}
-.del-item-btn{background:none;border:none;color:#ef4444;font-size:12px;font-weight:600;cursor:pointer;padding:2px 0;margin-left:auto}
-.del-item-btn:hover{text-decoration:underline}
 
 /* Sub-items */
-.sub-items{display:flex;flex-direction:column;border-top:1px dashed #e5e7eb}
-.sub-item{display:flex;align-items:flex-start;gap:8px;padding:10px 16px;border-bottom:1px dashed #f1f5f9}
-.sub-item-fields{display:grid;grid-template-columns:1fr 1fr;gap:12px;flex:1}
+.sub-items{display:flex;flex-direction:column;border-top:1px dashed #e5e7eb;background:#fdfcff}
+.sub-item{border-bottom:1px dashed #f1f5f9}
+.sub-item:last-child{border-bottom:none}
+.sub-fields-row{padding:8px 16px 8px 32px !important}
+.sub-fields-row .item-fields-main{grid-template-columns:1fr 1fr}
 
 /* Inputs */
 .fld-input{width:100%;padding:6px 10px;border:1px solid #e2e8f0;border-radius:5px;font-size:13px;color:#1e293b;font-family:inherit;background:white;transition:border-color 0.15s}

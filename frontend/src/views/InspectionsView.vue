@@ -665,7 +665,7 @@ onMounted(() => {
 
     <!-- ══ Create Inspection Modal ══════════════════════════════════════ -->
     <div v-if="showModal" class="modal-overlay" @click.self="showModal = false">
-      <div class="modal modal-large">
+      <div class="modal modal-wide">
         <div class="modal-header">
           <h2>New Inspection</h2>
           <button @click="showModal = false" class="btn-close">✕</button>
@@ -673,45 +673,134 @@ onMounted(() => {
 
         <form @submit.prevent="handleSubmit" class="modal-body">
 
-          <!-- Client Selection -->
-          <div class="form-group">
-            <label>Portfolio *</label>
-            <select v-model="form.client_id" @change="onClientChange" required>
-              <option :value="null" disabled>Select a portfolio...</option>
-              <option v-for="client in clients" :key="client.id" :value="client.id">
-                {{ client.name }} {{ client.company ? `(${client.company})` : '' }}
-              </option>
-            </select>
-          </div>
+          <!-- ── 2-column grid ────────────────────────────────────────── -->
+          <div class="modal-cols">
 
-          <!-- Property Selection -->
-          <div class="form-group">
-            <label>Property *</label>
-            <select v-model="form.property_id" required :disabled="!form.client_id">
-              <option :value="null" disabled>
-                {{ form.client_id ? 'Select a property...' : 'Please select a portfolio first' }}
-              </option>
-              <option v-for="property in filteredProperties" :key="property.id" :value="property.id">
-                {{ property.address }}
-              </option>
-            </select>
-            <p v-if="form.client_id && filteredProperties.length === 0" class="helper-text">
-              No properties found for this portfolio.
-            </p>
-          </div>
+            <!-- ── Column 1: Location & Scheduling ───────────────────── -->
+            <div class="modal-col">
+              <div class="col-section-title">Location &amp; Scheduling</div>
 
-          <!-- Inspection Type -->
-          <div class="form-group">
-            <label>Inspection Type *</label>
-            <select v-model="form.inspection_type" required>
-              <option value="check_in">Check In</option>
-              <option value="check_out">Check Out</option>
-              <option value="interim">Interim Inspection</option>
-              <option value="inventory">Inventory</option>
-            </select>
-          </div>
+              <!-- Portfolio -->
+              <div class="form-group">
+                <label>Portfolio *</label>
+                <select v-model="form.client_id" @change="onClientChange" required>
+                  <option :value="null" disabled>Select a portfolio...</option>
+                  <option v-for="client in clients" :key="client.id" :value="client.id">
+                    {{ client.name }} {{ client.company ? `(${client.company})` : '' }}
+                  </option>
+                </select>
+              </div>
 
-          <!-- ── Lifecycle suggestion banner ───────────────────────────── -->
+              <!-- Property -->
+              <div class="form-group">
+                <label>Property *</label>
+                <select v-model="form.property_id" required :disabled="!form.client_id">
+                  <option :value="null" disabled>
+                    {{ form.client_id ? 'Select a property...' : 'Select a portfolio first' }}
+                  </option>
+                  <option v-for="property in filteredProperties" :key="property.id" :value="property.id">
+                    {{ property.address }}
+                  </option>
+                </select>
+                <p v-if="form.client_id && filteredProperties.length === 0" class="helper-text">
+                  No properties found for this portfolio.
+                </p>
+              </div>
+
+              <!-- Inspection Type -->
+              <div class="form-group">
+                <label>Inspection Type *</label>
+                <select v-model="form.inspection_type" required>
+                  <option value="check_in">Check In</option>
+                  <option value="check_out">Check Out</option>
+                  <option value="interim">Interim Inspection</option>
+                  <option value="inventory">Inventory</option>
+                </select>
+              </div>
+
+              <!-- Date -->
+              <div class="form-group">
+                <label>Conduct Date</label>
+                <input v-model="form.conduct_date" type="date" class="input-field date-picker" />
+              </div>
+
+              <!-- Time -->
+              <div class="form-group">
+                <label>Time Preference</label>
+                <select v-model="form.time_preference">
+                  <option v-for="opt in timePreferenceOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+                </select>
+                <div v-if="form.time_preference === 'specific'" class="time-row">
+                  <select v-model="form.time_hour" class="time-select">
+                    <option v-for="h in hourOptions" :key="h" :value="h">{{ h }}</option>
+                  </select>
+                  <span>:</span>
+                  <select v-model="form.time_minute" class="time-select">
+                    <option v-for="m in minuteOptions" :key="m" :value="m">{{ m }}</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <!-- ── Column 2: Assignment & Contact ────────────────────── -->
+            <div class="modal-col">
+              <div class="col-section-title">Assignment &amp; Contact</div>
+
+              <!-- Template -->
+              <div class="form-group">
+                <label>Template</label>
+                <select v-model="form.template_id">
+                  <option :value="null">Use default for this type</option>
+                  <option v-for="t in filteredTemplates" :key="t.id" :value="t.id">
+                    {{ t.name }}{{ t.is_default ? ' ★ Default' : '' }}
+                  </option>
+                </select>
+                <p v-if="filteredTemplates.length === 0" class="helper-text warning">
+                  ⚠️ No templates for this type. Create one in Settings → Templates.
+                </p>
+                <p v-else class="helper-text">
+                  {{ filteredTemplates.length }} template{{ filteredTemplates.length !== 1 ? 's' : '' }} available.
+                </p>
+              </div>
+
+              <!-- Clerk -->
+              <div class="form-group">
+                <label>Clerk (Inspector) *</label>
+                <select v-model="form.inspector_id" required>
+                  <option :value="null" disabled>Select a clerk...</option>
+                  <option v-for="clerk in clerks" :key="clerk.id" :value="clerk.id">
+                    {{ clerk.name }} ({{ clerk.email }})
+                  </option>
+                </select>
+                <p v-if="clerks.length === 0" class="helper-text warning">
+                  ⚠️ No clerks available. Create clerk users first.
+                </p>
+              </div>
+
+              <!-- Typist -->
+              <div class="form-group">
+                <label>Typist (Optional)</label>
+                <select v-model="form.typist_id">
+                  <option :value="null">None — assign later</option>
+                  <option v-for="typist in typists" :key="typist.id" :value="typist.id">
+                    {{ typist.name }} ({{ typist.email }})
+                  </option>
+                </select>
+                <p class="helper-text">Can be assigned at the Processing stage.</p>
+              </div>
+
+              <!-- Tenant contact -->
+              <div class="form-group">
+                <label>Tenant Email(s)</label>
+                <input v-model="form.tenant_email" type="text" placeholder="tenant@example.com, tenant2@example.com" />
+                <p class="helper-text">💡 Separate multiple addresses with commas</p>
+              </div>
+            </div>
+
+          </div>
+          <!-- ── End columns ─────────────────────────────────────────── -->
+
+          <!-- ── Lifecycle suggestion banner (full-width below cols) ─── -->
           <div v-if="historyLoading" class="lc-loading">
             <span class="lc-spinner"></span> Checking property history…
           </div>
@@ -740,10 +829,7 @@ onMounted(() => {
                 </span>
               </label>
               <label class="lc-checkbox" v-if="form.source_inspection_id">
-                <input
-                  type="checkbox"
-                  v-model="form.include_photos"
-                />
+                <input type="checkbox" v-model="form.include_photos" />
                 <span>
                   Include photos from {{ lifecycleSuggestion.label }}
                   <span class="lc-photo-hint">Room item photos will carry through to the new report</span>
@@ -751,7 +837,6 @@ onMounted(() => {
               </label>
             </div>
           </div>
-          <!-- ────────────────────────────────────────────────────────── -->
 
           <!-- ── PDF import for Check Out with no linked Check In ──── -->
           <div
@@ -788,80 +873,6 @@ onMounted(() => {
               ✓ PDF will be analysed by AI when you create the inspection
             </p>
           </div>
-          <!-- ──────────────────────────────────────────────────────── -->
-
-          <!-- Conduct Date -->
-          <div class="form-group">
-            <label>Conduct Date</label>
-            <input v-model="form.conduct_date" type="date" class="input-field date-picker" />
-          </div>
-
-          <!-- Time Preference -->
-          <div class="form-group">
-            <label>Time Preference</label>
-            <select v-model="form.time_preference">
-              <option v-for="opt in timePreferenceOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-            </select>
-            <div v-if="form.time_preference === 'specific'" class="time-row">
-              <select v-model="form.time_hour" class="time-select">
-                <option v-for="h in hourOptions" :key="h" :value="h">{{ h }}</option>
-              </select>
-              <span>:</span>
-              <select v-model="form.time_minute" class="time-select">
-                <option v-for="m in minuteOptions" :key="m" :value="m">{{ m }}</option>
-              </select>
-            </div>
-          </div>
-
-          <!-- Template -->
-          <div class="form-group">
-            <label>Template</label>
-            <select v-model="form.template_id">
-              <option :value="null">Use default template for this type</option>
-              <option v-for="t in filteredTemplates" :key="t.id" :value="t.id">
-                {{ t.name }}{{ t.is_default ? ' ★ Default' : '' }}
-              </option>
-            </select>
-            <p v-if="filteredTemplates.length === 0" class="helper-text warning">
-              ⚠️ No templates for this inspection type. Create one in Settings → Templates.
-            </p>
-            <p v-else class="helper-text">
-              {{ filteredTemplates.length }} template{{ filteredTemplates.length !== 1 ? 's' : '' }} available. Leave blank to use the default.
-            </p>
-          </div>
-
-          <!-- Clerk -->
-          <div class="form-group">
-            <label>Assign Clerk (Inspector) *</label>
-            <select v-model="form.inspector_id" required>
-              <option :value="null" disabled>Select a clerk...</option>
-              <option v-for="clerk in clerks" :key="clerk.id" :value="clerk.id">
-                {{ clerk.name }} ({{ clerk.email }})
-              </option>
-            </select>
-            <p v-if="clerks.length === 0" class="helper-text warning">
-              ⚠️ No clerks available. Please create clerk users first.
-            </p>
-          </div>
-
-          <!-- Typist -->
-          <div class="form-group">
-            <label>Assign Typist (Optional)</label>
-            <select v-model="form.typist_id">
-              <option :value="null">None (assign later at Processing stage)</option>
-              <option v-for="typist in typists" :key="typist.id" :value="typist.id">
-                {{ typist.name }} ({{ typist.email }})
-              </option>
-            </select>
-            <p class="helper-text">Typists handle the "Processing" stage. You can assign them now or later.</p>
-          </div>
-
-          <!-- Tenant Email -->
-          <div class="form-group">
-            <label>Tenant Email(s)</label>
-            <input v-model="form.tenant_email" type="text" placeholder="tenant@example.com, tenant2@example.com" />
-            <p class="helper-text">💡 Enter tenant email addresses separated by commas</p>
-          </div>
 
           <div class="modal-footer">
             <button type="button" @click="showModal = false" class="btn-secondary">Cancel</button>
@@ -894,547 +905,151 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.page {
-  max-width: 1400px;
-}
+.page { max-width: 1400px; }
 
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 32px;
-}
+/* ── Page header ── */
+.page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.page-header h1 { font-size: 21px; font-weight: 700; color: #0f172a; margin: 0 0 1px; }
+.subtitle { font-size: 11px; color: #94a3b8; margin: 0; }
 
-.page-header h1 {
-  font-size: 32px;
-  font-weight: 700;
-  color: #1e293b;
-}
-
-.btn-primary {
-  padding: 12px 24px;
-  background: #6366f1;
-  color: white;
-  border: none;
-  border-radius: 8px;
-  font-size: 15px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.15s;
-}
+.btn-primary { padding: 7px 16px; background: #6366f1; color: white; border: none; border-radius: 7px; font-size: 13px; font-weight: 600; cursor: pointer; transition: background 0.15s; }
 .btn-primary:hover { background: #4f46e5; }
-
-.btn-secondary {
-  padding: 10px 20px;
-  background: white;
-  color: #475569;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  font-size: 15px;
-  font-weight: 600;
-  cursor: pointer;
-}
+.btn-secondary { padding: 7px 14px; background: white; color: #475569; border: 1px solid #e2e8f0; border-radius: 7px; font-size: 12px; font-weight: 600; cursor: pointer; }
 .btn-secondary:hover { background: #f8fafc; }
 
-.tabs {
-  display: flex;
-  gap: 4px;
-  margin-bottom: 24px;
-  border-bottom: 2px solid #e2e8f0;
-}
-
-.tab-button {
-  padding: 10px 20px;
-  background: none;
-  border: none;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -2px;
-  font-size: 14px;
-  font-weight: 600;
-  color: #64748b;
-  cursor: pointer;
-  transition: all 0.15s;
-}
+/* ── Tabs ── */
+.tabs { display: flex; gap: 2px; margin-bottom: 12px; border-bottom: 2px solid #e2e8f0; }
+.tab-button { padding: 7px 16px; background: none; border: none; border-bottom: 2px solid transparent; margin-bottom: -2px; font-size: 12px; font-weight: 600; color: #64748b; cursor: pointer; transition: all 0.15s; }
 .tab-button:hover { color: #1e293b; }
 .tab-button.active { color: #6366f1; border-bottom-color: #6366f1; }
 
-/* Filters */
-.filters-bar {
-  display: flex;
-  align-items: flex-end;
-  gap: 16px;
-  margin-bottom: 24px;
-  flex-wrap: wrap;
-}
-
-.filter-group {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 160px;
-}
-
-.filter-group label {
-  font-size: 12px;
-  font-weight: 700;
-  color: #64748b;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.filter-select,
-.filter-input {
-  padding: 8px 12px;
-  border: 1px solid #e2e8f0;
-  border-radius: 6px;
-  font-size: 14px;
-  background: white;
-  color: #1e293b;
-  font-family: inherit;
-}
-
-.btn-clear-filters,
-.btn-date-picker {
-  padding: 8px 16px;
-  background: #f1f5f9;
-  border: 1px solid #e2e8f0;
-  border-radius: 6px;
-  font-size: 13px;
-  font-weight: 600;
-  color: #475569;
-  cursor: pointer;
-  align-self: flex-end;
-}
+/* ── Filters bar ── */
+.filters-bar { display: flex; align-items: flex-end; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; background: white; border: 1px solid #e9ecef; border-radius: 9px; padding: 10px 14px; }
+.filter-group { display: flex; flex-direction: column; gap: 4px; min-width: 140px; }
+.filter-group label { font-size: 10px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.4px; }
+.filter-select, .filter-input { padding: 6px 9px; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 12px; background: white; color: #1e293b; font-family: inherit; }
+.btn-clear-filters, .btn-date-picker { padding: 6px 12px; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 11px; font-weight: 600; color: #64748b; cursor: pointer; align-self: flex-end; }
 .btn-clear-filters:hover, .btn-date-picker:hover { background: #e2e8f0; }
 
-/* Inspections list */
-.inspections-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 12px;
-}
+/* ── Inspections list ── */
+.inspections-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 8px; }
 
 .inspection-card {
-  background: white;
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  overflow: hidden;
-  transition: box-shadow 0.15s, transform 0.12s;
-  cursor: pointer;
-  display: flex;
-  flex-direction: column;
+  background: white; border: 1px solid #e2e8f0; border-radius: 9px;
+  overflow: hidden; transition: box-shadow 0.15s, transform 0.12s;
+  cursor: pointer; display: flex; flex-direction: column;
 }
-.inspection-card:hover {
-  box-shadow: 0 4px 14px rgba(0,0,0,0.08);
-  transform: translateY(-1px);
-}
+.inspection-card:hover { box-shadow: 0 3px 10px rgba(0,0,0,0.07); transform: translateY(-1px); }
 
 /* Date banner */
-.card-date-banner {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 14px;
-  background: linear-gradient(135deg, #1e3a5f 0%, #1e293b 100%);
-  color: white;
-}
+.card-date-banner { display: flex; align-items: center; gap: 8px; padding: 7px 11px; background: linear-gradient(135deg, #1e3a5f 0%, #1e293b 100%); color: white; }
 .card-date-unset { background: #f1f5f9; }
-.card-date-unset .card-date-day { color: #94a3b8; }
-.card-date-unset .card-date-month { color: #94a3b8; }
-
-.card-date-day {
-  font-size: 26px;
-  font-weight: 800;
-  line-height: 1;
-  color: white;
-  min-width: 32px;
-}
+.card-date-unset .card-date-day, .card-date-unset .card-date-month { color: #94a3b8; }
+.card-date-day { font-size: 20px; font-weight: 800; line-height: 1; color: white; min-width: 24px; }
 .card-date-rest { display: flex; flex-direction: column; gap: 1px; }
-.card-date-month { font-size: 11px; font-weight: 600; color: rgba(255,255,255,0.75); text-transform: uppercase; letter-spacing: 0.4px; }
+.card-date-month { font-size: 10px; font-weight: 600; color: rgba(255,255,255,0.75); text-transform: uppercase; letter-spacing: 0.4px; }
 
-.card-body { padding: 12px 14px 8px; flex: 1; }
+.card-body { padding: 9px 11px 6px; flex: 1; }
+.card-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 5px; }
+.card-type-badge { font-size: 9px; font-weight: 700; background: #eef2ff; color: #6366f1; padding: 2px 7px; border-radius: 4px; letter-spacing: 0.3px; }
+.status-badge { padding: 2px 8px; border-radius: 20px; font-size: 9px; font-weight: 700; color: white; white-space: nowrap; flex-shrink: 0; }
+.card-address { font-size: 12px; font-weight: 700; color: #1e293b; line-height: 1.3; margin-bottom: 2px; }
+.card-client { font-size: 10px; color: #6366f1; font-weight: 600; margin-bottom: 5px; }
+.card-assignments { display: flex; flex-direction: column; gap: 2px; }
+.assign-row { display: flex; align-items: center; gap: 5px; }
+.assign-role { font-size: 9px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.4px; min-width: 36px; }
+.assign-name { font-size: 11px; color: #475569; }
 
-.card-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 7px;
-}
-
-.card-type-badge {
-  font-size: 10px;
-  font-weight: 700;
-  background: #eef2ff;
-  color: #6366f1;
-  padding: 2px 8px;
-  border-radius: 5px;
-  letter-spacing: 0.3px;
-}
-
-.status-badge {
-  padding: 2px 9px;
-  border-radius: 20px;
-  font-size: 10px;
-  font-weight: 700;
-  color: white;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.card-address {
-  font-size: 13px;
-  font-weight: 700;
-  color: #1e293b;
-  line-height: 1.35;
-  margin-bottom: 3px;
-}
-
-.card-client {
-  font-size: 11px;
-  color: #6366f1;
-  font-weight: 600;
-  margin-bottom: 8px;
-}
-
-.card-assignments {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.assign-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.assign-role {
-  font-size: 10px;
-  font-weight: 700;
-  color: #94a3b8;
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-  min-width: 38px;
-}
-
-.assign-name {
-  font-size: 12px;
-  color: #475569;
-}
-
-.card-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 14px;
-  border-top: 1px solid #f1f5f9;
-  background: #fafbfc;
-}
-
+.card-footer { display: flex; align-items: center; justify-content: space-between; padding: 6px 11px; border-top: 1px solid #f1f5f9; background: #fafbfc; }
 .card-created { font-size: 10px; color: #cbd5e1; }
-
-.btn-delete-sm {
-  background: none;
-  border: none;
-  color: #fca5a5;
-  font-size: 12px;
-  cursor: pointer;
-  padding: 2px 6px;
-  border-radius: 4px;
-  line-height: 1;
-}
+.btn-delete-sm { background: none; border: none; color: #fca5a5; font-size: 11px; cursor: pointer; padding: 2px 5px; border-radius: 4px; line-height: 1; }
 .btn-delete-sm:hover { background: #fef2f2; color: #ef4444; }
 
-.empty-state {
-  grid-column: 1 / -1;
-  text-align: center;
-  padding: 60px 20px;
-  color: #94a3b8;
-  font-size: 15px;
-}
+.empty-state { grid-column: 1 / -1; text-align: center; padding: 60px 20px; color: #94a3b8; font-size: 13px; }
+.loading { text-align: center; padding: 60px; color: #94a3b8; font-size: 13px; }
 
-.loading {
-  text-align: center;
-  padding: 60px;
-  color: #94a3b8;
-  font-size: 15px;
-}
+/* ── Calendar ── */
+.calendar-view { margin-top: 6px; }
+.calendar-filters { background: #f8fafc; padding: 10px 14px; border-radius: 8px; border: 1px solid #e2e8f0; }
+.calendar-container { margin-top: 12px; }
+.calendar-legend { margin-top: 14px; padding: 12px 14px; background: white; border: 1px solid #e2e8f0; border-radius: 8px; }
+.calendar-legend h4 { font-size: 11px; font-weight: 700; color: #475569; margin-bottom: 8px; }
+.legend-items { display: flex; flex-wrap: wrap; gap: 10px; }
+.legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #475569; }
+.legend-color { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+.empty-legend { font-size: 12px; color: #94a3b8; font-style: italic; }
 
-/* Calendar */
-.calendar-view { margin-top: 8px; }
-.calendar-filters { background: #f8fafc; padding: 16px; border-radius: 8px; border: 1px solid #e2e8f0; }
-.calendar-container { margin-top: 16px; }
-
-.calendar-legend {
-  margin-top: 20px;
-  padding: 16px;
-  background: white;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-}
-.calendar-legend h4 { font-size: 13px; font-weight: 700; color: #475569; margin-bottom: 10px; }
-.legend-items { display: flex; flex-wrap: wrap; gap: 12px; }
-.legend-item { display: flex; align-items: center; gap: 7px; font-size: 13px; color: #475569; }
-.legend-color { width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0; }
-.empty-legend { font-size: 13px; color: #94a3b8; font-style: italic; }
-
-/* Modal */
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 100;
-  padding: 20px;
-}
-
-.modal {
-  background: white;
-  border-radius: 12px;
-  width: 560px;
-  max-width: 100%;
-  max-height: 90vh;
-  overflow-y: auto;
-  box-shadow: 0 20px 60px rgba(0,0,0,0.2);
-}
-
+/* ── Modal ── */
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 100; padding: 20px; }
+.modal { background: white; border-radius: 12px; width: 560px; max-width: 100%; max-height: 92vh; overflow-y: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.2); }
+.modal-wide { width: min(820px, 96vw); }
 .modal-large { width: 680px; }
 .modal-small { width: 400px; }
 
-.modal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 18px 24px;
-  border-bottom: 1px solid #f1f5f9;
-  position: sticky;
-  top: 0;
-  background: white;
-  z-index: 1;
-}
-.modal-header h2 { font-size: 17px; font-weight: 700; color: #0f172a; }
-
-.btn-close {
-  background: none;
-  border: none;
-  font-size: 18px;
-  color: #94a3b8;
-  cursor: pointer;
-  padding: 4px 8px;
-  border-radius: 4px;
-  line-height: 1;
-}
+.modal-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 20px; border-bottom: 1px solid #f1f5f9; position: sticky; top: 0; background: white; z-index: 1; }
+.modal-header h2 { font-size: 15px; font-weight: 700; color: #0f172a; }
+.btn-close { background: none; border: none; font-size: 16px; color: #94a3b8; cursor: pointer; padding: 3px 7px; border-radius: 4px; line-height: 1; }
 .btn-close:hover { background: #f1f5f9; color: #475569; }
 
-.modal-body {
-  padding: 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
+.modal-body { padding: 20px; display: flex; flex-direction: column; gap: 0; }
+
+/* 2-col layout */
+.modal-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0; }
+.modal-col { padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; }
+.modal-col + .modal-col { border-left: 1px solid #f1f5f9; }
+
+.col-section-title { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.8px; color: #94a3b8; padding-bottom: 4px; border-bottom: 1px solid #f1f5f9; margin-bottom: 2px; }
+
+.modal-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: 1px solid #f1f5f9; background: #f8fafc; }
+
+@media (max-width: 700px) {
+  .modal-cols { grid-template-columns: 1fr; }
+  .modal-col + .modal-col { border-left: none; border-top: 1px solid #f1f5f9; }
+  .modal-wide { width: 100%; }
 }
 
-.modal-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  padding-top: 8px;
-}
-
-.form-group {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.form-group label {
-  font-size: 13px;
-  font-weight: 700;
-  color: #374151;
-}
-
-.form-group select,
-.form-group input {
-  padding: 9px 12px;
-  border: 1px solid #e2e8f0;
-  border-radius: 7px;
-  font-size: 14px;
-  font-family: inherit;
-  color: #1e293b;
-  background: white;
-  width: 100%;
+/* ── Form elements ── */
+.form-group { display: flex; flex-direction: column; gap: 4px; }
+.form-group label { font-size: 11px; font-weight: 700; color: #374151; }
+.form-group select, .form-group input {
+  padding: 7px 10px; border: 1px solid #e2e8f0; border-radius: 6px;
+  font-size: 13px; font-family: inherit; color: #1e293b; background: white; width: 100%;
   transition: border-color 0.15s;
 }
-.form-group select:focus,
-.form-group input:focus {
-  outline: none;
-  border-color: #6366f1;
-  box-shadow: 0 0 0 2px rgba(99,102,241,0.08);
-}
+.form-group select:focus, .form-group input:focus { outline: none; border-color: #6366f1; box-shadow: 0 0 0 2px rgba(99,102,241,0.08); }
 .form-group select:disabled { background: #f8fafc; color: #94a3b8; cursor: not-allowed; }
 
-.input-field { padding: 9px 12px; border: 1px solid #e2e8f0; border-radius: 7px; font-size: 14px; font-family: inherit; width: 100%; }
-
-.helper-text { font-size: 12px; color: #64748b; }
+.input-field { padding: 7px 10px; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 13px; font-family: inherit; width: 100%; }
+.helper-text { font-size: 11px; color: #64748b; }
 .helper-text.warning { color: #f59e0b; font-weight: 600; }
 
-.time-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
-.time-select { width: 80px; padding: 7px 10px; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 14px; font-family: inherit; }
+.time-row { display: flex; align-items: center; gap: 7px; margin-top: 6px; }
+.time-select { width: 72px; padding: 6px 9px; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 13px; font-family: inherit; }
 
 .date-picker { cursor: pointer; }
-.date-picker-input { width: 100%; }
 
-/* ── Lifecycle banner ──────────────────────────────────────────────── */
-.lc-loading {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: #64748b;
-  padding: 10px 14px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-}
-
-.lc-spinner {
-  width: 14px;
-  height: 14px;
-  border: 2px solid #e2e8f0;
-  border-top-color: #6366f1;
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
-  flex-shrink: 0;
-}
-
+/* ── Lifecycle banner ── */
+.lc-loading { display: flex; align-items: center; gap: 7px; font-size: 12px; color: #64748b; padding: 9px 12px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 7px; }
+.lc-spinner { width: 13px; height: 13px; border: 2px solid #e2e8f0; border-top-color: #6366f1; border-radius: 50%; animation: spin 0.7s linear infinite; flex-shrink: 0; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-.lc-banner {
-  display: flex;
-  gap: 14px;
-  align-items: flex-start;
-  padding: 14px 16px;
-  background: #eef2ff;
-  border: 1px solid #c7d2fe;
-  border-radius: 10px;
-}
+.lc-banner { display: flex; gap: 12px; align-items: flex-start; padding: 11px 14px; background: #eef2ff; border: 1px solid #c7d2fe; border-radius: 8px; }
+.lc-banner-icon { font-size: 16px; flex-shrink: 0; margin-top: 1px; }
+.lc-banner-body { flex: 1; display: flex; flex-direction: column; gap: 5px; }
+.lc-banner-title { font-size: 12px; font-weight: 700; color: #3730a3; }
+.lc-banner-desc { font-size: 11px; color: #4338ca; line-height: 1.5; }
+.lc-checkbox { display: flex; align-items: center; gap: 7px; cursor: pointer; font-size: 12px; font-weight: 600; color: #1e293b; margin-top: 2px; }
+.lc-checkbox input[type="checkbox"] { width: 14px; height: 14px; accent-color: #6366f1; cursor: pointer; flex-shrink: 0; }
+.lc-photo-hint { display: block; font-size: 10px; color: #94a3b8; margin-top: 2px; }
+.lc-date-chip { display: inline-block; padding: 1px 7px; background: #ddd6fe; color: #4c1d95; border-radius: 8px; font-size: 10px; font-weight: 700; margin-left: 4px; }
 
-.lc-banner-icon {
-  font-size: 20px;
-  flex-shrink: 0;
-  margin-top: 1px;
-}
-
-.lc-banner-body {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.lc-banner-title {
-  font-size: 13px;
-  font-weight: 700;
-  color: #3730a3;
-}
-
-.lc-banner-desc {
-  font-size: 12px;
-  color: #4338ca;
-  line-height: 1.5;
-}
-
-.lc-checkbox {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 600;
-  color: #1e293b;
-  margin-top: 2px;
-}
-
-.lc-checkbox input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
-  accent-color: #6366f1;
-  cursor: pointer;
-  flex-shrink: 0;
-}
-
-.lc-photo-hint{display:block;font-size:11px;color:#94a3b8;margin-top:2px}
-.lc-date-chip {
-  display: inline-block;
-  padding: 1px 8px;
-  background: #ddd6fe;
-  color: #4c1d95;
-  border-radius: 8px;
-  font-size: 11px;
-  font-weight: 700;
-  margin-left: 4px;
-}
-
-/* ── PDF import section in create modal ───────────────────────────── */
-.pdf-import-section {
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  padding: 14px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.pdf-import-header {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 13px;
-  font-weight: 600;
-  color: #475569;
-}
-.pdf-import-hint {
-  font-size: 12px;
-  color: #64748b;
-  line-height: 1.5;
-  margin: 0;
-}
-.pdf-dropzone-sm {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 5px;
-  border: 2px dashed #cbd5e1;
-  border-radius: 8px;
-  padding: 16px;
-  cursor: pointer;
-  transition: all 0.15s;
-  background: white;
-  text-align: center;
-  font-size: 13px;
-  color: #64748b;
-}
-.pdf-dropzone-sm:hover,
-.pdf-dropzone-sm-has {
-  border-color: #6366f1;
-  background: #f5f3ff;
-  color: #4338ca;
-}
-.pdf-dz-sm-hint {
-  font-size: 11px;
-  color: #94a3b8;
-}
-.pdf-dz-sm-name {
-  font-weight: 600;
-  color: #4338ca;
-}
-.pdf-import-notice {
-  font-size: 12px;
-  color: #16a34a;
-  font-weight: 600;
-  margin: 0;
-}
-
+/* ── PDF import ── */
+.pdf-import-section { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 7px; padding: 11px 13px; display: flex; flex-direction: column; gap: 8px; }
+.pdf-import-header { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: #475569; }
+.pdf-import-hint { font-size: 11px; color: #64748b; line-height: 1.5; margin: 0; }
+.pdf-dropzone-sm { display: flex; flex-direction: column; align-items: center; gap: 4px; border: 2px dashed #cbd5e1; border-radius: 7px; padding: 13px; cursor: pointer; transition: all 0.15s; background: white; text-align: center; font-size: 12px; color: #64748b; }
+.pdf-dropzone-sm:hover, .pdf-dropzone-sm-has { border-color: #6366f1; background: #f5f3ff; color: #4338ca; }
+.pdf-dz-sm-hint { font-size: 10px; color: #94a3b8; }
+.pdf-dz-sm-name { font-weight: 600; color: #4338ca; }
+.pdf-import-notice { font-size: 11px; color: #16a34a; font-weight: 600; margin: 0; }
 </style>

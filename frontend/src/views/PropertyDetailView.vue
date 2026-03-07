@@ -31,27 +31,24 @@ const metersForm = ref({
 })
 
 // ── Address Lookup ────────────────────────────────────────────────────────────
-// Mode A — postcode entered  → fetch full address list, show picker
-// Mode B — street/number     → autocomplete suggestions, select → fetch postcode list
 const addressQuery        = ref('')
-const addressResults      = ref([])   // [{line1,line2,line3,city,county}] for postcode mode
-const autocompleteResults = ref([])   // [{address, url}] for text autocomplete mode
+const addressResults      = ref([])
+const autocompleteResults = ref([])
 const addressSearching    = ref(false)
 const showAddressDropdown = ref(false)
-const lookupMode          = ref(null) // 'postcode' | 'autocomplete'
-const lookupPostcode      = ref('')   // postcode resolved from autocomplete selection
+const lookupMode          = ref(null)
+const lookupPostcode      = ref('')
 
 const PC_RE = /^[A-Z]{1,2}[0-9][0-9A-Z]?\s?[0-9][A-Z]{2}$/i
 let autocompleteTimer = null
 
-// Debounced autocomplete as user types (text mode only)
 function onAddressInput() {
   const q = addressQuery.value.trim()
   showAddressDropdown.value = false
   autocompleteResults.value = []
   addressResults.value = []
   if (!q || q.length < 3) return
-  if (PC_RE.test(q)) return  // postcode — wait for explicit Search
+  if (PC_RE.test(q)) return
   clearTimeout(autocompleteTimer)
   autocompleteTimer = setTimeout(() => runAutocomplete(q), 350)
 }
@@ -63,14 +60,10 @@ async function runAutocomplete(q) {
     autocompleteResults.value = res.data.suggestions || []
     lookupMode.value = 'autocomplete'
     showAddressDropdown.value = true
-  } catch (e) {
-    toast.error('Address lookup failed')
-  } finally {
-    addressSearching.value = false
-  }
+  } catch (e) { toast.error('Address lookup failed') }
+  finally { addressSearching.value = false }
 }
 
-// Search button — postcode → full list, text → autocomplete
 async function searchAddress() {
   const q = addressQuery.value.trim()
   if (!q || q.length < 2) return
@@ -78,7 +71,6 @@ async function searchAddress() {
   addressResults.value = []
   autocompleteResults.value = []
   showAddressDropdown.value = false
-
   if (PC_RE.test(q)) {
     try {
       const res = await api.addressFindByPostcode(q)
@@ -87,15 +79,13 @@ async function searchAddress() {
       lookupMode.value = 'postcode'
       showAddressDropdown.value = true
       if (!addressResults.value.length) toast.warning('No addresses found for that postcode')
-    } catch (e) {
-      toast.error('Postcode lookup failed')
-    } finally { addressSearching.value = false }
+    } catch (e) { toast.error('Postcode lookup failed') }
+    finally { addressSearching.value = false }
   } else {
     await runAutocomplete(q)
   }
 }
 
-// Autocomplete suggestion selected — extract postcode and do full lookup
 async function selectAutocomplete(suggestion) {
   const pcMatch = suggestion.address.match(/([A-Z]{1,2}[0-9][0-9A-Z]?\s?[0-9][A-Z]{2})\s*$/i)
   if (pcMatch) {
@@ -113,7 +103,6 @@ async function selectAutocomplete(suggestion) {
   }
 }
 
-// Full address selected from postcode list
 function selectAddress(addr) {
   editForm.value.address_line1 = addr.line1
   editForm.value.address_line2 = [addr.line2, addr.line3].filter(Boolean).join(', ')
@@ -221,11 +210,15 @@ async function handlePhotoUpload(e) {
   if (!file) return
   photoUploading.value = true
   try {
-    const formData = new FormData()
-    formData.append('photo', file)
-    const res = await api.uploadPropertyPhoto(property.value.id, formData)
-    localPhoto.value = res.data.overview_photo
-    property.value.overview_photo = res.data.overview_photo
+    const base64 = await new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(reader.result)
+      reader.onerror = reject
+      reader.readAsDataURL(file)
+    })
+    await api.updateProperty(property.value.id, { overview_photo: base64 })
+    localPhoto.value = base64
+    property.value.overview_photo = base64
     toast.success('Photo uploaded')
   } catch (e) { toast.error('Failed to upload photo') }
   finally { photoUploading.value = false }
@@ -495,14 +488,10 @@ onMounted(fetchProperty)
                   />
                   <button type="button" class="btn-lookup" @click="searchAddress" :disabled="addressSearching">{{ addressSearching ? '…' : 'Search' }}</button>
                 </div>
-
-                <!-- Autocomplete suggestions (text mode) -->
                 <div v-if="showAddressDropdown && lookupMode === 'autocomplete' && autocompleteResults.length" class="addr-dropdown">
                   <div class="addr-dropdown-header">Select an address to find its postcode</div>
                   <div v-for="(s, i) in autocompleteResults" :key="i" class="addr-option" @click="selectAutocomplete(s)">{{ s.address }}</div>
                 </div>
-
-                <!-- Full address list (postcode mode) -->
                 <div v-if="showAddressDropdown && lookupMode === 'postcode' && addressResults.length" class="addr-dropdown">
                   <div class="addr-dropdown-header">{{ addressResults.length }} addresses found for {{ lookupPostcode }}</div>
                   <div v-for="(a, i) in addressResults" :key="i" class="addr-option" @click="selectAddress(a)">
@@ -511,7 +500,6 @@ onMounted(fetchProperty)
                     <span v-if="a.line3" class="addr-line2">, {{ a.line3 }}</span>
                   </div>
                 </div>
-
                 <div v-if="showAddressDropdown && !addressSearching && !autocompleteResults.length && !addressResults.length" class="addr-no-results">No results found</div>
                 <div v-if="showAddressDropdown" class="addr-backdrop" @click="closeDropdown"></div>
               </div>

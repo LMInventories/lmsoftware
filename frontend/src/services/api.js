@@ -79,11 +79,12 @@ const api = {
   deleteClient(id)        { return http.delete(`/api/clients/${id}`) },
 
   // ── Properties ────────────────────────────────────────────────────────────
-  getProperties()           { return http.get('/api/properties') },
-  getProperty(id)           { return http.get(`/api/properties/${id}`) },
-  createProperty(data)      { return http.post('/api/properties', data) },
-  updateProperty(id, data)  { return http.put(`/api/properties/${id}`, data) },
-  deleteProperty(id)        { return http.delete(`/api/properties/${id}`) },
+  getProperties()                { return http.get('/api/properties') },
+  getProperty(id)                { return http.get(`/api/properties/${id}`) },
+  createProperty(data)           { return http.post('/api/properties', data) },
+  updateProperty(id, data)       { return http.put(`/api/properties/${id}`, data) },
+  deleteProperty(id)             { return http.delete(`/api/properties/${id}`) },
+  uploadPropertyPhoto(id, photo) { return http.post(`/api/properties/${id}/photo`, { photo }) },
 
   // ── Inspections ───────────────────────────────────────────────────────────
   getInspections(params)             { return http.get('/api/inspections', { params }) },

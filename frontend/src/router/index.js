@@ -41,6 +41,11 @@ const router = createRouter({
           component: () => import('../views/PropertiesView.vue')
         },
         {
+          path: 'properties/:id',
+          name: 'PropertyDetail',
+          component: () => import('../views/PropertyDetailView.vue')
+        },
+        {
           path: 'inspections',
           name: 'Inspections',
           component: () => import('../views/InspectionsView.vue')

@@ -76,36 +76,64 @@ class Client(db.Model):
 class Property(db.Model):
     __tablename__ = 'properties'
 
-    id             = db.Column(db.Integer, primary_key=True)
-    client_id      = db.Column(db.Integer, db.ForeignKey('clients.id'), nullable=False)
-    address        = db.Column(db.Text, nullable=False)
-    property_type  = db.Column(db.String(50))
-    bedrooms       = db.Column(db.Integer)
-    bathrooms      = db.Column(db.Integer)
-    furnished      = db.Column(db.Boolean, default=False)
-    parking        = db.Column(db.Boolean, default=False)
-    garden         = db.Column(db.Boolean, default=False)
-    notes          = db.Column(db.Text)
-    overview_photo = db.Column(db.Text)  # base64 encoded
-    created_at     = db.Column(db.DateTime, default=datetime.utcnow)
+    id                = db.Column(db.Integer, primary_key=True)
+    client_id         = db.Column(db.Integer, db.ForeignKey('clients.id'), nullable=False)
+    address           = db.Column(db.Text, nullable=False)
+    property_type     = db.Column(db.String(50))
+    bedrooms          = db.Column(db.Integer)
+    bathrooms         = db.Column(db.Integer)
+    furnished         = db.Column(db.String(50))           # 'Furnished', 'Part Furnished', 'Unfurnished'
+    parking           = db.Column(db.Boolean, default=False)
+    garden            = db.Column(db.Boolean, default=False)
+    elevator          = db.Column(db.Boolean, default=False)
+    detachment_type   = db.Column(db.String(50))           # 'Terraced', 'Semi-Detached', etc.
+    elevation         = db.Column(db.String(50))           # 'Ground Floor', '1st Floor', etc.
+    meter_electricity = db.Column(db.String(255))
+    meter_gas         = db.Column(db.String(255))
+    meter_heat        = db.Column(db.String(255))
+    meter_water       = db.Column(db.String(255))
+    notes             = db.Column(db.Text)
+    overview_photo    = db.Column(db.Text)                 # base64 encoded
+    created_at        = db.Column(db.DateTime, default=datetime.utcnow)
 
     inspections = db.relationship('Inspection', backref='property', lazy=True, cascade='all, delete-orphan')
 
     def to_dict(self):
         return {
-            'id':             self.id,
-            'client_id':      self.client_id,
-            'client_name':    self.client.name if self.client else None,
-            'address':        self.address,
-            'property_type':  self.property_type,
-            'bedrooms':       self.bedrooms,
-            'bathrooms':      self.bathrooms,
-            'furnished':      self.furnished,
-            'parking':        self.parking,
-            'garden':         self.garden,
-            'notes':          self.notes,
-            'overview_photo': self.overview_photo,
-            'created_at':     self.created_at.isoformat() if self.created_at else None,
+            'id':                self.id,
+            'client_id':         self.client_id,
+            'client_name':       self.client.name    if self.client else None,
+            'client_company':    self.client.company if self.client else None,
+            'address':           self.address,
+            'property_type':     self.property_type,
+            'bedrooms':          self.bedrooms,
+            'bathrooms':         self.bathrooms,
+            'furnished':         self.furnished,
+            'parking':           self.parking,
+            'garden':            self.garden,
+            'elevator':          self.elevator,
+            'detachment_type':   self.detachment_type,
+            'elevation':         self.elevation,
+            'meter_electricity': self.meter_electricity,
+            'meter_gas':         self.meter_gas,
+            'meter_heat':        self.meter_heat,
+            'meter_water':       self.meter_water,
+            'notes':             self.notes,
+            'overview_photo':    self.overview_photo,
+            'created_at':        self.created_at.isoformat() if self.created_at else None,
+            'inspections': sorted(
+                [
+                    {
+                        'id':              insp.id,
+                        'inspection_type': insp.inspection_type,
+                        'conduct_date':    insp.conduct_date.isoformat() if insp.conduct_date else None,
+                        'status':          insp.status,
+                    }
+                    for insp in self.inspections
+                ],
+                key=lambda x: x['conduct_date'] or '',
+                reverse=True
+            ),
         }
 
 

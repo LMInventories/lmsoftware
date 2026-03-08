@@ -25,8 +25,14 @@ const roles = [
   { value: 'typist', label: 'Typist' }
 ]
 
+const filters = ref({ search: '', role: '' })
+
 const filteredUsers = computed(() => {
-  return users.value.sort((a, b) => {
+  let result = [...users.value]
+  const s = filters.value.search.toLowerCase().trim()
+  if (s) result = result.filter(u => u.name.toLowerCase().includes(s) || u.email.toLowerCase().includes(s))
+  if (filters.value.role) result = result.filter(u => u.role === filters.value.role)
+  return result.sort((a, b) => {
     const roleOrder = { admin: 1, manager: 2, clerk: 3, typist: 4 }
     return roleOrder[a.role] - roleOrder[b.role]
   })
@@ -127,48 +133,70 @@ onMounted(() => {
 <template>
   <div class="page">
     <div class="page-header">
-      <h1>👥 Users</h1>
-      <button @click="openModal" class="btn-primary">➕ New User</button>
+      <div>
+        <h1>Users</h1>
+        <p class="subtitle">{{ filteredUsers.length }} of {{ users.length }} shown</p>
+      </div>
+      <button @click="openModal" class="btn-primary">+ New User</button>
+    </div>
+
+    <div class="filters-bar">
+      <div class="filter-group">
+        <label>Search</label>
+        <input v-model="filters.search" type="text" placeholder="Name or email..." class="filter-input" />
+      </div>
+      <div class="filter-group">
+        <label>Role</label>
+        <select v-model="filters.role" class="filter-select">
+          <option value="">All Roles</option>
+          <option value="admin">Admin</option>
+          <option value="manager">Manager</option>
+          <option value="clerk">Clerk</option>
+          <option value="typist">Typist</option>
+        </select>
+      </div>
+      <button @click="filters = { search: '', role: '' }" class="btn-clear">Clear</button>
     </div>
 
     <div v-if="loading" class="loading">Loading...</div>
 
     <div v-else class="users-grid">
       <div v-for="user in filteredUsers" :key="user.id" class="user-card">
-        <div class="user-header">
-          <div class="user-info">
-            <div class="user-name-row">
-              <h3>{{ user.name }}</h3>
-              <span 
-                v-if="user.role === 'clerk' || user.role === 'typist'"
-                class="color-dot" 
-                :style="{ backgroundColor: user.color }"
-                :title="`Calendar color: ${user.color}`"
-              ></span>
+        <div class="card-top-bar" :style="{ background: getRoleBadgeColor(user.role) }"></div>
+        <div class="card-body">
+          <div class="user-identity">
+            <div class="user-avatar" :style="{ background: user.color || getRoleBadgeColor(user.role) }">
+              {{ user.name.split(' ').map(w => w[0]).slice(0,2).join('').toUpperCase() }}
             </div>
-            <span 
-              class="role-badge" 
-              :style="{ backgroundColor: getRoleBadgeColor(user.role) }"
-            >
-              {{ user.role }}
-            </span>
+            <div class="user-name-block">
+              <div class="user-name-row">
+                <h3>{{ user.name }}</h3>
+                <span
+                  v-if="user.role === 'clerk' || user.role === 'typist'"
+                  class="color-dot"
+                  :style="{ backgroundColor: user.color }"
+                  :title="`Calendar color: ${user.color}`"
+                ></span>
+              </div>
+              <span class="role-badge" :style="{ backgroundColor: getRoleBadgeColor(user.role) }">{{ user.role }}</span>
+            </div>
+          </div>
+
+          <div class="user-details">
+            <div class="detail-row"><span class="detail-icon">✉</span>{{ user.email }}</div>
+            <div v-if="user.phone" class="detail-row"><span class="detail-icon">📞</span>{{ user.phone }}</div>
+            <div class="detail-row detail-muted"><span class="detail-icon">📅</span>Since {{ new Date(user.created_at).toLocaleDateString('en-GB', {day:'2-digit',month:'short',year:'numeric'}) }}</div>
           </div>
         </div>
 
-        <div class="user-details">
-          <p>📧 {{ user.email }}</p>
-          <p v-if="user.phone">📱 {{ user.phone }}</p>
-          <p class="user-created">Created: {{ new Date(user.created_at).toLocaleDateString('en-GB') }}</p>
-        </div>
-
-        <div class="user-actions">
-          <button @click="editUser(user)" class="btn-edit">Edit</button>
-          <button @click="deleteUser(user.id)" class="btn-delete">Delete</button>
+        <div class="card-actions">
+          <button @click="editUser(user)" class="btn-action btn-edit">Edit</button>
+          <button @click="deleteUser(user.id)" class="btn-action btn-delete">Delete</button>
         </div>
       </div>
 
-      <div v-if="users.length === 0" class="empty-state">
-        No users yet. Create your first user!
+      <div v-if="filteredUsers.length === 0" class="empty-state">
+        {{ users.length === 0 ? 'No users yet. Create your first user!' : 'No users match your filters.' }}
       </div>
     </div>
 
@@ -242,307 +270,89 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.page {
-  max-width: 1400px;
+.page { max-width: 1400px; }
+
+.page-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
+h1 { font-size: 21px; font-weight: 700; color: #0f172a; margin: 0 0 1px; }
+.subtitle { font-size: 11px; color: #94a3b8; margin: 0; }
+
+.btn-primary { padding: 7px 16px; background: #6366f1; color: white; border: none; border-radius: 7px; font-size: 13px; font-weight: 600; cursor: pointer; transition: background 0.15s; }
+.btn-primary:hover { background: #4f46e5; }
+
+/* Filters */
+.filters-bar { display: flex; align-items: flex-end; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; background: white; border: 1px solid #e9ecef; border-radius: 9px; padding: 10px 14px; }
+.filter-group { display: flex; flex-direction: column; gap: 4px; min-width: 140px; }
+.filter-group label { font-size: 10px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.4px; }
+.filter-select, .filter-input { padding: 6px 9px; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 12px; background: white; color: #1e293b; font-family: inherit; }
+.btn-clear { padding: 6px 12px; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 11px; font-weight: 600; color: #64748b; cursor: pointer; align-self: flex-end; }
+.btn-clear:hover { background: #e2e8f0; }
+
+.loading { text-align: center; padding: 60px; color: #94a3b8; font-size: 13px; }
+
+/* Grid */
+.users-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
+
+/* Card */
+.user-card { background: white; border: 1px solid #e2e8f0; border-radius: 9px; overflow: hidden; transition: box-shadow 0.15s, transform 0.12s; display: flex; flex-direction: column; }
+.user-card:hover { box-shadow: 0 3px 10px rgba(0,0,0,0.07); transform: translateY(-1px); }
+
+.card-top-bar { height: 3px; flex-shrink: 0; }
+
+.card-body { padding: 11px 13px 8px; flex: 1; }
+
+.user-identity { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+
+.user-avatar {
+  width: 36px; height: 36px; border-radius: 8px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; color: white; letter-spacing: -0.5px;
 }
 
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 32px;
-}
+.user-name-block { flex: 1; min-width: 0; }
 
-.page-header h1 {
-  font-size: 32px;
-  font-weight: 700;
-  color: #1e293b;
-}
+.user-name-row { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
+h3 { font-size: 13px; font-weight: 700; color: #1e293b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-.btn-primary {
-  padding: 12px 24px;
-  background: #6366f1;
-  color: white;
-  border: none;
-  border-radius: 8px;
-  font-size: 15px;
-  font-weight: 600;
-  cursor: pointer;
-}
+.color-dot { width: 10px; height: 10px; border-radius: 50%; border: 1px solid rgba(0,0,0,0.1); flex-shrink: 0; }
 
-.btn-primary:hover {
-  background: #4f46e5;
-}
+.role-badge { display: inline-block; padding: 2px 8px; color: white; border-radius: 10px; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
 
-.loading {
-  text-align: center;
-  padding: 60px;
-  color: #64748b;
-}
+.user-details { display: flex; flex-direction: column; gap: 3px; }
+.detail-row { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #475569; }
+.detail-icon { font-size: 10px; opacity: 0.6; flex-shrink: 0; }
+.detail-muted { color: #94a3b8; font-size: 10px; }
 
-.users-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 20px;
-}
+.card-actions { display: flex; border-top: 1px solid #f1f5f9; }
+.btn-action { flex: 1; padding: 7px 8px; border: none; background: transparent; font-size: 11px; font-weight: 600; cursor: pointer; transition: background 0.15s; border-right: 1px solid #f1f5f9; }
+.btn-action:last-child { border-right: none; }
+.btn-edit { color: #4338ca; }
+.btn-edit:hover { background: #eef2ff; }
+.btn-delete { color: #dc2626; }
+.btn-delete:hover { background: #fef2f2; }
 
-.user-card {
-  background: white;
-  padding: 24px;
-  border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-}
+.empty-state { grid-column: 1 / -1; text-align: center; padding: 60px 20px; color: #94a3b8; font-size: 13px; }
 
-.user-header {
-  margin-bottom: 16px;
-}
+/* Modal */
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 20px; }
+.modal { background: white; border-radius: 12px; width: 100%; max-width: 460px; max-height: 92vh; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,0.2); }
+.modal-header { display: flex; justify-content: space-between; align-items: center; padding: 14px 20px; border-bottom: 1px solid #f1f5f9; }
+.modal-header h2 { font-size: 15px; font-weight: 700; color: #0f172a; }
+.btn-close { background: none; border: none; font-size: 16px; color: #94a3b8; cursor: pointer; padding: 3px 7px; border-radius: 4px; }
+.btn-close:hover { background: #f1f5f9; }
+.modal-body { padding: 18px 20px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 14px; }
 
-.user-info {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
+.form-group { display: flex; flex-direction: column; gap: 4px; }
+.form-group label { font-size: 11px; font-weight: 700; color: #374151; }
+.form-group input, .form-group select { padding: 7px 10px; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 13px; font-family: inherit; color: #1e293b; background: white; width: 100%; }
+.form-group input:focus, .form-group select:focus { outline: none; border-color: #6366f1; box-shadow: 0 0 0 2px rgba(99,102,241,0.08); }
 
-.user-name-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
+.color-picker-container { display: flex; align-items: center; gap: 10px; }
+.color-input { width: 44px !important; height: 34px; padding: 2px !important; border: 1px solid #e2e8f0; border-radius: 6px; cursor: pointer; }
+.color-preview { width: 34px; height: 34px; border-radius: 6px; border: 1px solid #e2e8f0; flex-shrink: 0; }
+.color-value { font-family: monospace; font-size: 12px; color: #64748b; font-weight: 600; }
+.helper-text { font-size: 11px; color: #64748b; line-height: 1.5; }
 
-.user-card h3 {
-  font-size: 20px;
-  font-weight: 600;
-  color: #1e293b;
-}
-
-.color-dot {
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  border: 2px solid #fff;
-  box-shadow: 0 0 0 1px #cbd5e1;
-  flex-shrink: 0;
-}
-
-.role-badge {
-  display: inline-block;
-  padding: 4px 12px;
-  color: white;
-  border-radius: 12px;
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  width: fit-content;
-}
-
-.user-details {
-  margin-bottom: 16px;
-}
-
-.user-details p {
-  font-size: 14px;
-  color: #64748b;
-  margin: 6px 0;
-}
-
-.user-created {
-  font-size: 12px;
-  color: #94a3b8;
-  margin-top: 12px;
-}
-
-.user-actions {
-  display: flex;
-  gap: 12px;
-}
-
-.btn-edit {
-  flex: 1;
-  padding: 10px 20px;
-  background: #6366f1;
-  color: white;
-  border: none;
-  border-radius: 6px;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.btn-edit:hover {
-  background: #4f46e5;
-}
-
-.btn-delete {
-  flex: 1;
-  padding: 10px 20px;
-  background: #fee2e2;
-  color: #991b1b;
-  border: none;
-  border-radius: 6px;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.btn-delete:hover {
-  background: #fecaca;
-}
-
-.empty-state {
-  grid-column: 1 / -1;
-  text-align: center;
-  padding: 60px 20px;
-  color: #64748b;
-}
-
-/* Modal styles */
-.modal-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-  padding: 20px;
-}
-
-.modal {
-  background: white;
-  border-radius: 12px;
-  width: 100%;
-  max-width: 500px;
-  max-height: 90vh;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-
-.modal-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 24px;
-  border-bottom: 1px solid #e5e7eb;
-}
-
-.modal-header h2 {
-  font-size: 20px;
-  font-weight: 600;
-}
-
-.btn-close {
-  background: none;
-  border: none;
-  font-size: 24px;
-  cursor: pointer;
-  padding: 0;
-  width: 32px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 4px;
-}
-
-.btn-close:hover {
-  background: #f1f5f9;
-}
-
-.modal-body {
-  padding: 24px;
-  overflow-y: auto;
-  flex: 1;
-}
-
-.form-group {
-  margin-bottom: 20px;
-}
-
-.form-group label {
-  display: block;
-  margin-bottom: 8px;
-  font-weight: 600;
-  color: #475569;
-  font-size: 14px;
-}
-
-.form-group input,
-.form-group select {
-  width: 100%;
-  padding: 10px 14px;
-  border: 1px solid #cbd5e1;
-  border-radius: 6px;
-  font-size: 14px;
-}
-
-.form-group input:focus,
-.form-group select:focus {
-  outline: none;
-  border-color: #6366f1;
-}
-
-.color-picker-container {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.color-input {
-  width: 60px !important;
-  height: 40px;
-  padding: 4px !important;
-  border: 1px solid #cbd5e1;
-  border-radius: 6px;
-  cursor: pointer;
-}
-
-.color-preview {
-  width: 40px;
-  height: 40px;
-  border-radius: 6px;
-  border: 2px solid #cbd5e1;
-}
-
-.color-value {
-  font-family: monospace;
-  font-size: 14px;
-  color: #64748b;
-  font-weight: 600;
-}
-
-.helper-text {
-  margin-top: 6px;
-  font-size: 12px;
-  color: #64748b;
-  line-height: 1.5;
-}
-
-.modal-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
-  padding: 20px 24px;
-  border-top: 1px solid #e5e7eb;
-  background: #f8fafc;
-}
-
-.btn-secondary {
-  padding: 10px 20px;
-  background: white;
-  color: #64748b;
-  border: 1px solid #cbd5e1;
-  border-radius: 6px;
-  cursor: pointer;
-  font-weight: 600;
-  font-size: 14px;
-}
-
-.btn-secondary:hover {
-  background: #f1f5f9;
-}
+.modal-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: 1px solid #f1f5f9; background: #f8fafc; }
+.btn-secondary { padding: 7px 14px; background: white; color: #64748b; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; }
+.btn-secondary:hover { background: #f8fafc; }
 </style>

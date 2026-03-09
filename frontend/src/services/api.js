@@ -89,6 +89,7 @@ const api = {
   // ── Address Lookup (proxied via backend to keep API key server-side) ──────
   addressFindByPostcode(postcode) { return http.get(`/api/address/find/${encodeURIComponent(postcode)}`) },
   addressAutocomplete(q)          { return http.get('/api/address/autocomplete', { params: { q } }) },
+  addressGet(url)                 { return http.get('/api/address/get', { params: { url } }) },
 
   // ── Inspections ───────────────────────────────────────────────────────────
   getInspections(params)             { return http.get('/api/inspections', { params }) },

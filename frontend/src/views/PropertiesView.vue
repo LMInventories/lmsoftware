@@ -95,14 +95,10 @@ async function searchAddress() {
   }
 }
 
-// Autocomplete suggestion selected — extract postcode and do full lookup
+// Autocomplete suggestion selected — resolve full address via /get/{id}
 async function selectAutocomplete(suggestion) {
-  const pcMatch = suggestion.address.match(/([A-Z]{1,2}[0-9][0-9A-Z]?\s?[0-9][A-Z]{2})\s*$/i)
-  if (pcMatch) {
-    addressQuery.value = pcMatch[1].toUpperCase()
-    autocompleteResults.value = []
-    await searchAddress()
-  } else {
+  if (!suggestion.url) {
+    // No URL — fall back to best-effort string parse
     const parts = suggestion.address.split(',').map(s => s.trim())
     form.value.address_line1 = parts[0] || ''
     form.value.address_line2 = parts[1] || ''
@@ -110,6 +106,23 @@ async function selectAutocomplete(suggestion) {
     form.value.postcode      = ''
     showAddressDropdown.value = false
     addressQuery.value = ''
+    return
+  }
+  addressSearching.value = true
+  showAddressDropdown.value = false
+  try {
+    const res = await api.addressGet(suggestion.url)
+    const a = res.data
+    form.value.address_line1 = a.line1  || ''
+    form.value.address_line2 = [a.line2, a.line3].filter(Boolean).join(', ')
+    form.value.city          = a.city   || ''
+    form.value.postcode      = a.postcode || ''
+    addressQuery.value = ''
+    autocompleteResults.value = []
+  } catch (e) {
+    toast.error('Could not resolve address details')
+  } finally {
+    addressSearching.value = false
   }
 }
 

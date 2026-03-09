@@ -131,7 +131,7 @@ function selectAddress(addr) {
   form.value.address_line1 = addr.line1
   form.value.address_line2 = [addr.line2, addr.line3].filter(Boolean).join(', ')
   form.value.city          = addr.city
-  form.value.postcode      = lookupPostcode.value
+  form.value.postcode      = addr.postcode || lookupPostcode.value
   addressQuery.value       = ''
   showAddressDropdown.value = false
   addressResults.value     = []

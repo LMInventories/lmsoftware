@@ -1569,9 +1569,9 @@ textarea.input-field { resize: vertical; }
     justify-content: center;
   }
 
-  /* Extra bottom pad so content isn't hidden behind sticky actions bar */
-  .inspection-detail-page {
-    padding-bottom: 120px;
+  /* Extra bottom pad so content clears the sticky actions bar + bottom nav */
+  .inspection-detail {
+    padding-bottom: 140px;
   }
 
   /* Info panels: compact */

@@ -290,6 +290,8 @@ onMounted(() => { fetchProperties(); fetchClients() })
       </div>
     </div>
 
+    
+    <button class="mobile-fab-add" @click="openCreateModal" style="display:none">+</button>
     <div v-if="loading" class="loading">Loading properties...</div>
 
     <!-- Grid view -->
@@ -724,4 +726,77 @@ h1 { font-size: 21px; font-weight: 700; color: #0f172a; margin: 0 0 2px; }
 
 @media (max-width: 900px) { .map-view { grid-template-columns: 1fr; } .map-bg { min-height: 300px; } }
 @media (max-width: 640px) { .modal-cols { grid-template-columns: 1fr; } .modal-col-divider { border-left: none; border-top: 1px solid #f1f5f9; } }
+
+/* ══════════════════════════════════════
+   MOBILE  ≤ 768px
+══════════════════════════════════════ */
+@media (max-width: 768px) {
+
+  .page-header .btn-primary { display: none; }
+  .mobile-fab-add { display: flex !important; }
+
+  .filters-bar {
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+  }
+  .filter-group { min-width: 100%; }
+
+  .properties-grid {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  /* Property cards: overview photo full-width on mobile */
+  .property-overview-photo {
+    height: 140px;
+  }
+
+  /* Address lookup dropdown: full-screen width */
+  .address-dropdown {
+    position: fixed;
+    left: 14px;
+    right: 14px;
+    top: auto;
+    width: auto;
+    max-height: 50vh;
+    z-index: 500;
+  }
+
+  .modal-overlay {
+    align-items: flex-end;
+    padding: 0;
+  }
+  .modal {
+    border-radius: 20px 20px 0 0;
+    max-width: 100%;
+    max-height: 94vh;
+  }
+  .modal-cols,
+  .form-cols {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Feature toggles: 2 per row */
+  .feature-toggles {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+
+.mobile-fab-add {
+  display: none;
+  position: fixed;
+  bottom: 76px; right: 18px;
+  width: 52px; height: 52px;
+  background: #6366f1; color: white;
+  border: none; border-radius: 50%;
+  font-size: 26px; line-height: 1;
+  box-shadow: 0 4px 14px rgba(99,102,241,0.4);
+  cursor: pointer; z-index: 150;
+  align-items: center; justify-content: center;
+  transition: transform 0.15s;
+}
+.mobile-fab-add:hover { transform: scale(1.07); }
+
 </style>

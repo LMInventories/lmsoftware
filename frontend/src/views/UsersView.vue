@@ -158,6 +158,8 @@ onMounted(() => {
       <button @click="filters = { search: '', role: '' }" class="btn-clear">Clear</button>
     </div>
 
+    
+    <button class="mobile-fab-add" @click="openModal" style="display:none">+</button>
     <div v-if="loading" class="loading">Loading...</div>
 
     <div v-else class="users-grid">
@@ -355,4 +357,37 @@ h3 { font-size: 13px; font-weight: 700; color: #1e293b; white-space: nowrap; ove
 .modal-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: 1px solid #f1f5f9; background: #f8fafc; }
 .btn-secondary { padding: 7px 14px; background: white; color: #64748b; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; }
 .btn-secondary:hover { background: #f8fafc; }
+
+/* ══════════════════════════════════════
+   MOBILE  ≤ 768px
+══════════════════════════════════════ */
+@media (max-width: 768px) {
+  .page-header .btn-primary { display: none; }
+  .mobile-fab-add { display: flex !important; }
+
+  .filters-bar { flex-direction: column; padding: 10px 12px; gap: 8px; }
+  .filter-group { min-width: 100%; }
+
+  .users-grid { grid-template-columns: 1fr; gap: 8px; }
+
+  .modal-overlay { align-items: flex-end; padding: 0; }
+  .modal { border-radius: 20px 20px 0 0; max-width: 100%; max-height: 94vh; }
+}
+
+
+.mobile-fab-add {
+  display: none;
+  position: fixed;
+  bottom: 76px; right: 18px;
+  width: 52px; height: 52px;
+  background: #6366f1; color: white;
+  border: none; border-radius: 50%;
+  font-size: 26px; line-height: 1;
+  box-shadow: 0 4px 14px rgba(99,102,241,0.4);
+  cursor: pointer; z-index: 150;
+  align-items: center; justify-content: center;
+  transition: transform 0.15s;
+}
+.mobile-fab-add:hover { transform: scale(1.07); }
+
 </style>

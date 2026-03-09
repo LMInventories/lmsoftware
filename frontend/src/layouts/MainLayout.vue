@@ -1,430 +1,371 @@
 <script setup>
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 
 const router    = useRouter()
 const authStore = useAuthStore()
 
-const collapsed    = ref(false)
-const accountOpen  = ref(false)
-const accountRef   = ref(null)
-
-function toggleSidebar() {
-  collapsed.value = !collapsed.value
-}
-
-function toggleAccount() {
-  accountOpen.value = !accountOpen.value
-}
+const drawerOpen = ref(false)
 
 function logout() {
-  accountOpen.value = false
   authStore.logout()
   router.push('/login')
+  drawerOpen.value = false
 }
 
-function goChangePassword() {
-  accountOpen.value = false
-  router.push('/change-password')
+function navigate(path) {
+  router.push(path)
+  drawerOpen.value = false
 }
-
-function handleOutsideClick(e) {
-  if (accountRef.value && !accountRef.value.contains(e.target)) {
-    accountOpen.value = false
-  }
-}
-
-onMounted(() => document.addEventListener('mousedown', handleOutsideClick))
-onBeforeUnmount(() => document.removeEventListener('mousedown', handleOutsideClick))
 </script>
 
 <template>
-  <div class="layout" :class="{ 'sidebar-collapsed': collapsed }">
+  <div class="layout">
 
-    <!-- Sidebar -->
+    <!-- ══ DESKTOP SIDEBAR ══════════════════════════════════════════ -->
     <aside class="sidebar">
-
-      <!-- Header -->
       <div class="sidebar-header">
-        <div class="brand">
-          <span class="brand-icon">🏠</span>
-          <transition name="fade-text">
-            <div v-if="!collapsed" class="brand-text">
-              <span class="brand-name">L&amp;M</span>
-              <span class="brand-sub">Inventories</span>
-            </div>
-          </transition>
-        </div>
-        <button class="collapse-btn" @click="toggleSidebar" :title="collapsed ? 'Expand sidebar' : 'Collapse sidebar'">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
-            <polyline v-if="!collapsed" points="15 18 9 12 15 6"/>
-            <polyline v-else points="9 18 15 12 9 6"/>
-          </svg>
-        </button>
+        <h1>🏠 L&M</h1>
+        <p>Inventories</p>
       </div>
 
-      <!-- Nav -->
       <nav class="sidebar-nav">
-        <router-link to="/dashboard" class="nav-item" :title="collapsed ? 'Dashboard' : ''">
-          <span class="nav-icon">📊</span>
-          <span v-if="!collapsed" class="nav-label">Dashboard</span>
+        <router-link to="/dashboard" class="nav-item">
+          <span class="icon">📊</span><span>Dashboard</span>
         </router-link>
-
-        <router-link to="/inspections" class="nav-item" :title="collapsed ? 'Inspections' : ''">
-          <span class="nav-icon">📋</span>
-          <span v-if="!collapsed" class="nav-label">Inspections</span>
+        <router-link to="/inspections" class="nav-item">
+          <span class="icon">📋</span><span>Inspections</span>
         </router-link>
-
-        <router-link to="/properties" class="nav-item" :title="collapsed ? 'Properties' : ''">
-          <span class="nav-icon">🏢</span>
-          <span v-if="!collapsed" class="nav-label">Properties</span>
+        <router-link to="/properties" class="nav-item">
+          <span class="icon">🏢</span><span>Properties</span>
         </router-link>
-
-        <router-link to="/clients" class="nav-item" v-if="authStore.isAdmin || authStore.isManager" :title="collapsed ? 'Clients' : ''">
-          <span class="nav-icon">👥</span>
-          <span v-if="!collapsed" class="nav-label">Clients</span>
+        <router-link to="/clients" class="nav-item" v-if="authStore.isAdmin || authStore.isManager">
+          <span class="icon">👥</span><span>Clients</span>
         </router-link>
-
-        <router-link to="/users" class="nav-item" v-if="authStore.isAdmin || authStore.isManager" :title="collapsed ? 'Users' : ''">
-          <span class="nav-icon">👤</span>
-          <span v-if="!collapsed" class="nav-label">Users</span>
+        <router-link to="/users" class="nav-item" v-if="authStore.isAdmin || authStore.isManager">
+          <span class="icon">👤</span><span>Users</span>
         </router-link>
-
         <div class="nav-divider"></div>
-
-        <router-link to="/settings" class="nav-item" v-if="authStore.isAdmin || authStore.isManager" :title="collapsed ? 'Settings' : ''">
-          <span class="nav-icon">⚙️</span>
-          <span v-if="!collapsed" class="nav-label">Settings</span>
+        <router-link to="/settings" class="nav-item" v-if="authStore.isAdmin || authStore.isManager">
+          <span class="icon">⚙️</span><span>Settings</span>
         </router-link>
       </nav>
 
-      <!-- Footer: account menu -->
-      <div class="sidebar-footer" ref="accountRef">
-        <button class="account-btn" @click="toggleAccount" :class="{ open: accountOpen }">
+      <div class="sidebar-footer">
+        <div class="user-info">
           <div class="user-avatar">{{ authStore.user?.name?.charAt(0) || 'U' }}</div>
-          <transition name="fade-text">
-            <div v-if="!collapsed" class="user-details">
-              <div class="user-name">{{ authStore.user?.name }}</div>
-              <div class="user-role">{{ authStore.user?.role }}</div>
-            </div>
-          </transition>
-          <transition name="fade-text">
-            <svg v-if="!collapsed" class="chevron" :class="{ rotated: accountOpen }" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <polyline points="18 15 12 9 6 15"/>
-            </svg>
-          </transition>
-        </button>
-
-        <!-- Dropdown -->
-        <transition name="dropdown">
-          <div v-if="accountOpen" class="account-dropdown">
-            <button class="dropdown-item" @click="goChangePassword">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-              Change Password
-            </button>
-            <div class="dropdown-divider"></div>
-            <button class="dropdown-item dropdown-item--danger" @click="logout">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-              Logout
-            </button>
+          <div class="user-details">
+            <div class="user-name">{{ authStore.user?.name }}</div>
+            <div class="user-role">{{ authStore.user?.role }}</div>
           </div>
-        </transition>
+        </div>
+        <button @click="logout" class="btn-logout">🚪 Logout</button>
       </div>
-
     </aside>
 
-    <!-- Main Content -->
+    <!-- ══ MOBILE TOPBAR ════════════════════════════════════════════ -->
+    <header class="mobile-topbar">
+      <div class="mobile-topbar-brand">
+        <span class="mobile-brand-icon">🏠</span>
+        <span class="mobile-brand-name">L&M Inventories</span>
+      </div>
+      <div class="mobile-topbar-right">
+        <div class="mobile-user-avatar">{{ authStore.user?.name?.charAt(0) || 'U' }}</div>
+        <button class="mobile-menu-btn" @click="drawerOpen = true">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <line x1="3" y1="6" x2="21" y2="6"/>
+            <line x1="3" y1="12" x2="21" y2="12"/>
+            <line x1="3" y1="18" x2="21" y2="18"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- ══ MAIN CONTENT ══════════════════════════════════════════════ -->
     <main class="main-content">
       <router-view />
     </main>
+
+    <!-- ══ MOBILE BOTTOM NAV ════════════════════════════════════════ -->
+    <nav class="mobile-bottom-nav">
+      <router-link to="/inspections" class="bnav-item">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><line x1="9" y1="12" x2="15" y2="12"/><line x1="9" y1="16" x2="13" y2="16"/></svg>
+        <span>Inspections</span>
+      </router-link>
+      <router-link to="/properties" class="bnav-item">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+        <span>Properties</span>
+      </router-link>
+      <router-link to="/dashboard" class="bnav-item">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+        <span>Dashboard</span>
+      </router-link>
+      <button class="bnav-item bnav-more" @click="drawerOpen = true">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="1" fill="currentColor"/><circle cx="12" cy="12" r="1" fill="currentColor"/><circle cx="12" cy="19" r="1" fill="currentColor"/></svg>
+        <span>More</span>
+      </button>
+    </nav>
+
+    <!-- ══ MOBILE DRAWER ════════════════════════════════════════════ -->
+    <Transition name="drawer-fade">
+      <div v-if="drawerOpen" class="drawer-backdrop" @click="drawerOpen = false"></div>
+    </Transition>
+    <Transition name="drawer-slide">
+      <div v-if="drawerOpen" class="mobile-drawer">
+        <div class="drawer-header">
+          <div class="drawer-user">
+            <div class="drawer-avatar">{{ authStore.user?.name?.charAt(0) || 'U' }}</div>
+            <div>
+              <div class="drawer-name">{{ authStore.user?.name }}</div>
+              <div class="drawer-role">{{ authStore.user?.role }}</div>
+            </div>
+          </div>
+          <button class="drawer-close" @click="drawerOpen = false">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+
+        <div class="drawer-nav">
+          <button class="drawer-item" @click="navigate('/dashboard')">
+            <span class="drawer-icon">📊</span><span>Dashboard</span>
+          </button>
+          <button class="drawer-item" @click="navigate('/inspections')">
+            <span class="drawer-icon">📋</span><span>Inspections</span>
+          </button>
+          <button class="drawer-item" @click="navigate('/properties')">
+            <span class="drawer-icon">🏢</span><span>Properties</span>
+          </button>
+          <button class="drawer-item" v-if="authStore.isAdmin || authStore.isManager" @click="navigate('/clients')">
+            <span class="drawer-icon">👥</span><span>Clients</span>
+          </button>
+          <button class="drawer-item" v-if="authStore.isAdmin || authStore.isManager" @click="navigate('/users')">
+            <span class="drawer-icon">👤</span><span>Users</span>
+          </button>
+
+          <div class="drawer-divider"></div>
+
+          <button class="drawer-item" v-if="authStore.isAdmin || authStore.isManager" @click="navigate('/settings')">
+            <span class="drawer-icon">⚙️</span><span>Settings</span>
+          </button>
+          <button class="drawer-item" @click="navigate('/change-password')">
+            <span class="drawer-icon">🔑</span><span>Change Password</span>
+          </button>
+
+          <div class="drawer-divider"></div>
+
+          <button class="drawer-item drawer-logout" @click="logout">
+            <span class="drawer-icon">🚪</span><span>Logout</span>
+          </button>
+        </div>
+      </div>
+    </Transition>
+
   </div>
 </template>
 
 <style scoped>
-/* ── Layout shell ─────────────────────────────────────────── */
+/* ── Base layout ───────────────────────────────────────────────────── */
 .layout {
   display: flex;
   min-height: 100vh;
   background: #f1f5f9;
-  transition: none;
 }
 
-/* ── Sidebar ──────────────────────────────────────────────── */
+/* ── Desktop sidebar ───────────────────────────────────────────────── */
 .sidebar {
-  width: 240px;
+  width: 260px;
   background: #1e293b;
   color: white;
   display: flex;
   flex-direction: column;
   position: fixed;
-  left: 0;
-  top: 0;
-  bottom: 0;
+  left: 0; top: 0; bottom: 0;
   z-index: 100;
-  transition: width 0.22s ease;
-  overflow: hidden;
 }
 
-.sidebar-collapsed .sidebar {
-  width: 60px;
-}
-
-/* ── Header ───────────────────────────────────────────────── */
 .sidebar-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 10px 0 16px;
-  height: 60px;
-  border-bottom: 1px solid rgba(255,255,255,0.08);
-  flex-shrink: 0;
+  padding: 24px 20px;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
 }
+.sidebar-header h1 { font-size: 24px; font-weight: 700; margin-bottom: 2px; }
+.sidebar-header p { font-size: 12px; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px; font-weight: 600; }
 
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  overflow: hidden;
-  flex: 1;
-  min-width: 0;
-}
-
-.brand-icon { font-size: 20px; flex-shrink: 0; }
-
-.brand-text {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  white-space: nowrap;
-}
-
-.brand-name {
-  font-size: 16px;
-  font-weight: 800;
-  color: white;
-  line-height: 1;
-}
-
-.brand-sub {
-  font-size: 10px;
-  color: #64748b;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  font-weight: 600;
-  margin-top: 2px;
-}
-
-.collapse-btn {
-  flex-shrink: 0;
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(255,255,255,0.06);
-  border: 1px solid rgba(255,255,255,0.1);
-  border-radius: 6px;
-  color: #94a3b8;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.collapse-btn:hover {
-  background: rgba(255,255,255,0.12);
-  color: white;
-}
-
-/* ── Nav ──────────────────────────────────────────────────── */
-.sidebar-nav {
-  flex: 1;
-  padding: 12px 8px;
-  overflow-y: auto;
-  overflow-x: hidden;
-}
+.sidebar-nav { flex: 1; padding: 16px 12px; overflow-y: auto; }
 
 .nav-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 10px;
-  border-radius: 7px;
-  color: #94a3b8;
-  text-decoration: none;
-  transition: all 0.15s;
-  margin-bottom: 2px;
-  font-size: 14px;
-  font-weight: 500;
-  white-space: nowrap;
-  overflow: hidden;
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 16px; border-radius: 8px;
+  color: #cbd5e1; text-decoration: none;
+  transition: all 0.2s; margin-bottom: 4px; font-weight: 500;
 }
+.nav-item:hover { background: rgba(255,255,255,0.1); color: white; }
+.nav-item.router-link-active { background: #6366f1; color: white; }
+.nav-item .icon { font-size: 20px; width: 24px; text-align: center; }
 
-.nav-item:hover {
-  background: rgba(255,255,255,0.08);
-  color: white;
-}
+.nav-divider { height: 1px; background: rgba(255,255,255,0.1); margin: 12px 8px; }
 
-.nav-item.router-link-active {
-  background: #6366f1;
-  color: white;
-}
+.sidebar-footer { padding: 16px; border-top: 1px solid rgba(255,255,255,0.1); }
+.user-info { display: flex; align-items: center; gap: 12px; padding: 12px; background: rgba(255,255,255,0.05); border-radius: 8px; margin-bottom: 12px; }
+.user-avatar { width: 40px; height: 40px; background: #6366f1; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 16px; flex-shrink: 0; }
+.user-details { flex: 1; min-width: 0; }
+.user-name { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.user-role { font-size: 12px; color: #94a3b8; text-transform: capitalize; }
 
-.nav-icon {
-  font-size: 17px;
-  width: 22px;
-  text-align: center;
-  flex-shrink: 0;
-}
+.btn-logout { width: 100%; padding: 10px; background: rgba(239,68,68,0.1); color: #fca5a5; border: 1px solid rgba(239,68,68,0.2); border-radius: 6px; font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+.btn-logout:hover { background: rgba(239,68,68,0.2); color: #fef2f2; }
 
-.nav-label { overflow: hidden; }
-
-.nav-divider {
-  height: 1px;
-  background: rgba(255,255,255,0.08);
-  margin: 8px 6px;
-}
-
-/* ── Footer / account ─────────────────────────────────────── */
-.sidebar-footer {
-  padding: 10px 8px;
-  border-top: 1px solid rgba(255,255,255,0.08);
-  position: relative;
-  flex-shrink: 0;
-}
-
-.account-btn {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
-  background: rgba(255,255,255,0.05);
-  border: 1px solid transparent;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: all 0.15s;
-  overflow: hidden;
-  text-align: left;
-}
-
-.account-btn:hover,
-.account-btn.open {
-  background: rgba(255,255,255,0.1);
-  border-color: rgba(255,255,255,0.1);
-}
-
-.user-avatar {
-  width: 32px;
-  height: 32px;
-  background: #6366f1;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 700;
-  font-size: 14px;
-  color: white;
-  flex-shrink: 0;
-}
-
-.user-details {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-}
-
-.user-name {
-  font-size: 13px;
-  font-weight: 600;
-  color: white;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.user-role {
-  font-size: 11px;
-  color: #64748b;
-  text-transform: capitalize;
-}
-
-.chevron {
-  flex-shrink: 0;
-  color: #64748b;
-  transition: transform 0.2s;
-}
-
-.chevron.rotated { transform: rotate(180deg); }
-
-/* ── Account dropdown ─────────────────────────────────────── */
-.account-dropdown {
-  position: absolute;
-  bottom: calc(100% + 4px);
-  left: 8px;
-  right: 8px;
-  background: #0f172a;
-  border: 1px solid rgba(255,255,255,0.12);
-  border-radius: 9px;
-  padding: 5px;
-  box-shadow: 0 -8px 24px rgba(0,0,0,0.4);
-  z-index: 200;
-}
-
-.dropdown-item {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  width: 100%;
-  padding: 9px 11px;
-  background: none;
-  border: none;
-  border-radius: 6px;
-  font-size: 13px;
-  font-weight: 500;
-  color: #cbd5e1;
-  cursor: pointer;
-  transition: all 0.12s;
-  text-align: left;
-}
-
-.dropdown-item:hover {
-  background: rgba(255,255,255,0.08);
-  color: white;
-}
-
-.dropdown-item--danger { color: #fca5a5; }
-.dropdown-item--danger:hover {
-  background: rgba(239,68,68,0.15);
-  color: #fecaca;
-}
-
-.dropdown-divider {
-  height: 1px;
-  background: rgba(255,255,255,0.08);
-  margin: 4px 0;
-}
-
-/* ── Main content ─────────────────────────────────────────── */
+/* ── Main content ──────────────────────────────────────────────────── */
 .main-content {
   flex: 1;
-  margin-left: 240px;
-  padding: 28px 32px;
+  margin-left: 260px;
+  padding: 32px;
   overflow-y: auto;
-  transition: margin-left 0.22s ease;
+  min-height: 100vh;
 }
 
-.sidebar-collapsed .main-content {
-  margin-left: 60px;
+/* ── Mobile elements — hidden on desktop ───────────────────────────── */
+.mobile-topbar,
+.mobile-bottom-nav,
+.mobile-drawer,
+.drawer-backdrop { display: none; }
+
+/* ══════════════════════════════════════════════════════════════════════
+   MOBILE STYLES  ≤ 768px
+══════════════════════════════════════════════════════════════════════ */
+@media (max-width: 768px) {
+
+  /* Hide desktop sidebar */
+  .sidebar { display: none; }
+
+  /* Layout becomes full-width column */
+  .layout { flex-direction: column; }
+
+  .main-content {
+    margin-left: 0;
+    padding: 14px 14px 80px;   /* bottom pad clears the nav bar */
+    padding-top: calc(52px + 14px); /* clears the topbar */
+    min-height: 100vh;
+  }
+
+  /* ── Topbar ── */
+  .mobile-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    height: 52px;
+    background: #1e293b;
+    padding: 0 16px;
+    z-index: 200;
+    border-bottom: 1px solid rgba(255,255,255,0.07);
+  }
+
+  .mobile-topbar-brand { display: flex; align-items: center; gap: 8px; }
+  .mobile-brand-icon { font-size: 18px; }
+  .mobile-brand-name { font-size: 15px; font-weight: 700; color: white; letter-spacing: -0.2px; }
+
+  .mobile-topbar-right { display: flex; align-items: center; gap: 10px; }
+  .mobile-user-avatar {
+    width: 30px; height: 30px; background: #6366f1; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 700; color: white;
+  }
+  .mobile-menu-btn {
+    background: none; border: none; color: #94a3b8; cursor: pointer;
+    padding: 4px; display: flex; align-items: center; justify-content: center;
+    border-radius: 6px;
+  }
+  .mobile-menu-btn:hover { background: rgba(255,255,255,0.1); color: white; }
+
+  /* ── Bottom nav ── */
+  .mobile-bottom-nav {
+    display: flex;
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    height: 60px;
+    background: white;
+    border-top: 1px solid #e2e8f0;
+    z-index: 200;
+    box-shadow: 0 -2px 12px rgba(0,0,0,0.06);
+  }
+
+  .bnav-item {
+    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 3px; text-decoration: none; color: #94a3b8; font-size: 10px; font-weight: 600;
+    background: none; border: none; cursor: pointer;
+    transition: color 0.15s;
+    padding: 8px 4px;
+  }
+  .bnav-item.router-link-active { color: #6366f1; }
+  .bnav-item:hover { color: #475569; }
+  .bnav-more { color: #94a3b8; }
+
+  /* ── Drawer backdrop ── */
+  .drawer-backdrop {
+    display: block;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.45);
+    z-index: 300;
+  }
+
+  /* ── Drawer ── */
+  .mobile-drawer {
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    max-height: 85vh;
+    background: white;
+    border-radius: 20px 20px 0 0;
+    z-index: 301;
+    overflow-y: auto;
+    padding-bottom: env(safe-area-inset-bottom, 16px);
+  }
+
+  .drawer-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 20px 20px 14px;
+    border-bottom: 1px solid #f1f5f9;
+  }
+  .drawer-user { display: flex; align-items: center; gap: 12px; }
+  .drawer-avatar {
+    width: 40px; height: 40px; background: #6366f1; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 15px; font-weight: 700; color: white;
+  }
+  .drawer-name { font-size: 14px; font-weight: 700; color: #0f172a; }
+  .drawer-role { font-size: 11px; color: #94a3b8; text-transform: capitalize; margin-top: 1px; }
+
+  .drawer-close {
+    width: 32px; height: 32px; background: #f1f5f9; border: none;
+    border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center;
+    color: #64748b;
+  }
+
+  .drawer-nav { padding: 8px 12px 20px; }
+
+  .drawer-item {
+    display: flex; align-items: center; gap: 14px;
+    width: 100%; padding: 13px 12px; border: none; background: none;
+    font-size: 15px; font-weight: 500; color: #1e293b;
+    text-align: left; cursor: pointer; border-radius: 10px;
+    transition: background 0.1s;
+  }
+  .drawer-item:hover { background: #f8fafc; }
+  .drawer-icon { font-size: 18px; width: 26px; text-align: center; }
+
+  .drawer-divider { height: 1px; background: #f1f5f9; margin: 6px 0; }
+
+  .drawer-logout { color: #dc2626; }
+  .drawer-logout:hover { background: #fef2f2; }
 }
 
-/* ── Transitions ──────────────────────────────────────────── */
-.fade-text-enter-active { transition: opacity 0.15s ease 0.05s; }
-.fade-text-leave-active { transition: opacity 0.1s ease; }
-.fade-text-enter-from,
-.fade-text-leave-to { opacity: 0; }
+/* ── Drawer transitions ────────────────────────────────────────────── */
+.drawer-fade-enter-active, .drawer-fade-leave-active { transition: opacity 0.2s; }
+.drawer-fade-enter-from, .drawer-fade-leave-to { opacity: 0; }
 
-.dropdown-enter-active { transition: opacity 0.15s ease, transform 0.15s ease; }
-.dropdown-leave-active { transition: opacity 0.1s ease, transform 0.1s ease; }
-.dropdown-enter-from { opacity: 0; transform: translateY(4px); }
-.dropdown-leave-to   { opacity: 0; transform: translateY(4px); }
+.drawer-slide-enter-active, .drawer-slide-leave-active { transition: transform 0.25s ease; }
+.drawer-slide-enter-from, .drawer-slide-leave-to { transform: translateY(100%); }
 </style>

@@ -66,12 +66,6 @@ const saving       = ref(false)
 const lastSaved    = ref(null)
 const unsaved      = ref(false)
 const activeId     = ref(null)
-const mobileNavOpen = ref(false)
-
-function scrollToMobile(id) {
-  scrollTo(id)
-  mobileNavOpen.value = false
-}
 const showPhotoModal = ref(false)
 const photoUploading = ref(false)
 const currentPhoto   = ref(null)
@@ -2031,10 +2025,6 @@ async function moveToReview() {
         </div>
       </div>
       <div class="topbar-r">
-        <!-- Mobile nav toggle -->
-        <button class="mob-nav-toggle" @click="mobileNavOpen = !mobileNavOpen" :class="{ active: mobileNavOpen }" title="Sections">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
-        </button>
         <div v-if="allSections.length" class="prog">
           <div class="prog-track"><div class="prog-fill" :style="{ width: `${Math.round(startedCount/allSections.length*100)}%` }"></div></div>
           <span class="prog-lbl">{{ startedCount }}/{{ allSections.length }}</span>
@@ -2061,38 +2051,6 @@ async function moveToReview() {
 
 
     <div class="body">
-      <!-- Mobile nav drawer — slides down over content -->
-      <transition name="mob-nav">
-        <div v-if="mobileNavOpen" class="mob-nav-drawer" @click.self="mobileNavOpen = false">
-          <div class="mob-nav-inner">
-            <div v-if="template">
-              <div v-if="fixedSections.length" class="mob-nav-grp">
-                <p class="mob-nav-lbl">Report Sections</p>
-                <div class="mob-nav-pills">
-                  <button v-for="s in fixedSections" :key="s.id"
-                    class="mob-nav-pill" :class="{ active: activeId===s.id, done: sectionStarted(s.id) }"
-                    @click="scrollToMobile(s.id)">
-                    <span class="mob-dot" :class="{ done: sectionStarted(s.id) }"></span>
-                    {{ s.name }}
-                  </button>
-                </div>
-              </div>
-              <div v-if="rooms.length" class="mob-nav-grp">
-                <p class="mob-nav-lbl">Rooms</p>
-                <div class="mob-nav-pills">
-                  <button v-for="r in rooms" :key="r.id"
-                    class="mob-nav-pill" :class="{ active: activeId===r.id, done: sectionStarted(r.id) }"
-                    @click="scrollToMobile(r.id)">
-                    <span class="mob-dot" :class="{ done: sectionStarted(r.id) }"></span>
-                    {{ r.name }}
-                  </button>
-                </div>
-              </div>
-            </div>
-            <div v-else class="mob-nav-empty">No template assigned</div>
-          </div>
-        </div>
-      </transition>
       <nav class="sidebar">
         <div v-if="template">
           <div v-if="fixedSections.length" class="nav-grp">
@@ -3428,7 +3386,7 @@ async function moveToReview() {
 *{box-sizing:border-box}
 
 /* Layout */
-.shell{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:#f1f5f9;position:relative}
+.shell{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:#f1f5f9}
 .loading-screen{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:14px;background:#f8fafc}
 .loading-screen p{font-size:14px;color:#64748b}
 .ring{width:36px;height:36px;border:3px solid #e2e8f0;border-top-color:#6366f1;border-radius:50%;animation:spin 0.7s linear infinite}
@@ -4147,133 +4105,334 @@ async function moveToReview() {
 }
 .resp-none { color: #cbd5e1; font-size: 12px; }
 
-/* ── Mobile nav toggle button (hidden on desktop) ── */
-.mob-nav-toggle {
-  display: none;
-  align-items: center;
-  justify-content: center;
-  width: 34px; height: 34px;
-  background: rgba(255,255,255,0.07);
-  border: 1px solid rgba(255,255,255,0.12);
-  border-radius: 6px;
-  color: #94a3b8;
-  cursor: pointer;
-  transition: all 0.15s;
-  flex-shrink: 0;
-}
-.mob-nav-toggle:hover { background: rgba(255,255,255,0.13); color: #e2e8f0; }
-.mob-nav-toggle.active { background: rgba(99,102,241,0.25); border-color: #6366f1; color: #a5b4fc; }
-
-/* ── Mobile nav drawer ── */
-.mob-nav-drawer {
-  position: absolute;
-  top: 52px; left: 0; right: 0;
-  z-index: 200;
-  background: rgba(0,0,0,0.4);
-  padding-bottom: 20px;
-}
-.mob-nav-inner {
-  background: #172033;
-  border-bottom: 1px solid #0d1726;
-  padding: 12px 16px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  max-height: 60vh;
-  overflow-y: auto;
-}
-.mob-nav-grp { display: flex; flex-direction: column; gap: 6px; }
-.mob-nav-lbl { font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: 1.2px; color: #2d4a6b; padding: 4px 0 2px; }
-.mob-nav-pills { display: flex; flex-wrap: wrap; gap: 6px; }
-.mob-nav-pill {
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 6px 12px;
-  background: rgba(255,255,255,0.04);
-  border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 20px;
-  font-size: 12px; font-weight: 500; color: #64748b;
-  cursor: pointer; transition: all 0.12s;
-  white-space: nowrap;
-}
-.mob-nav-pill:hover { background: rgba(255,255,255,0.08); color: #94a3b8; }
-.mob-nav-pill.active { background: rgba(99,102,241,0.15); border-color: #4f46e5; color: #a5b4fc; font-weight: 600; }
-.mob-nav-pill.done { border-color: rgba(34,197,94,0.3); }
-.mob-dot { width: 6px; height: 6px; border-radius: 50%; background: transparent; border: 1.5px solid #2d4a6b; flex-shrink: 0; }
-.mob-dot.done { background: #22c55e; border-color: #22c55e; }
-.mob-nav-empty { font-size: 12px; color: #4b6282; padding: 8px 0; }
-
-/* Drawer slide animation */
-.mob-nav-enter-active, .mob-nav-leave-active { transition: opacity 0.18s, transform 0.18s; }
-.mob-nav-enter-from, .mob-nav-leave-to { opacity: 0; transform: translateY(-8px); }
-
-/* ── RESPONSIVE BREAKPOINTS ── */
+/* ══════════════════════════════════════════════════════════════════
+   REPORT EDITOR — MOBILE  ≤ 768px
+   The desktop layout is: fixed topbar + 2-col body (sidebar | main)
+   Mobile layout is:      topbar + horizontal tab strip + scrollable main
+══════════════════════════════════════════════════════════════════ */
 @media (max-width: 768px) {
 
-  /* Show mobile toggle, hide progress bar text clutter */
-  .mob-nav-toggle { display: inline-flex; }
-  .prog-lbl { display: none; }
-  .prog-track { width: 50px; }
-  .crumb-who { display: none; }
-  .crumb-dot:last-of-type { display: none; }
-  .photo-btn span { display: none; } /* icon only */
+  /* ── Shell: full height, no overflow issues ── */
+  .shell {
+    height: 100dvh;   /* dynamic viewport height on mobile browsers */
+    overflow: hidden;
+  }
 
-  /* Collapse sidebar — hidden on mobile, drawer used instead */
-  .body { grid-template-columns: 1fr; position: relative; }
-  .sidebar { display: none; }
+  /* ── Topbar: compact, hide breadcrumb details ── */
+  .topbar {
+    padding: 0 12px;
+    height: 48px;
+    gap: 8px;
+  }
 
-  /* Reduce main padding */
-  .main { padding: 16px 12px 120px; gap: 16px; }
+  /* Hide progress bar and crumb separators on mobile */
+  .prog,
+  .crumb-sep,
+  .crumb-type,
+  .crumb-who {
+    display: none !important;
+  }
 
-  /* Cards */
-  .card { border-radius: 8px; }
-  .card-hd { padding: 12px 14px; }
+  .crumb-addr {
+    font-size: 12px;
+    max-width: 140px;
+  }
+
+  .back-btn {
+    padding: 4px 8px;
+    font-size: 11px;
+  }
+
+  .save-btn {
+    padding: 5px 12px;
+    font-size: 12px;
+  }
+
+  .photo-btn span,
+  .review-btn-label {
+    display: none;
+  }
+
+  /* ── Body: collapse 2-col into stacked layout ── */
+  .body {
+    display: flex;
+    flex-direction: column;
+    grid-template-columns: unset;
+    overflow: hidden;
+  }
+
+  /* ── Section sidebar → horizontal tab strip ── */
+  .sidebar {
+    width: 100% !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    display: flex !important;
+    flex-direction: row !important;
+    padding: 6px 8px !important;
+    border-right: none !important;
+    border-bottom: 1px solid #0d1726 !important;
+    background: #172033 !important;
+    gap: 4px;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    flex-shrink: 0;
+  }
+  .sidebar::-webkit-scrollbar { display: none; }
+
+  /* Section nav group: flatten into horizontal items */
+  .nav-grp {
+    display: contents;
+    margin-bottom: 0 !important;
+  }
+
+  /* Hide section group labels in horizontal mode */
+  .nav-lbl {
+    display: none !important;
+  }
+
+  /* Nav buttons become pills */
+  .nav-btn {
+    white-space: nowrap;
+    flex-shrink: 0;
+    padding: 6px 12px !important;
+    border-radius: 20px !important;
+    border-left: none !important;
+    border: 1px solid transparent !important;
+    font-size: 11px !important;
+    font-weight: 600 !important;
+    background: rgba(255,255,255,0.04) !important;
+    color: #6b8caf !important;
+    min-width: 0 !important;
+  }
+
+  .nav-btn.active,
+  .nav-btn:focus {
+    background: #6366f1 !important;
+    color: white !important;
+    border-color: transparent !important;
+  }
+
+  /* Hide the sidebar warning box (space is precious) */
+  .sidebar-warn { display: none !important; }
+
+  /* ── Main content: full width, proper scroll ── */
+  .main {
+    padding: 14px 12px 100px !important;  /* bottom pad for save bar */
+    flex: 1;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    gap: 14px !important;
+  }
+
+  /* ── Cards: full width, touch-friendly ── */
+  .card {
+    border-radius: 10px !important;
+    margin-bottom: 0 !important;
+  }
+
+  .card-hd {
+    padding: 10px 14px !important;
+  }
+
+  .card-title {
+    font-size: 13px !important;
+  }
+
+  /* ── Tables → stacked item cards ──────────────────────────────── */
+  /* Hide table headers entirely on mobile */
+  .tbl thead,
+  .tbl th {
+    display: none !important;
+  }
+
+  /* Each table row becomes a stacked card */
+  .tbl tr {
+    display: flex !important;
+    flex-direction: column !important;
+    padding: 10px 12px !important;
+    border-bottom: 1px solid #f1f5f9 !important;
+    gap: 8px !important;
+  }
+
+  /* Each cell: full width */
+  .tbl td {
+    display: block !important;
+    padding: 0 !important;
+    border: none !important;
+    font-size: 13px !important;
+    width: 100% !important;
+  }
+
+  /* Item name cell: bold label */
+  .td-name {
+    font-size: 13px !important;
+    font-weight: 700 !important;
+    color: #1e293b !important;
+    margin-bottom: 2px !important;
+    white-space: normal !important;
+  }
+
+  /* Drag handles: hide on mobile (not usable) */
+  .td-drag,
+  .drag-handle,
+  .drag-handle-room {
+    display: none !important;
+  }
+
+  /* Select/input fields: full width, touch-sized */
+  .tbl td select,
+  .tbl td input[type="text"],
+  .tbl td textarea,
+  .fld-select,
+  .fld-input,
+  .fld-textarea {
+    width: 100% !important;
+    min-height: 38px !important;
+    font-size: 14px !important;
+    padding: 8px 10px !important;
+    border-radius: 7px !important;
+  }
 
   /* Item header bar */
-  .item-header-bar { padding: 10px 12px 6px; }
+  .item-header-bar {
+    padding: 8px 12px 6px !important;
+  }
 
-  /* Stack desc + condition vertically on mobile */
-  .item-fields-row { padding: 8px 12px 8px; }
-  .item-fields-main { grid-template-columns: 1fr !important; }
-  .room-field-desc,
-  .room-field-cond,
-  .room-field-inv,
-  .room-field-notes,
-  .room-field-actions,
-  .room-field-ci-photos { grid-column: 1 !important; }
+  /* Item fields: single column */
+  .item-fields-main {
+    grid-template-columns: 1fr !important;
+    gap: 8px !important;
+  }
 
-  /* Shrink button column */
-  .item-btn-col { padding-left: 8px; padding-top: 22px; gap: 8px; }
+  /* Photo panel: horizontal scroll strip */
+  .photo-panel,
+  .photo-panel-inline,
+  .photo-panel-sub {
+    display: flex !important;
+    flex-direction: row !important;
+    overflow-x: auto !important;
+    gap: 8px !important;
+    padding: 8px !important;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    flex-wrap: nowrap !important;
+  }
+  .photo-panel::-webkit-scrollbar,
+  .photo-panel-inline::-webkit-scrollbar { display: none; }
 
-  /* Sub-items */
-  .sub-fields-row { padding: 8px 12px 8px 20px !important; }
+  .ph-thumb {
+    flex-shrink: 0 !important;
+    width: 70px !important;
+    height: 70px !important;
+  }
 
-  /* Fixed section tables — allow horizontal scroll */
-  .section-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .ph-img-click {
+    width: 70px !important;
+    height: 70px !important;
+    object-fit: cover !important;
+    border-radius: 6px !important;
+  }
 
-  /* Topbar: tighten up */
-  .topbar { padding: 0 12px; gap: 8px; }
-  .back-btn span { display: none; } /* arrow only on very small */
-  .save-btn { padding: 6px 12px; font-size: 12px; }
-  .review-btn { padding: 6px 14px; font-size: 12px; }
+  /* Upload / View All buttons in photo strip */
+  .ph-upload-btn,
+  .ph-view-all-btn {
+    flex-shrink: 0 !important;
+    white-space: nowrap !important;
+    align-self: center !important;
+    padding: 8px 12px !important;
+    font-size: 12px !important;
+    min-height: 38px !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 5px !important;
+  }
 
-  /* Room header */
-  .card-hd-room { padding: 10px 12px; }
-  .room-name-input { font-size: 15px; }
+  /* QA rows */
+  .qa-row {
+    padding: 12px !important;
+  }
 
-  /* Action summary table — scrollable */
-  .summary-tbl { font-size: 12px; }
-  .stbl-note { display: none; }
+  .qa-controls {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
 
-  /* photo panel */
-  .photo-panel-inline { padding: 8px 12px; gap: 6px; }
-  .ph-thumb-lg { width: 60px; height: 60px; }
+  /* Add row bar */
+  .add-row-bar {
+    padding: 10px 12px !important;
+  }
+
+  /* Room overview section */
+  .room-header-bar {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 10px 12px !important;
+  }
+
+  .room-name-input {
+    min-width: 120px !important;
+    max-width: 100% !important;
+    font-size: 15px !important;
+  }
+
+  /* ── Sticky save bar on mobile ── */
+  .topbar-r {
+    gap: 6px;
+  }
+
+  /* Make save/review buttons larger tap targets */
+  .save-btn {
+    min-width: 60px;
+    min-height: 36px;
+  }
+
+  .review-btn {
+    min-width: 60px;
+    min-height: 36px;
+    padding: 6px 14px !important;
+    font-size: 12px !important;
+  }
+
+  /* ── Lightbox / photo grid modal: full screen ── */
+  .pg-modal,
+  .lightbox-modal {
+    inset: 0 !important;
+    border-radius: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    max-width: 100% !important;
+    max-height: 100% !important;
+  }
+
+  .pg-grid {
+    grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)) !important;
+    gap: 6px !important;
+  }
+
+  /* ── Check-out section specific ── */
+  .co-fields-row .item-fields-main {
+    grid-template-columns: 1fr !important;
+  }
+
+  .sub-fields-row .item-fields-main {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* ── Meter/key rows ── */
+  .meter-row,
+  .key-row {
+    flex-direction: column !important;
+    gap: 6px !important;
+  }
 }
 
-@media (max-width: 480px) {
-  .crumb-addr { max-width: 140px; }
-  .crumb-type { display: none; }
-  .main { padding: 12px 8px 120px; }
-  .item-fields-row { padding: 8px 10px; }
-  .item-header-bar { padding: 9px 10px 5px; }
+/* ── Very small phones ≤ 400px ── */
+@media (max-width: 400px) {
+  .topbar { padding: 0 8px; gap: 6px; }
+  .crumb-addr { max-width: 100px; font-size: 11px; }
+  .save-btn { font-size: 11px; padding: 5px 10px; }
 }
+
 </style>

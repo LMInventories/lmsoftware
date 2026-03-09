@@ -1504,4 +1504,119 @@ textarea.input-field { resize: vertical; }
   .content-grid { grid-template-columns: 1fr; }
   .workflow-bar { overflow-x: auto; }
 }
+
+/* ══════════════════════════════════════
+   MOBILE  ≤ 768px
+══════════════════════════════════════ */
+@media (max-width: 768px) {
+
+  /* Page title + back button: compact */
+  .detail-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  /* Content grid: already 1-col from 1024px */
+  .content-grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  /* Workflow status track: horizontal scroll */
+  .workflow-bar {
+    border-radius: 10px;
+    margin-bottom: 12px;
+  }
+  .status-track {
+    padding: 14px 16px 10px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .status-track::-webkit-scrollbar { display: none; }
+  .status-step {
+    min-width: 60px;
+  }
+  .step-label {
+    font-size: 9px !important;
+    white-space: nowrap;
+  }
+
+  /* Workflow action buttons: sticky bottom bar on mobile */
+  .workflow-actions {
+    position: fixed;
+    bottom: 60px;
+    left: 0; right: 0;
+    background: white;
+    border-top: 1px solid #e2e8f0;
+    padding: 10px 14px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    z-index: 150;
+    box-shadow: 0 -2px 12px rgba(0,0,0,0.06);
+  }
+
+  .workflow-actions .btn-action,
+  .workflow-actions .btn-primary,
+  .workflow-actions .btn-secondary {
+    flex: 1 1 calc(50% - 4px);
+    font-size: 12px;
+    padding: 10px 8px;
+    text-align: center;
+    justify-content: center;
+  }
+
+  /* Extra bottom pad so content isn't hidden behind sticky actions bar */
+  .inspection-detail-page {
+    padding-bottom: 120px;
+  }
+
+  /* Info panels: compact */
+  .info-card {
+    border-radius: 10px;
+    margin-bottom: 10px;
+  }
+
+  .info-card-header {
+    padding: 10px 14px;
+  }
+
+  .info-card-body {
+    padding: 10px 14px;
+  }
+
+  .info-grid {
+    grid-template-columns: 1fr 1fr !important;
+    gap: 10px;
+  }
+
+  /* Form rows: single column */
+  .form-row {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Modals → bottom sheets */
+  .modal-overlay {
+    align-items: flex-end;
+    padding: 0;
+  }
+  .modal {
+    border-radius: 20px 20px 0 0;
+    max-width: 100%;
+    max-height: 92vh;
+  }
+
+  /* Report edit button: full width */
+  .btn-edit-report {
+    width: 100%;
+    text-align: center;
+    justify-content: center;
+    padding: 12px !important;
+    font-size: 14px !important;
+  }
+}
+
 </style>

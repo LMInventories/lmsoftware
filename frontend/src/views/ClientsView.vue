@@ -181,6 +181,8 @@ onMounted(() => {
       </div>
     </div>
 
+    
+    <button class="mobile-fab-add" @click="openCreateModal" style="display:none">+</button>
     <div v-if="loading" class="loading">Loading clients...</div>
 
     <div v-else-if="clients.length === 0" class="empty-state">
@@ -620,4 +622,49 @@ h1 { font-size: 21px; font-weight: 700; color: #0f172a; margin: 0 0 1px; }
 .btn-secondary:hover { background: #f8fafc; }
 
 @media (max-width: 640px) { .form-cols { grid-template-columns: 1fr; } }
+
+/* ══════════════════════════════════════
+   MOBILE  ≤ 768px
+══════════════════════════════════════ */
+@media (max-width: 768px) {
+  .page-header .btn-primary { display: none; }
+  .mobile-fab-add { display: flex !important; }
+
+  .filters-bar { flex-direction: column; padding: 10px 12px; gap: 8px; }
+  .filter-group { min-width: 100%; }
+
+  .clients-grid { grid-template-columns: 1fr; gap: 8px; }
+
+  .modal-overlay { align-items: flex-end; padding: 0; }
+  .modal { border-radius: 20px 20px 0 0; max-width: 100%; max-height: 94vh; }
+  .form-cols { grid-template-columns: 1fr !important; }
+  .view-detail-grid { grid-template-columns: 1fr !important; }
+
+  /* Logo upload area: compact on mobile */
+  .logo-upload-placeholder { padding: 14px; }
+  .upload-icon { font-size: 20px; }
+
+  /* Color presets: more swatches visible */
+  .color-preset-swatch { width: 24px; height: 24px; }
+
+  /* Mini cover preview: hide on small screens (saves space) */
+  .mini-cover-preview { height: 100px; }
+}
+
+
+.mobile-fab-add {
+  display: none;
+  position: fixed;
+  bottom: 76px; right: 18px;
+  width: 52px; height: 52px;
+  background: #6366f1; color: white;
+  border: none; border-radius: 50%;
+  font-size: 26px; line-height: 1;
+  box-shadow: 0 4px 14px rgba(99,102,241,0.4);
+  cursor: pointer; z-index: 150;
+  align-items: center; justify-content: center;
+  transition: transform 0.15s;
+}
+.mobile-fab-add:hover { transform: scale(1.07); }
+
 </style>

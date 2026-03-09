@@ -4,6 +4,7 @@ import App from './App.vue'
 import router from './router'
 import './style.css'
 import { useAuthStore } from './stores/auth'
+import './assets/mobile.css'
 
 const app = createApp(App)
 const pinia = createPinia()

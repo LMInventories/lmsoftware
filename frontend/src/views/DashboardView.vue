@@ -424,4 +424,70 @@ h1 { font-size: 21px; font-weight: 700; color: #0f172a; margin: 0 0 2px; }
   .status-tiles { grid-template-columns: repeat(2, 1fr); }
   .totals-strip { flex-wrap: wrap; gap: 10px; }
 }
+
+/* ══════════════════════════════════════
+   MOBILE  ≤ 768px
+══════════════════════════════════════ */
+@media (max-width: 768px) {
+  /* Status tiles: 3 across (they're small enough) */
+  .status-tiles {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+  }
+
+  .status-tile {
+    padding: 10px 8px;
+  }
+
+  .tile-count {
+    font-size: 22px !important;
+  }
+
+  .tile-label {
+    font-size: 9px !important;
+  }
+
+  /* Totals strip: 2x2 grid */
+  .totals-strip {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+    flex-wrap: unset;
+  }
+
+  .total-item {
+    justify-content: flex-start;
+    padding: 10px 12px;
+    background: white;
+    border-radius: 8px;
+    border: 1px solid #e2e8f0;
+  }
+
+  /* Main grid: already 1-col from 1100px breakpoint */
+  .main-grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  /* Panel header */
+  .panel-title { font-size: 11px; }
+  .panel-meta { font-size: 10px; }
+
+  /* Activity feed: tighter rows */
+  .feed-row { padding: 8px 12px; }
+  .feed-action { font-size: 11px; }
+  .feed-meta { font-size: 10px; }
+
+  /* Upcoming inspection cards */
+  .up-card { padding: 8px 12px; }
+  .up-address { font-size: 12px; }
+  .up-meta { font-size: 10px; }
+
+  /* Page header */
+  .page-header {
+    flex-direction: row;
+    align-items: center;
+  }
+}
+
 </style>

@@ -2054,7 +2054,7 @@ async function moveToReview() {
 
     <div class="body">
       <nav class="sidebar">
-        <!-- Mobile: collapsible toggle -->
+        <!-- Mobile: collapsible toggle (hidden on desktop via CSS) -->
         <button class="mobile-nav-toggle" @click="mobileNavOpen = !mobileNavOpen">
           <span class="mobile-nav-toggle-label">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
@@ -2062,7 +2062,7 @@ async function moveToReview() {
           </span>
           <span class="mobile-nav-toggle-arrow" :class="{ open: mobileNavOpen }">▼</span>
         </button>
-        <!-- Nav body: always visible on desktop, collapsible on mobile -->
+        <!-- Nav body: visible on desktop always, collapsible on mobile -->
         <div class="mobile-nav-body" :class="{ 'nav-open': mobileNavOpen }">
           <div v-if="template">
             <div v-if="fixedSections.length" class="nav-grp">
@@ -4122,7 +4122,7 @@ async function moveToReview() {
    REPORT EDITOR — MOBILE  ≤ 768px
 ══════════════════════════════════════════════════════════════════ */
 
-/* Mobile toggle — hidden on desktop, shown on mobile */
+/* Mobile nav toggle — hidden on desktop */
 .mobile-nav-toggle { display: none; }
 /* Nav body — always visible on desktop */
 .mobile-nav-body { display: block; }
@@ -4143,7 +4143,7 @@ async function moveToReview() {
   /* ── Body: column layout ── */
   .body { display: flex; flex-direction: column; grid-template-columns: unset; overflow: hidden; }
 
-  /* ── Sidebar: collapses to a toggle button + dropdown ── */
+  /* ── Sidebar: collapsible dropdown ── */
   .sidebar {
     width: 100% !important;
     height: auto !important;
@@ -4157,7 +4157,6 @@ async function moveToReview() {
     flex-shrink: 0;
   }
 
-  /* Toggle button */
   .mobile-nav-toggle {
     display: flex;
     align-items: center;
@@ -4173,25 +4172,10 @@ async function moveToReview() {
     text-transform: uppercase;
     letter-spacing: 0.6px;
   }
+  .mobile-nav-toggle-label { display: flex; align-items: center; gap: 7px; }
+  .mobile-nav-toggle-arrow { font-size: 9px; transition: transform 0.2s; color: #4b6282; }
+  .mobile-nav-toggle-arrow.open { transform: rotate(180deg); color: #a5b4fc; }
 
-  .mobile-nav-toggle-label {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-  }
-
-  .mobile-nav-toggle-arrow {
-    font-size: 9px;
-    transition: transform 0.2s;
-    color: #4b6282;
-  }
-
-  .mobile-nav-toggle-arrow.open {
-    transform: rotate(180deg);
-    color: #a5b4fc;
-  }
-
-  /* Nav body: hidden by default, shown when .nav-open */
   .mobile-nav-body {
     display: none;
     padding: 0 10px 10px;
@@ -4202,11 +4186,9 @@ async function moveToReview() {
   .mobile-nav-body::-webkit-scrollbar { display: none; }
   .mobile-nav-body.nav-open { display: block; }
 
-  /* Nav groups inside the dropdown */
   .nav-grp { margin-bottom: 4px; }
   .nav-lbl { padding: 8px 4px 4px; font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; color: #2d4a6b; display: block; }
 
-  /* Nav buttons: compact pills in the dropdown */
   .nav-btn {
     display: inline-flex;
     white-space: nowrap;
@@ -4233,12 +4215,15 @@ async function moveToReview() {
   .card-hd { padding: 10px 14px !important; }
   .card-title { font-size: 13px !important; }
 
-  /* ── Tables: rows become stacked cards ── */
+  /* ── FIXED SECTIONS: table rows become stacked cards ── */
   .tbl thead, .tbl th { display: none !important; }
 
+  /* Each row: flex column for the data cells, but the
+     action cells (td-cam, td-del) get pulled into a row */
   .tbl tr {
     display: flex !important;
     flex-direction: column !important;
+    flex-wrap: nowrap !important;
     padding: 10px 12px !important;
     border-bottom: 1px solid #f1f5f9 !important;
     gap: 6px !important;
@@ -4251,7 +4236,14 @@ async function moveToReview() {
     width: 100% !important;
   }
 
-  .td-name { font-size: 13px !important; font-weight: 700 !important; color: #1e293b !important; white-space: normal !important; margin-bottom: 2px !important; }
+  .td-name {
+    font-size: 13px !important;
+    font-weight: 700 !important;
+    color: #1e293b !important;
+    white-space: normal !important;
+    margin-bottom: 2px !important;
+  }
+
   .td-drag, .drag-handle, .drag-handle-room { display: none !important; }
 
   /* Inputs: full width, touch-sized */
@@ -4266,48 +4258,63 @@ async function moveToReview() {
     border-radius: 7px !important;
   }
 
-  /* ── FIXED SECTIONS: photo / mic / delete in a row ── */
-  /* td-cam and td-del are siblings in the flex-column tr.
-     We pull them into a row using flexbox ordering. */
-  .td-cam, .td-del {
+  /* ── FIXED SECTION BUTTONS: force into a horizontal row ──
+     td-cam and td-del are table cells that become block divs
+     in the flex-column tr. We override them to inline-flex
+     so they sit next to each other, then wrap the whole row
+     by giving the tr a special last-child treatment.
+     The cleanest approach: make td-cam and td-del inline-flex
+     with auto width, and since they come last in the row they
+     will sit side by side naturally in the flex-column tr
+     because they're no longer 100% wide. ── */
+  .td-cam {
     display: inline-flex !important;
     width: auto !important;
-    align-self: flex-start;
+    float: left !important;
+    margin-right: 6px !important;
+    clear: left;
   }
 
-  /* Group the last two cells into a horizontal row by
-     making the tr wrap and giving them flex-direction: row */
-  .tbl tr .td-cam { order: 90; }
-  .tbl tr .td-del { order: 91; }
-
-  /* Both buttons sit naturally in a row because they're
-     inline-flex with auto width in a flex-wrap container */
-  .tbl tr {
-    flex-wrap: wrap;
-    align-items: flex-start;
+  .td-del {
+    display: inline-flex !important;
+    width: auto !important;
+    float: left !important;
   }
 
-  /* Touch-friendly button sizing */
+  /* Clear floats after the action cells */
+  .photo-panel-row,
+  .photo-panel-cell {
+    clear: both !important;
+  }
+
   .cam-btn { min-width: 38px !important; min-height: 34px !important; }
   .del-btn  { min-width: 34px !important; min-height: 34px !important; }
 
-  /* ── ROOM SECTIONS: stack title / desc / condition / buttons ── */
+  /* ── ROOM SECTIONS: stack description / condition / buttons ── */
 
-  /* The room item layout: flip from side-by-side to stacked */
+  /* The outer row: flip to column */
   .item-fields-row {
     flex-direction: column !important;
     gap: 8px !important;
+    padding: 10px 12px 8px !important;
   }
 
-  /* Fields area: full width, single column */
+  /* Fields grid: 1 column so desc and condition stack vertically */
   .item-fields-main {
     grid-template-columns: 1fr !important;
     gap: 8px !important;
     width: 100% !important;
   }
 
-  /* Button column: was vertical stack to the right.
-     On mobile: becomes a horizontal row BELOW the fields */
+  /* Both field boxes take full width */
+  .room-field-desc,
+  .room-field-cond,
+  .room-field-notes {
+    grid-column: 1 !important;
+    width: 100% !important;
+  }
+
+  /* Button column: horizontal row below the fields */
   .item-btn-col {
     display: flex !important;
     flex-direction: row !important;
@@ -4316,15 +4323,7 @@ async function moveToReview() {
     justify-content: flex-start;
   }
 
-  .item-btn-col .cam-btn,
-  .item-btn-col .del-btn,
-  .item-btn-col .del-btn-sub {
-    flex: 0 0 auto;
-  }
-
-  /* Item header bar */
   .item-header-bar { padding: 8px 12px 6px !important; }
-  .room-row-right { flex-direction: column !important; }
 
   /* ── Photo panels: horizontal scroll strip ── */
   .photo-panel, .photo-panel-inline, .photo-panel-sub {
@@ -4361,7 +4360,7 @@ async function moveToReview() {
   .room-header-bar { flex-wrap: wrap; gap: 8px; padding: 10px 12px !important; }
   .room-name-input { min-width: 120px !important; max-width: 100% !important; font-size: 15px !important; }
 
-  /* ── Save/review buttons: larger tap targets ── */
+  /* ── Save/review buttons ── */
   .topbar-r { gap: 6px; }
   .save-btn { min-width: 60px; min-height: 36px; }
   .review-btn { min-width: 60px; min-height: 36px; padding: 6px 14px !important; font-size: 12px !important; }

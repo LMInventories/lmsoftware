@@ -1381,6 +1381,17 @@ function getItemActions(roomId, itemId) {
   const key = `_actions_${itemId}`
   return reportData.value[roomId]?.[key] ?? []
 }
+
+// Action picker expand/collapse (mobile: toggled via action-trigger-btn)
+const expandedActions = ref({})
+function toggleActionExpanded(roomId, itemId) {
+  const key = `${roomId}_${itemId}`
+  expandedActions.value[key] = !expandedActions.value[key]
+}
+function isActionExpanded(roomId, itemId) {
+  const key = `${roomId}_${itemId}`
+  return !!expandedActions.value[key]
+}
 function setItemActions(roomId, itemId, actions) {
   const key = `_actions_${itemId}`
   if (!reportData.value[roomId]) reportData.value[roomId] = {}
@@ -2554,7 +2565,6 @@ async function moveToReview() {
                             <textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" rows="3" :placeholder="`Describe ${item.label.toLowerCase()}…`"
                               :value="get(room.id,item.id,'description')"
                               @input="set(room.id,item.id,'description',$event.target.value)"></textarea>
-                            <button v-if="canEdit" class="add-sub-btn add-sub-inline" @click="addSubItem(room.id, item.id)">+ Add sub-item</button>
                           </div>
                           <div v-if="item.hasCondition" class="room-field-cond">
                             <label class="field-lbl">Condition</label>
@@ -2569,6 +2579,7 @@ async function moveToReview() {
                               @input="set(room.id,item.id,'notes',$event.target.value)"></textarea>
                           </div>
                         </div>
+                        <button v-if="canEdit && item.hasDescription" class="add-sub-btn add-sub-below" @click="addSubItem(room.id, item.id)">+ Add sub-item</button>
                         <!-- Buttons stacked to the right -->
                         <div class="item-btn-col" v-if="item.hasCondition || item.hasDescription || (!item.hasCondition && !item.hasDescription)">
                           <button class="cam-btn cam-btn-item" :class="{ 'cam-has': getPhotos(room.id, item.id).length }" @click="togglePanel(room.id, item.id)" title="Photos">
@@ -2668,8 +2679,8 @@ async function moveToReview() {
                               ? set(room.id,item.id,'checkOutCondition',$event.target.value)
                               : setRoomExtraField(room.id,item._eid,'checkOutCondition',$event.target.value)"></textarea>
                         </div>
-                        <!-- Actions picker -->
-                        <div class="room-field-actions">
+                        <!-- Actions picker — shown always on desktop, toggled on mobile via action-trigger-btn -->
+                        <div class="room-field-actions" :class="{ 'actions-expanded': isActionExpanded(room.id, item._type==='extra' ? item._eid : item.id) }">
                           <label class="field-lbl">Actions</label>
                           <CheckOutActionPicker
                             :actions="getItemActions(room.id, item._type==='extra' ? item._eid : item.id)"
@@ -2705,10 +2716,18 @@ async function moveToReview() {
                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
                           <span v-if="getItemRecordings(room.id, item._type==='template' ? item.id : item._eid).length && !isItemRecording(room.id, item._type==='template' ? item.id : item._eid)" class="cam-count mic-count">{{ getItemRecordings(room.id, item._type==='template' ? item.id : item._eid).length }}</span>
                         </button>
-                        <button v-if="canEdit" class="del-item-icon-btn"
-                          @click="item._type==='template' ? hideItem(room.id, item.id) : removeRoomExtraItem(room.id, item._eid)"
-                          title="Remove item">
-                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+                        <!-- Action trigger button — opens/focuses the actions picker -->
+                        <button
+                          class="cam-btn cam-btn-item action-trigger-btn"
+                          :class="{ 'action-has': getItemActions(room.id, item._type==='extra' ? item._eid : item.id).length }"
+                          @click.stop="toggleActionExpanded(room.id, item._type==='extra' ? item._eid : item.id)"
+                          title="Actions">
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                            <line x1="12" y1="9" x2="12" y2="13"/>
+                            <line x1="12" y1="17" x2="12.01" y2="17"/>
+                          </svg>
+                          <span v-if="getItemActions(room.id, item._type==='extra' ? item._eid : item.id).length" class="cam-count action-count">{{ getItemActions(room.id, item._type==='extra' ? item._eid : item.id).length }}</span>
                         </button>
                       </div>
                     </div>
@@ -3526,11 +3545,18 @@ async function moveToReview() {
 
 /* Delete icon button */
 .del-item-icon-btn{width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center;background:none;border:1px solid #fca5a5;border-radius:6px;color:#ef4444;cursor:pointer;transition:all 0.12s;flex-shrink:0}
+.action-trigger-btn{ color:#f59e0b; border-color:rgba(245,158,11,0.25) !important; }
+.action-trigger-btn:hover{ background:rgba(245,158,11,0.1) !important; border-color:rgba(245,158,11,0.4) !important; }
+.action-trigger-btn.action-has{ color:#f59e0b; background:rgba(245,158,11,0.08) !important; border-color:rgba(245,158,11,0.35) !important; }
+.action-count{ background:#f59e0b !important; }
+
 .del-item-icon-btn:hover{background:#fef2f2;border-color:#ef4444}
 
 /* Add sub-item link — sits below description box */
 .add-sub-inline{display:block;background:none;border:none;color:#7c3aed;font-size:11px;font-weight:600;cursor:pointer;padding:4px 0 0;text-align:left;width:100%}
 .add-sub-inline:hover{text-decoration:underline}
+.add-sub-below{display:block;background:none;border:none;color:#7c3aed;font-size:11px;font-weight:600;cursor:pointer;padding:4px 0 2px;text-align:left;width:auto}
+.add-sub-below:hover{text-decoration:underline}
 
 /* room-row-fields is a passthrough wrapper */
 .room-row-fields{display:contents}
@@ -4353,7 +4379,15 @@ async function moveToReview() {
   .meter-row, .key-row { flex-direction: column !important; gap: 6px !important; }
 }
 
-/* ── Very small phones ≤ 400px ── */
+/* ── Very small phones ≤ 400px ──  /* Actions picker: on mobile, hidden until action-trigger-btn is tapped */
+  .room-field-actions {
+    display: none !important;
+  }
+  .room-field-actions.actions-expanded {
+    display: block !important;
+  }
+
+ */
 @media (max-width: 400px) {
   .topbar { padding: 0 8px; gap: 6px; }
   .crumb-addr { max-width: 100px; font-size: 11px; }

@@ -1381,8 +1381,6 @@ function getItemActions(roomId, itemId) {
   const key = `_actions_${itemId}`
   return reportData.value[roomId]?.[key] ?? []
 }
-
-// Action picker expand/collapse (mobile: toggled via action-trigger-btn)
 const expandedActions = ref({})
 function toggleActionExpanded(roomId, itemId) {
   const key = `${roomId}_${itemId}`
@@ -2679,7 +2677,7 @@ async function moveToReview() {
                               ? set(room.id,item.id,'checkOutCondition',$event.target.value)
                               : setRoomExtraField(room.id,item._eid,'checkOutCondition',$event.target.value)"></textarea>
                         </div>
-                        <!-- Actions picker — shown always on desktop, toggled on mobile via action-trigger-btn -->
+                        <!-- Actions picker: shown on desktop always; on mobile toggled by action-trigger-btn -->
                         <div class="room-field-actions" :class="{ 'actions-expanded': isActionExpanded(room.id, item._type==='extra' ? item._eid : item.id) }">
                           <label class="field-lbl">Actions</label>
                           <CheckOutActionPicker
@@ -2716,17 +2714,12 @@ async function moveToReview() {
                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
                           <span v-if="getItemRecordings(room.id, item._type==='template' ? item.id : item._eid).length && !isItemRecording(room.id, item._type==='template' ? item.id : item._eid)" class="cam-count mic-count">{{ getItemRecordings(room.id, item._type==='template' ? item.id : item._eid).length }}</span>
                         </button>
-                        <!-- Action trigger button — opens/focuses the actions picker -->
                         <button
                           class="cam-btn cam-btn-item action-trigger-btn"
                           :class="{ 'action-has': getItemActions(room.id, item._type==='extra' ? item._eid : item.id).length }"
                           @click.stop="toggleActionExpanded(room.id, item._type==='extra' ? item._eid : item.id)"
                           title="Actions">
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
-                            <line x1="12" y1="9" x2="12" y2="13"/>
-                            <line x1="12" y1="17" x2="12.01" y2="17"/>
-                          </svg>
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
                           <span v-if="getItemActions(room.id, item._type==='extra' ? item._eid : item.id).length" class="cam-count action-count">{{ getItemActions(room.id, item._type==='extra' ? item._eid : item.id).length }}</span>
                         </button>
                       </div>
@@ -3545,18 +3538,11 @@ async function moveToReview() {
 
 /* Delete icon button */
 .del-item-icon-btn{width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center;background:none;border:1px solid #fca5a5;border-radius:6px;color:#ef4444;cursor:pointer;transition:all 0.12s;flex-shrink:0}
-.action-trigger-btn{ color:#f59e0b; border-color:rgba(245,158,11,0.25) !important; }
-.action-trigger-btn:hover{ background:rgba(245,158,11,0.1) !important; border-color:rgba(245,158,11,0.4) !important; }
-.action-trigger-btn.action-has{ color:#f59e0b; background:rgba(245,158,11,0.08) !important; border-color:rgba(245,158,11,0.35) !important; }
-.action-count{ background:#f59e0b !important; }
-
 .del-item-icon-btn:hover{background:#fef2f2;border-color:#ef4444}
 
 /* Add sub-item link — sits below description box */
 .add-sub-inline{display:block;background:none;border:none;color:#7c3aed;font-size:11px;font-weight:600;cursor:pointer;padding:4px 0 0;text-align:left;width:100%}
 .add-sub-inline:hover{text-decoration:underline}
-.add-sub-below{display:block;background:none;border:none;color:#7c3aed;font-size:11px;font-weight:600;cursor:pointer;padding:4px 0 2px;text-align:left;width:auto}
-.add-sub-below:hover{text-decoration:underline}
 
 /* room-row-fields is a passthrough wrapper */
 .room-row-fields{display:contents}
@@ -4124,13 +4110,22 @@ async function moveToReview() {
 }
 .resp-none { color: #cbd5e1; font-size: 12px; }
 
+
+.add-sub-below{display:block;background:none;border:none;color:#7c3aed;font-size:11px;font-weight:600;cursor:pointer;padding:4px 0 2px;text-align:left;width:auto}
+.add-sub-below:hover{text-decoration:underline}
+.action-trigger-btn{color:#f59e0b !important;border-color:rgba(245,158,11,0.25) !important}
+.action-trigger-btn:hover{background:rgba(245,158,11,0.1) !important;border-color:rgba(245,158,11,0.4) !important}
+.action-trigger-btn.action-has{background:rgba(245,158,11,0.08) !important;border-color:rgba(245,158,11,0.35) !important}
+.action-count{background:#f59e0b !important}
+.td-btn-group{padding:0}
+
 /* ══════════════════════════════════════════════════════════════════
    REPORT EDITOR — MOBILE  ≤ 768px
 ══════════════════════════════════════════════════════════════════ */
 
-/* Mobile nav toggle — hidden on desktop */
+/* Mobile nav toggle: hidden on desktop, shown on mobile */
 .mobile-nav-toggle { display: none; }
-/* Nav body — always visible on desktop */
+/* Nav body: always visible on desktop */
 .mobile-nav-body { display: block; }
 
 @media (max-width: 768px) {
@@ -4138,7 +4133,7 @@ async function moveToReview() {
   /* ── Shell ── */
   .shell { height: 100dvh; overflow: hidden; }
 
-  /* ── Topbar: compact ── */
+  /* ── Topbar ── */
   .topbar { padding: 0 12px; height: 48px; gap: 8px; }
   .prog, .crumb-sep, .crumb-type, .crumb-who { display: none !important; }
   .crumb-addr { font-size: 12px; max-width: 140px; }
@@ -4146,70 +4141,41 @@ async function moveToReview() {
   .save-btn { padding: 5px 12px; font-size: 12px; }
   .photo-btn span, .review-btn-label { display: none; }
 
-  /* ── Body: column layout ── */
+  /* ── Body ── */
   .body { display: flex; flex-direction: column; grid-template-columns: unset; overflow: hidden; }
 
-  /* ── Sidebar: collapsible dropdown ── */
+  /* ── Sidebar: collapsible ── */
   .sidebar {
-    width: 100% !important;
-    height: auto !important;
-    overflow: visible !important;
-    display: flex !important;
-    flex-direction: column !important;
-    padding: 0 !important;
-    border-right: none !important;
-    border-bottom: 1px solid #0d1726 !important;
-    background: #172033 !important;
-    flex-shrink: 0;
+    width: 100% !important; height: auto !important; overflow: visible !important;
+    display: flex !important; flex-direction: column !important; padding: 0 !important;
+    border-right: none !important; border-bottom: 1px solid #0d1726 !important;
+    background: #172033 !important; flex-shrink: 0;
   }
   .mobile-nav-toggle {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    width: 100%;
-    padding: 10px 14px;
-    background: none;
-    border: none;
-    cursor: pointer;
-    color: #a5b4fc;
-    font-size: 12px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.6px;
+    display: flex; align-items: center; justify-content: space-between;
+    width: 100%; padding: 10px 14px; background: none; border: none; cursor: pointer;
+    color: #a5b4fc; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px;
   }
   .mobile-nav-toggle-label { display: flex; align-items: center; gap: 7px; }
   .mobile-nav-toggle-arrow { font-size: 9px; transition: transform 0.2s; color: #4b6282; }
   .mobile-nav-toggle-arrow.open { transform: rotate(180deg); color: #a5b4fc; }
-  .mobile-nav-body {
-    display: none;
-    padding: 0 10px 10px;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-  }
+  .mobile-nav-body { display: none; padding: 0 10px 10px; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
   .mobile-nav-body::-webkit-scrollbar { display: none; }
   .mobile-nav-body.nav-open { display: block; }
   .nav-grp { margin-bottom: 4px; }
   .nav-lbl { padding: 8px 4px 4px; font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; color: #2d4a6b; display: block; }
   .nav-btn {
-    display: inline-flex;
-    white-space: nowrap;
-    padding: 5px 10px !important;
-    border-radius: 14px !important;
-    border-left: none !important;
-    border: 1px solid rgba(255,255,255,0.06) !important;
-    font-size: 11px !important;
-    font-weight: 600 !important;
-    background: rgba(255,255,255,0.04) !important;
-    color: #6b8caf !important;
-    margin: 2px 2px !important;
-    min-width: 0 !important;
-    width: auto !important;
+    display: inline-flex; white-space: nowrap; margin: 2px;
+    padding: 5px 10px !important; border-radius: 14px !important;
+    border-left: none !important; border: 1px solid rgba(255,255,255,0.06) !important;
+    font-size: 11px !important; font-weight: 600 !important;
+    background: rgba(255,255,255,0.04) !important; color: #6b8caf !important;
+    min-width: 0 !important; width: auto !important;
   }
   .nav-btn.active { background: #6366f1 !important; color: white !important; border-color: transparent !important; }
   .sidebar-warn { display: none !important; }
 
-  /* ── Main: full width scroll ── */
+  /* ── Main ── */
   .main { padding: 14px 12px 100px !important; flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; gap: 14px !important; }
 
   /* ── Cards ── */
@@ -4217,140 +4183,47 @@ async function moveToReview() {
   .card-hd { padding: 10px 14px !important; }
   .card-title { font-size: 13px !important; }
 
-  /* ══════════════════════════════════════════════════════
-     FIXED SECTIONS — TABLE ROWS
-     Every row has this tail: ...inputs... | td-cam | td-cam | td-del
-     Strategy: flex-column for the whole row, but the last 3 cells
-     (the buttons) get display:inline-flex + shrink to content width,
-     so they naturally line up side by side on the same line.
-     We force this by wrapping them in a block context using ::before
-     on td:nth-last-child(3) to clear to a new line.
-  ══════════════════════════════════════════════════════ */
-
+  /* ── Fixed section table rows ── */
   .tbl thead, .tbl th { display: none !important; }
-
-  /* Row: flex column */
   .tbl tbody tr {
-    display: flex !important;
-    flex-direction: column !important;
-    padding: 10px 12px !important;
-    border-bottom: 1px solid #f1f5f9 !important;
-    gap: 6px !important;
-    align-items: stretch !important;
+    display: flex !important; flex-direction: column !important;
+    padding: 10px 12px !important; border-bottom: 1px solid #f1f5f9 !important; gap: 6px !important;
   }
-
-  /* All cells: block, full width by default */
-  .tbl tbody tr td {
-    display: block !important;
-    width: 100% !important;
-    padding: 0 !important;
-    border: none !important;
-    box-sizing: border-box !important;
-  }
-
-  /* Drag: hide */
+  .tbl tbody tr td { display: block !important; width: 100% !important; padding: 0 !important; border: none !important; box-sizing: border-box !important; }
   .tbl tbody tr .td-drag { display: none !important; }
-
-  /* Name: styled */
-  .tbl tbody tr .td-name {
-    font-size: 13px !important;
-    font-weight: 700 !important;
-    color: #1e293b !important;
-    white-space: normal !important;
-  }
-
-  /* Inputs full width */
+  .tbl tbody tr .td-name { font-size: 13px !important; font-weight: 700 !important; color: #1e293b !important; white-space: normal !important; }
   .tbl tbody tr td textarea,
   .tbl tbody tr td select,
-  .tbl tbody tr td input[type="text"],
-  .fld-textarea, .fld-select, .fld-input {
-    width: 100% !important;
-    min-height: 38px !important;
-    font-size: 14px !important;
-    padding: 8px 10px !important;
-    border-radius: 7px !important;
-    box-sizing: border-box !important;
-  }
-
-  /* Button group cell: the 3 buttons now live in a single td.
-     item-btn-col handles the flex row — same as room items. */
-  .td-btn-group {
-    width: 100% !important;
-    padding: 0 !important;
-  }
-
-  .cam-btn { min-width: 38px !important; min-height: 36px !important; }
-  .del-btn  { min-width: 34px !important; min-height: 36px !important; }
-
-  /* Photo panel row: full width */
+  .tbl tbody tr td input[type="text"] { width: 100% !important; min-height: 38px !important; font-size: 14px !important; padding: 8px 10px !important; border-radius: 7px !important; box-sizing: border-box !important; }
+  .td-btn-group { width: 100% !important; padding: 0 !important; }
   .tbl tbody .photo-panel-row { display: block !important; width: 100% !important; }
   .photo-panel-row td { width: 100% !important; display: block !important; padding: 0 !important; }
 
-  /* ══════════════════════════════════════════════════════
-     HEALTH & SAFETY (qa-row) — div-based rows
-     Structure: .qa-row > .qa-row-header > (qa-question | cam | cam | del)
-     Fix: qa-question takes full width, buttons wrap onto a row below
-  ══════════════════════════════════════════════════════ */
-
+  /* ── QA rows (Health and Safety) ── */
   .qa-row { padding: 12px !important; }
-
-  .qa-row-header {
-    display: flex !important;
-    flex-wrap: wrap !important;
-    align-items: center !important;
-    gap: 6px !important;
-  }
-
-  /* Question text: force full width so buttons wrap below it */
-  .qa-question {
-    flex: 0 0 100% !important;
-    width: 100% !important;
-  }
-
-  /* Buttons: auto width, sit in a row on the next line */
-  .qa-row-header .cam-btn,
-  .qa-row-header .del-btn {
-    flex: 0 0 auto !important;
-  }
-
+  .qa-row-header { display: flex !important; flex-wrap: wrap !important; align-items: center !important; gap: 6px !important; }
+  .qa-question { flex: 0 0 100% !important; width: 100% !important; }
+  .qa-row-header .cam-btn, .qa-row-header .del-btn { flex: 0 0 auto !important; }
   .qa-controls { flex-wrap: wrap; gap: 8px; }
 
-  /* ══════════════════════════════════════════════════════
-     ROOM SECTIONS — working correctly, preserve
-  ══════════════════════════════════════════════════════ */
-
-  .item-fields-row {
-    flex-direction: column !important;
-    gap: 8px !important;
-    padding: 10px 12px 8px !important;
-  }
-  .item-fields-main {
-    grid-template-columns: 1fr !important;
-    gap: 8px !important;
-    width: 100% !important;
-  }
-  .room-field-desc, .room-field-cond, .room-field-notes {
-    grid-column: 1 !important;
-    width: 100% !important;
-  }
-  .item-btn-col {
-    display: flex !important;
-    flex-direction: row !important;
-    gap: 6px !important;
-    width: 100% !important;
-  }
+  /* ── Room item layout ── */
+  .item-fields-row { flex-direction: column !important; gap: 8px !important; padding: 10px 12px 8px !important; }
+  .item-fields-main { grid-template-columns: 1fr !important; gap: 8px !important; width: 100% !important; }
+  .room-field-desc, .room-field-cond, .room-field-notes { grid-column: 1 !important; width: 100% !important; }
+  .item-btn-col { display: flex !important; flex-direction: row !important; gap: 6px !important; width: 100% !important; }
   .item-header-bar { padding: 8px 12px 6px !important; }
+  .cam-btn { min-width: 38px !important; min-height: 36px !important; }
+  .del-btn  { min-width: 34px !important; min-height: 36px !important; }
 
-  /* ── Photo panels: horizontal scroll strip ── */
+  /* ── Actions picker: hidden on mobile until action-trigger-btn tapped ── */
+  .room-field-actions { display: none !important; }
+  .room-field-actions.actions-expanded { display: block !important; }
+
+  /* ── Photo panels ── */
   .photo-panel, .photo-panel-inline, .photo-panel-sub {
-    display: flex !important;
-    flex-direction: row !important;
-    overflow-x: auto !important;
-    gap: 8px !important;
-    padding: 8px !important;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-    flex-wrap: nowrap !important;
+    display: flex !important; flex-direction: row !important; overflow-x: auto !important;
+    gap: 8px !important; padding: 8px !important; -webkit-overflow-scrolling: touch;
+    scrollbar-width: none; flex-wrap: nowrap !important;
   }
   .photo-panel::-webkit-scrollbar, .photo-panel-inline::-webkit-scrollbar { display: none; }
   .ph-thumb { flex-shrink: 0 !important; width: 70px !important; height: 70px !important; }
@@ -4362,6 +4235,7 @@ async function moveToReview() {
   }
 
   /* ── Misc ── */
+  .fld-textarea, .fld-select, .fld-input { width: 100% !important; min-height: 38px !important; font-size: 14px !important; padding: 8px 10px !important; border-radius: 7px !important; }
   .add-row-bar { padding: 10px 12px !important; }
   .room-header-bar { flex-wrap: wrap; gap: 8px; padding: 10px 12px !important; }
   .room-name-input { min-width: 120px !important; max-width: 100% !important; font-size: 15px !important; }
@@ -4379,19 +4253,9 @@ async function moveToReview() {
   .meter-row, .key-row { flex-direction: column !important; gap: 6px !important; }
 }
 
-/* ── Very small phones ≤ 400px ──  /* Actions picker: on mobile, hidden until action-trigger-btn is tapped */
-  .room-field-actions {
-    display: none !important;
-  }
-  .room-field-actions.actions-expanded {
-    display: block !important;
-  }
-
- */
 @media (max-width: 400px) {
   .topbar { padding: 0 8px; gap: 6px; }
   .crumb-addr { max-width: 100px; font-size: 11px; }
   .save-btn { font-size: 11px; padding: 5px 10px; }
 }
-
 </style>

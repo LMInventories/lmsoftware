@@ -2362,9 +2362,11 @@ async function moveToReview() {
                 <div v-show="!isHidden(sec.id, row.id)" class="qa-row">
                   <div class="qa-row-header">
                     <span class="qa-question"><span class="sec-ref-badge">{{ fixedRowRef(sec, row.id) }}</span>{{ row.question }}</span>
-                    <button class="cam-btn" :class="{ 'cam-has': getPhotos(sec.id,row.id).length }" @click="togglePanel(sec.id,row.id)" title="Photos"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,row.id).length" class="cam-count">{{ getPhotos(sec.id,row.id).length }}</span></button>
-                    <button class="cam-btn mic-btn" :class="{ 'mic-active': isItemRecording(sec.id,row.id), 'mic-has': !isItemRecording(sec.id,row.id) && getItemRecordings(sec.id,row.id).length, 'mic-ai': isItemAiProcessing(sec.id,row.id) }" @click.stop="toggleItemRecording(sec.id,row.id,fixedItemLabel(sec,row.id,row.question))" title="Record"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span v-if="getItemRecordings(sec.id,row.id).length && !isItemRecording(sec.id,row.id)" class="cam-count mic-count">{{ getItemRecordings(sec.id,row.id).length }}</span></button>
-                    <button v-if="canDelete" class="del-btn" @click="hideRow(sec.id,row.id)">×</button>
+                    <div class="item-btn-col">
+                      <button class="cam-btn cam-btn-item" :class="{ 'cam-has': getPhotos(sec.id,row.id).length }" @click="togglePanel(sec.id,row.id)" title="Photos"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,row.id).length" class="cam-count">{{ getPhotos(sec.id,row.id).length }}</span></button>
+                      <button class="cam-btn mic-btn" :class="{ 'mic-active': isItemRecording(sec.id,row.id), 'mic-has': !isItemRecording(sec.id,row.id) && getItemRecordings(sec.id,row.id).length, 'mic-ai': isItemAiProcessing(sec.id,row.id) }" @click.stop="toggleItemRecording(sec.id,row.id,fixedItemLabel(sec,row.id,row.question))" title="Record"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span v-if="getItemRecordings(sec.id,row.id).length && !isItemRecording(sec.id,row.id)" class="cam-count mic-count">{{ getItemRecordings(sec.id,row.id).length }}</span></button>
+                      <button v-if="canDelete" class="del-item-icon-btn" @click="hideRow(sec.id,row.id)">×</button>
+                    </div>
                   </div>
                   <p v-if="row.guidance" class="qa-guidance">{{ row.guidance }}</p>
                   <div class="qa-controls">
@@ -3491,7 +3493,8 @@ async function moveToReview() {
 /* Q&A */
 .qa-row{padding:16px 20px;border-bottom:1px solid #f1f5f9;display:flex;flex-direction:column;gap:10px}
 .qa-row:last-child{border-bottom:none}
-.qa-row-header{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+.qa-row-header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.qa-row-header .item-btn-col{padding-top:0;padding-left:0}
 .qa-extra-header{display:flex;align-items:center;gap:8px}
 .qa-question{font-size:13px;font-weight:600;color:#1e293b;line-height:1.4;flex:1}
 .qa-guidance{font-size:12px;color:#64748b;line-height:1.5;background:#fffbeb;border-left:3px solid #fbbf24;padding:8px 12px;border-radius:0 4px 4px 0}
@@ -4201,9 +4204,8 @@ async function moveToReview() {
 
   /* ── QA rows (Health and Safety) ── */
   .qa-row { padding: 12px !important; }
-  .qa-row-header { display: flex !important; flex-wrap: wrap !important; align-items: center !important; gap: 6px !important; }
-  .qa-question { flex: 0 0 100% !important; width: 100% !important; }
-  .qa-row-header .cam-btn, .qa-row-header .del-btn { flex: 0 0 auto !important; }
+  .qa-row-header { display: flex !important; align-items: flex-start !important; gap: 8px !important; }
+  .qa-question { flex: 1 !important; }
   .qa-controls { flex-wrap: wrap; gap: 8px; }
 
   /* ── Room item layout ── */

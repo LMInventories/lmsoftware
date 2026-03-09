@@ -4156,7 +4156,6 @@ async function moveToReview() {
     background: #172033 !important;
     flex-shrink: 0;
   }
-
   .mobile-nav-toggle {
     display: flex;
     align-items: center;
@@ -4175,7 +4174,6 @@ async function moveToReview() {
   .mobile-nav-toggle-label { display: flex; align-items: center; gap: 7px; }
   .mobile-nav-toggle-arrow { font-size: 9px; transition: transform 0.2s; color: #4b6282; }
   .mobile-nav-toggle-arrow.open { transform: rotate(180deg); color: #a5b4fc; }
-
   .mobile-nav-body {
     display: none;
     padding: 0 10px 10px;
@@ -4185,10 +4183,8 @@ async function moveToReview() {
   }
   .mobile-nav-body::-webkit-scrollbar { display: none; }
   .mobile-nav-body.nav-open { display: block; }
-
   .nav-grp { margin-bottom: 4px; }
   .nav-lbl { padding: 8px 4px 4px; font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; color: #2d4a6b; display: block; }
-
   .nav-btn {
     display: inline-flex;
     white-space: nowrap;
@@ -4215,114 +4211,170 @@ async function moveToReview() {
   .card-hd { padding: 10px 14px !important; }
   .card-title { font-size: 13px !important; }
 
-  /* ── FIXED SECTIONS: table rows become stacked cards ── */
+  /* ══════════════════════════════════════════════════════
+     FIXED SECTIONS — TABLE ROWS
+     Every row has this tail: ...inputs... | td-cam | td-cam | td-del
+     Strategy: flex-column for the whole row, but the last 3 cells
+     (the buttons) get display:inline-flex + shrink to content width,
+     so they naturally line up side by side on the same line.
+     We force this by wrapping them in a block context using ::before
+     on td:nth-last-child(3) to clear to a new line.
+  ══════════════════════════════════════════════════════ */
+
   .tbl thead, .tbl th { display: none !important; }
 
-  /* Each row: flex column for the data cells, but the
-     action cells (td-cam, td-del) get pulled into a row */
-  .tbl tr {
+  /* Row: flex column */
+  .tbl tbody tr {
     display: flex !important;
     flex-direction: column !important;
-    flex-wrap: nowrap !important;
     padding: 10px 12px !important;
     border-bottom: 1px solid #f1f5f9 !important;
     gap: 6px !important;
+    align-items: stretch !important;
   }
 
-  .tbl td {
+  /* All cells: block, full width by default */
+  .tbl tbody tr td {
     display: block !important;
+    width: 100% !important;
     padding: 0 !important;
     border: none !important;
-    width: 100% !important;
+    box-sizing: border-box !important;
   }
 
-  .td-name {
+  /* Drag: hide */
+  .tbl tbody tr .td-drag { display: none !important; }
+
+  /* Name: styled */
+  .tbl tbody tr .td-name {
     font-size: 13px !important;
     font-weight: 700 !important;
     color: #1e293b !important;
     white-space: normal !important;
-    margin-bottom: 2px !important;
   }
 
-  .td-drag, .drag-handle, .drag-handle-room { display: none !important; }
-
-  /* Inputs: full width, touch-sized */
-  .tbl td select,
-  .tbl td input[type="text"],
-  .tbl td textarea,
-  .fld-select, .fld-input, .fld-textarea {
+  /* Inputs full width */
+  .tbl tbody tr td textarea,
+  .tbl tbody tr td select,
+  .tbl tbody tr td input[type="text"],
+  .fld-textarea, .fld-select, .fld-input {
     width: 100% !important;
     min-height: 38px !important;
     font-size: 14px !important;
     padding: 8px 10px !important;
     border-radius: 7px !important;
+    box-sizing: border-box !important;
   }
 
-  /* ── FIXED SECTION BUTTONS: force into a horizontal row ──
-     td-cam and td-del are table cells that become block divs
-     in the flex-column tr. We override them to inline-flex
-     so they sit next to each other, then wrap the whole row
-     by giving the tr a special last-child treatment.
-     The cleanest approach: make td-cam and td-del inline-flex
-     with auto width, and since they come last in the row they
-     will sit side by side naturally in the flex-column tr
-     because they're no longer 100% wide. ── */
-  .td-cam {
-    display: inline-flex !important;
+  /* THE BUTTON ROW:
+     The last 3 cells are always: photo(td-cam) | mic(td-cam) | del(td-del)
+     Make them shrink to fit and sit in a row by switching them to
+     inline-flex. Since the tr is flex-column, we need them to share
+     a row — we do this by making td:nth-last-child(3) start a new
+     flex row by setting align-self and using a flex-wrap trick.
+
+     The cleanest reliable CSS: set the 3 button cells to
+     width:auto + flex-shrink:0, then wrap them by making the tr
+     flex-wrap:wrap and giving the button cells flex:0 0 auto.
+     A ::before pseudo on the third-last cell forces a line break.
+  */
+
+  .tbl tbody tr {
+    flex-wrap: wrap !important;
+  }
+
+  /* Non-button cells: full width (push buttons to their own line) */
+  .tbl tbody tr td:not(.td-drag):not(:nth-last-child(1)):not(:nth-last-child(2)):not(:nth-last-child(3)) {
+    flex: 0 0 100% !important;
+    width: 100% !important;
+  }
+
+  /* The 3 button cells: auto width, sitting in a row */
+  .tbl tbody tr td:nth-last-child(1),
+  .tbl tbody tr td:nth-last-child(2),
+  .tbl tbody tr td:nth-last-child(3) {
+    flex: 0 0 auto !important;
     width: auto !important;
-    float: left !important;
-    margin-right: 6px !important;
-    clear: left;
-  }
-
-  .td-del {
     display: inline-flex !important;
-    width: auto !important;
-    float: left !important;
+    align-items: center !important;
+    justify-content: center !important;
+    min-width: 40px !important;
   }
 
-  /* Clear floats after the action cells */
-  .photo-panel-row,
-  .photo-panel-cell {
-    clear: both !important;
+  /* BUT td-drag is also a cell — it's hidden, but it shifts nth-last counts.
+     Wait: td-drag is display:none so it's removed from layout, but it's
+     still in the DOM so nth-last-child still counts it.
+     td-drag is always FIRST child, so:
+     In a 6-cell row (drag|name|input|cam|cam|del):
+       nth-last-child(1) = td-del   ✓
+       nth-last-child(2) = td-cam   ✓  
+       nth-last-child(3) = td-cam   ✓
+       nth-last-child(4) = input td ✓ (gets 100% width)
+       nth-last-child(5) = td-name  ✓ (gets 100% width)
+       nth-last-child(6) = td-drag  → hidden, no effect
+     This works correctly regardless of how many input cells there are!
+  */
+
+  .cam-btn { min-width: 38px !important; min-height: 36px !important; }
+  .del-btn  { min-width: 34px !important; min-height: 36px !important; }
+
+  /* Photo panel row: full width */
+  .tbl tbody .photo-panel-row { display: block !important; width: 100% !important; }
+  .photo-panel-row td { width: 100% !important; display: block !important; padding: 0 !important; }
+
+  /* ══════════════════════════════════════════════════════
+     HEALTH & SAFETY (qa-row) — div-based rows
+     Structure: .qa-row > .qa-row-header > (qa-question | cam | cam | del)
+     Fix: qa-question takes full width, buttons wrap onto a row below
+  ══════════════════════════════════════════════════════ */
+
+  .qa-row { padding: 12px !important; }
+
+  .qa-row-header {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    align-items: center !important;
+    gap: 6px !important;
   }
 
-  .cam-btn { min-width: 38px !important; min-height: 34px !important; }
-  .del-btn  { min-width: 34px !important; min-height: 34px !important; }
+  /* Question text: force full width so buttons wrap below it */
+  .qa-question {
+    flex: 0 0 100% !important;
+    width: 100% !important;
+  }
 
-  /* ── ROOM SECTIONS: stack description / condition / buttons ── */
+  /* Buttons: auto width, sit in a row on the next line */
+  .qa-row-header .cam-btn,
+  .qa-row-header .del-btn {
+    flex: 0 0 auto !important;
+  }
 
-  /* The outer row: flip to column */
+  .qa-controls { flex-wrap: wrap; gap: 8px; }
+
+  /* ══════════════════════════════════════════════════════
+     ROOM SECTIONS — working correctly, preserve
+  ══════════════════════════════════════════════════════ */
+
   .item-fields-row {
     flex-direction: column !important;
     gap: 8px !important;
     padding: 10px 12px 8px !important;
   }
-
-  /* Fields grid: 1 column so desc and condition stack vertically */
   .item-fields-main {
     grid-template-columns: 1fr !important;
     gap: 8px !important;
     width: 100% !important;
   }
-
-  /* Both field boxes take full width */
-  .room-field-desc,
-  .room-field-cond,
-  .room-field-notes {
+  .room-field-desc, .room-field-cond, .room-field-notes {
     grid-column: 1 !important;
     width: 100% !important;
   }
-
-  /* Button column: horizontal row below the fields */
   .item-btn-col {
     display: flex !important;
     flex-direction: row !important;
     gap: 6px !important;
     width: 100% !important;
-    justify-content: flex-start;
   }
-
   .item-header-bar { padding: 8px 12px 6px !important; }
 
   /* ── Photo panels: horizontal scroll strip ── */
@@ -4337,47 +4389,29 @@ async function moveToReview() {
     flex-wrap: nowrap !important;
   }
   .photo-panel::-webkit-scrollbar, .photo-panel-inline::-webkit-scrollbar { display: none; }
-
   .ph-thumb { flex-shrink: 0 !important; width: 70px !important; height: 70px !important; }
   .ph-img-click { width: 70px !important; height: 70px !important; object-fit: cover !important; border-radius: 6px !important; }
-
   .ph-upload-btn, .ph-view-all-btn {
-    flex-shrink: 0 !important;
-    white-space: nowrap !important;
-    align-self: center !important;
-    padding: 8px 12px !important;
-    font-size: 12px !important;
-    min-height: 38px !important;
-    display: flex !important;
-    align-items: center !important;
-    gap: 5px !important;
+    flex-shrink: 0 !important; white-space: nowrap !important; align-self: center !important;
+    padding: 8px 12px !important; font-size: 12px !important; min-height: 38px !important;
+    display: flex !important; align-items: center !important; gap: 5px !important;
   }
 
-  /* ── QA / misc rows ── */
-  .qa-row { padding: 12px !important; }
-  .qa-controls { flex-wrap: wrap; gap: 8px; }
+  /* ── Misc ── */
   .add-row-bar { padding: 10px 12px !important; }
   .room-header-bar { flex-wrap: wrap; gap: 8px; padding: 10px 12px !important; }
   .room-name-input { min-width: 120px !important; max-width: 100% !important; font-size: 15px !important; }
-
-  /* ── Save/review buttons ── */
   .topbar-r { gap: 6px; }
   .save-btn { min-width: 60px; min-height: 36px; }
   .review-btn { min-width: 60px; min-height: 36px; padding: 6px 14px !important; font-size: 12px !important; }
-
-  /* ── Lightbox / photo grid: full screen ── */
   .pg-modal, .lightbox-modal {
     inset: 0 !important; border-radius: 0 !important;
     width: 100% !important; height: 100% !important;
     max-width: 100% !important; max-height: 100% !important;
   }
   .pg-grid { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)) !important; gap: 6px !important; }
-
-  /* ── Check-out / sub-item fields ── */
   .co-fields-row .item-fields-main { grid-template-columns: 1fr !important; }
   .sub-fields-row .item-fields-main { grid-template-columns: 1fr !important; }
-
-  /* ── Meter/key rows ── */
   .meter-row, .key-row { flex-direction: column !important; gap: 6px !important; }
 }
 

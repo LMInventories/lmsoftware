@@ -4204,8 +4204,9 @@ async function moveToReview() {
 
   /* ── QA rows (Health and Safety) ── */
   .qa-row { padding: 12px !important; }
-  .qa-row-header { display: flex !important; align-items: flex-start !important; gap: 8px !important; }
-  .qa-question { flex: 1 !important; }
+  .qa-row-header { display: flex !important; flex-direction: column !important; align-items: flex-start !important; gap: 8px !important; }
+  .qa-question { width: 100% !important; }
+  .qa-row-header .item-btn-col { flex-direction: row !important; width: 100% !important; padding-top: 0 !important; padding-left: 0 !important; }
   .qa-controls { flex-wrap: wrap; gap: 8px; }
 
   /* ── Room item layout ── */

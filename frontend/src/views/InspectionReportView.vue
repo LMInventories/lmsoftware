@@ -2576,8 +2576,8 @@ async function moveToReview() {
                               :value="get(room.id,item.id,'notes')"
                               @input="set(room.id,item.id,'notes',$event.target.value)"></textarea>
                           </div>
+                          <button v-if="canEdit && item.hasDescription" class="add-sub-btn add-sub-below" @click="addSubItem(room.id, item.id)">+ Add sub-item</button>
                         </div>
-                        <button v-if="canEdit && item.hasDescription" class="add-sub-btn add-sub-below" @click="addSubItem(room.id, item.id)">+ Add sub-item</button>
                         <!-- Buttons stacked to the right -->
                         <div class="item-btn-col" v-if="item.hasCondition || item.hasDescription || (!item.hasCondition && !item.hasDescription)">
                           <button class="cam-btn cam-btn-item" :class="{ 'cam-has': getPhotos(room.id, item.id).length }" @click="togglePanel(room.id, item.id)" title="Photos">
@@ -4111,7 +4111,7 @@ async function moveToReview() {
 .resp-none { color: #cbd5e1; font-size: 12px; }
 
 
-.add-sub-below{display:block;background:none;border:none;color:#7c3aed;font-size:11px;font-weight:600;cursor:pointer;padding:4px 0 2px;text-align:left;width:auto}
+.add-sub-below{display:block;background:none;border:none;color:#7c3aed;font-size:11px;font-weight:600;cursor:pointer;padding:4px 0 2px;text-align:left;width:auto;grid-column:1 / -1}
 .add-sub-below:hover{text-decoration:underline}
 .action-trigger-btn{color:#f59e0b !important;border-color:rgba(245,158,11,0.25) !important}
 .action-trigger-btn:hover{background:rgba(245,158,11,0.1) !important;border-color:rgba(245,158,11,0.4) !important}

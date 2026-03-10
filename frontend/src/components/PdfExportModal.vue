@@ -1,40 +1,83 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { computed } from 'vue'
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Props
+// ─────────────────────────────────────────────────────────────────────────────
 const props = defineProps({
   inspection:      { type: Object, required: true },
   fixedSections:   { type: Array,  default: () => [] },
   rooms:           { type: Array,  default: () => [] },
   reportData:      { type: Object, default: () => ({}) },
   actionCatalogue: { type: Array,  default: () => [] },
+  // photoSettings — parsed report_photo_settings JSON from the client record.
+  // Keys: photo_room_overview, photo_room_item, show_photo_timestamp, action_summary_position
   photoSettings:   { type: Object, default: () => ({}) },
 })
-
 const emit = defineEmits(['close'])
 
-// ── Data helpers ──────────────────────────────────────────────────────────
-const fixedSections = computed(() => props.fixedSections)
-const rooms         = computed(() => props.rooms)
-const isCheckOut    = computed(() => props.inspection.inspection_type === 'check_out')
+// ─────────────────────────────────────────────────────────────────────────────
+// Derived values
+// ─────────────────────────────────────────────────────────────────────────────
+const isCheckOut = computed(() => props.inspection.inspection_type === 'check_out')
 
+const typeLabel = computed(() => ({
+  check_in:  'Inventory & Check In',
+  check_out: 'Check Out',
+  interim:   'Interim Inspection',
+  inventory: 'Inventory Report',
+})[props.inspection.inspection_type] ?? 'Inspection Report')
+
+// Client + property — embedded on inspection object by the API
+const client = computed(() => props.inspection.client   || {})
+const prop   = computed(() => props.inspection.property || {})
+
+// Branding: report_color_override takes precedence over primary_color
+const brandColor      = computed(() => client.value.report_color_override || client.value.primary_color || '#1E3A8A')
+const headerTextColor = computed(() => client.value.report_header_text_color || '#FFFFFF')
+const bodyTextColor   = computed(() => client.value.report_body_text_color   || '#1e293b')
+const orientation     = computed(() => client.value.report_orientation       || 'portrait')
+
+// Photo + layout settings (from report_photo_settings JSON — passed as photoSettings prop)
+const photoRoomOverview = computed(() => props.photoSettings.photo_room_overview    || 'above')
+const photoRoomItem     = computed(() => props.photoSettings.photo_room_item        || 'below')
+const showTimestamp     = computed(() => props.photoSettings.show_photo_timestamp   === true)
+const actionSummaryPos  = computed(() => props.photoSettings.action_summary_position || 'bottom')
+
+// Action catalogue helpers
+function catalogueLookup(actionId) { return props.actionCatalogue.find(c => c.id === actionId) || null }
+function actionName(actionId)  { return catalogueLookup(actionId)?.name  || actionId || '—' }
+function actionColor(actionId) { return catalogueLookup(actionId)?.color || '#64748b' }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Report data accessors (mirror InspectionReportView helpers exactly)
+// ─────────────────────────────────────────────────────────────────────────────
 function get(sectionId, rowId, field) {
   return props.reportData[sectionId]?.[String(rowId)]?.[field] ?? ''
 }
-function getExtra(sectionId) { return props.reportData[sectionId]?._extra ?? [] }
-
+function isHidden(sectionId, rowId) {
+  return props.reportData[sectionId]?._hidden?.includes(String(rowId)) ?? false
+}
+function isItemHidden(roomId, itemId) {
+  return props.reportData[roomId]?._hiddenItems?.includes(String(itemId)) ?? false
+}
+function getExtra(sectionId) {
+  return props.reportData[sectionId]?._extra ?? []
+}
+function getItemActions(roomId, itemId) {
+  return props.reportData[roomId]?.[`_actions_${itemId}`] ?? []
+}
 function getOrderedRoomItems(room) {
-  const storedOrder = props.reportData[room.id]?._itemOrder
-  const templateItems = (room.sections || []).map(i => ({ ...i, _type: 'template' }))
+  const storedOrder   = props.reportData[room.id]?._itemOrder
+  const templateItems = (room.sections || []).map(item => ({ ...item, _type: 'template' }))
   const extraItems    = (props.reportData[room.id]?._extra || []).map(ex => ({
-    ...ex, id: ex._eid, label: ex.label || '', _type: 'extra'
+    ...ex, id: ex._eid, label: ex.label || 'New item', _type: 'extra',
   }))
   const all = [...templateItems, ...extraItems]
   if (!storedOrder?.length) return all
-  const ordered = []
-  for (const id of storedOrder) {
-    const found = all.find(i => String(i.id) === String(id) || String(i._eid) === String(id))
-    if (found) ordered.push(found)
-  }
+  const ordered = storedOrder
+    .map(id => all.find(i => String(i.id) === String(id) || String(i._eid) === String(id)))
+    .filter(Boolean)
   for (const item of all) {
     const key = item._type === 'extra' ? item._eid : String(item.id)
     if (!storedOrder.some(o => String(o) === key)) ordered.push(item)
@@ -42,66 +85,17 @@ function getOrderedRoomItems(room) {
   return ordered
 }
 
-function isHidden(sectionId, rowId) {
-  return props.reportData[sectionId]?._hidden?.includes(String(rowId)) ?? false
-}
-function isItemHidden(roomId, itemId) {
-  return props.reportData[roomId]?._hiddenItems?.includes(String(itemId)) ?? false
-}
-function getItemActions(roomId, itemId) {
-  return props.reportData[roomId]?.[`_actions_${itemId}`] ?? []
-}
-
-const typeLabel = computed(() => ({
-  check_in:  'Check In Report',
-  check_out: 'Check Out Report',
-  interim:   'Interim Inspection Report',
-  inventory: 'Inventory Report',
-})[props.inspection.inspection_type] ?? 'Inspection Report')
-
-const primaryColor = computed(() => props.inspection.client?.primary_color || '#1E3A8A')
-
-const formattedDate = computed(() => {
-  if (!props.inspection.conduct_date) return ''
-  return new Date(props.inspection.conduct_date).toLocaleDateString('en-GB', {
-    day: '2-digit', month: 'long', year: 'numeric'
-  })
-})
-
-// ── Photo / report settings ───────────────────────────────────────────────
-const photoRoomOverview   = computed(() => props.photoSettings.photo_room_overview    || 'above')
-const photoRoomItem       = computed(() => props.photoSettings.photo_room_item        || 'below')
-const showTimestamp       = computed(() => props.photoSettings.show_photo_timestamp   === true)
-const actionSummaryPos    = computed(() => props.photoSettings.action_summary_position || 'bottom')
-
-// ── Action catalogue helpers ─────────────────────────────────────────────
-function catalogueLookup(actionId) {
-  return props.actionCatalogue.find(c => c.id === actionId) || null
-}
-function actionDisplayName(actionId) {
-  return catalogueLookup(actionId)?.name  || actionId || '—'
-}
-function actionDisplayColor(actionId) {
-  return catalogueLookup(actionId)?.color || '#64748b'
-}
-
+// Action summary data (Check Out only)
 const actionsSummary = computed(() => {
+  if (!isCheckOut.value) return []
   const result = []
-  for (const room of rooms.value) {
+  for (const room of props.rooms) {
     for (const item of getOrderedRoomItems(room)) {
       const itemId = item._type === 'extra' ? item._eid : item.id
       if (isItemHidden(room.id, itemId)) continue
       for (const act of getItemActions(room.id, itemId)) {
         if (!act.actionId) continue
-        result.push({
-          room:           room.name,
-          item:           item.label || item.name || '',
-          actionId:       act.actionId,
-          actionName:     actionDisplayName(act.actionId),
-          actionColor:    actionDisplayColor(act.actionId),
-          responsibility: act.responsibility || '',
-          condition:      act.condition      || '',
-        })
+        result.push({ room: room.name, item: item.label || item.name || '', ...act })
       }
     }
   }
@@ -111,610 +105,696 @@ const actionsSummary = computed(() => {
 const actionGroups = computed(() => {
   const groups = {}
   for (const a of actionsSummary.value) {
-    const key = a.actionId
-    if (!groups[key]) groups[key] = { name: a.actionName, color: a.actionColor, items: [] }
-    groups[key].items.push(a)
+    if (!groups[a.actionId]) {
+      groups[a.actionId] = { name: actionName(a.actionId), color: actionColor(a.actionId), items: [] }
+    }
+    groups[a.actionId].items.push(a)
   }
   return groups
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// buildReportHTML
-// Generates a complete, self-contained HTML document for the report.
-// This is written into a hidden iframe and printed from there — which means
-// ONLY the report prints, never the surrounding web application.
+// Print
+// ─────────────────────────────────────────────────────────────────────────────
+function printReport() {
+  const html = buildReportHTML()
+  const iframe = document.createElement('iframe')
+  iframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;'
+  document.body.appendChild(iframe)
+  iframe.contentDocument.open()
+  iframe.contentDocument.write(html)
+  iframe.contentDocument.close()
+  iframe.contentWindow.focus()
+  setTimeout(() => {
+    iframe.contentWindow.print()
+    setTimeout(() => document.body.removeChild(iframe), 2000)
+  }, 800)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HTML builder
 // ─────────────────────────────────────────────────────────────────────────────
 function buildReportHTML() {
-  const brand  = primaryColor.value
-  const insp   = props.inspection
-  const client = insp.client   || {}
-  const prop   = insp.property || {}
+  const brand    = brandColor.value
+  const hdrTxt   = headerTextColor.value
+  const bodyTxt  = bodyTextColor.value
+  const orient   = orientation.value
+  const ovPos    = photoRoomOverview.value     // 'above' | 'below'
+  const itemPos  = photoRoomItem.value         // 'above' | 'below' | 'hyperlink'
+  const addTs    = showTimestamp.value
+  const actPos   = actionSummaryPos.value      // 'top' | 'bottom' | 'none'
 
-  const photoItem     = photoRoomItem.value        // 'above' | 'below' | 'hyperlink'
-  const addTimestamp  = showTimestamp.value
-  const actionPos     = actionSummaryPos.value     // 'top' | 'bottom' | 'none'
+  const insp = props.inspection
+  const cl   = client.value
+  const pr   = prop.value
 
+  // ── Escape ────────────────────────────────────────────────────────────────
   function e(s) {
     if (s == null) return ''
     return String(s)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
   }
 
-  // ── CSS ──────────────────────────────────────────────────────────────────
+  function fmtDate(iso) {
+    if (!iso) return ''
+    return new Date(iso).toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' })
+  }
+
+  function fmtTs(iso) {
+    if (!iso) return ''
+    return new Date(iso).toLocaleString('en-GB', {
+      day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
+    })
+  }
+
+  // ── Photo helpers ─────────────────────────────────────────────────────────
+  function getPhotos(sectionId, rowId) {
+    return props.reportData[sectionId]?.[String(rowId)]?._photos || []
+  }
+  function getPhotoTs(sectionId, rowId) {
+    return props.reportData[sectionId]?.[String(rowId)]?._photoTs || []
+  }
+
+  // Render a single .photo-unit
+  function photoUnit(src, ts, refLabel) {
+    const tsHtml = addTs && ts
+      ? `<div class="photo-ts">${e(fmtTs(ts))}</div>` : ''
+    return `<div class="photo-unit">
+      <div class="photo-wrap"><img src="${e(src)}" />${tsHtml}</div>
+      <div class="photo-ref">Ref #${e(refLabel)}</div>
+    </div>`
+  }
+
+  // Build array of photo-unit strings for a section+row
+  function photoUnits(sectionId, rowId, refLabel) {
+    const ps = getPhotos(sectionId, rowId)
+    const ts = getPhotoTs(sectionId, rowId)
+    return ps.map((src, i) => photoUnit(src, ts[i], refLabel))
+  }
+
+  // Wrap units in a .photo-grid div
+  function photoGrid(units, inline = false) {
+    if (!units.length) return ''
+    const cls = inline ? ' photo-grid--inline' : ''
+    return `<div class="photo-grid${cls}">${units.join('')}</div>`
+  }
+
+  // ── Section header ────────────────────────────────────────────────────────
+  function sectionHdr(title) {
+    return `<div class="section-hdr" style="background:${e(brand)};color:${e(hdrTxt)};">${e(title)}</div>`
+  }
+
+  // ── Page wrapper ──────────────────────────────────────────────────────────
+  function page(content) {
+    return `<div class="page">${content}</div>`
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // COVER PAGE
+  // ─────────────────────────────────────────────────────────────────────────
+  function buildCover() {
+    const logoHtml = cl.logo
+      ? `<img src="${e(cl.logo)}" class="cover-logo-img" alt="logo">`
+      : `<div class="cover-logo-fallback">${e((cl.company || cl.name || 'IP').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase())}</div>`
+
+    const propPhotoHtml = pr.overview_photo
+      ? `<img src="${e(pr.overview_photo)}" class="cover-photo-img" alt="Property">`
+      : `<div class="cover-photo-placeholder"><span>Property overview photo</span></div>`
+
+    const infoRows = [
+      { label: 'Address', value: pr.address || insp.property_address || '' },
+      { label: 'Date',    value: fmtDate(insp.conduct_date) },
+      { label: 'Clerk',   value: insp.inspector?.name || insp.inspector_name || '' },
+      { label: 'Client',  value: cl.company || cl.name || '' },
+    ]
+    if (insp.typist?.name && insp.typist.name !== 'AI Typist') {
+      infoRows.push({ label: 'Typist', value: insp.typist.name })
+    }
+    const infoHtml = infoRows.map(r =>
+      `<div class="cover-info-row">
+        <div class="cover-info-lbl">${e(r.label)}</div>
+        <div class="cover-info-val" style="color:${e(bodyTxt)};">${e(r.value)}</div>
+      </div>`
+    ).join('')
+
+    return `<div class="page page-cover">
+      <div class="cover-top" style="background:${e(brand)};">
+        <div class="cover-logo-wrap">${logoHtml}</div>
+        <div class="cover-type-badge" style="color:${e(hdrTxt)};">${e(typeLabel.value)}</div>
+      </div>
+      <div class="cover-photo-area">${propPhotoHtml}</div>
+      <div class="cover-info-block">${infoHtml}</div>
+      <div class="cover-footer" style="background:${e(brand)};color:${e(hdrTxt)};">
+        <span>${e(cl.company || cl.name || 'InspectPro')}</span>
+        <span>Confidential</span>
+      </div>
+    </div>`
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // CONTENTS PAGE
+  // ─────────────────────────────────────────────────────────────────────────
+  function buildContents() {
+    const rows = []
+    let n = 1
+    rows.push({ n: n++, title: 'Cover Page',  cls: 'front' })
+    rows.push({ n: n++, title: 'Contents',    cls: 'front' })
+    if (cl.report_disclaimer) rows.push({ n: n++, title: 'Disclaimers', cls: 'front' })
+    if (isCheckOut.value && actPos === 'top' && actionsSummary.value.length) {
+      rows.push({ n: n++, title: 'Action Summary', cls: 'action' })
+    }
+    for (const s of props.fixedSections) rows.push({ n: n++, title: s.name, cls: 'fixed' })
+    for (const r of props.rooms)         rows.push({ n: n++, title: r.name, cls: 'room' })
+    if (isCheckOut.value && actPos === 'bottom' && actionsSummary.value.length) {
+      rows.push({ n: n++, title: 'Action Summary', cls: 'action' })
+    }
+    rows.push({ n: n++, title: 'Declaration', cls: 'front' })
+
+    const rowsHtml = rows.map(r =>
+      `<tr>
+        <td class="toc-num" style="color:${e(brand)};">${r.n}</td>
+        <td class="toc-title">${e(r.title)}</td>
+        <td class="toc-dots"></td>
+        <td class="toc-page">—</td>
+      </tr>`
+    ).join('')
+
+    return page(sectionHdr('Contents') + `<table class="toc-table"><tbody>${rowsHtml}</tbody></table>`)
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // DISCLAIMER
+  // Uses pre-wrap so line breaks in the disclaimer text are preserved.
+  // Long disclaimers flow naturally across pages.
+  // ─────────────────────────────────────────────────────────────────────────
+  function buildDisclaimer() {
+    if (!cl.report_disclaimer) return ''
+    return page(sectionHdr('Disclaimers') + `<div class="disclaimer-body">${e(cl.report_disclaimer)}</div>`)
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // FIXED SECTIONS
+  // Photos are placed inline — immediately after their own row inside the table.
+  // This matches the reference PDF (74 Linwood Close) where each item's photos
+  // appear directly below that item's data row, before the next item.
+  // ─────────────────────────────────────────────────────────────────────────
+  const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+
+  function buildFixedSections() {
+    return props.fixedSections.map((section, si) => {
+      const letter     = LETTERS[si] ?? String(si + 1)
+      const t          = section.type
+      const visRows    = (section.rows || []).filter(r => !isHidden(section.id, r.id))
+      const extraRows  = getExtra(section.id)
+
+      // Row ref: A.1, A.2 … for visible rows; continues numbering for extras
+      function rowRef(rowId) {
+        const i = visRows.findIndex(r => String(r.id) === String(rowId))
+        if (i >= 0) return `${letter}.${i + 1}`
+        const ei = extraRows.findIndex(ex => ex._eid === rowId)
+        if (ei >= 0) return `${letter}.${visRows.length + ei + 1}`
+        return `${letter}.?`
+      }
+
+      // Inline photo row spanning all columns, inserted after data row
+      function inlinePhotoRow(rowId, ref, colspan) {
+        const units = photoUnits(section.id, rowId, ref)
+        if (!units.length) return ''
+        return `<tr class="photo-tr">
+          <td colspan="${colspan}" class="photo-td">${photoGrid(units, true)}</td>
+        </tr>`
+      }
+
+      // Build one data row + optional inline photo row
+      function buildRow(r, isExtra) {
+        const rid  = isExtra ? r._eid : r.id
+        const ref  = rowRef(rid)
+        const gv   = (f) => isExtra ? (r[f] || '') : (get(section.id, rid, f) || r[f] || '')
+
+        if (t === 'condition_summary') {
+          return `<tr>
+            <td class="col-ref">${e(ref)}</td><td>${e(r.name)}</td>
+            <td>${e(gv('condition')) || '—'}</td>
+          </tr>` + inlinePhotoRow(rid, ref, 3)
+        }
+        if (t === 'cleaning_summary') {
+          return `<tr>
+            <td class="col-ref">${e(ref)}</td><td>${e(r.name)}</td>
+            <td>${e(gv('cleanliness')) || '—'}</td>
+            <td class="notes">${e(gv('cleanlinessNotes')) || '—'}</td>
+          </tr>` + inlinePhotoRow(rid, ref, 4)
+        }
+        if (t === 'smoke_alarms' || t === 'health_safety') {
+          const ans = gv('answer') || r.answer || ''
+          const cls = ans === 'Yes' ? 'ans-yes' : ans === 'No' ? 'ans-no' : 'ans-na'
+          return `<tr>
+            <td class="col-ref">${e(ref)}</td><td>${e(r.question || r.name)}</td>
+            <td><span class="ans-badge ${cls}">${e(ans) || '—'}</span></td>
+            <td class="notes">${e(gv('notes') || r.notes || '—')}</td>
+          </tr>` + inlinePhotoRow(rid, ref, 4)
+        }
+        if (t === 'fire_door_safety') {
+          const ans = gv('answer') || r.answer || ''
+          const cls = ans === 'Yes' ? 'ans-yes' : ans === 'No' ? 'ans-no' : 'ans-na'
+          return `<tr>
+            <td class="col-ref">${e(ref)}</td><td>${e(r.name)}</td>
+            <td>${e(r.question)}</td>
+            <td><span class="ans-badge ${cls}">${e(ans) || '—'}</span></td>
+            <td class="notes">${e(gv('notes') || r.notes || '—')}</td>
+          </tr>` + inlinePhotoRow(rid, ref, 5)
+        }
+        if (t === 'keys') {
+          return `<tr>
+            <td class="col-ref">${e(ref)}</td><td>${e(r.name)}</td>
+            <td>${e(gv('description')) || '—'}</td>
+          </tr>` + inlinePhotoRow(rid, ref, 3)
+        }
+        if (t === 'meter_readings') {
+          return `<tr>
+            <td class="col-ref">${e(ref)}</td><td>${e(r.name)}</td>
+            <td>${e(gv('locationSerial')) || '—'}</td>
+            <td class="reading">${e(gv('reading')) || '—'}</td>
+          </tr>` + inlinePhotoRow(rid, ref, 4)
+        }
+        // Generic
+        return `<tr>
+          <td class="col-ref">${e(ref)}</td><td>${e(r.name)}</td>
+          <td>${e(gv('condition') || gv('description')) || '—'}</td>
+        </tr>` + inlinePhotoRow(rid, ref, 3)
+      }
+
+      const theadMap = {
+        condition_summary:  `<tr><th>Ref</th><th>Name</th><th>Condition</th></tr>`,
+        cleaning_summary:   `<tr><th>Ref</th><th>Area</th><th>Cleanliness</th><th>Additional Notes</th></tr>`,
+        smoke_alarms:       `<tr><th>Ref</th><th>Question</th><th>Answer</th><th>Additional Notes</th></tr>`,
+        health_safety:      `<tr><th>Ref</th><th>Question</th><th>Answer</th><th>Additional Notes</th></tr>`,
+        fire_door_safety:   `<tr><th>Ref</th><th>Name</th><th>Question</th><th>Answer</th><th>Additional Notes</th></tr>`,
+        keys:               `<tr><th>Ref</th><th>Key / Item</th><th>Description</th></tr>`,
+        meter_readings:     `<tr><th>Ref</th><th>Meter</th><th>Location &amp; Serial</th><th>Reading</th></tr>`,
+      }
+      const thead = theadMap[t] || `<tr><th>Ref</th><th>Item</th><th>Details</th></tr>`
+      const body  = visRows.map(r => buildRow(r, false)).join('')
+                  + extraRows.map(r => buildRow(r, true)).join('')
+
+      return page(
+        sectionHdr(section.name) +
+        `<table>
+          <thead style="background:${e(brand)};color:${e(hdrTxt)};">${thead}</thead>
+          <tbody>${body}</tbody>
+        </table>`
+      )
+    }).join('')
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // ROOM PAGES
+  //
+  // Layout within each room page (order depends on client settings):
+  //
+  //   ovPos === 'above'    → room overview photo grid  ← always first if above
+  //   itemPos === 'above'  → all item photo grids
+  //   [data table always in the middle]
+  //   itemPos === 'below'  → all item photo grids
+  //   ovPos === 'below'    → room overview photo grid  ← always last if below
+  //
+  // Room overview photos are always shown regardless of itemPos.
+  // Item photos are skipped entirely when itemPos === 'hyperlink'.
+  // All photos are labelled: overview = "Ref #N", items = "Ref #N.M"
+  // ─────────────────────────────────────────────────────────────────────────
+  function buildRooms() {
+    return props.rooms.map((room, ri) => {
+      const roomNum = ri + 1
+      const items   = getOrderedRoomItems(room)
+      const co      = isCheckOut.value
+
+      // ── Overview photos ─────────────────────────────────────────────────
+      const ovUnits = photoUnits(room.id, '_overview', String(roomNum))
+      const ovBlock = ovUnits.length
+        ? `<div class="ov-label">Room Overview</div>${photoGrid(ovUnits)}`
+        : ''
+
+      // ── Item photo grid ─────────────────────────────────────────────────
+      const itemUnits = []
+      if (itemPos !== 'hyperlink') {
+        let idx = 1
+        for (const item of items) {
+          const iid = item._type === 'extra' ? item._eid : item.id
+          if (isItemHidden(room.id, iid)) { idx++; continue }
+          const ref = `${roomNum}.${idx}`
+          itemUnits.push(...photoUnits(room.id, String(iid), ref))
+          idx++
+        }
+      }
+      const itemPhotoBlock = photoGrid(itemUnits)
+
+      // ── Data table ──────────────────────────────────────────────────────
+      let thead, body = '', idx = 1
+      if (co) {
+        thead = `<tr>
+          <th class="col-ref">Ref</th><th class="col-item">Item</th>
+          <th class="col-desc">Description</th><th class="col-cond">Condition at Check In</th>
+          <th class="col-co">Condition at Check Out</th><th class="col-act">Actions</th>
+        </tr>`
+      } else {
+        thead = `<tr>
+          <th class="col-ref">Ref</th><th class="col-item">Item</th>
+          <th class="col-desc">Description</th><th class="col-cond">Condition</th>
+        </tr>`
+      }
+
+      for (const item of items) {
+        const iid    = item._type === 'extra' ? item._eid : item.id
+        if (isItemHidden(room.id, iid)) { idx++; continue }
+        const ref    = `${roomNum}.${idx++}`
+        const isEx   = item._type === 'extra'
+        const label  = item.label || item.name || ''
+        const desc   = isEx ? (item.description || '') : get(room.id, item.id, 'description')
+
+        if (co) {
+          const inv  = isEx ? (item.inventoryCondition || '') : (get(room.id, item.id, 'inventoryCondition') || get(room.id, item.id, 'condition'))
+          const coC  = isEx ? (item.checkOutCondition  || 'As Inventory &amp; Check In') : (get(room.id, item.id, 'checkOutCondition') || 'As Inventory &amp; Check In')
+          const acts = getItemActions(room.id, iid)
+          const actHtml = acts.map(a => {
+            const ac = actionColor(a.actionId)
+            return `<span class="act-tag" style="background:${ac}22;color:${ac};border:1px solid ${ac}55;">${e(actionName(a.actionId))}${a.responsibility ? `<br><small>${e(a.responsibility)}</small>` : ''}</span>`
+          }).join('')
+          body += `<tr>
+            <td class="col-ref">${e(ref)}</td><td class="col-item">${e(label)}</td>
+            <td>${e(desc) || '—'}</td><td>${e(inv) || '—'}</td>
+            <td>${coC}</td><td>${actHtml}</td>
+          </tr>`
+        } else {
+          const cond = isEx ? (item.condition || '') : get(room.id, item.id, 'condition')
+          body += `<tr>
+            <td class="col-ref">${e(ref)}</td><td class="col-item">${e(label)}</td>
+            <td>${e(desc) || '—'}</td><td>${e(cond) || '—'}</td>
+          </tr>`
+        }
+      }
+
+      const tableBlock = `<table>
+        <thead style="background:${e(brand)};color:${e(hdrTxt)};">${thead}</thead>
+        <tbody>${body}</tbody>
+      </table>`
+
+      // ── Assemble page in correct order ──────────────────────────────────
+      const parts = [sectionHdr(room.name)]
+      if (ovBlock        && ovPos   === 'above') parts.push(ovBlock)
+      if (itemPhotoBlock && itemPos === 'above') parts.push(itemPhotoBlock)
+      parts.push(tableBlock)
+      if (itemPhotoBlock && itemPos === 'below') parts.push(itemPhotoBlock)
+      if (ovBlock        && ovPos   === 'below') parts.push(ovBlock)
+
+      return page(parts.join(''))
+    }).join('')
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // ACTION SUMMARY (Check Out only)
+  // ─────────────────────────────────────────────────────────────────────────
+  function buildActionSummary() {
+    if (!isCheckOut.value || actPos === 'none' || !actionsSummary.value.length) return ''
+    return Object.values(actionGroups.value).map(group => {
+      const c = group.color
+      const rows = group.items.map((a, i) =>
+        `<tr>
+          <td class="col-ref">${i + 1}</td>
+          <td>${e(a.room)} › ${e(a.item)}</td>
+          <td><span class="resp-tag" style="background:${c}22;color:${c};border:1px solid ${c}55;">${e(a.responsibility) || '—'}</span></td>
+          <td>${e(a.condition) || '—'}</td>
+        </tr>`
+      ).join('')
+      return page(
+        `<div class="section-hdr" style="background:${e(c)};color:white;">${e(group.name)}</div>
+        <table>
+          <thead style="background:${e(c)}22;">
+            <tr>
+              <th style="color:${e(c)};">Ref</th>
+              <th style="color:${e(c)};">Room › Item</th>
+              <th style="color:${e(c)};">Responsibility</th>
+              <th style="color:${e(c)};">Condition at Check Out</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>`
+      )
+    }).join('')
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // DECLARATION
+  // ─────────────────────────────────────────────────────────────────────────
+  function buildDeclaration() {
+    return page(
+      sectionHdr('Declaration') +
+      `<div class="decl-body">
+        <p class="decl-text">I/We the undersigned, affirm that if I/we do not comment on the Inventory in writing within seven days of receipt of this Inventory then I/we accept the Inventory as being an accurate record of the contents and condition of the property.</p>
+        <div class="decl-sigs">
+          <div class="decl-sig-block">
+            <div class="decl-sig-label">Signed by the Tenant(s)</div>
+            <div class="decl-sig-line"></div>
+            <div class="decl-field"><span>Print Name</span><div class="decl-field-line"></div></div>
+            <div class="decl-field"><span>Date</span><div class="decl-field-line"></div></div>
+          </div>
+          <div class="decl-sig-block">
+            <div class="decl-sig-label">Signed by the Landlord / Agent</div>
+            <div class="decl-sig-line"></div>
+            <div class="decl-field"><span>Print Name</span><div class="decl-field-line"></div></div>
+            <div class="decl-field"><span>Date</span><div class="decl-field-line"></div></div>
+          </div>
+        </div>
+      </div>`
+    )
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // ASSEMBLE FULL REPORT
+  // ─────────────────────────────────────────────────────────────────────────
+  let body = ''
+  body += buildCover()
+  body += buildContents()
+  body += buildDisclaimer()
+  if (isCheckOut.value && actPos === 'top')    body += buildActionSummary()
+  body += buildFixedSections()
+  body += buildRooms()
+  if (isCheckOut.value && actPos === 'bottom') body += buildActionSummary()
+  body += buildDeclaration()
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // CSS
+  // ─────────────────────────────────────────────────────────────────────────
+  const pageSize = orient === 'landscape' ? 'A4 landscape' : 'A4 portrait'
   const css = `
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    @page { size: ${pageSize}; margin: 12mm 14mm; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
-      font-size: 10pt; color: #1a1a1a; background: #fff;
+      font-size: 9pt; color: ${bodyTxt}; background: white;
+    }
+
+    /* ── Pages ── */
+    .page { page-break-after: always; }
+    .page:last-child { page-break-after: auto; }
+    .page-cover { page-break-after: always; }
+
+    /* ── Section header bar ── */
+    .section-hdr {
+      font-size: 11pt; font-weight: 700; letter-spacing: 0.3px;
+      padding: 8px 12px; margin-bottom: 10px; break-after: avoid;
       -webkit-print-color-adjust: exact; print-color-adjust: exact;
     }
-    .page {
-      page-break-after: always;
-      padding: 12mm 14mm;
-    }
-    .page:last-child { page-break-after: auto; }
+
+    /* ── Tables ── */
+    table { width: 100%; border-collapse: collapse; font-size: 8.5pt; margin-bottom: 8px; }
+    thead tr { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    thead th { padding: 7px 10px; text-align: left; font-size: 8pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; }
+    tbody td { padding: 7px 10px; border-bottom: 1px solid #f1f5f9; vertical-align: top; line-height: 1.5; }
+    tbody tr:nth-child(even) td { background: #f8fafc; }
+    /* Photo rows inside tables never get zebra stripe */
+    tr.photo-tr td { background: white !important; padding: 4px 10px 8px; border-bottom: 1px solid #f1f5f9; }
+
+    .col-ref  { width: 5%;  font-weight: 700; color: ${brand}; white-space: nowrap; font-size: 8pt; }
+    .col-item { width: 18%; font-weight: 600; }
+    .col-desc { width: 25%; }
+    .col-cond { width: 20%; }
+    .col-co   { width: 18%; }
+    .col-act  { width: 14%; }
+    .reading  { font-family: 'Courier New', monospace; font-weight: 600; }
+    .notes    { font-size: 8pt; color: #64748b; }
+
+    /* ── Badges ── */
+    .ans-badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 8pt; font-weight: 700; }
+    .ans-yes   { background: #dcfce7; color: #166534; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .ans-no    { background: #fee2e2; color: #991b1b; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .ans-na    { background: #f1f5f9; color: #64748b; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .act-tag   { display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 7.5pt; font-weight: 600; margin: 1px 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .act-tag small { display: block; font-size: 7pt; font-weight: 400; opacity: 0.8; }
+    .resp-tag  { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 8pt; font-weight: 600; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+    /* ── TOC ── */
+    .toc-table { border-collapse: collapse; width: 100%; margin-top: 8px; }
+    .toc-table td { padding: 6px 0; border: none; font-size: 9.5pt; vertical-align: baseline; }
+    .toc-table tbody tr:nth-child(even) td { background: transparent; }
+    .toc-num   { width: 30px; font-weight: 700; }
+    .toc-dots  { border-bottom: 1.5px dotted #cbd5e1; width: auto; }
+    .toc-page  { width: 36px; text-align: right; font-weight: 700; color: ${brand}; }
+
+    /* ── Disclaimer ── */
+    .disclaimer-body { font-size: 9pt; line-height: 1.75; white-space: pre-wrap; }
 
     /* ── Cover ── */
-    .page-cover {
-      page-break-after: always;
-      display: flex;
-      flex-direction: column;
-      min-height: 297mm;
-    }
     .cover-top {
-      background: ${brand};
-      padding: 48px 56px 40px;
-      display: flex; flex-direction: column; gap: 24px;
+      padding: 32px 40px 28px;
+      display: flex; flex-direction: column; gap: 16px;
       -webkit-print-color-adjust: exact; print-color-adjust: exact;
     }
-    .cover-logo-wrap { display: flex; justify-content: center; }
-    .cover-logo-img { width: 400px; max-width: 100%; height: auto; display: block; object-fit: contain; }
-    .cover-logo-fallback { width: 400px; max-width: 100%; height: 80px; display: flex; align-items: center; justify-content: center; }
-    .cover-logo-text { font-size: 32px; font-weight: 700; color: rgba(255,255,255,0.6); letter-spacing: -1px; }
-    .cover-type-badge {
-      display: inline-block; padding: 10px 20px;
-      background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.3);
-      border-radius: 6px; color: white; font-size: 15pt; font-weight: 400;
-      font-family: Georgia, serif; letter-spacing: 0.5px; align-self: flex-start;
+    .cover-logo-img { max-height: 80px; max-width: 320px; width: auto; height: auto; object-fit: contain; display: block; }
+    .cover-logo-fallback {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 72px; height: 72px; background: rgba(255,255,255,0.18); border-radius: 8px;
+      font-size: 26px; font-weight: 700; color: white;
     }
-    .cover-photo-area { background: #f1f5f9; display: flex; align-items: center; justify-content: center; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .cover-photo-img { width: 100%; max-height: 320px; object-fit: cover; display: block; }
-    .cover-photo-placeholder { width: 100%; min-height: 220px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: #94a3b8; font-size: 12pt; }
-    .cover-info-grid { display: grid; grid-template-columns: 1fr 1fr; border-top: 2px solid ${brand}; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .cover-info-cell { padding: 18px 28px; border-right: 1px solid #e5e7eb; border-bottom: 1px solid #e5e7eb; }
-    .cover-info-cell:nth-child(even) { border-right: none; }
-    .cover-info-lbl { font-size: 8pt; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #94a3b8; margin-bottom: 4px; }
-    .cover-info-val { font-size: 13pt; font-weight: 600; color: #1e293b; }
-    .cover-footer-strip { margin-top: auto; background: ${brand}; display: flex; justify-content: space-between; align-items: center; padding: 12px 28px; font-size: 10pt; color: rgba(255,255,255,0.8); font-weight: 500; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-
-    /* ── Contents page ── */
-    .contents-title { font-size: 18pt; font-weight: 700; color: ${brand}; margin-bottom: 24px; padding-bottom: 10px; border-bottom: 2px solid ${brand}; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .contents-table { width: 100%; border-collapse: collapse; }
-    .contents-table tr { border-bottom: 1px solid #f1f5f9; }
-    .contents-table td { padding: 10px 8px; font-size: 11pt; vertical-align: middle; }
-    .contents-num  { width: 36px; font-weight: 700; color: ${brand}; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .contents-name { color: #1e293b; }
-    .contents-type { font-size: 9pt; color: #94a3b8; padding-left: 8px; }
-    .contents-pg   { text-align: right; color: #cbd5e1; font-size: 9pt; width: 40px; }
-
-    /* ── Section / room pages ── */
-    .section-hdr {
-      background: ${brand}; color: #fff;
-      padding: 8px 16px; font-size: 13pt; font-weight: 700;
-      border-radius: 4px; margin-bottom: 14px;
+    .cover-type-badge { font-size: 20pt; font-weight: 700; }
+    .cover-photo-area { background: #f1f5f9; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .cover-photo-img  { width: 100%; max-height: 340px; object-fit: cover; display: block; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .cover-photo-placeholder { min-height: 180px; display: flex; align-items: center; justify-content: center; color: #94a3b8; font-size: 10pt; }
+    .cover-info-block { margin: 0; }
+    .cover-info-row { display: flex; padding: 10px 14px; border-bottom: 1px solid #f1f5f9; align-items: baseline; gap: 14px; }
+    .cover-info-lbl { width: 120px; font-size: 8pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: #94a3b8; flex-shrink: 0; }
+    .cover-info-val { font-size: 11pt; font-weight: 600; }
+    .cover-footer {
+      display: flex; justify-content: space-between; padding: 10px 14px;
+      font-size: 9pt; font-weight: 500; margin-top: 8px;
       -webkit-print-color-adjust: exact; print-color-adjust: exact;
     }
-    .section-hdr-red { background: #dc2626 !important; }
-
-    table { width: 100%; border-collapse: collapse; font-size: 9pt; }
-    th {
-      background: #f1f5f9; padding: 7px 10px; text-align: left;
-      font-weight: 700; font-size: 8pt; text-transform: uppercase; letter-spacing: 0.3px;
-      border-bottom: 2px solid #e2e8f0;
-      -webkit-print-color-adjust: exact; print-color-adjust: exact;
-    }
-    td { padding: 7px 10px; vertical-align: top; border-bottom: 1px solid #f1f5f9; line-height: 1.45; }
-    tr:last-child td { border-bottom: none; }
-    tr:nth-child(even) td { background: #fafafa; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-
-    .c-ref   { width: 5%;  font-weight: 700; color: #6366f1; font-size: 8pt; white-space: nowrap; }
-    .c-item  { width: 18%; font-weight: 600; color: #374151; }
-    .c-desc  { width: 26%; }
-    .c-cond  { width: 22%; }
-    .c-co    { width: 20%; }
-    .c-act   { width: 14%; }
-    .c-orig  { color: #64748b; font-style: italic; }
-
-    .action-tag {
-      display: inline-block; padding: 2px 7px; border-radius: 8px;
-      font-size: 7.5pt; font-weight: 600; margin: 2px 0; line-height: 1.5;
-      -webkit-print-color-adjust: exact; print-color-adjust: exact;
-    }
-    .ref-num { font-weight: 700; color: ${brand}; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .resp-tag {
-      background: #e0e7ff; color: #4338ca;
-      padding: 1px 7px; border-radius: 6px; font-size: 8pt; font-weight: 600;
-      -webkit-print-color-adjust: exact; print-color-adjust: exact;
-    }
-
-    .disclaimer-body { font-size: 10pt; line-height: 1.7; color: #374151; white-space: pre-wrap; }
-
-    .decl-body  { font-size: 10pt; line-height: 1.6; color: #374151; margin-bottom: 36px; }
-    .sig-grid   { display: grid; grid-template-columns: 1fr 1fr; gap: 36px; margin-top: 20px; }
-    .sig-lbl    { font-size: 9pt; font-weight: 600; color: #64748b; margin-bottom: 6px; }
-    .sig-line   { height: 30px; border-bottom: 1.5px solid #94a3b8; margin-bottom: 20px; }
-    .sig-sub    { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 10px; }
-    .sig-short  { height: 26px; border-bottom: 1.5px solid #94a3b8; }
 
     /* ── Photos ── */
-    /* 4-across grid; each unit = photo + ref label underneath */
-    .photo-grid { display: flex; flex-wrap: wrap; margin: 8px 0 4px; }
-    .photo-unit { width: 25%; padding: 3px; box-sizing: border-box; }
+    .ov-label { font-size: 8pt; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin: 8px 0 4px; }
+
+    /* 4-across grid */
+    .photo-grid { display: flex; flex-wrap: wrap; margin: 6px 0 10px; }
+    .photo-unit { width: 25%; padding: 3px; }
     .photo-unit img {
       width: 100%; aspect-ratio: 4/3; object-fit: cover; display: block;
       border: 1px solid #e2e8f0;
       -webkit-print-color-adjust: exact; print-color-adjust: exact;
     }
-    .photo-unit-ref {
-      font-size: 7pt; font-style: italic; color: #64748b;
-      text-align: center; padding: 2px 0 5px;
-    }
+    .photo-ref { font-size: 7pt; font-style: italic; color: #64748b; text-align: center; padding: 2px 0 4px; }
+
+    /* Inline grid inside fixed section tables — 6-across, slightly smaller */
+    .photo-grid--inline .photo-unit { width: 16.66%; }
+
     /* Timestamp overlay */
-    .photo-wrap { position: relative; width: 100%; }
+    .photo-wrap { position: relative; }
     .photo-ts {
       position: absolute; bottom: 0; left: 0; right: 0;
-      text-align: center; font-size: 6pt; color: white;
-      background: rgba(0,0,0,0.55); padding: 1px 3px;
+      text-align: center; font-size: 5.5pt; color: white;
+      background: rgba(0,0,0,0.58); padding: 1px 2px;
       -webkit-print-color-adjust: exact; print-color-adjust: exact;
     }
-    .room-overview-hdr { font-size: 8pt; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin: 8px 0 2px; }
 
-    @page { size: A4 portrait; margin: 0; }
+    /* ── Declaration ── */
+    .decl-body  { padding: 8px 0; }
+    .decl-text  { font-size: 9pt; line-height: 1.7; margin-bottom: 44px; }
+    .decl-sigs  { display: flex; gap: 40px; }
+    .decl-sig-block { flex: 1; }
+    .decl-sig-label { font-size: 9pt; font-weight: 700; margin-bottom: 50px; }
+    .decl-sig-line  { border-bottom: 1px solid #374151; margin-bottom: 14px; }
+    .decl-field {
+      display: flex; align-items: center; gap: 12px;
+      font-size: 8.5pt; color: #475569; margin-bottom: 22px;
+    }
+    .decl-field-line { flex: 1; border-bottom: 1px solid #cbd5e1; }
+
+    /* ── Print colour enforcement ── */
+    @media print {
+      body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    }
   `
 
-  // ── Helper: build photo grid HTML for a room ─────────────────────────────
-  // Collects ALL photos for the room (overview first, then each item in order)
-  // and renders them as a flat 4-across grid with "Ref #X.Y" labels underneath.
-  // Returns '' if there are no photos at all.
-  function roomPhotoGrid(room, roomIdx) {
-    if (photoItem === 'hyperlink') return ''   // hyperlink mode: no embedded photos
-
-    const units = []
-
-    // ── Overview photos ───────────────────────────────────────────────────
-    const ovPhotos = props.reportData[room.id]?.['_overview']?._photos || []
-    const ovTs     = props.reportData[room.id]?.['_overview']?._photoTs || []
-    ovPhotos.forEach((src, i) => {
-      const ts = addTimestamp && ovTs[i]
-        ? `<div class="photo-ts">${new Date(ovTs[i]).toLocaleString('en-GB', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' })}</div>`
-        : ''
-      units.push(`<div class="photo-unit">
-        <div class="photo-wrap"><img src="${e(src)}" />${ts}</div>
-        <div class="photo-unit-ref">Ref #${roomIdx}</div>
-      </div>`)
-    })
-
-    // ── Per-item photos ───────────────────────────────────────────────────
-    let itemIdx = 1
-    for (const item of getOrderedRoomItems(room)) {
-      const iid = item._type === 'extra' ? item._eid : item.id
-      if (isItemHidden(room.id, iid)) { itemIdx++; continue }
-      const refLabel = `${roomIdx}.${itemIdx}`
-      const photos = props.reportData[room.id]?.[String(iid)]?._photos || []
-      const times  = props.reportData[room.id]?.[String(iid)]?._photoTs || []
-      photos.forEach((src, i) => {
-        const ts = addTimestamp && times[i]
-          ? `<div class="photo-ts">${new Date(times[i]).toLocaleString('en-GB', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' })}</div>`
-          : ''
-        units.push(`<div class="photo-unit">
-          <div class="photo-wrap"><img src="${e(src)}" />${ts}</div>
-          <div class="photo-unit-ref">Ref #${refLabel}</div>
-        </div>`)
-      })
-      itemIdx++
-    }
-
-    if (!units.length) return ''
-    return `<div class="photo-grid">${units.join('')}</div>`
-  }
-
-  // ── Fixed section rows ────────────────────────────────────────────────────
-  function fixedRows(section) {
-    const t = section.type
-    let thead = '', body = ''
-    const rowData   = (section.rows || []).filter(r => !isHidden(section.id, r.id))
-    const extraData = getExtra(section.id)
-
-    if (t === 'condition_summary') {
-      thead = '<tr><th>Item</th><th>Condition</th></tr>'
-      rowData.forEach(r  => { body += `<tr><td>${e(r.name)}</td><td>${e(get(section.id, r.id, 'condition') || r.condition) || '—'}</td></tr>` })
-      extraData.forEach(r => { body += `<tr><td>${e(r.name)}</td><td>${e(r.condition) || '—'}</td></tr>` })
-    } else if (t === 'cleaning_summary') {
-      thead = '<tr><th>Area</th><th>Cleanliness</th><th>Notes</th></tr>'
-      rowData.forEach(r  => { body += `<tr><td>${e(r.name)}</td><td>${e(get(section.id, r.id, 'cleanliness')) || '—'}</td><td>${e(get(section.id, r.id, 'cleanlinessNotes')) || '—'}</td></tr>` })
-      extraData.forEach(r => { body += `<tr><td>${e(r.name)}</td><td>${e(r.cleanliness) || '—'}</td><td>${e(r.cleanlinessNotes) || '—'}</td></tr>` })
-    } else if (t === 'keys') {
-      thead = '<tr><th>Key / Item</th><th>Description / Qty</th></tr>'
-      rowData.forEach(r  => { body += `<tr><td>${e(r.name)}</td><td>${e(get(section.id, r.id, 'description')) || '—'}</td></tr>` })
-      extraData.forEach(r => { body += `<tr><td>${e(r.name)}</td><td>${e(r.description) || '—'}</td></tr>` })
-    } else if (t === 'meter_readings') {
-      thead = '<tr><th>Meter</th><th>Location / Serial</th><th>Reading</th></tr>'
-      rowData.forEach(r  => { body += `<tr><td>${e(r.name)}</td><td>${e(get(section.id, r.id, 'locationSerial')) || '—'}</td><td>${e(get(section.id, r.id, 'reading')) || '—'}</td></tr>` })
-      extraData.forEach(r => { body += `<tr><td>${e(r.name)}</td><td>${e(r.locationSerial) || '—'}</td><td>${e(r.reading) || '—'}</td></tr>` })
-    } else if (['smoke_alarms', 'health_safety', 'fire_door_safety'].includes(t)) {
-      const fd = t === 'fire_door_safety'
-      thead = fd ? '<tr><th>Item</th><th>Question</th><th>Answer</th><th>Notes</th></tr>'
-                 : '<tr><th>Question / Item</th><th>Answer</th><th>Notes</th></tr>'
-      rowData.forEach(r => {
-        body += `<tr>${fd ? `<td>${e(r.name)}</td>` : ''}<td>${e(r.question || r.name)}</td><td>${e(get(section.id, r.id, 'answer')) || '—'}</td><td>${e(get(section.id, r.id, 'notes')) || '—'}</td></tr>`
-      })
-      extraData.forEach(r => {
-        body += `<tr>${fd ? `<td>${e(r.name)}</td>` : ''}<td>${e(r.question) || '—'}</td><td>${e(r.answer) || '—'}</td><td>${e(r.notes) || '—'}</td></tr>`
-      })
-    } else {
-      thead = '<tr><th>Item</th><th>Details</th></tr>'
-      rowData.forEach(r => { body += `<tr><td>${e(r.name)}</td><td>${e(get(section.id, r.id, 'condition') || get(section.id, r.id, 'description')) || '—'}</td></tr>` })
-    }
-
-    return `<div class="page">
-      <div class="section-hdr">${e(section.name)}</div>
-      <table><thead>${thead}</thead><tbody>${body}</tbody></table>
-    </div>`
-  }
-
-  // ── Room page ─────────────────────────────────────────────────────────────
-  // roomIdx = 1-based position of this room in rooms.value (for ref labels)
-  function roomPage(room, roomIdx) {
-    const items = getOrderedRoomItems(room)
-    const co    = isCheckOut.value
-
-    // ── Column headers ────────────────────────────────────────────────────
-    const thead = co
-      ? '<tr><th class="c-ref">Ref</th><th class="c-item">Item</th><th class="c-desc">Description</th><th class="c-cond">Condition at Check In</th><th class="c-co">Condition at Check Out</th><th class="c-act">Actions</th></tr>'
-      : '<tr><th class="c-ref">Ref</th><th class="c-item">Item</th><th class="c-desc">Description</th><th class="c-cond">Condition</th></tr>'
-
-    // ── Build tbody rows (no photos inside the table) ─────────────────────
-    let body = ''
-    let itemIdx = 1
-    for (const item of items) {
-      const iid = item._type === 'extra' ? item._eid : item.id
-      if (isItemHidden(room.id, iid)) { itemIdx++; continue }
-
-      const refLabel = `${roomIdx}.${itemIdx}`
-      itemIdx++
-
-      if (co) {
-        const desc = item._type === 'template' ? get(room.id, item.id, 'description') : item.description
-        const inv  = item._type === 'template'
-          ? (get(room.id, item.id, 'inventoryCondition') || get(room.id, item.id, 'condition'))
-          : item.inventoryCondition
-        const coC  = item._type === 'template'
-          ? (get(room.id, item.id, 'checkOutCondition') || 'As Inventory &amp; Check In')
-          : (item.checkOutCondition || 'As Inventory &amp; Check In')
-        const acts    = getItemActions(room.id, iid)
-        const actHTML = acts.map(a => {
-          const name  = actionDisplayName(a.actionId)
-          const color = actionDisplayColor(a.actionId)
-          const bg = color + '22', bd = color + '55'
-          return `<span class="action-tag" style="background:${bg};color:${color};border:1px solid ${bd}">${e(name)}${a.responsibility ? `<br><small>${e(a.responsibility)}</small>` : ''}</span>`
-        }).join(' ')
-        body += `<tr>
-          <td class="c-ref">${e(refLabel)}</td>
-          <td class="c-item">${e(item.label)}</td>
-          <td class="c-desc">${e(desc) || '—'}</td>
-          <td class="c-cond c-orig">${e(inv) || '—'}</td>
-          <td class="c-co">${e(coC)}</td>
-          <td class="c-act">${actHTML}</td>
-        </tr>`
-      } else {
-        const desc = item._type === 'template' ? get(room.id, item.id, 'description') : item.description
-        const cond = item._type === 'template' ? get(room.id, item.id, 'condition')   : item.condition
-        body += `<tr>
-          <td class="c-ref">${e(refLabel)}</td>
-          <td class="c-item">${e(item.label)}</td>
-          <td class="c-desc">${e(desc) || '—'}</td>
-          <td class="c-cond">${e(cond) || '—'}</td>
-        </tr>`
-      }
-    }
-
-    const tableBlock = `<table><thead>${thead}</thead><tbody>${body}</tbody></table>`
-
-    // ── Photo grid: all room photos (overview + items) in 4-across layout ─
-    // Position is controlled by client's photo_room_item setting.
-    // Overview photos are always included; they always appear at the top of the grid.
-    const photoGrid = roomPhotoGrid(room, roomIdx)
-
-    // ── Assemble page ─────────────────────────────────────────────────────
-    // "above": photos first, then data table
-    // "below" (default): data table first, then photos
-    const photosAbove = photoGrid && photoItem === 'above'
-    return `<div class="page">
-      <div class="section-hdr">${e(room.name)}</div>
-      ${photosAbove ? photoGrid : ''}
-      ${tableBlock}
-      ${!photosAbove ? photoGrid : ''}
-    </div>`
-  }
-
-  // ── Actions summary pages (Check Out only) ───────────────────────────────
-  function actionsPages() {
-    if (!isCheckOut.value || !actionsSummary.value.length) return ''
-    if (actionPos === 'none') return ''
-    let html = ''
-    for (const [, group] of Object.entries(actionGroups.value)) {
-      const color = group.color
-      const bg = color + '22', bd = color + '55'
-      let rows = ''
-      group.items.forEach((a, i) => {
-        rows += `<tr>
-          <td class="ref-num">${i + 1}</td>
-          <td>${e(a.room)} › ${e(a.item)}</td>
-          <td><span class="resp-tag" style="background:${bg};color:${color};border:1px solid ${bd}">${e(a.responsibility) || '—'}</span></td>
-          <td>${e(a.condition) || '—'}</td>
-        </tr>`
-      })
-      html += `<div class="page">
-        <div class="section-hdr" style="background:${color};-webkit-print-color-adjust:exact;print-color-adjust:exact;">${e(group.name)}</div>
-        <table>
-          <thead><tr><th>Ref</th><th>Room › Item</th><th>Responsibility</th><th>Condition</th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
-      </div>`
-    }
-    return html
-  }
-
-  // ── Cover ─────────────────────────────────────────────────────────────────
-  const logoInner = client.logo
-    ? `<img src="${e(client.logo)}" class="cover-logo-img" alt="Logo">`
-    : `<div class="cover-logo-fallback"><span class="cover-logo-text">${e((client.name || 'IN').split(' ').map(w => w[0]).join('').slice(0,2).toUpperCase())}</span></div>`
-
-  const photoInner = prop.overview_photo
-    ? `<img src="${e(prop.overview_photo)}" class="cover-photo-img" alt="Property">`
-    : `<div class="cover-photo-placeholder">
-        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="1.5">
-          <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
-        </svg>
-        <span>Property overview photo</span>
-      </div>`
-
-  const infoCells = [
-    { lbl: 'Property Address', val: prop.address || insp.property_address },
-    { lbl: 'Inspection Date',  val: formattedDate.value || 'Not set' },
-    { lbl: 'Inspector',        val: insp.inspector?.name || '—' },
-    { lbl: 'Reference',        val: insp.reference || `CHK-${new Date().getFullYear()}-${String(insp.id).padStart(4,'0')}` },
-  ]
-  if (insp.typist)  infoCells.push({ lbl: 'Typist',  val: insp.typist.name })
-  if (client.name)  infoCells.push({ lbl: 'Client',  val: client.name })
-  if (infoCells.length % 2 !== 0) infoCells.push({ lbl: '', val: '' })
-
-  const infoGridHTML = infoCells.map(c =>
-    `<div class="cover-info-cell">
-      <div class="cover-info-lbl">${e(c.lbl)}</div>
-      <div class="cover-info-val">${e(c.val)}</div>
-    </div>`
-  ).join('')
-
-  const cover = `<div class="page-cover">
-    <div class="cover-top">
-      <div class="cover-logo-wrap">${logoInner}</div>
-      <div class="cover-type-badge">${e(typeLabel.value)}</div>
-    </div>
-    <div class="cover-photo-area">${photoInner}</div>
-    <div class="cover-info-grid">${infoGridHTML}</div>
-    <div class="cover-footer-strip">
-      <span>Prepared by ${e(client.company || client.name || 'InspectPro')}</span>
-      <span>Confidential</span>
-    </div>
-  </div>`
-
-  // ── Contents page ─────────────────────────────────────────────────────────
-  function contentsPage() {
-    let sectionNum = 1
-    const rows = []
-
-    // Disclaimers
-    if (client.report_disclaimer) {
-      rows.push({ num: sectionNum++, name: 'Disclaimers', type: '' })
-    }
-
-    // Action summary at top (Check Out only)
-    if (isCheckOut.value && actionPos === 'top' && actionsSummary.value.length) {
-      rows.push({ num: sectionNum++, name: 'Actions Summary', type: 'Check Out' })
-    }
-
-    // Fixed sections
-    for (const s of fixedSections.value) {
-      rows.push({ num: sectionNum++, name: s.name, type: 'Fixed Section' })
-    }
-
-    // Rooms
-    for (const r of rooms.value) {
-      rows.push({ num: sectionNum++, name: r.name, type: 'Room' })
-    }
-
-    // Action summary at bottom (Check Out only)
-    if (isCheckOut.value && actionPos === 'bottom' && actionsSummary.value.length) {
-      rows.push({ num: sectionNum++, name: 'Actions Summary', type: 'Check Out' })
-    }
-
-    // Declaration
-    rows.push({ num: sectionNum++, name: 'Declaration', type: '' })
-
-    const tableRows = rows.map(r =>
-      `<tr>
-        <td class="contents-num">${r.num}</td>
-        <td class="contents-name">${e(r.name)}</td>
-        <td class="contents-type">${e(r.type)}</td>
-        <td class="contents-pg">—</td>
-      </tr>`
-    ).join('')
-
-    return `<div class="page">
-      <div class="contents-title">Contents</div>
-      <table class="contents-table">
-        <tbody>${tableRows}</tbody>
-      </table>
-    </div>`
-  }
-
-  // ── Disclaimer ────────────────────────────────────────────────────────────
-  const disclaimer = client.report_disclaimer
-    ? `<div class="page"><div class="section-hdr">Disclaimer</div><div class="disclaimer-body">${e(client.report_disclaimer)}</div></div>`
-    : ''
-
-  // ── Declaration ───────────────────────────────────────────────────────────
-  const declaration = `<div class="page">
-    <div class="section-hdr">Declaration</div>
-    <p class="decl-body">I/We the undersigned, affirm that if I/we do not comment on the Inventory in writing within seven days of receipt of this Inventory then I/we accept the Inventory as being an accurate record of the contents and condition of the property.</p>
-    <div class="sig-grid">
-      <div>
-        <p class="sig-lbl">Signed by the Tenant(s)</p>
-        <div class="sig-line"></div>
-        <div class="sig-sub">
-          <div><p class="sig-lbl">Print Name</p><div class="sig-short"></div></div>
-          <div><p class="sig-lbl">Date</p><div class="sig-short"></div></div>
-        </div>
-      </div>
-      <div>
-        <p class="sig-lbl">Signed by the Agent / Landlord</p>
-        <div class="sig-line"></div>
-        <div class="sig-sub">
-          <div><p class="sig-lbl">Print Name</p><div class="sig-short"></div></div>
-          <div><p class="sig-lbl">Date</p><div class="sig-short"></div></div>
-        </div>
-      </div>
-    </div>
-  </div>`
-
-  // ── Assemble in correct order ─────────────────────────────────────────────
-  const fixedHtml   = fixedSections.value.map(fixedRows).join('')
-  const roomsHtml   = rooms.value.map((room, i) => roomPage(room, i + 1)).join('')
-  const actionsHtml = actionsPages()
-
-  let body = ''
-  body += cover
-  body += contentsPage()
-  body += disclaimer
-  if (isCheckOut.value && actionPos === 'top')    body += actionsHtml
-  body += fixedHtml
-  body += roomsHtml
-  if (isCheckOut.value && actionPos === 'bottom')  body += actionsHtml
-  body += declaration
-
+  const addr = e(pr.address || insp.property_address || '')
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <title>${e(typeLabel.value)} — ${e(prop.address || '')}</title>
+  <meta charset="UTF-8">
+  <title>${e(typeLabel.value)} — ${addr}</title>
   <style>${css}</style>
 </head>
 <body>${body}</body>
 </html>`
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// triggerPrint — injects a hidden iframe, writes the report HTML into it,
-// and calls iframe.contentWindow.print().
-//
-// WHY IFRAME INSTEAD OF POPUP WINDOW:
-//   • popup.print() in Chrome/Edge also triggers window.print() on the opener
-//     page — printing the whole web app alongside the report.
-//   • iframe.contentWindow.print() is guaranteed to print ONLY the iframe.
-//   • No popup-blocker issues; no race condition between onload and print.
-// ─────────────────────────────────────────────────────────────────────────────
-const printing = ref(false)
-
-async function triggerPrint() {
-  if (printing.value) return
-  printing.value = true
-
-  await nextTick()
-
-  const html = buildReportHTML()
-
-  // 1. Create invisible iframe
-  const iframe = document.createElement('iframe')
-  iframe.setAttribute('aria-hidden', 'true')
-  iframe.style.cssText = 'position:fixed;top:0;left:-9999px;width:210mm;height:297mm;border:0;'
-  document.body.appendChild(iframe)
-
-  // 2. Write the complete HTML document into it
-  const doc = iframe.contentDocument || iframe.contentWindow.document
-  doc.open()
-  doc.write(html)
-  doc.close()
-
-  // 3. Wait for all images inside the iframe to finish loading
-  await new Promise(resolve => {
-    const imgs = Array.from(doc.querySelectorAll('img'))
-    if (!imgs.length) return resolve()
-    let pending = imgs.length
-    const done = () => { if (--pending <= 0) resolve() }
-    imgs.forEach(img => {
-      if (img.complete) done()
-      else { img.onload = done; img.onerror = done }
-    })
-    setTimeout(resolve, 5000) // safety net
-  })
-
-  // 4. Print ONLY the iframe — never touches the parent page
-  iframe.contentWindow.focus()
-  iframe.contentWindow.print()
-
-  // 5. Clean up after the print dialog closes
-  setTimeout(() => {
-    try { document.body.removeChild(iframe) } catch {}
-    printing.value = false
-  }, 2000)
-}
-
-function handleKeydown(e) {
-  if (e.key === 'Escape') emit('close')
-}
-onMounted(() => document.addEventListener('keydown', handleKeydown))
-onUnmounted(() => document.removeEventListener('keydown', handleKeydown))
 </script>
 
 <template>
-  <div class="pdf-overlay" @click.self="$emit('close')">
+  <div class="pdf-overlay" @click.self="emit('close')">
     <div class="pdf-modal">
 
-      <div class="pdf-modal-header">
-        <div>
-          <h2>Export Report as PDF</h2>
-          <p>Prints only the report — not the web page.</p>
+      <div class="pdf-modal-hdr">
+        <div class="pdf-title">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          Export Report PDF
         </div>
-        <button class="btn-close" @click="$emit('close')">✕</button>
+        <button class="close-btn" @click="emit('close')">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
       </div>
 
-      <div class="pdf-preview-info">
-        <div class="info-row"><span class="info-lbl">Property</span><span>{{ inspection.property?.address || inspection.property_address }}</span></div>
-        <div class="info-row"><span class="info-lbl">Type</span><span>{{ typeLabel }}</span></div>
-        <div class="info-row"><span class="info-lbl">Date</span><span>{{ formattedDate || 'Not set' }}</span></div>
-        <div class="info-row"><span class="info-lbl">Clerk</span><span>{{ inspection.inspector?.name || '—' }}</span></div>
-        <div class="info-row"><span class="info-lbl">Sections</span><span>{{ fixedSections.length }} fixed + {{ rooms.length }} rooms</span></div>
+      <div class="pdf-modal-body">
+
+        <!-- Settings at a glance -->
+        <div class="settings-card">
+          <div class="sc-row">
+            <span class="sc-lbl">Brand colour</span>
+            <span class="sc-val">
+              <span class="color-dot" :style="{ background: brandColor }"></span>
+              {{ brandColor }}
+            </span>
+          </div>
+          <div class="sc-row">
+            <span class="sc-lbl">Orientation</span>
+            <span class="sc-val">{{ orientation === 'landscape' ? 'Landscape' : 'Portrait' }}</span>
+          </div>
+          <div class="sc-row">
+            <span class="sc-lbl">Overview photos</span>
+            <span class="sc-val">{{ photoRoomOverview === 'above' ? 'Above data' : 'Below data' }}</span>
+          </div>
+          <div class="sc-row">
+            <span class="sc-lbl">Item photos</span>
+            <span class="sc-val">{{ photoRoomItem === 'above' ? 'Above data' : photoRoomItem === 'hyperlink' ? 'Hyperlink only' : 'Below data' }}</span>
+          </div>
+          <div class="sc-row" v-if="isCheckOut && actionsSummary.length">
+            <span class="sc-lbl">Action summary</span>
+            <span class="sc-val">{{ actionSummaryPos === 'top' ? 'Top of report' : actionSummaryPos === 'bottom' ? 'Bottom of report' : 'Not included' }}</span>
+          </div>
+          <div class="sc-note">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            Settings configured per-client in Settings → Reports
+          </div>
+        </div>
+
+        <!-- Section list -->
+        <div class="section-list">
+          <div class="sl-hdr">Report structure</div>
+          <div class="sl-chips">
+            <span class="chip chip--front">Cover</span>
+            <span class="chip chip--front">Contents</span>
+            <span v-if="client.report_disclaimer" class="chip chip--front">Disclaimers</span>
+            <span v-if="isCheckOut && actionSummaryPos === 'top' && actionsSummary.length" class="chip chip--action">Action Summary ↑</span>
+            <span v-for="s in fixedSections" :key="s.id" class="chip chip--fixed">{{ s.name }}</span>
+            <span v-for="r in rooms" :key="r.id" class="chip chip--room">{{ r.name }}</span>
+            <span v-if="isCheckOut && actionSummaryPos === 'bottom' && actionsSummary.length" class="chip chip--action">Action Summary ↓</span>
+            <span class="chip chip--front">Declaration</span>
+          </div>
+        </div>
+
       </div>
 
-      <div class="pdf-tips">
-        <strong>💡 Tips for best output</strong>
-        <ul>
-          <li>Set <strong>Destination → Save as PDF</strong></li>
-          <li>Layout: <strong>Portrait</strong>, paper: <strong>A4</strong></li>
-          <li>Enable <strong>Background graphics</strong> for coloured section headers</li>
-          <li>Margins: <strong>Default</strong> or <strong>Minimum</strong></li>
-        </ul>
-      </div>
-
-      <div class="pdf-modal-footer">
-        <button class="btn-cancel" @click="$emit('close')">Cancel</button>
-        <button class="btn-print" :disabled="printing" @click="triggerPrint">
-          <span v-if="printing">⏳ Preparing…</span>
-          <span v-else>🖨&nbsp;&nbsp;Print / Save as PDF</span>
+      <div class="pdf-modal-ftr">
+        <button class="btn-cancel" @click="emit('close')">Cancel</button>
+        <button class="btn-print" @click="printReport">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+          Print / Save as PDF
         </button>
       </div>
 
@@ -724,63 +804,74 @@ onUnmounted(() => document.removeEventListener('keydown', handleKeydown))
 
 <style scoped>
 .pdf-overlay {
-  position: fixed; inset: 0;
-  background: rgba(0,0,0,0.5);
-  z-index: 9000;
-  display: flex; align-items: center; justify-content: center;
+  position: fixed; inset: 0; background: rgba(15,23,42,0.7);
+  z-index: 9000; display: flex; align-items: center; justify-content: center;
 }
+
 .pdf-modal {
-  background: white; border-radius: 16px;
-  padding: 32px; width: 520px; max-width: 95vw;
-  box-shadow: 0 25px 60px rgba(0,0,0,0.3);
+  background: white; border-radius: 12px; width: 460px; max-width: 95vw;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+  display: flex; flex-direction: column; overflow: hidden;
 }
-.pdf-modal-header {
-  display: flex; justify-content: space-between; align-items: flex-start;
-  margin-bottom: 20px;
-}
-.pdf-modal-header h2 { font-size: 20px; font-weight: 700; color: #1e293b; }
-.pdf-modal-header p  { font-size: 13px; color: #64748b; margin-top: 4px; }
 
-.btn-close {
-  background: none; border: none; font-size: 18px; cursor: pointer;
-  color: #94a3b8; padding: 4px 8px; border-radius: 6px; flex-shrink: 0;
+.pdf-modal-hdr {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 20px; border-bottom: 1px solid #f1f5f9;
 }
-.btn-close:hover { background: #f1f5f9; color: #475569; }
 
-.pdf-preview-info {
-  background: #f8fafc; border: 1px solid #e2e8f0;
-  border-radius: 10px; padding: 16px; margin-bottom: 20px;
+.pdf-title {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 15px; font-weight: 700; color: #1e293b;
 }
-.info-row {
-  display: flex; gap: 12px; font-size: 13px;
-  padding: 5px 0; border-bottom: 1px solid #f1f5f9;
-}
-.info-row:last-child { border-bottom: none; }
-.info-lbl { font-weight: 600; color: #64748b; width: 80px; flex-shrink: 0; }
 
-.pdf-tips {
-  background: #fffbeb; border: 1px solid #fde68a;
-  border-radius: 10px; padding: 16px; font-size: 13px;
-  margin-bottom: 24px;
+.close-btn {
+  width: 28px; height: 28px; border: none; background: #f1f5f9;
+  border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+  color: #64748b; transition: background 0.15s;
 }
-.pdf-tips strong { display: block; margin-bottom: 8px; color: #92400e; }
-.pdf-tips ul { padding-left: 18px; color: #78350f; line-height: 1.8; }
+.close-btn:hover { background: #e2e8f0; }
 
-.pdf-modal-footer { display: flex; justify-content: flex-end; gap: 12px; }
+.pdf-modal-body { padding: 16px 20px; display: flex; flex-direction: column; gap: 14px; }
+
+/* Settings card */
+.settings-card {
+  background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 8px;
+  padding: 12px 14px; display: flex; flex-direction: column; gap: 7px;
+}
+.sc-row { display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
+.sc-lbl { color: #64748b; }
+.sc-val { font-weight: 600; color: #1e293b; display: flex; align-items: center; gap: 6px; }
+.color-dot { width: 12px; height: 12px; border-radius: 50%; border: 1px solid rgba(0,0,0,0.1); flex-shrink: 0; }
+.sc-note {
+  display: flex; align-items: center; gap: 5px;
+  font-size: 11px; color: #94a3b8; padding-top: 8px; margin-top: 2px; border-top: 1px solid #e5e7eb;
+}
+
+/* Section list */
+.sl-hdr { font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 7px; }
+.sl-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.chip { padding: 3px 9px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+.chip--front  { background: #f1f5f9; color: #475569; }
+.chip--fixed  { background: #dbeafe; color: #1e40af; }
+.chip--room   { background: #ede9fe; color: #5b21b6; }
+.chip--action { background: #fef3c7; color: #92400e; }
+
+.pdf-modal-ftr {
+  padding: 14px 20px; border-top: 1px solid #f1f5f9;
+  display: flex; justify-content: flex-end; gap: 10px;
+}
 
 .btn-cancel {
-  padding: 9px 20px; background: white;
-  border: 1px solid #e5e7eb; border-radius: 8px;
-  font-size: 14px; font-weight: 600; color: #64748b; cursor: pointer;
+  padding: 8px 18px; border: 1px solid #e5e7eb; background: white;
+  border-radius: 7px; font-size: 13px; font-weight: 600; color: #64748b; cursor: pointer;
 }
 .btn-cancel:hover { background: #f8fafc; }
 
 .btn-print {
-  padding: 9px 24px; background: #1e3a8a; border: none;
-  border-radius: 8px; font-size: 14px; font-weight: 700;
-  color: white; cursor: pointer; min-width: 170px;
+  display: flex; align-items: center; gap: 7px;
+  padding: 8px 20px; background: #0f172a; color: white;
+  border: none; border-radius: 7px; font-size: 13px; font-weight: 700; cursor: pointer;
   transition: background 0.15s;
 }
-.btn-print:hover:not(:disabled) { background: #1e40af; }
-.btn-print:disabled { opacity: 0.6; cursor: not-allowed; }
+.btn-print:hover { background: #1e293b; }
 </style>

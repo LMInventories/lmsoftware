@@ -594,7 +594,7 @@ const actionSummaryGroups = computed(() => {
           itemLabel:      itemLabel,
           ref:            refNum,
           responsibility: a.responsibility || '',
-          note:           a.note           || '',
+          condition:      a.condition      || '',
         })
       }
     }
@@ -2222,7 +2222,7 @@ async function moveToReview() {
                       <th class="stbl-room">Room</th>
                       <th class="stbl-item">Item</th>
                       <th class="stbl-resp">Responsibility</th>
-                      <th class="stbl-note">Note</th>
+                      <th class="stbl-note">Condition</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -2234,7 +2234,7 @@ async function moveToReview() {
                         <span v-if="item.responsibility" class="resp-badge" :style="{ background: group.color + '18', color: group.color, borderColor: group.color + '50' }">{{ item.responsibility }}</span>
                         <span v-else class="resp-none">—</span>
                       </td>
-                      <td class="stbl-note">{{ item.note || '—' }}</td>
+                      <td class="stbl-note">{{ item.condition || '—' }}</td>
                     </tr>
                   </tbody>
                 </table>
@@ -2688,6 +2688,9 @@ async function moveToReview() {
                             :actions="getItemActions(room.id, item._type==='extra' ? item._eid : item.id)"
                             :room-id="room.id"
                             :item-id="item._type==='extra' ? item._eid : item.id"
+                            :condition-text="item._type==='template'
+                              ? get(room.id, item.id, 'checkOutCondition')
+                              : (item.checkOutCondition || '')"
                             @update:actions="val => setItemActions(room.id, item._type==='extra' ? item._eid : item.id, val)"
                           />
                         </div>
@@ -2830,7 +2833,7 @@ async function moveToReview() {
                       <th class="stbl-room">Room</th>
                       <th class="stbl-item">Item</th>
                       <th class="stbl-resp">Responsibility</th>
-                      <th class="stbl-note">Note</th>
+                      <th class="stbl-note">Condition</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -2842,7 +2845,7 @@ async function moveToReview() {
                         <span v-if="item.responsibility" class="resp-badge" :style="{ background: group.color + '18', color: group.color, borderColor: group.color + '50' }">{{ item.responsibility }}</span>
                         <span v-else class="resp-none">—</span>
                       </td>
-                      <td class="stbl-note">{{ item.note || '—' }}</td>
+                      <td class="stbl-note">{{ item.condition || '—' }}</td>
                     </tr>
                   </tbody>
                 </table>

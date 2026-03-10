@@ -7,7 +7,7 @@
  * dropdown to add/remove tags and set a responsibility party.
  *
  * Props:
- *   actions  — array of assigned action objects: [{ actionId, responsibility, note }]
+ *   actions  — array of assigned action objects: [{ actionId, responsibility, condition }]
  *   roomId   — string (for keying)
  *   itemId   — string (for keying)
  *
@@ -15,7 +15,7 @@
  *   update:actions — new array of action objects
  *
  * Action object shape (stored in reportData):
- *   { actionId: string, responsibility: string, note: string }
+ *   { actionId: string, responsibility: string, condition: string }
  */
 
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
@@ -25,6 +25,16 @@ const props = defineProps({
   actions:        { type: Array,  default: () => [] },
   roomId:         { type: String, default: '' },
   itemId:         { type: String, default: '' },
+  conditionText:  { type: String, default: '' },
+})
+
+// ── Condition lines — split the checkOutCondition textarea by newline ─────
+const conditionLines = computed(() => {
+  if (!props.conditionText) return []
+  return props.conditionText
+    .split('\n')
+    .map(l => l.trim())
+    .filter(Boolean)
 })
 const emit = defineEmits(['update:actions'])
 
@@ -83,7 +93,7 @@ function toggleAction(actionId) {
   } else {
     emit('update:actions', [
       ...assigned.value,
-      { actionId, responsibility: responsibilities.value[0] || '', note: '' }
+      { actionId, responsibility: responsibilities.value[0] || '', condition: '' }
     ])
   }
 }
@@ -94,9 +104,9 @@ function setResponsibility(actionId, value) {
   ))
 }
 
-function setNote(actionId, value) {
+function setCondition(actionId, value) {
   emit('update:actions', assigned.value.map(a =>
-    a.actionId === actionId ? { ...a, note: value } : a
+    a.actionId === actionId ? { ...a, condition: value } : a
   ))
 }
 
@@ -205,17 +215,44 @@ function getCatalogueItem(actionId) {
                 </select>
               </div>
 
-              <!-- Optional note -->
+              <!-- Condition — dropdown from checkOutCondition lines, or free text -->
               <div class="cap-detail-field">
-                <label class="cap-field-lbl">Note <span class="cap-opt">(optional)</span></label>
-                <input
-                  class="cap-note-input"
-                  type="text"
-                  placeholder="e.g. Stain on carpet near window…"
-                  :value="a.note"
-                  @input="setNote(a.actionId, $event.target.value)"
-                  maxlength="200"
-                />
+                <label class="cap-field-lbl">Condition</label>
+
+                <!-- Lines available: show dropdown -->
+                <template v-if="conditionLines.length">
+                  <select
+                    class="cap-select"
+                    :value="conditionLines.includes(a.condition) ? a.condition : (a.condition ? '__custom__' : '')"
+                    @change="setCondition(a.actionId, $event.target.value)"
+                  >
+                    <option value="">— Select condition —</option>
+                    <option v-for="line in conditionLines" :key="line" :value="line">{{ line }}</option>
+                    <option value="__custom__">— Enter manually —</option>
+                  </select>
+                  <input
+                    v-if="a.condition && !conditionLines.includes(a.condition)"
+                    class="cap-note-input"
+                    style="margin-top:6px"
+                    type="text"
+                    placeholder="Describe the condition…"
+                    :value="a.condition"
+                    @input="setCondition(a.actionId, $event.target.value)"
+                    maxlength="200"
+                  />
+                </template>
+
+                <!-- No lines yet: plain text input -->
+                <template v-else>
+                  <input
+                    class="cap-note-input"
+                    type="text"
+                    placeholder="e.g. Heavy marks to low level door…"
+                    :value="a.condition"
+                    @input="setCondition(a.actionId, $event.target.value)"
+                    maxlength="200"
+                  />
+                </template>
               </div>
             </div>
           </template>

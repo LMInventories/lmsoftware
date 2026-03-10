@@ -5,6 +5,7 @@ import { useToast } from '../composables/useToast'
 import api from '../services/api'
 import { useAuthStore } from '../stores/auth'
 import CheckOutActionPicker from '../components/CheckOutActionPicker.vue'
+import PdfExportModal from '../components/PdfExportModal.vue'
 
 // v-click-outside directive (registered inline for this component)
 const vClickOutside = {
@@ -556,6 +557,9 @@ const showPhotoTimestamp       = computed(() => clientPhotoSettings.value.show_p
 const actionSummaryPosition    = computed(() => clientPhotoSettings.value.action_summary_position || 'bottom')
 // Action catalogue — names + colours for the summary panel
 const actionCatalogue = ref([])
+
+// PDF export modal
+const showPdfModal = ref(false)
 
 // Build the Check Out action summary: items grouped by actionId
 const actionSummaryGroups = computed(() => {
@@ -2048,12 +2052,15 @@ async function moveToReview() {
         <span v-else-if="savedTime && !unsaved" class="chip chip-saved"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>Saved {{ savedTime }}</span>
         <span v-else-if="unsaved" class="chip chip-unsaved">● Unsaved</span>
         <template v-if="canEdit">
+          <button class="pdf-btn" @click="showPdfModal = true">🖨 Export PDF</button>
           <button class="save-btn" :disabled="saving" @click="save()">Save</button>
         </template>
         <template v-if="canMoveToReview">
+          <button class="pdf-btn" @click="showPdfModal = true">🖨 Export PDF</button>
           <button class="review-btn" @click="moveToReview">Move to Review</button>
         </template>
         <template v-if="!canEdit">
+          <button class="pdf-btn" @click="showPdfModal = true">🖨 Export PDF</button>
           <span class="chip chip-readonly">👁 Read Only</span>
         </template>
       </div>
@@ -3392,6 +3399,17 @@ async function moveToReview() {
     </div>
   </div>
 
+  <!-- PDF Export Modal -->
+  <PdfExportModal
+    v-if="showPdfModal"
+    :inspection="inspection"
+    :template="template"
+    :report-data="reportData"
+    :action-catalogue="actionCatalogue"
+    :photo-settings="clientPhotoSettings"
+    @close="showPdfModal = false"
+  />
+
   </div>
 </template>
 <style scoped>
@@ -3427,6 +3445,8 @@ async function moveToReview() {
 .photo-btn{display:flex;align-items:center;gap:6px;padding:5px 11px;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.1);border-radius:5px;font-size:12px;color:#94a3b8;cursor:pointer;transition:all 0.15s}
 .photo-btn:hover{background:rgba(255,255,255,0.13);color:#e2e8f0}
 .save-btn{padding:6px 16px;background:#6366f1;color:white;border:none;border-radius:5px;font-size:13px;font-weight:700;cursor:pointer;transition:background 0.15s}
+.pdf-btn{padding:6px 14px;background:#0f172a;color:white;border:none;border-radius:5px;font-size:13px;font-weight:600;cursor:pointer;transition:background 0.15s;white-space:nowrap}
+.pdf-btn:hover{background:#1e293b}
 .review-btn{padding:8px 20px;background:#16a34a;color:white;border:none;border-radius:6px;font-size:13px;font-weight:700;cursor:pointer;transition:background 0.15s}
 .review-btn:hover{background:#15803d}
 .chip-readonly{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;background:#f1f5f9;color:#64748b;border-radius:20px;font-size:12px;font-weight:500}

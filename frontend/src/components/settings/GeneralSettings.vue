@@ -239,7 +239,6 @@ onMounted(fetchSettings)
                 {{ (form.company_name || 'CO').split(' ').map(w => w[0]).slice(0,2).join('').toUpperCase() }}
               </div>
             </div>
-            <div class="ep-company">{{ form.company_name || 'Your Company Name' }}</div>
           </div>
           <div class="ep-body">
             <p class="ep-greeting">Dear [Client Name],</p>
@@ -516,21 +515,20 @@ onMounted(fetchSettings)
 }
 
 .ep-header {
-  background: #f8fafc;
-  border-bottom: 1px solid #e5e7eb;
-  padding: 16px 20px;
+  background: #ffffff;
+  border-bottom: 2px solid #1e3a8a;
+  padding: 14px 20px;
   display: flex;
   align-items: center;
-  gap: 12px;
+  justify-content: center;
 }
 
 .ep-logo {
   flex-shrink: 0;
-  width: 48px;
-  height: 48px;
-  border-radius: 8px;
+  width: 160px;
+  height: 52px;
   overflow: hidden;
-  background: #e5e7eb;
+  background: transparent;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -548,12 +546,7 @@ onMounted(fetchSettings)
   display: flex;
   align-items: center;
   justify-content: center;
-}
-
-.ep-company {
-  font-size: 15px;
-  font-weight: 700;
-  color: #1e293b;
+  border-radius: 6px;
 }
 
 .ep-body {

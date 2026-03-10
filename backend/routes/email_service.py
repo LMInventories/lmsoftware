@@ -128,7 +128,7 @@ def _wrap(content_html, title='InspectPro'):
         <!-- Header -->
         <tr>
           <td style="background-color:#ffffff;padding:20px 32px;border-bottom:2px solid #1e3a8a;text-align:center;">
-            <img src="https://app.lminventories.co.uk/ip-logo.png" alt="InspectPro" width="180" style="display:inline-block;height:auto;border:0;" />
+            <img src="https://app.lminventories.co.uk/ip-logo.png" alt="InspectPro" width="260" style="display:inline-block;height:auto;border:0;" />
           </td>
         </tr>
 

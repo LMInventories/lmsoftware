@@ -34,9 +34,9 @@ const prop   = computed(() => props.inspection.property || {})
 
 // Branding: report_color_override takes precedence over primary_color
 const brandColor      = computed(() => client.value.report_color_override || client.value.primary_color || '#1E3A8A')
-const headerTextColor = computed(() => props.photoSettings.report_header_text_color || client.value.report_header_text_color || '#FFFFFF')
-const bodyTextColor   = computed(() => props.photoSettings.report_body_text_color   || client.value.report_body_text_color   || '#1e293b')
-const orientation     = computed(() => props.photoSettings.report_orientation       || client.value.report_orientation       || 'portrait')
+const headerTextColor = computed(() => props.photoSettings.report_header_text_color ?? client.value.report_header_text_color ?? '#FFFFFF')
+const bodyTextColor   = computed(() => props.photoSettings.report_body_text_color   ?? client.value.report_body_text_color   ?? '#1e293b')
+const orientation     = computed(() => props.photoSettings.report_orientation       ?? client.value.report_orientation       ?? 'portrait')
 
 // Photo + layout settings (from report_photo_settings JSON — passed as photoSettings prop)
 const photoRoomOverview = computed(() => props.photoSettings.photo_room_overview    || 'above')

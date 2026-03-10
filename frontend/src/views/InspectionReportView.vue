@@ -179,7 +179,14 @@ async function load() {
     if (inspection.value.client_id) {
       try {
         const cRes = await api.getClient(inspection.value.client_id)
-        clientPhotoSettings.value = JSON.parse(cRes.data.report_photo_settings || '{}')
+        const ps = JSON.parse(cRes.data.report_photo_settings || '{}')
+        clientPhotoSettings.value = {
+          ...ps,
+          report_header_text_color: cRes.data.report_header_text_color || '#FFFFFF',
+          report_body_text_color:   cRes.data.report_body_text_color   || '#1e293b',
+          report_orientation:       cRes.data.report_orientation       || 'portrait',
+          report_color_override:    cRes.data.report_color_override    || null,
+        }
       } catch { clientPhotoSettings.value = {} }
     }
     try {

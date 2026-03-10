@@ -34,7 +34,7 @@ const client = computed(() => props.inspection.client   || {})
 const prop   = computed(() => props.inspection.property || {})
 
 // Branding: report_color_override takes precedence over primary_color
-const brandColor      = computed(() => props.clientSettings.report_color_override || client.value.report_color_override || client.value.primary_color || '#1E3A8A')
+const brandColor      = computed(() => props.clientSettings.report_color_override || props.clientSettings.primary_color || '#1E3A8A')
 const headerTextColor = computed(() => props.clientSettings.report_header_text_color || '#FFFFFF')
 const bodyTextColor   = computed(() => props.clientSettings.report_body_text_color   || '#1e293b')
 const orientation     = computed(() => props.clientSettings.report_orientation       || 'portrait')
@@ -751,6 +751,20 @@ function buildReportHTML() {
             <span class="sc-val">
               <span class="color-dot" :style="{ background: brandColor }"></span>
               {{ brandColor }}
+            </span>
+          </div>
+          <div class="sc-row">
+            <span class="sc-lbl">Header text</span>
+            <span class="sc-val">
+              <span class="color-dot" :style="{ background: headerTextColor, border: '1px solid #cbd5e1' }"></span>
+              {{ headerTextColor }}
+            </span>
+          </div>
+          <div class="sc-row">
+            <span class="sc-lbl">Body text</span>
+            <span class="sc-val">
+              <span class="color-dot" :style="{ background: bodyTextColor, border: '1px solid #cbd5e1' }"></span>
+              {{ bodyTextColor }}
             </span>
           </div>
           <div class="sc-row">

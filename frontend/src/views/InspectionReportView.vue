@@ -186,6 +186,7 @@ async function load() {
           report_body_text_color:   cRes.data.report_body_text_color   || '#1e293b',
           report_orientation:       cRes.data.report_orientation       || 'portrait',
           report_color_override:    cRes.data.report_color_override    || null,
+          primary_color:            cRes.data.primary_color            || '#1E3A8A',
         }
       } catch { clientPhotoSettings.value = {} }
     }

@@ -48,11 +48,11 @@ def _save_global(data):
 
 # ── Routes ───────────────────────────────────────────────────────────────────
 
-@email_bp.route('/api/email/settings', methods=['GET'])
+@email_bp.route('/settings', methods=['GET'])
 def get_global_settings():
     return jsonify(_load_global())
 
-@email_bp.route('/api/email/settings', methods=['PUT'])
+@email_bp.route('/settings', methods=['PUT'])
 def save_global_settings():
     data = request.get_json() or {}
     current = _load_global()
@@ -64,7 +64,7 @@ def save_global_settings():
     return jsonify({'success': True, 'settings': current})
 
 
-@email_bp.route('/api/email/client/<int:client_id>/settings', methods=['GET'])
+@email_bp.route('/client/<int:client_id>/settings', methods=['GET'])
 def get_client_email_settings(client_id):
     client = Client.query.get_or_404(client_id)
     prefs = DEFAULT_CLIENT_PREFS.copy()
@@ -78,7 +78,7 @@ def get_client_email_settings(client_id):
                     'email': client.email, 'prefs': prefs})
 
 
-@email_bp.route('/api/email/client/<int:client_id>/settings', methods=['PUT'])
+@email_bp.route('/client/<int:client_id>/settings', methods=['PUT'])
 def save_client_email_settings(client_id):
     client = Client.query.get_or_404(client_id)
     data = request.get_json() or {}
@@ -91,9 +91,9 @@ def save_client_email_settings(client_id):
     return jsonify({'success': True, 'client_id': client_id, 'prefs': prefs})
 
 
-@email_bp.route('/api/email/test', methods=['POST'])
+@email_bp.route('/test', methods=['POST'])
 def send_test_email():
-    from email_service import _send, _wrap
+    from routes.email_service import _send, _wrap
     data = request.get_json() or {}
     to   = data.get('to', '')
     if not to:
@@ -106,7 +106,7 @@ def send_test_email():
     return jsonify({'success': ok, 'error': err})
 
 
-@email_bp.route('/api/email/clerk-summary/run', methods=['POST'])
+@email_bp.route('/clerk-summary/run', methods=['POST'])
 def run_clerk_summaries_now():
     """Manually trigger clerk summaries — useful for testing."""
     count, errors = _send_all_clerk_summaries()
@@ -121,7 +121,7 @@ def trigger_inspection_notification(event, inspection):
     event: 'created' | 'updated' | 'completed' | 'reminder'
     """
     try:
-        from email_service import send_inspection_notification
+        from routes.email_service import send_inspection_notification
         client   = inspection.client if hasattr(inspection, 'client') else \
                    Client.query.get(inspection.property.client_id) if inspection.property else None
         prop     = inspection.property
@@ -152,7 +152,7 @@ def trigger_inspection_notification(event, inspection):
 
 def _send_all_clerk_summaries():
     """Find all clerks and send them their next-day schedule."""
-    from email_service import send_clerk_daily_summary
+    from routes.email_service import send_clerk_daily_summary
     tomorrow = date.today() + timedelta(days=1)
     clerks   = User.query.filter_by(role='clerk').all()
     sent     = 0

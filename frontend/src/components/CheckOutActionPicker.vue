@@ -18,7 +18,7 @@
  *   { actionId: string, responsibility: string, condition: string }
  */
 
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import api from '../services/api'
 
 const props = defineProps({
@@ -64,16 +64,54 @@ onMounted(async () => {
 })
 
 // ── Picker open/close ─────────────────────────────────────────────────────
-const open = ref(false)
-const pickerEl = ref(null)
+const open      = ref(false)
+const pickerEl  = ref(null)
+const toggleBtn = ref(null)
 
-function toggle() { open.value = !open.value }
+const dropdownStyle = ref({})
+
+function positionDropdown() {
+  if (!toggleBtn.value) return
+  const rect = toggleBtn.value.getBoundingClientRect()
+  const spaceBelow = window.innerHeight - rect.bottom
+  const dropH = 480
+
+  if (spaceBelow >= dropH || spaceBelow >= 200) {
+    // Open downward
+    dropdownStyle.value = {
+      top:  rect.bottom + 6 + 'px',
+      left: rect.left + 'px',
+    }
+  } else {
+    // Flip upward
+    dropdownStyle.value = {
+      top:  rect.top - 6 + 'px',
+      left: rect.left + 'px',
+      transform: 'translateY(-100%)',
+    }
+  }
+}
+
+function toggle() {
+  open.value = !open.value
+  if (open.value) {
+    nextTick(positionDropdown)
+  }
+}
 
 function onClickOutside(e) {
   if (pickerEl.value && !pickerEl.value.contains(e.target)) open.value = false
 }
-onMounted(() => document.addEventListener('mousedown', onClickOutside))
-onBeforeUnmount(() => document.removeEventListener('mousedown', onClickOutside))
+onMounted(() => {
+  document.addEventListener('mousedown', onClickOutside)
+  window.addEventListener('scroll', positionDropdown, true)
+  window.addEventListener('resize', positionDropdown)
+})
+onBeforeUnmount(() => {
+  document.removeEventListener('mousedown', onClickOutside)
+  window.removeEventListener('scroll', positionDropdown, true)
+  window.removeEventListener('resize', positionDropdown)
+})
 
 // ── Assigned actions ──────────────────────────────────────────────────────
 // Internal copy — we emit on every change
@@ -141,6 +179,7 @@ function getCatalogueItem(actionId) {
 
       <!-- Toggle button -->
       <button
+        ref="toggleBtn"
         class="cap-toggle-btn"
         :class="{ 'cap-toggle-has': assigned.length }"
         @click="toggle"
@@ -156,7 +195,7 @@ function getCatalogueItem(actionId) {
 
     <!-- ── Dropdown ───────────────────────────────────────────────────── -->
     <transition name="cap-fade">
-      <div v-if="open" class="cap-dropdown">
+      <div v-if="open" class="cap-dropdown" :style="dropdownStyle">
 
         <div v-if="!catalogue.length" class="cap-empty">
           No actions configured — add them in Settings → Actions.
@@ -351,10 +390,8 @@ function getCatalogueItem(actionId) {
 
 /* ── Dropdown ──────────────────────────────────────────────────────────── */
 .cap-dropdown {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  z-index: 200;
+  position: fixed;
+  z-index: 9999;
   background: white;
   border: 1px solid #e2e8f0;
   border-radius: 12px;

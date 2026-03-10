@@ -182,6 +182,21 @@ const api = {
   pdfImport(data) {
     return http.post('/api/ai/pdf-import', data, { timeout: 120000 })
   },
+  
+  // ── Add these methods to your existing api.js (inside the api object) ─────────
+
+// Email global settings
+getEmailGlobalSettings:        ()           => axios.get(`${BASE_URL}/api/email/settings`),
+saveEmailGlobalSettings:       (data)       => axios.put(`${BASE_URL}/api/email/settings`, data),
+
+// Per-client email settings
+getClientEmailSettings:        (clientId)   => axios.get(`${BASE_URL}/api/email/client/${clientId}/settings`),
+saveClientEmailSettings:       (clientId, prefs) => axios.put(`${BASE_URL}/api/email/client/${clientId}/settings`, prefs),
+
+// Test + manual triggers
+sendTestEmail:                 (to)         => axios.post(`${BASE_URL}/api/email/test`, { to }),
+triggerClerkSummaries:         ()           => axios.post(`${BASE_URL}/api/email/clerk-summary/run`),
+   },
 }
 
 export default api

@@ -7,7 +7,6 @@ import os
 
 def create_app():
     app = Flask(__name__)
-
     basedir = os.path.abspath(os.path.dirname(__file__))
     instance_path = os.path.join(basedir, 'instance')
     os.makedirs(instance_path, exist_ok=True)
@@ -15,7 +14,6 @@ def create_app():
     # ── Database ──────────────────────────────────────────────────────────────
     database_url = os.environ.get('DATABASE_URL')
     if database_url:
-        # Render provides postgres:// — rewrite to postgresql+psycopg2://
         database_url = database_url.replace('postgres://', 'postgresql+psycopg2://')
         database_url = database_url.replace('postgresql://', 'postgresql+psycopg2://')
         app.config['SQLALCHEMY_DATABASE_URI'] = database_url
@@ -59,8 +57,9 @@ def create_app():
     from routes.ai              import ai_bp
     from routes.transcribe      import transcribe_bp
     from routes.pdf_import      import pdf_import_bp
-    from routes.section_presets import section_presets_bp  # ← added
+    from routes.section_presets import section_presets_bp
     from routes.address_lookup  import address_lookup_bp
+    from routes.email_service        import email_bp  # ← email notifications
 
     app.register_blueprint(auth_bp,            url_prefix='/api/auth')
     app.register_blueprint(users_bp,           url_prefix='/api/users')
@@ -73,14 +72,14 @@ def create_app():
     app.register_blueprint(ai_bp,              url_prefix='/api/ai')
     app.register_blueprint(transcribe_bp,      url_prefix='/api/transcribe')
     app.register_blueprint(pdf_import_bp,      url_prefix='/api/ai')
-    app.register_blueprint(section_presets_bp, url_prefix='/api/section-presets')  # ← added
+    app.register_blueprint(section_presets_bp, url_prefix='/api/section-presets')
     app.register_blueprint(address_lookup_bp,  url_prefix='/api/address')
+    app.register_blueprint(email_bp,           url_prefix='/api/email')  # ← email notifications
 
     # Optional blueprints — register only if the file exists
     _optional = [
         ('routes.system_settings', 'system_settings_bp', '/api/system-settings'),
         ('routes.actions',         'actions_bp',          '/api/actions'),
-        ('routes.emails',          'emails_bp',           '/api/emails'),
     ]
     for module_name, bp_name, prefix in _optional:
         try:
@@ -94,3 +93,14 @@ def create_app():
         db.create_all()
 
     return app
+
+
+# ── Scheduler (runs outside create_app so it starts once, not per request) ───
+app = create_app()
+
+from routes.email_notifications import schedule_clerk_summaries
+schedule_clerk_summaries(app)
+
+
+if __name__ == '__main__':
+    app.run(debug=False)

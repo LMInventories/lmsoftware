@@ -53,6 +53,7 @@ class Client(db.Model):
     report_color_override = db.Column(db.String(7))
     report_photo_settings = db.Column(db.Text)             # JSON: photo placement prefs
     created_at            = db.Column(db.DateTime, default=datetime.utcnow)
+    email_notifications   = db.Column(db.Text)
 
     properties = db.relationship('Property', backref='client', lazy=True, cascade='all, delete-orphan')
 

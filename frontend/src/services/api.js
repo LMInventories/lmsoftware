@@ -1,11 +1,6 @@
 import axios from 'axios'
 
 // ── BASE URL RESOLUTION ───────────────────────────────────────────────────────
-// Priority: VITE_API_URL env var → Android LAN → Render production → local dev
-//
-// Local dev:  create frontend/.env.local  →  VITE_API_URL=http://localhost:5000
-// Vercel:     Settings → Environment Variables  →  VITE_API_URL=https://lmsoftware.onrender.com
-//
 const BACKEND_LAN_IP = '192.168.50.2'
 const RENDER_URL     = 'https://lmsoftware.onrender.com'
 
@@ -21,10 +16,9 @@ function getBaseURL() {
 // ── AXIOS INSTANCE ────────────────────────────────────────────────────────────
 const http = axios.create({
   baseURL: getBaseURL(),
-  timeout: 30000,  // 30s — covers Render free-tier cold start
+  timeout: 30000,
 })
 
-// Attach JWT to every outgoing request
 http.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('token')
@@ -34,7 +28,6 @@ http.interceptors.request.use(
   (error) => Promise.reject(error)
 )
 
-// Force re-login on any 401
 http.interceptors.response.use(
   (response) => response,
   (error) => {
@@ -49,7 +42,6 @@ http.interceptors.response.use(
 
 // ── API ───────────────────────────────────────────────────────────────────────
 const api = {
-
   // Token management
   getToken()    { return localStorage.getItem('token') },
   setToken(t)   { localStorage.setItem('token', t) },
@@ -86,7 +78,7 @@ const api = {
   deleteProperty(id)             { return http.delete(`/api/properties/${id}`) },
   uploadPropertyPhoto(id, photo) { return http.post(`/api/properties/${id}/photo`, { photo }) },
 
-  // ── Address Lookup (proxied via backend to keep API key server-side) ──────
+  // ── Address Lookup ────────────────────────────────────────────────────────
   addressFindByPostcode(postcode) { return http.get(`/api/address/find/${encodeURIComponent(postcode)}`) },
   addressAutocomplete(q)          { return http.get('/api/address/autocomplete', { params: { q } }) },
   addressGet(url)                 { return http.get('/api/address/get', { params: { url } }) },
@@ -145,25 +137,14 @@ const api = {
   getSystemSettings()        { return http.get('/api/system-settings') },
   updateSystemSettings(data) { return http.put('/api/system-settings', data) },
 
-  // ── Fixed sections (system-wide, Settings → Fixed Sections) ──────────────
+  // ── Fixed sections ────────────────────────────────────────────────────────
   getFixedSections()         { return http.get('/api/fixed-sections') },
   updateFixedSections(data)  { return http.put('/api/fixed-sections', data) },
 
   // ── AI proxy ──────────────────────────────────────────────────────────────
-  // All Claude / Whisper calls must go through the Flask backend.
-  // Direct browser → api.anthropic.com calls are blocked by Anthropic CORS policy.
-  // The API keys live on Render (env vars ANTHROPIC_API_KEY / OPENAI_API_KEY).
-
-  // claudeProxy({ model?, max_tokens?, messages, system? })
-  //   → response.data is the raw Anthropic JSON (content array, usage, etc.)
   claudeProxy(payload) {
     return http.post('/api/ai/claude', payload, { timeout: 120000 })
   },
-
-  // transcribeAudio(audioBlob, prompt?)
-  //   audioBlob — Blob or File: webm / mp4 / wav / m4a
-  //   prompt    — optional vocabulary hint for Whisper
-  //   → response.data.text is the transcript string
   transcribeAudio(audioBlob, prompt = '') {
     const form = new FormData()
     form.append('file', audioBlob, audioBlob.name || 'audio.webm')
@@ -173,30 +154,18 @@ const api = {
       timeout: 90000,
     })
   },
-
-  // checkAiStatus() → { anthropic_key_set: bool, openai_key_set: bool }
   checkAiStatus() { return http.get('/api/ai/status') },
-
-  // pdfImport({ pdf: base64string, templateStructure: string|null })
-  //   → response.data is { rooms: [...], fixedSections: {...} }
   pdfImport(data) {
     return http.post('/api/ai/pdf-import', data, { timeout: 120000 })
   },
-  
-  // ── Add these methods to your existing api.js (inside the api object) ─────────
 
-// Email global settings
-getEmailGlobalSettings:        ()           => axios.get(`${BASE_URL}/api/email/settings`),
-saveEmailGlobalSettings:       (data)       => axios.put(`${BASE_URL}/api/email/settings`, data),
-
-// Per-client email settings
-getClientEmailSettings:        (clientId)   => axios.get(`${BASE_URL}/api/email/client/${clientId}/settings`),
-saveClientEmailSettings:       (clientId, prefs) => axios.put(`${BASE_URL}/api/email/client/${clientId}/settings`, prefs),
-
-// Test + manual triggers
-sendTestEmail:                 (to)         => axios.post(`${BASE_URL}/api/email/test`, { to }),
-triggerClerkSummaries:         ()           => axios.post(`${BASE_URL}/api/email/clerk-summary/run`),
-   },
+  // ── Email notifications ───────────────────────────────────────────────────
+  getEmailGlobalSettings()             { return http.get('/api/email/settings') },
+  saveEmailGlobalSettings(data)        { return http.put('/api/email/settings', data) },
+  getClientEmailSettings(clientId)     { return http.get(`/api/email/client/${clientId}/settings`) },
+  saveClientEmailSettings(clientId, prefs) { return http.put(`/api/email/client/${clientId}/settings`, prefs) },
+  sendTestEmail(to)                    { return http.post('/api/email/test', { to }) },
+  triggerClerkSummaries()              { return http.post('/api/email/clerk-summary/run') },
 }
 
 export default api

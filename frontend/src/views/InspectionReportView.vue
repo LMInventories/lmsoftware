@@ -3403,7 +3403,8 @@ async function moveToReview() {
   <PdfExportModal
     v-if="showPdfModal"
     :inspection="inspection"
-    :template="template"
+    :fixed-sections="fixedSections"
+    :rooms="rooms"
     :report-data="reportData"
     :action-catalogue="actionCatalogue"
     :photo-settings="clientPhotoSettings"

@@ -3,7 +3,8 @@ import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 
 const props = defineProps({
   inspection:      { type: Object, required: true },
-  template:        { type: Object, default: null },
+  fixedSections:   { type: Array,  default: () => [] },
+  rooms:           { type: Array,  default: () => [] },
   reportData:      { type: Object, default: () => ({}) },
   actionCatalogue: { type: Array,  default: () => [] },
   photoSettings:   { type: Object, default: () => ({}) },
@@ -12,13 +13,8 @@ const props = defineProps({
 const emit = defineEmits(['close'])
 
 // ── Data helpers ──────────────────────────────────────────────────────────
-const parsed = computed(() => {
-  if (!props.template?.content) return { fixedSections: [], rooms: [] }
-  try { return JSON.parse(props.template.content) } catch { return { fixedSections: [], rooms: [] } }
-})
-
-const fixedSections = computed(() => (parsed.value.fixedSections || []).filter(s => s.enabled !== false))
-const rooms         = computed(() => (parsed.value.rooms        || []).filter(r => r.enabled !== false))
+const fixedSections = computed(() => props.fixedSections)
+const rooms         = computed(() => props.rooms)
 const isCheckOut    = computed(() => props.inspection.inspection_type === 'check_out')
 
 function get(sectionId, rowId, field) {

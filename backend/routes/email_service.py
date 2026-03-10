@@ -159,9 +159,48 @@ def _fmt_date(d):
 
 
 def _fmt_time(t):
+    """Parse conduct_time_preference into a display string."""
     if not t:
-        return ''
-    return str(t)[:5]  # HH:MM
+        return 'Anytime'
+    t = str(t).strip().lower()
+    if t in ('', 'anytime'):
+        return 'Anytime'
+    if t == 'am':
+        return 'AM'
+    if t == 'pm':
+        return 'PM'
+    if t.startswith('specific:'):
+        # format: specific:HH_MM
+        try:
+            _, time_part = t.split(':', 1)
+            hour, minute = time_part.split('_')
+            return f"{int(hour):02d}:{minute}"
+        except Exception:
+            return t
+    return t
+
+
+def _sort_key(t):
+    """Return a numeric sort key for ordering inspections by time preference.
+    Order: specific AM → AM → specific PM → PM → Anytime
+    """
+    if not t:
+        return (4, 0)
+    t = str(t).strip().lower()
+    if t.startswith('specific:'):
+        try:
+            _, time_part = t.split(':', 1)
+            hour, minute = time_part.split('_')
+            total_mins = int(hour) * 60 + int(minute)
+            # AM specifics (before 12:00) → bucket 0, PM specifics → bucket 2
+            return (0, total_mins) if int(hour) < 12 else (2, total_mins)
+        except Exception:
+            return (2, 0)
+    if t == 'am':
+        return (1, 0)
+    if t == 'pm':
+        return (3, 0)
+    return (4, 0)  # anytime last
 
 
 # ── 1. Client notification email ─────────────────────────────────────────────
@@ -222,6 +261,10 @@ def send_clerk_daily_summary(clerk, inspections_tomorrow):
         return False, 'Clerk has no email address'
 
     date_str = '—'
+    inspections_tomorrow = sorted(
+        inspections_tomorrow,
+        key=lambda x: _sort_key(getattr(x[0], 'conduct_time_preference', None))
+    )
     if inspections_tomorrow:
         d = getattr(inspections_tomorrow[0][0], 'conduct_date', None) or \
             getattr(inspections_tomorrow[0][0], 'scheduled_date', None)
@@ -249,7 +292,7 @@ def send_clerk_daily_summary(clerk, inspections_tomorrow):
         rows_html += f"""
 <div class="info-box" style="margin-bottom:20px;">
   <div style="padding:10px 0 12px;border-bottom:1px solid #e2e8f0;margin-bottom:4px;">
-    <div style="font-size:18px;font-weight:700;color:#1e293b;">{insp_time or 'Time TBC'}</div>
+    <div style="font-size:18px;font-weight:700;color:#1e293b;">{insp_time}</div>
     <span class="pill pill-blue" style="margin-top:6px;display:inline-block;">{insp_type}</span>
   </div>
   <div class="info-row"><span class="info-label">Property</span><span class="info-value">{prop_addr}</span></div>

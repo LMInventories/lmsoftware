@@ -59,7 +59,7 @@ def create_app():
     from routes.pdf_import      import pdf_import_bp
     from routes.section_presets import section_presets_bp
     from routes.address_lookup  import address_lookup_bp
-    from routes.email_service        import email_bp  # ← email notifications
+    from routes.email_notifications  import email_bp  # ← email notifications
 
     app.register_blueprint(auth_bp,            url_prefix='/api/auth')
     app.register_blueprint(users_bp,           url_prefix='/api/users')
@@ -98,7 +98,7 @@ def create_app():
 # ── Scheduler (runs outside create_app so it starts once, not per request) ───
 app = create_app()
 
-from routes.email_notifications import schedule_clerk_summaries
+from routes.email_notifications import schedule_clerk_summaries  # noqa
 schedule_clerk_summaries(app)
 
 

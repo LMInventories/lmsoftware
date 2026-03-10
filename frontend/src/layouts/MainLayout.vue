@@ -26,8 +26,7 @@ function navigate(path) {
     <!-- ══ DESKTOP SIDEBAR ══════════════════════════════════════════ -->
     <aside class="sidebar">
       <div class="sidebar-header">
-        <h1>🏠 L&M</h1>
-        <p>Inventories</p>
+        <img src="/ip-logo.png" alt="InspectPro" class="sidebar-logo" />
       </div>
 
       <nav class="sidebar-nav">
@@ -67,8 +66,7 @@ function navigate(path) {
     <!-- ══ MOBILE TOPBAR ════════════════════════════════════════════ -->
     <header class="mobile-topbar">
       <div class="mobile-topbar-brand">
-        <span class="mobile-brand-icon">🏠</span>
-        <span class="mobile-brand-name">L&M Inventories</span>
+        <img src="/ip-logo.png" alt="InspectPro" class="mobile-brand-logo" />
       </div>
       <div class="mobile-topbar-right">
         <div class="mobile-user-avatar">{{ authStore.user?.name?.charAt(0) || 'U' }}</div>
@@ -185,11 +183,16 @@ function navigate(path) {
 }
 
 .sidebar-header {
-  padding: 24px 20px;
+  padding: 20px;
   border-bottom: 1px solid rgba(255,255,255,0.1);
+  background: white;
 }
-.sidebar-header h1 { font-size: 24px; font-weight: 700; margin-bottom: 2px; }
-.sidebar-header p { font-size: 12px; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px; font-weight: 600; }
+.sidebar-logo {
+  width: 160px;
+  height: auto;
+  display: block;
+  margin: 0 auto;
+}
 
 .sidebar-nav { flex: 1; padding: 16px 12px; overflow-y: auto; }
 
@@ -262,9 +265,8 @@ function navigate(path) {
     border-bottom: 1px solid rgba(255,255,255,0.07);
   }
 
-  .mobile-topbar-brand { display: flex; align-items: center; gap: 8px; }
-  .mobile-brand-icon { font-size: 18px; }
-  .mobile-brand-name { font-size: 15px; font-weight: 700; color: white; letter-spacing: -0.2px; }
+  .mobile-topbar-brand { display: flex; align-items: center; }
+  .mobile-brand-logo { height: 32px; width: auto; filter: brightness(0) invert(1); }
 
   .mobile-topbar-right { display: flex; align-items: center; gap: 10px; }
   .mobile-user-avatar {

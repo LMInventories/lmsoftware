@@ -39,8 +39,7 @@ async function handleLogin() {
   <div class="login-container">
     <div class="login-card">
       <div class="login-header">
-        <h1>InspectPro</h1>
-        <p>Property Inspection Management</p>
+        <img src="/ip-logo.png" alt="InspectPro" class="login-logo" />
       </div>
 
       <form @submit.prevent="handleLogin" class="login-form">
@@ -104,16 +103,11 @@ async function handleLogin() {
   margin-bottom: 32px;
 }
 
-.login-header h1 {
-  font-size: 28px;
-  font-weight: 700;
-  color: #1e293b;
-  margin-bottom: 8px;
-}
-
-.login-header p {
-  color: #64748b;
-  font-size: 14px;
+.login-logo {
+  width: 220px;
+  height: auto;
+  display: block;
+  margin: 0 auto;
 }
 
 .login-form {

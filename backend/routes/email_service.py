@@ -9,11 +9,11 @@ Templates:
 Env vars required on Render:
   SMTP_HOST       e.g. smtp.fasthosts.co.uk
   SMTP_PORT       587 (STARTTLS) or 465 (SSL)
-  SMTP_USER       no-reply@lminventories.co.uk
+  SMTP_USER       no-reply@inspectpro.co.uk  (or your sending address)
   SMTP_PASSWORD   mailbox password
-  SMTP_FROM       no-reply@lminventories.co.uk
-  SMTP_FROM_REPORTS  reports@lminventories.co.uk  (for PDF emails)
-  APP_BASE_URL    https://lmsoftware.vercel.app   (used in email links)
+  SMTP_FROM       no-reply@inspectpro.co.uk
+  SMTP_FROM_REPORTS  reports@inspectpro.co.uk  (for PDF emails)
+  APP_BASE_URL    https://app.lminventories.co.uk   (used in email links)
 """
 
 import os
@@ -127,9 +127,8 @@ def _wrap(content_html, title='InspectPro'):
 
         <!-- Header -->
         <tr>
-          <td style="background-color:#1e3a8a;padding:24px 32px;">
-            <p style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:20px;font-weight:bold;color:#ffffff;line-height:1.2;">LM Inventories</p>
-            <p style="margin:4px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#93c5fd;">Property Inspection Management</p>
+          <td style="background-color:#ffffff;padding:20px 32px;border-bottom:2px solid #1e3a8a;text-align:center;">
+            <img src="https://app.lminventories.co.uk/ip-logo.png" alt="InspectPro" width="180" style="display:inline-block;height:auto;border:0;" />
           </td>
         </tr>
 
@@ -143,7 +142,7 @@ def _wrap(content_html, title='InspectPro'):
         <!-- Footer -->
         <tr>
           <td style="padding:16px 32px;background-color:#f8fafc;border-top:1px solid #e2e8f0;font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#94a3b8;">
-            This email was sent automatically by InspectPro &middot; LM Inventories &middot; lminventories.co.uk<br/>
+            This email was sent automatically by InspectPro &middot; Property Reporting<br/>
             Please do not reply to this email.
           </td>
         </tr>
@@ -435,7 +434,7 @@ def send_welcome_user(user, plain_password):
   <tr><td style="padding:4px 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#475569;">4. &nbsp;Enter your current password, then choose a new one</td></tr>
 </table>'''
         + _btn('Log In Now', login_url)
-        + '''<p style="margin:16px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#94a3b8;">If you did not expect this email, please contact us immediately at no-reply@lminventories.co.uk.</p>'''
+        + '''<p style="margin:16px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#94a3b8;">If you did not expect this email, please contact us immediately.</p>'''
     )
 
     subject = f'Welcome to InspectPro — Your {role_label} Account'
@@ -455,7 +454,7 @@ def send_welcome_client(client, plain_password):
     account_name = client.company or 'Your account'
     body = (
         f'''<p style="margin:0 0 12px;font-family:Arial,Helvetica,sans-serif;font-size:17px;font-weight:bold;color:#1e293b;">Welcome to InspectPro, {client.name}!</p>'''
-        f'''<p style="margin:0 0 16px;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#475569;">{account_name} has been set up on InspectPro &mdash; LM Inventories&rsquo; property inspection management platform. Your login details are below. Please change your password the first time you log in.</p>'''
+        f'''<p style="margin:0 0 16px;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#475569;">{account_name} has been set up on InspectPro &mdash; your property inspection management platform. Your login details are below. Please change your password the first time you log in.</p>'''
         + _info_table_open()
         + _info_row('Name',     client.name)
         + _info_row('Email',    client.email)
@@ -470,7 +469,7 @@ def send_welcome_client(client, plain_password):
   <tr><td style="padding:4px 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#475569;">4. &nbsp;Enter your current password, then choose a new one</td></tr>
 </table>'''
         + _btn('Log In Now', login_url)
-        + '''<p style="margin:16px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#94a3b8;">If you did not expect this email, please contact us at no-reply@lminventories.co.uk.</p>'''
+        + '''<p style="margin:16px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#94a3b8;">If you did not expect this email, please contact us.</p>'''
     )
 
     subject = f'Welcome to InspectPro — {client.company or client.name}'

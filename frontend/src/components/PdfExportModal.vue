@@ -158,6 +158,12 @@ function buildReportHTML() {
     }
     .page:last-child { page-break-after: auto; }
 
+    /* Sections that may naturally span multiple printed pages (e.g. long disclaimer) */
+    .page-multiflow {
+      padding: 12mm 14mm;
+      page-break-after: always;
+    }
+
     /* ── Cover ── */
     .page-cover {
       page-break-after: always;
@@ -219,13 +225,14 @@ function buildReportHTML() {
     }
     td { padding: 7px 10px; vertical-align: top; border-bottom: 1px solid #f1f5f9; line-height: 1.45; }
     tr:last-child td { border-bottom: none; }
-    tr:nth-child(even):not(.photo-row) td { background: #fafafa; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    tr:nth-child(even) td { background: #fafafa; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 
-    .c-item  { width: 18%; font-weight: 600; color: #374151; }
-    .c-desc  { width: 26%; }
-    .c-cond  { width: 22%; }
+    .c-ref  { width: 6%; font-weight: 700; color: #6366f1; font-size: 8.5pt; white-space: nowrap; }
+    .c-item  { width: 15%; font-weight: 600; color: #374151; }
+    .c-desc  { width: 24%; }
+    .c-cond  { width: 20%; }
     .c-co    { width: 20%; }
-    .c-act   { width: 14%; }
+    .c-act   { width: 15%; }
     .c-orig  { color: #64748b; font-style: italic; }
 
     .action-tag {
@@ -242,6 +249,15 @@ function buildReportHTML() {
 
     .disclaimer-body { font-size: 10pt; line-height: 1.7; color: #374151; white-space: pre-wrap; }
 
+    /* ── Multi-page sections: don't force break-after, let content flow ── */
+    .page-flow {
+      padding: 12mm 14mm;
+    }
+    .page-flow-hdr {
+      font-size: 8pt; color: #94a3b8; text-align: right;
+      margin-bottom: 6px; font-style: italic;
+    }
+
     .decl-body  { font-size: 10pt; line-height: 1.6; color: #374151; margin-bottom: 36px; }
     .sig-grid   { display: grid; grid-template-columns: 1fr 1fr; gap: 36px; margin-top: 20px; }
     .sig-lbl    { font-size: 9pt; font-weight: 600; color: #64748b; margin-bottom: 6px; }
@@ -250,38 +266,194 @@ function buildReportHTML() {
     .sig-short  { height: 26px; border-bottom: 1.5px solid #94a3b8; }
 
     /* ── Photos ── */
-    .photo-strip { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
-    .photo-wrap  { position: relative; width: calc(25% - 5px); }
-    .photo-wrap img { width: 100%; height: 90px; object-fit: cover; border-radius: 4px; display: block; border: 1px solid #e2e8f0; }
+    /* Photo page: all photos for a room displayed together before or after the data table */
+    .photo-page { page-break-after: always; padding: 12mm 14mm; }
+    .photo-page:last-child { page-break-after: auto; }
+
+    /* 4-across grid of photo groups */
+    .photo-grid { display: flex; flex-wrap: wrap; gap: 0; }
+
+    /* Each photo+label unit */
+    .photo-unit {
+      width: 25%;
+      padding: 4px;
+      box-sizing: border-box;
+    }
+    .photo-unit img {
+      width: 100%;
+      aspect-ratio: 4/3;
+      object-fit: cover;
+      display: block;
+      border: 1px solid #e2e8f0;
+    }
+    .photo-unit-ref {
+      font-size: 7.5pt;
+      font-style: italic;
+      color: #64748b;
+      text-align: center;
+      padding: 2px 0 6px;
+      border-bottom: 1px solid #f1f5f9;
+      margin-bottom: 4px;
+    }
+
+    /* Row separator between groups of 4 */
+    .photo-row-sep { width: 100%; height: 0; }
+
+    .room-overview-hdr {
+      font-size: 9pt; font-weight: 700; color: #64748b;
+      text-transform: uppercase; letter-spacing: 0.5px;
+      margin: 10px 0 6px;
+    }
+
+    /* Timestamp overlay */
+    .photo-wrap  { position: relative; width: 100%; }
     .photo-ts {
-      position: absolute; bottom: 4px; left: 0; right: 0;
-      text-align: center; font-size: 6.5pt; color: white;
-      background: rgba(0,0,0,0.55); padding: 1px 3px;
+      position: absolute; bottom: 22px; left: 0; right: 0;
+      text-align: center; font-size: 6pt; color: white;
+      background: rgba(0,0,0,0.6); padding: 1px 3px;
       -webkit-print-color-adjust: exact; print-color-adjust: exact;
     }
-    /* Full-width photo row between data rows */
-    .photo-row td { padding: 4px 10px 8px; border-bottom: 1px solid #f1f5f9; }
-    .photo-cell { background: #fafafa !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .room-overview-hdr { font-size: 9pt; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin: 10px 0 6px; }
 
     @page { size: A4 portrait; margin: 0; }
   `
 
-  // ── Helper: render a photo strip ─────────────────────────────────────────
-  function photoStrip(sectionId, rowId) {
-    const photos = props.reportData[sectionId]?.[String(rowId)]?._photos || []
-    const timestamps = props.reportData[sectionId]?.[String(rowId)]?._photoTs || []
-    if (!photos.length) return ''
-    const imgs = photos.map((src, i) => {
-      const ts = addTimestamp && timestamps[i]
+  // ── Helper: build photo units for a single item (src+ref label each) ────
+  // Returns an array of .photo-unit HTML strings, one per photo.
+  function photoUnits(sectionId, rowId, refLabel) {
+    const photos     = props.reportData[sectionId]?.[String(rowId)]?._photos     || []
+    const timestamps = props.reportData[sectionId]?.[String(rowId)]?._photoTs    || []
+    if (!photos.length) return []
+    return photos.map((src, i) => {
+      const tsHtml = addTimestamp && timestamps[i]
         ? `<div class="photo-ts">${new Date(timestamps[i]).toLocaleString('en-GB', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' })}</div>`
         : ''
-      return `<div class="photo-wrap"><img src="${e(src)}" />${ts}</div>`
-    }).join('')
-    return `<div class="photo-strip">${imgs}</div>`
+      return `<div class="photo-unit">
+        <div class="photo-wrap"><img src="${e(src)}" />${tsHtml}</div>
+        <div class="photo-unit-ref">Ref #${e(refLabel)}</div>
+      </div>`
+    })
   }
 
-  // ── Fixed section rows ────────────────────────────────────────────────────
+  // ── Helper: render a full photo page from an array of photo-unit strings ─
+  // Wraps units in a .photo-grid inside a .photo-page.
+  // Accepts a sectionHdr string for the page header.
+  function photoPage(sectionHdr, units) {
+    if (!units.length) return ''
+    return `<div class="photo-page">
+      <div class="section-hdr">${e(sectionHdr)}</div>
+      <div class="photo-grid">${units.join('')}</div>
+    </div>`
+  }
+
+  // ── Room page ─────────────────────────────────────────────────────────────
+  function roomPage(room, roomIdx) {
+    const items = getOrderedRoomItems(room)
+    const co    = isCheckOut.value
+
+    // ── Collect all photo units for this room ─────────────────────────────
+    // Overview photos always come first in the photo page
+    const overviewUnits = photoUnits(room.id, '_overview', String(roomIdx))
+
+    // Item photos — collected in item order, each labelled "roomIdx.itemIdx"
+    // Only collect if not hyperlink mode
+    const allItemPhotoUnits = []
+    if (photoItem !== 'hyperlink') {
+      let itemIdx = 1
+      for (const item of items) {
+        const iid = item._type === 'extra' ? item._eid : item.id
+        if (isItemHidden(room.id, iid)) { itemIdx++; continue }
+        const refLabel = `${roomIdx}.${itemIdx}`
+        const units = photoUnits(room.id, String(iid), refLabel)
+        allItemPhotoUnits.push(...units)
+        itemIdx++
+      }
+    }
+
+    const allPhotoUnits = [...overviewUnits, ...allItemPhotoUnits]
+
+    // ── Build photo page(s) ───────────────────────────────────────────────
+    // All photos for the room go on their own page(s) — same header as the room.
+    // The photo-grid is full-width, 4-across, and flows naturally across pages
+    // without forced breaks (browser print handles pagination automatically).
+    const photoPagesHtml = allPhotoUnits.length
+      ? photoPage(room.name, allPhotoUnits)
+      : ''
+
+    // ── Column headers ────────────────────────────────────────────────────
+    const thead = co
+      ? '<tr><th class="c-ref">Ref</th><th class="c-item">Item</th><th class="c-desc">Description</th><th class="c-cond">Condition at Check In</th><th class="c-co">Condition at Check Out</th><th class="c-act">Actions</th></tr>'
+      : '<tr><th class="c-ref">Ref</th><th class="c-item">Item</th><th class="c-desc">Description</th><th class="c-cond">Condition</th></tr>'
+
+    // ── Build tbody rows ──────────────────────────────────────────────────
+    let body = ''
+    let itemIdx = 1
+    for (const item of items) {
+      const iid = item._type === 'extra' ? item._eid : item.id
+      if (isItemHidden(room.id, iid)) { itemIdx++; continue }
+
+      const refLabel = `${roomIdx}.${itemIdx}`
+      itemIdx++
+
+      if (co) {
+        const desc  = item._type === 'template' ? get(room.id, item.id, 'description') : item.description
+        const inv   = item._type === 'template'
+          ? (get(room.id, item.id, 'inventoryCondition') || get(room.id, item.id, 'condition'))
+          : item.inventoryCondition
+        const coC   = item._type === 'template'
+          ? (get(room.id, item.id, 'checkOutCondition') || 'As Inventory &amp; Check In')
+          : (item.checkOutCondition || 'As Inventory &amp; Check In')
+
+        const acts    = getItemActions(room.id, iid)
+        const actHTML = acts.map(a => {
+          const name  = actionDisplayName(a.actionId)
+          const color = actionDisplayColor(a.actionId)
+          const bg = color + '22', bd = color + '55'
+          return `<span class="action-tag" style="background:${bg};color:${color};border:1px solid ${bd}">${e(name)}${a.responsibility ? `<br><small>${e(a.responsibility)}</small>` : ''}</span>`
+        }).join(' ')
+
+        body += `<tr>
+          <td class="c-ref">${e(refLabel)}</td>
+          <td class="c-item">${e(item.label)}</td>
+          <td class="c-desc">${e(desc) || '—'}</td>
+          <td class="c-cond c-orig">${e(inv) || '—'}</td>
+          <td class="c-co">${e(coC)}</td>
+          <td class="c-act">${actHTML}</td>
+        </tr>`
+      } else {
+        const desc = item._type === 'template' ? get(room.id, item.id, 'description') : item.description
+        const cond = item._type === 'template' ? get(room.id, item.id, 'condition')   : item.condition
+
+        body += `<tr>
+          <td class="c-ref">${e(refLabel)}</td>
+          <td class="c-item">${e(item.label)}</td>
+          <td class="c-desc">${e(desc) || '—'}</td>
+          <td class="c-cond">${e(cond) || '—'}</td>
+        </tr>`
+      }
+    }
+
+    const dataPage = `<div class="page">
+      <div class="section-hdr">${e(room.name)}</div>
+      <table><thead>${thead}</thead><tbody>${body}</tbody></table>
+    </div>`
+
+    // ── Assemble: photos above or below data table ────────────────────────
+    // "above" = photo page(s) first, then data table page
+    // "below" = data table page first, then photo page(s)
+    // Room overview is always included in the photo page regardless of setting
+    if (photoItem === 'hyperlink') {
+      // No item photos embedded — just data table, overview photos still shown above
+      const ovPage = overviewUnits.length ? photoPage(room.name, overviewUnits) : ''
+      return `${ovPage}${dataPage}`
+    }
+
+    if (photoOverview === 'above' || photoItem === 'above') {
+      return `${photoPagesHtml}${dataPage}`
+    } else {
+      // below: data first, photos after
+      return `${dataPage}${photoPagesHtml}`
+    }
+  }
   function fixedRows(section) {
     const t = section.type
     let thead = '', body = ''
@@ -325,88 +497,7 @@ function buildReportHTML() {
     </div>`
   }
 
-  // ── Room page ─────────────────────────────────────────────────────────────
-  function roomPage(room) {
-    const items = getOrderedRoomItems(room)
-    const co    = isCheckOut.value
-    const cols  = co ? 5 : 3   // number of <th> columns — used for colspan on photo rows
 
-    // ── Room overview photo block ─────────────────────────────────────────
-    const overviewStrip = photoStrip(room.id, '_overview')
-    const overviewBlock = overviewStrip
-      ? `<div class="room-overview-hdr">Room Overview</div>${overviewStrip}`
-      : ''
-
-    // ── Column headers ────────────────────────────────────────────────────
-    const thead = co
-      ? '<tr><th class="c-item">Item</th><th class="c-desc">Description</th><th class="c-cond">Condition at Check In</th><th class="c-co">Condition at Check Out</th><th class="c-act">Actions</th></tr>'
-      : '<tr><th class="c-item">Item</th><th class="c-desc">Description</th><th class="c-cond">Condition</th></tr>'
-
-    // ── Helper: photo row spanning all columns ────────────────────────────
-    // Photos go in a full-width row immediately before or after the data row.
-    // They are NEVER placed inside a data cell.
-    function itemPhotoRow(sectionId, rowId) {
-      if (photoItem === 'hyperlink') return ''   // hyperlink mode: no embedded photos
-      const strip = photoStrip(sectionId, String(rowId))
-      if (!strip) return ''
-      return `<tr class="photo-row"><td colspan="${cols}" class="photo-cell">${strip}</td></tr>`
-    }
-
-    // ── Build tbody rows ──────────────────────────────────────────────────
-    let body = ''
-    for (const item of items) {
-      const iid = item._type === 'extra' ? item._eid : item.id
-      if (isItemHidden(room.id, iid)) continue
-
-      const photoRowAbove = photoItem === 'above' ? itemPhotoRow(room.id, iid) : ''
-      const photoRowBelow = photoItem === 'below' ? itemPhotoRow(room.id, iid) : ''
-
-      if (co) {
-        const desc  = item._type === 'template' ? get(room.id, item.id, 'description') : item.description
-        const inv   = item._type === 'template'
-          ? (get(room.id, item.id, 'inventoryCondition') || get(room.id, item.id, 'condition'))
-          : item.inventoryCondition
-        const coC   = item._type === 'template'
-          ? (get(room.id, item.id, 'checkOutCondition') || 'As Inventory &amp; Check In')
-          : (item.checkOutCondition || 'As Inventory &amp; Check In')
-
-        const acts    = getItemActions(room.id, iid)
-        const actHTML = acts.map(a => {
-          const name  = actionDisplayName(a.actionId)
-          const color = actionDisplayColor(a.actionId)
-          const bg = color + '22', bd = color + '55'
-          return `<span class="action-tag" style="background:${bg};color:${color};border:1px solid ${bd}">${e(name)}${a.responsibility ? `<br><small>${e(a.responsibility)}</small>` : ''}</span>`
-        }).join(' ')
-
-        body += `${photoRowAbove}<tr>
-          <td class="c-item">${e(item.label)}</td>
-          <td class="c-desc">${e(desc) || '—'}</td>
-          <td class="c-cond c-orig">${e(inv) || '—'}</td>
-          <td class="c-co">${e(coC)}</td>
-          <td class="c-act">${actHTML}</td>
-        </tr>${photoRowBelow}`
-      } else {
-        const desc = item._type === 'template' ? get(room.id, item.id, 'description') : item.description
-        const cond = item._type === 'template' ? get(room.id, item.id, 'condition')   : item.condition
-
-        body += `${photoRowAbove}<tr>
-          <td class="c-item">${e(item.label)}</td>
-          <td class="c-desc">${e(desc) || '—'}</td>
-          <td class="c-cond">${e(cond) || '—'}</td>
-        </tr>${photoRowBelow}`
-      }
-    }
-
-    const tableBlock = `<table><thead>${thead}</thead><tbody>${body}</tbody></table>`
-
-    // ── Assemble page: overview above or below the table ──────────────────
-    return `<div class="page">
-      <div class="section-hdr">${e(room.name)}</div>
-      ${photoOverview === 'above' ? overviewBlock : ''}
-      ${tableBlock}
-      ${photoOverview === 'below' ? overviewBlock : ''}
-    </div>`
-  }
 
   // ── Actions summary pages (Check Out only) ───────────────────────────────
   function actionsPages() {
@@ -531,8 +622,10 @@ function buildReportHTML() {
   }
 
   // ── Disclaimer ────────────────────────────────────────────────────────────
+  // Wrapped in .page-multiflow so the content can span multiple printed pages
+  // naturally. The section header stays at the top of the first page only.
   const disclaimer = client.report_disclaimer
-    ? `<div class="page"><div class="section-hdr">Disclaimer</div><div class="disclaimer-body">${e(client.report_disclaimer)}</div></div>`
+    ? `<div class="page-multiflow"><div class="section-hdr" style="break-after:avoid;">Disclaimer</div><div class="disclaimer-body">${e(client.report_disclaimer)}</div></div>`
     : ''
 
   // ── Declaration ───────────────────────────────────────────────────────────
@@ -560,8 +653,8 @@ function buildReportHTML() {
   </div>`
 
   // ── Assemble in correct order ─────────────────────────────────────────────
-  const fixedHtml  = fixedSections.value.map(fixedRows).join('')
-  const roomsHtml  = rooms.value.map(roomPage).join('')
+  const fixedHtml   = fixedSections.value.map(fixedRows).join('')
+  const roomsHtml   = rooms.value.map((room, i) => roomPage(room, i + 1)).join('')
   const actionsHtml = actionsPages()
 
   let body = ''

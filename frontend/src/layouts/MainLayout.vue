@@ -185,13 +185,13 @@ function navigate(path) {
 .sidebar-header {
   padding: 20px;
   border-bottom: 1px solid rgba(255,255,255,0.1);
-  background: white;
 }
 .sidebar-logo {
   width: 160px;
   height: auto;
   display: block;
   margin: 0 auto;
+  filter: brightness(0) invert(1);
 }
 
 .sidebar-nav { flex: 1; padding: 16px 12px; overflow-y: auto; }

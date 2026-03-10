@@ -176,20 +176,7 @@ async function load() {
     }
 
     // Load client photo settings (for timestamp overlay etc.) and action catalogue
-    if (inspection.value.client_id) {
-      try {
-        const cRes = await api.getClient(inspection.value.client_id)
-        const ps = JSON.parse(cRes.data.report_photo_settings || '{}')
-        clientPhotoSettings.value = { ...ps }
-        clientReportSettings.value = {
-          report_header_text_color: cRes.data.report_header_text_color || '#FFFFFF',
-          report_body_text_color:   cRes.data.report_body_text_color   || '#1e293b',
-          report_orientation:       cRes.data.report_orientation       || 'portrait',
-          report_color_override:    cRes.data.report_color_override    || null,
-          primary_color:            cRes.data.primary_color            || '#1E3A8A',
-        }
-      } catch { clientPhotoSettings.value = {} }
-    }
+    await loadClientSettings()
     try {
       const aRes = await api.getActions()
       actionCatalogue.value = aRes.data.actions || []
@@ -565,6 +552,23 @@ const clientPhotoSettings = ref({})
 const clientReportSettings = ref({})
 const showPhotoTimestamp       = computed(() => clientPhotoSettings.value.show_photo_timestamp === true)
 const actionSummaryPosition    = computed(() => clientPhotoSettings.value.action_summary_position || 'bottom')
+
+async function loadClientSettings() {
+  const clientId = inspection.value?.client_id
+  if (!clientId) return
+  try {
+    const cRes = await api.getClient(clientId)
+    const ps = JSON.parse(cRes.data.report_photo_settings || '{}')
+    clientPhotoSettings.value = { ...ps }
+    clientReportSettings.value = {
+      report_header_text_color: cRes.data.report_header_text_color || '#FFFFFF',
+      report_body_text_color:   cRes.data.report_body_text_color   || '#1e293b',
+      report_orientation:       cRes.data.report_orientation       || 'portrait',
+      report_color_override:    cRes.data.report_color_override    || null,
+      primary_color:            cRes.data.primary_color            || '#1E3A8A',
+    }
+  } catch { clientPhotoSettings.value = {} }
+}
 // Action catalogue — names + colours for the summary panel
 const actionCatalogue = ref([])
 
@@ -2062,15 +2066,15 @@ async function moveToReview() {
         <span v-else-if="savedTime && !unsaved" class="chip chip-saved"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>Saved {{ savedTime }}</span>
         <span v-else-if="unsaved" class="chip chip-unsaved">● Unsaved</span>
         <template v-if="canEdit">
-          <button class="pdf-btn" @click="showPdfModal = true">🖨 Export PDF</button>
+          <button class="pdf-btn" @click="loadClientSettings(); showPdfModal = true">🖨 Export PDF</button>
           <button class="save-btn" :disabled="saving" @click="save()">Save</button>
         </template>
         <template v-if="canMoveToReview">
-          <button class="pdf-btn" @click="showPdfModal = true">🖨 Export PDF</button>
+          <button class="pdf-btn" @click="loadClientSettings(); showPdfModal = true">🖨 Export PDF</button>
           <button class="review-btn" @click="moveToReview">Move to Review</button>
         </template>
         <template v-if="!canEdit">
-          <button class="pdf-btn" @click="showPdfModal = true">🖨 Export PDF</button>
+          <button class="pdf-btn" @click="loadClientSettings(); showPdfModal = true">🖨 Export PDF</button>
           <span class="chip chip-readonly">👁 Read Only</span>
         </template>
       </div>

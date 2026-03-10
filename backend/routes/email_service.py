@@ -248,11 +248,12 @@ def send_clerk_daily_summary(clerk, inspections_tomorrow):
 
         rows_html += f"""
 <div class="info-box" style="margin-bottom:20px;">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-    <span style="font-size:15px;font-weight:700;color:#1e293b;">{insp_time or 'Time TBC'} — {prop_addr}</span>
-    <span class="pill pill-blue">{insp_type}</span>
+  <div style="padding:10px 0 12px;border-bottom:1px solid #e2e8f0;margin-bottom:4px;">
+    <div style="font-size:18px;font-weight:700;color:#1e293b;">{insp_time or 'Time TBC'}</div>
+    <span class="pill pill-blue" style="margin-top:6px;display:inline-block;">{insp_type}</span>
   </div>
-  <div class="info-row"><span class="info-label">Property</span><span class="info-value">{prop_addr}{' · ' + prop_detail if prop_detail else ''}</span></div>
+  <div class="info-row"><span class="info-label">Property</span><span class="info-value">{prop_addr}</span></div>
+  <div class="info-row"><span class="info-label">Bedrooms / Baths</span><span class="info-value">{prop_detail if prop_detail else '—'}</span></div>
   <div class="info-row"><span class="info-label">Client</span><span class="info-value">{client_name}</span></div>
   {client_addr_row}
   <div class="info-row"><span class="info-label">Key Collect</span><span class="info-value">{key_loc}</span></div>

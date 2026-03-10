@@ -2362,19 +2362,21 @@ async function moveToReview() {
                 <div v-show="!isHidden(sec.id, row.id)" class="qa-row">
                   <div class="qa-row-header">
                     <span class="qa-question"><span class="sec-ref-badge">{{ fixedRowRef(sec, row.id) }}</span>{{ row.question }}</span>
+                  </div>
+                  <p v-if="row.guidance" class="qa-guidance">{{ row.guidance }}</p>
+                  <div class="qa-row-bottom">
+                    <div class="qa-controls">
+                      <select class="fld-input" style="width:180px" :value="get(sec.id,row.id,'answer')" @change="set(sec.id,row.id,'answer',$event.target.value)">
+                        <option value="">Select…</option>
+                        <option>Yes</option><option>No</option><option>N/A</option><option>Not Tested</option>
+                      </select>
+                      <textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" style="flex:1" placeholder="Additional notes…" :value="get(sec.id,row.id,'notes')" @input="set(sec.id,row.id,'notes',$event.target.value)"></textarea>
+                    </div>
                     <div class="item-btn-col">
                       <button class="cam-btn cam-btn-item" :class="{ 'cam-has': getPhotos(sec.id,row.id).length }" @click="togglePanel(sec.id,row.id)" title="Photos"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,row.id).length" class="cam-count">{{ getPhotos(sec.id,row.id).length }}</span></button>
                       <button class="cam-btn mic-btn" :class="{ 'mic-active': isItemRecording(sec.id,row.id), 'mic-has': !isItemRecording(sec.id,row.id) && getItemRecordings(sec.id,row.id).length, 'mic-ai': isItemAiProcessing(sec.id,row.id) }" @click.stop="toggleItemRecording(sec.id,row.id,fixedItemLabel(sec,row.id,row.question))" title="Record"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span v-if="getItemRecordings(sec.id,row.id).length && !isItemRecording(sec.id,row.id)" class="cam-count mic-count">{{ getItemRecordings(sec.id,row.id).length }}</span></button>
                       <button v-if="canDelete" class="del-item-icon-btn" @click="hideRow(sec.id,row.id)">×</button>
                     </div>
-                  </div>
-                  <p v-if="row.guidance" class="qa-guidance">{{ row.guidance }}</p>
-                  <div class="qa-controls">
-                    <select class="fld-input" style="width:180px" :value="get(sec.id,row.id,'answer')" @change="set(sec.id,row.id,'answer',$event.target.value)">
-                      <option value="">Select…</option>
-                      <option>Yes</option><option>No</option><option>N/A</option><option>Not Tested</option>
-                    </select>
-                    <textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" style="flex:1" placeholder="Additional notes…" :value="get(sec.id,row.id,'notes')" @input="set(sec.id,row.id,'notes',$event.target.value)"></textarea>
                   </div>
                   <div v-if="isPanelOpen(sec.id,row.id)" class="photo-panel-inline"><div v-for="(ph,pi) in getPhotos(sec.id,row.id)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,row.id,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,row.id,pi)">×</button></div><button v-if="getPhotos(sec.id,row.id).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(sec.id,row.id,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,row.id,e.target.files)" /></label></div>
                 </div>
@@ -3493,8 +3495,10 @@ async function moveToReview() {
 /* Q&A */
 .qa-row{padding:16px 20px;border-bottom:1px solid #f1f5f9;display:flex;flex-direction:column;gap:10px}
 .qa-row:last-child{border-bottom:none}
-.qa-row-header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
-.qa-row-header .item-btn-col{padding-top:0;padding-left:0}
+.qa-row-header{display:flex;align-items:flex-start;gap:8px}
+.qa-row-bottom{display:flex;align-items:flex-start;gap:0}
+.qa-row-bottom .qa-controls{flex:1;min-width:0}
+.qa-row-bottom .item-btn-col{padding-top:4px;padding-left:12px}
 .qa-extra-header{display:flex;align-items:center;gap:8px}
 .qa-question{font-size:13px;font-weight:600;color:#1e293b;line-height:1.4;flex:1}
 .qa-guidance{font-size:12px;color:#64748b;line-height:1.5;background:#fffbeb;border-left:3px solid #fbbf24;padding:8px 12px;border-radius:0 4px 4px 0}
@@ -4204,9 +4208,12 @@ async function moveToReview() {
 
   /* ── QA rows (Health and Safety) ── */
   .qa-row { padding: 12px !important; }
-  .qa-row-header { display: flex !important; flex-direction: column !important; align-items: flex-start !important; gap: 8px !important; }
-  .qa-question { width: 100% !important; }
-  .qa-row-header .item-btn-col { flex-direction: row !important; width: 100% !important; padding-top: 0 !important; padding-left: 0 !important; }
+  .qa-row-header { display: flex !important; align-items: flex-start !important; gap: 6px !important; }
+  .qa-question { flex: 1 !important; }
+  .qa-row-bottom { flex-direction: column !important; gap: 8px !important; }
+  .qa-row-bottom .qa-controls { flex-direction: column !important; width: 100% !important; }
+  .qa-row-bottom .qa-controls select { width: 100% !important; }
+  .qa-row-bottom .item-btn-col { flex-direction: row !important; width: 100% !important; padding-left: 0 !important; padding-top: 0 !important; }
   .qa-controls { flex-wrap: wrap; gap: 8px; }
 
   /* ── Room item layout ── */

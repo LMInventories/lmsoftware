@@ -31,6 +31,10 @@ def create_client():
         primary_color=data.get('primary_color', '#1E3A8A'),
         report_disclaimer=data.get('report_disclaimer'),
         report_color_override=data.get('report_color_override'),
+        report_photo_settings=data.get('report_photo_settings'),
+        report_header_text_color=data.get('report_header_text_color'),
+        report_body_text_color=data.get('report_body_text_color'),
+        report_orientation=data.get('report_orientation'),
     )
 
     db.session.add(client)
@@ -71,6 +75,14 @@ def update_client(client_id):
         client.report_disclaimer = data['report_disclaimer']
     if 'report_color_override' in data:
         client.report_color_override = data['report_color_override']
+    if 'report_photo_settings' in data:
+        client.report_photo_settings = data['report_photo_settings']
+    if 'report_header_text_color' in data:
+        client.report_header_text_color = data['report_header_text_color']
+    if 'report_body_text_color' in data:
+        client.report_body_text_color = data['report_body_text_color']
+    if 'report_orientation' in data:
+        client.report_orientation = data['report_orientation']
 
     db.session.commit()
     return jsonify(client.to_dict())

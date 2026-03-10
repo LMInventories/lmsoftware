@@ -180,12 +180,12 @@ async function load() {
       try {
         const cRes = await api.getClient(inspection.value.client_id)
         const ps = JSON.parse(cRes.data.report_photo_settings || '{}')
-        clientPhotoSettings.value = {
-          ...ps,
-          report_header_text_color: cRes.data.report_header_text_color,
-          report_body_text_color:   cRes.data.report_body_text_color,
-          report_orientation:       cRes.data.report_orientation,
-          report_color_override:    cRes.data.report_color_override,
+        clientPhotoSettings.value = { ...ps }
+        clientReportSettings.value = {
+          report_header_text_color: cRes.data.report_header_text_color || '#FFFFFF',
+          report_body_text_color:   cRes.data.report_body_text_color   || '#1e293b',
+          report_orientation:       cRes.data.report_orientation       || 'portrait',
+          report_color_override:    cRes.data.report_color_override    || null,
         }
       } catch { clientPhotoSettings.value = {} }
     }
@@ -560,6 +560,8 @@ const photoViewer = ref({
 })
 // Client photo settings — loaded from report_photo_settings JSON on the client record
 const clientPhotoSettings = ref({})
+// All client report settings (colours, orientation) — stored separately so they're never lost
+const clientReportSettings = ref({})
 const showPhotoTimestamp       = computed(() => clientPhotoSettings.value.show_photo_timestamp === true)
 const actionSummaryPosition    = computed(() => clientPhotoSettings.value.action_summary_position || 'bottom')
 // Action catalogue — names + colours for the summary panel
@@ -3415,6 +3417,7 @@ async function moveToReview() {
     :report-data="reportData"
     :action-catalogue="actionCatalogue"
     :photo-settings="clientPhotoSettings"
+    :client-settings="clientReportSettings"
     @close="showPdfModal = false"
   />
 

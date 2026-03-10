@@ -10,9 +10,10 @@ const props = defineProps({
   rooms:           { type: Array,  default: () => [] },
   reportData:      { type: Object, default: () => ({}) },
   actionCatalogue: { type: Array,  default: () => [] },
-  // photoSettings — parsed report_photo_settings JSON from the client record.
-  // Keys: photo_room_overview, photo_room_item, show_photo_timestamp, action_summary_position
+  // photoSettings — photo placement prefs (photo_room_overview, photo_room_item, etc.)
   photoSettings:   { type: Object, default: () => ({}) },
+  // clientSettings — report branding settings (colours, orientation)
+  clientSettings:  { type: Object, default: () => ({}) },
 })
 const emit = defineEmits(['close'])
 
@@ -33,10 +34,10 @@ const client = computed(() => props.inspection.client   || {})
 const prop   = computed(() => props.inspection.property || {})
 
 // Branding: report_color_override takes precedence over primary_color
-const brandColor      = computed(() => client.value.report_color_override || client.value.primary_color || '#1E3A8A')
-const headerTextColor = computed(() => props.photoSettings.report_header_text_color ?? client.value.report_header_text_color ?? '#FFFFFF')
-const bodyTextColor   = computed(() => props.photoSettings.report_body_text_color   ?? client.value.report_body_text_color   ?? '#1e293b')
-const orientation     = computed(() => props.photoSettings.report_orientation       ?? client.value.report_orientation       ?? 'portrait')
+const brandColor      = computed(() => props.clientSettings.report_color_override || client.value.report_color_override || client.value.primary_color || '#1E3A8A')
+const headerTextColor = computed(() => props.clientSettings.report_header_text_color || '#FFFFFF')
+const bodyTextColor   = computed(() => props.clientSettings.report_body_text_color   || '#1e293b')
+const orientation     = computed(() => props.clientSettings.report_orientation       || 'portrait')
 
 // Photo + layout settings (from report_photo_settings JSON — passed as photoSettings prop)
 const photoRoomOverview = computed(() => props.photoSettings.photo_room_overview    || 'above')
@@ -239,13 +240,13 @@ function buildReportHTML() {
     ).join('')
 
     return `<div class="page page-cover">
-      <div class="cover-top" style="background:${e(brand)};">
-        <div class="cover-logo-wrap">${logoHtml}</div>
+      <div class="cover-top" style="background:${e(brand)};-webkit-print-color-adjust:exact;print-color-adjust:exact;">
+        <div class="cover-logo-centered">${logoHtml}</div>
         <div class="cover-type-badge" style="color:${e(hdrTxt)};">${e(typeLabel.value)}</div>
       </div>
       <div class="cover-photo-area">${propPhotoHtml}</div>
       <div class="cover-info-block">${infoHtml}</div>
-      <div class="cover-footer" style="background:${e(brand)};color:${e(hdrTxt)};">
+      <div class="cover-footer" style="background:${e(brand)};color:${e(hdrTxt)};-webkit-print-color-adjust:exact;print-color-adjust:exact;">
         <span>${e(cl.company || cl.name || 'InspectPro')}</span>
         <span>Confidential</span>
       </div>
@@ -645,27 +646,28 @@ function buildReportHTML() {
 
     /* ── Cover ── */
     .cover-top {
-      padding: 32px 40px 28px;
-      display: flex; flex-direction: column; gap: 16px;
+      padding: 36px 0 28px;
+      display: flex; flex-direction: column; align-items: center; gap: 16px;
       -webkit-print-color-adjust: exact; print-color-adjust: exact;
     }
-    .cover-logo-img { max-height: 80px; max-width: 320px; width: auto; height: auto; object-fit: contain; display: block; }
+    .cover-logo-centered { display: flex; justify-content: center; width: 100%; }
+    .cover-logo-img { max-height: 90px; max-width: 380px; width: auto; height: auto; object-fit: contain; display: block; }
     .cover-logo-fallback {
       display: inline-flex; align-items: center; justify-content: center;
-      width: 72px; height: 72px; background: rgba(255,255,255,0.18); border-radius: 8px;
-      font-size: 26px; font-weight: 700; color: white;
+      width: 90px; height: 90px; background: rgba(255,255,255,0.18); border-radius: 10px;
+      font-size: 30px; font-weight: 700; color: white;
     }
-    .cover-type-badge { font-size: 20pt; font-weight: 700; }
-    .cover-photo-area { background: #f1f5f9; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .cover-photo-img  { width: 100%; max-height: 340px; object-fit: cover; display: block; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .cover-photo-placeholder { min-height: 180px; display: flex; align-items: center; justify-content: center; color: #94a3b8; font-size: 10pt; }
+    .cover-type-badge { font-size: 20pt; font-weight: 700; text-align: center; padding: 0 20px; }
+    .cover-photo-area { background: #f1f5f9; margin: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .cover-photo-img  { width: 100%; height: 300px; object-fit: cover; display: block; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .cover-photo-placeholder { height: 220px; display: flex; align-items: center; justify-content: center; color: #94a3b8; font-size: 10pt; }
     .cover-info-block { margin: 0; }
     .cover-info-row { display: flex; padding: 10px 14px; border-bottom: 1px solid #f1f5f9; align-items: baseline; gap: 14px; }
     .cover-info-lbl { width: 120px; font-size: 8pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: #94a3b8; flex-shrink: 0; }
     .cover-info-val { font-size: 11pt; font-weight: 600; }
     .cover-footer {
       display: flex; justify-content: space-between; padding: 10px 14px;
-      font-size: 9pt; font-weight: 500; margin-top: 8px;
+      font-size: 9pt; font-weight: 500;
       -webkit-print-color-adjust: exact; print-color-adjust: exact;
     }
 

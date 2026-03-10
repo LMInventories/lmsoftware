@@ -24,6 +24,9 @@ with app.app_context():
     typist = User(name='Typist User', email='typist@example.com', role='typist')
     typist.set_password('typist123')
 
+    ai_typist = User(name='AI Typist', email='ai-typist@lminventories.co.uk', role='typist')
+    ai_typist.set_password('ai-typist-2024!')
+
     client = Client(
         name='Yellands Estates',
         email='info@yellands.co.uk',
@@ -31,11 +34,12 @@ with app.app_context():
         company='Yellands Estates'
     )
 
-    db.session.add_all([admin, manager, clerk, typist, client])
+    db.session.add_all([admin, manager, clerk, typist, ai_typist, client])
     db.session.commit()
 
     print("\nDatabase seeded successfully.")
-    print("Admin:   admin@example.com / admin123")
-    print("Manager: manager@example.com / manager123")
-    print("Clerk:   clerk@example.com / clerk123")
-    print("Typist:  typist@example.com / typist123")
+    print("Admin:      admin@example.com / admin123")
+    print("Manager:    manager@example.com / manager123")
+    print("Clerk:      clerk@example.com / clerk123")
+    print("Typist:     typist@example.com / typist123")
+    print("AI Typist:  ai-typist@lminventories.co.uk / ai-typist-2024!")

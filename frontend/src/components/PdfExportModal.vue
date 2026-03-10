@@ -608,7 +608,7 @@ function buildReportHTML() {
     /* ── Tables ── */
     table { width: 100%; border-collapse: collapse; font-size: 8.5pt; margin-bottom: 8px; }
     thead tr { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    thead th { padding: 7px 10px; text-align: left; font-size: 8pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; }
+    thead th { padding: 7px 10px; text-align: left; font-size: 8pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; color: ${hdrTxt}; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     tbody td { padding: 7px 10px; border-bottom: 1px solid #f1f5f9; vertical-align: top; line-height: 1.5; }
     tbody tr:nth-child(even) td { background: #f8fafc; }
     /* Photo rows inside tables never get zebra stripe */

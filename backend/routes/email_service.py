@@ -319,6 +319,160 @@ def send_clerk_daily_summary(clerk, inspections_tomorrow):
     return _send(SMTP_FROM, clerk.email, subject, _wrap(body, subject))
 
 
+# ── 3. Welcome emails (new user / new client) ───────────────────────────────
+
+ROLE_LABELS = {
+    'admin':   'Administrator',
+    'manager': 'Manager',
+    'clerk':   'Clerk / Inspector',
+    'typist':  'Typist',
+}
+
+def send_welcome_user(user, plain_password):
+    """
+    Send a welcome email to a newly created user (any role).
+    plain_password: the password as typed before hashing — only available at creation time.
+    """
+    if not getattr(user, 'email', ''):
+        return False, 'No email address'
+
+    role_label  = ROLE_LABELS.get(user.role, user.role.title())
+    login_url   = f"{APP_BASE_URL}/login"
+
+    role_notes = {
+        'admin':   'As an administrator you have full access to all areas of InspectPro, including settings, templates, clients, and user management.',
+        'manager': 'As a manager you can create and manage inspections, assign clerks and typists, and review completed reports.',
+        'clerk':   'As a clerk you will be assigned inspections to carry out on-site. You can access your schedule and complete inspection reports via the InspectPro app.',
+        'typist':  'As a typist you will be notified when inspection reports are ready for you to complete. Log in to the InspectPro portal to work on assigned reports.',
+    }.get(user.role, '')
+
+    body = f"""
+<h2>Welcome to InspectPro, {user.name}!</h2>
+<p>Your account has been set up. Your login details are below — please change your password the first time you log in.</p>
+
+<div class="info-box">
+  <div class="info-row"><span class="info-label">Name</span><span class="info-value">{user.name}</span></div>
+  <div class="info-row"><span class="info-label">Email</span><span class="info-value">{user.email}</span></div>
+  <div class="info-row"><span class="info-label">Password</span><span class="info-value" style="font-family:monospace;font-size:15px;letter-spacing:1px;">{plain_password}</span></div>
+  <div class="info-row"><span class="info-label">Role</span><span class="info-value"><span class="pill pill-blue">{role_label}</span></span></div>
+</div>
+
+<p>{role_notes}</p>
+
+<h3 style="font-size:15px;font-weight:700;color:#1e293b;margin:20px 0 10px;">How to change your password</h3>
+<ol style="font-size:14px;color:#475569;line-height:1.8;padding-left:20px;margin:0 0 16px;">
+  <li>Log in at <a href="{login_url}" style="color:#1e3a8a;">{login_url}</a></li>
+  <li>Click your name icon in the top-right corner</li>
+  <li>Select <strong>Change Password</strong></li>
+  <li>Enter your current password, then choose a new one</li>
+</ol>
+
+<a href="{login_url}" class="btn">Log In Now</a>
+
+<p style="margin-top:20px;font-size:13px;color:#94a3b8;">
+  If you did not expect this email, please contact us immediately at no-reply@lminventories.co.uk.
+</p>
+"""
+
+    subject = f'Welcome to InspectPro — Your {role_label} Account'
+    return _send(SMTP_FROM, user.email, subject, _wrap(body, subject))
+
+
+def send_welcome_client(client, plain_password):
+    """
+    Send a welcome email to a newly created client contact.
+    plain_password: the password as typed before hashing.
+    """
+    if not getattr(client, 'email', ''):
+        return False, 'No email address'
+
+    login_url = f"{APP_BASE_URL}/login"
+
+    body = f"""
+<h2>Welcome to InspectPro, {client.name}!</h2>
+<p>
+  {client.company or 'Your account'} has been set up on InspectPro — LM Inventories' property inspection management platform.
+  Your login details are below. Please change your password the first time you log in.
+</p>
+
+<div class="info-box">
+  <div class="info-row"><span class="info-label">Name</span><span class="info-value">{client.name}</span></div>
+  <div class="info-row"><span class="info-label">Email</span><span class="info-value">{client.email}</span></div>
+  <div class="info-row"><span class="info-label">Password</span><span class="info-value" style="font-family:monospace;font-size:15px;letter-spacing:1px;">{plain_password}</span></div>
+</div>
+
+<p>
+  Through InspectPro you will receive automated email notifications when inspections are scheduled, updated, or completed.
+  Full reports will be sent to you on completion.
+</p>
+
+<h3 style="font-size:15px;font-weight:700;color:#1e293b;margin:20px 0 10px;">How to change your password</h3>
+<ol style="font-size:14px;color:#475569;line-height:1.8;padding-left:20px;margin:0 0 16px;">
+  <li>Log in at <a href="{login_url}" style="color:#1e3a8a;">{login_url}</a></li>
+  <li>Click your name icon in the top-right corner</li>
+  <li>Select <strong>Change Password</strong></li>
+  <li>Enter your current password, then choose a new one</li>
+</ol>
+
+<a href="{login_url}" class="btn">Log In Now</a>
+
+<p style="margin-top:20px;font-size:13px;color:#94a3b8;">
+  If you did not expect this email, please contact us at no-reply@lminventories.co.uk.
+</p>
+"""
+
+    subject = f'Welcome to InspectPro — {client.company or client.name}'
+    return _send(SMTP_FROM, client.email, subject, _wrap(body, subject))
+
+
+# ── 4. Typist assigned to inspection (processing stage) ──────────────────────
+
+def send_typist_assignment(typist, inspection, property_obj, client):
+    """
+    Notify a typist that an inspection has entered Processing and is ready for them.
+    """
+    if not getattr(typist, 'email', ''):
+        return False, 'Typist has no email address'
+
+    prop_addr   = getattr(property_obj, 'address', '—') if property_obj else '—'
+    beds        = getattr(property_obj, 'bedrooms', None)
+    baths       = getattr(property_obj, 'bathrooms', None)
+    prop_detail = ', '.join(filter(None, [f"{beds} bed" if beds else '', f"{baths} bath" if baths else '']))
+    insp_type   = _type_label(getattr(inspection, 'inspection_type', ''))
+    insp_date   = _fmt_date(getattr(inspection, 'conduct_date', None) or getattr(inspection, 'scheduled_date', None))
+    clerk_name  = inspection.inspector.name if getattr(inspection, 'inspector', None) else '—'
+    client_name = getattr(client, 'name', '—') if client else '—'
+    login_url   = f"{APP_BASE_URL}/login"
+
+    body = f"""
+<h2>Report Ready for Typing</h2>
+<p>Hi {typist.name},</p>
+<p>
+  An inspection has been completed and is now in the <strong>Processing</strong> stage — ready for you to type up.
+  Audio recordings and photos are available in the app.
+</p>
+
+<div class="info-box">
+  <div class="info-row"><span class="info-label">Property</span><span class="info-value">{prop_addr}{' · ' + prop_detail if prop_detail else ''}</span></div>
+  <div class="info-row"><span class="info-label">Report Type</span><span class="info-value"><span class="pill pill-purple">{insp_type}</span></span></div>
+  <div class="info-row"><span class="info-label">Date</span><span class="info-value">{insp_date}</span></div>
+  <div class="info-row"><span class="info-label">Inspector</span><span class="info-value">{clerk_name}</span></div>
+  <div class="info-row"><span class="info-label">Client</span><span class="info-value">{client_name}</span></div>
+</div>
+
+<p>Log in to InspectPro to open the report and begin typing. The inspection will be listed under your assigned reports.</p>
+
+<a href="{login_url}" class="btn">Open InspectPro</a>
+
+<p style="margin-top:20px;font-size:13px;color:#94a3b8;">
+  Once you have completed the report, mark it as <strong>Review</strong> so it can be checked before sending.
+</p>
+"""
+
+    subject = f'Report Ready: {insp_type} — {prop_addr}'
+    return _send(SMTP_FROM, typist.email, subject, _wrap(body, subject))
+
+
 # ── 3. Report complete (with PDF) ────────────────────────────────────────────
 
 def send_report_complete(inspection, client, property_obj, pdf_bytes=None):

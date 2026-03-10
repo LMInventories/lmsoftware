@@ -148,6 +148,44 @@ def trigger_inspection_notification(event, inspection):
         print(f'[email] notification error ({event}): {e}')
 
 
+# ── Welcome email triggers ────────────────────────────────────────────────────
+
+def trigger_welcome_user(user, plain_password):
+    """Call from users route immediately after creating a new user."""
+    try:
+        from routes.email_service import send_welcome_user
+        send_welcome_user(user, plain_password)
+    except Exception as e:
+        print(f'[email] welcome user error: {e}')
+
+
+def trigger_welcome_client(client, plain_password):
+    """Call from clients route immediately after creating a new client."""
+    try:
+        from routes.email_service import send_welcome_client
+        send_welcome_client(client, plain_password)
+    except Exception as e:
+        print(f'[email] welcome client error: {e}')
+
+
+def trigger_typist_assignment(inspection):
+    """
+    Call from inspections route when status changes to 'processing'.
+    Notifies the assigned typist that the report is ready for them.
+    """
+    try:
+        from routes.email_service import send_typist_assignment
+        typist = inspection.typist if getattr(inspection, 'typist', None) else                  User.query.get(inspection.typist_id) if inspection.typist_id else None
+        if not typist or not typist.email:
+            return
+        prop   = inspection.property
+        client = prop.client if prop else None
+        send_typist_assignment(typist, inspection, prop, client)
+    except Exception as e:
+        print(f'[email] typist assignment error: {e}')
+
+
+
 # ── Clerk daily summary logic ────────────────────────────────────────────────
 
 def _send_all_clerk_summaries():

@@ -265,7 +265,15 @@ def update_inspection(inspection_id):
             return jsonify({'error': 'Typists can only move inspection to review'}), 403
 
     if 'status' in data:
+        old_status = inspection.status
         inspection.status = data['status']
+        # ── Notify typist when inspection enters Processing stage ──────────
+        if data['status'] == 'processing' and old_status != 'processing':
+            try:
+                from routes.email_notifications import trigger_typist_assignment
+                trigger_typist_assignment(inspection)
+            except Exception as email_err:
+                print(f'[email] typist assignment failed (non-fatal): {email_err}')
 
     if 'inspector_id' in data:
         if data['inspector_id'] is None:

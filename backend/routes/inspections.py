@@ -275,6 +275,25 @@ def update_inspection(inspection_id):
             except Exception as email_err:
                 print(f'[email] typist assignment failed (non-fatal): {email_err}')
 
+        # ── Generate PDF and email report when inspection is Complete ───────
+        if data['status'] == 'complete' and old_status != 'complete':
+            try:
+                from routes.pdf_generator import generate_inspection_pdf, _get_report_recipients
+                from routes.email_service import send_report_complete
+
+                pdf_bytes  = generate_inspection_pdf(inspection.id)
+                recipients = _get_report_recipients(inspection)
+                client     = inspection.property.client if inspection.property else None
+                prop       = inspection.property
+
+                if recipients and client:
+                    send_report_complete(inspection, client, prop, pdf_bytes, recipients=recipients)
+                    print(f'[pdf] report emailed for inspection {inspection.id} → {recipients}')
+                else:
+                    print(f'[pdf] no recipients for inspection {inspection.id} — PDF generated but not sent')
+            except Exception as pdf_err:
+                print(f'[pdf] report generation/send failed (non-fatal): {pdf_err}')
+
     if 'inspector_id' in data:
         if data['inspector_id'] is None:
             inspection.status = 'created'

@@ -518,10 +518,15 @@ def send_typist_assignment(typist, inspection, property_obj, client):
 
 # ── 3. Report complete (with PDF) ────────────────────────────────────────────
 
-def send_report_complete(inspection, client, property_obj, pdf_bytes=None):
+def send_report_complete(inspection, client, property_obj, pdf_bytes=None, recipients=None):
     """
     Send report-complete email from reports@ address, optionally with PDF attached.
-    pdf_bytes: raw bytes of the PDF, or None to send without attachment.
+
+    pdf_bytes:  raw bytes of the PDF, or None to send without attachment.
+    recipients: explicit deduplicated list of email strings built by
+                pdf_generator._get_report_recipients() — covers client email
+                (or override) plus tenant, without duplication. Falls back to
+                the old client_email_override / client.email logic if omitted.
     """
     prop_addr  = getattr(property_obj, 'address', '') or '—'
     insp_type  = _type_label(getattr(inspection, 'inspection_type', ''))
@@ -545,9 +550,15 @@ def send_report_complete(inspection, client, property_obj, pdf_bytes=None):
         + '''<p style="margin:12px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#475569;">Please review the report and contact us if you have any questions or concerns.</p>'''
     )
 
-    subject     = f'Inspection Report: {insp_type} — {prop_addr}'
-    override    = getattr(inspection, 'client_email_override', None)
-    recipients  = override if override else getattr(client, 'email', '')
+    subject = f'Inspection Report: {insp_type} — {prop_addr}'
+
+    # Use explicit deduplicated list if provided; otherwise fall back to old logic
+    if recipients:
+        to_addrs = recipients
+    else:
+        override = getattr(inspection, 'client_email_override', None)
+        to_addrs = override if override else getattr(client, 'email', '')
+
     attachments = [(pdf_name, pdf_bytes)] if pdf_bytes else None
 
-    return _send(SMTP_FROM_REPORTS, recipients, subject, _wrap(body, subject), attachments=attachments)
+    return _send(SMTP_FROM_REPORTS, to_addrs, subject, _wrap(body, subject), attachments=attachments)

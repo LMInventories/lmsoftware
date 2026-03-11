@@ -555,9 +555,17 @@ const actionSummaryPosition    = computed(() => clientPhotoSettings.value.action
 
 async function loadClientSettings() {
   const clientId = inspection.value?.client_id
-  if (!clientId) return
+  console.log('[PDF] loadClientSettings called, clientId:', clientId)
+  if (!clientId) { console.warn('[PDF] no client_id'); return }
   try {
     const cRes = await api.getClient(clientId)
+    console.log('[PDF] API response colours:', JSON.stringify({
+      report_header_text_color: cRes.data.report_header_text_color,
+      report_body_text_color:   cRes.data.report_body_text_color,
+      report_orientation:       cRes.data.report_orientation,
+      report_color_override:    cRes.data.report_color_override,
+      primary_color:            cRes.data.primary_color,
+    }))
     const ps = JSON.parse(cRes.data.report_photo_settings || '{}')
     clientPhotoSettings.value = { ...ps }
     clientReportSettings.value = {
@@ -567,7 +575,8 @@ async function loadClientSettings() {
       report_color_override:    cRes.data.report_color_override    || null,
       primary_color:            cRes.data.primary_color            || '#1E3A8A',
     }
-  } catch { clientPhotoSettings.value = {} }
+    console.log('[PDF] clientReportSettings:', JSON.stringify(clientReportSettings.value))
+  } catch (err) { console.error('[PDF] failed:', err); clientPhotoSettings.value = {} }
 }
 // Action catalogue — names + colours for the summary panel
 const actionCatalogue = ref([])

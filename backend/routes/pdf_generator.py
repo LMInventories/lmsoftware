@@ -4,12 +4,15 @@ pdf_generator.py — Server-side PDF generation for InspectPro.
 Mirrors the HTML builder in PdfExportModal.vue exactly so the server-generated
 PDF is visually identical to the browser-printed version.
 
+Uses xhtml2pdf — pure Python, no system libraries required, works on Render free tier.
+
 Usage:
     from routes.pdf_generator import generate_inspection_pdf
     pdf_bytes = generate_inspection_pdf(inspection_id)
     # returns bytes on success, raises on failure
 """
 
+import io
 import json
 from html import escape as _esc
 from datetime import datetime
@@ -24,24 +27,27 @@ from models import db, Inspection, Client, Template
 def generate_inspection_pdf(inspection_id: int) -> bytes:
     """
     Generate a PDF for the given inspection and return raw bytes.
-    Raises ValueError if the inspection doesn't exist or has no report data.
-    Raises ImportError if WeasyPrint is not installed.
+    Uses xhtml2pdf — pure Python, no system libraries required.
+    Raises ValueError if the inspection doesn't exist.
     """
     try:
-        from weasyprint import HTML
+        from xhtml2pdf import pisa
     except ImportError:
         raise ImportError(
-            'WeasyPrint is not installed. Add weasyprint to requirements.txt '
-            'and ensure system libs are available (libpango, libcairo).'
+            'xhtml2pdf is not installed. Add xhtml2pdf to requirements.txt.'
         )
+    import io
 
     inspection = Inspection.query.get(inspection_id)
     if not inspection:
         raise ValueError(f'Inspection {inspection_id} not found')
 
     html_string = _build_report_html(inspection)
-    pdf_bytes = HTML(string=html_string).write_pdf()
-    return pdf_bytes
+    buf = io.BytesIO()
+    result = pisa.CreatePDF(html_string, dest=buf, encoding='utf-8')
+    if result.err:
+        raise RuntimeError(f'PDF generation failed with {result.err} error(s)')
+    return buf.getvalue()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

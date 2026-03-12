@@ -583,8 +583,7 @@ function buildReportHTML() {
   // ─────────────────────────────────────────────────────────────────────────
   const pageSize = orient === 'landscape' ? 'A4 landscape' : 'A4 portrait'
   const css = `
-    @page           { size: ${pageSize}; margin: 12mm 14mm; }
-    @page :first    { size: ${pageSize}; margin: 0; }
+    @page { size: ${pageSize}; margin: 12mm 14mm; }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
@@ -594,12 +593,7 @@ function buildReportHTML() {
     /* ── Pages ── */
     .page { page-break-after: always; }
     .page:last-child { page-break-after: auto; }
-    .page-cover {
-      page-break-after: always;
-      position: relative;
-      height: 297mm;
-      overflow: hidden;
-    }
+    .page-cover { page-break-after: always; }
 
     /* ── Section header bar ── */
     .section-hdr {
@@ -647,31 +641,34 @@ function buildReportHTML() {
     .disclaimer-body { font-size: 9pt; line-height: 1.75; white-space: pre-wrap; }
 
     /* ── Cover ── */
-    /* @page :first { margin:0 } gives full bleed; cover div fills exact A4 height */
     .cover-top {
-      padding: 28px 14mm 20px;
+      padding: 52px 0 44px;
       display: flex; flex-direction: column; align-items: center; gap: 16px;
       -webkit-print-color-adjust: exact; print-color-adjust: exact;
     }
     .cover-logo-centered { display: flex; justify-content: center; width: 100%; }
-    .cover-logo-img { max-height: 90px; max-width: 380px; width: auto; height: auto; object-fit: contain; display: block; }
+    .cover-logo-img { max-height: 110px; max-width: 380px; width: auto; height: auto; object-fit: contain; display: block; }
     .cover-logo-fallback {
       display: inline-flex; align-items: center; justify-content: center;
       width: 90px; height: 90px; background: rgba(255,255,255,0.18); border-radius: 10px;
       font-size: 30px; font-weight: 700; color: white;
     }
-    .cover-photo-area { background: #f1f5f9; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .cover-photo-area {
+      background: #f1f5f9;
+      margin: 0 -14mm; /* bleed past page margins */
+      -webkit-print-color-adjust: exact; print-color-adjust: exact;
+    }
     .cover-photo-img  { width: 100%; height: 300px; object-fit: cover; display: block; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .cover-photo-placeholder { height: 220px; display: flex; align-items: center; justify-content: center; color: #94a3b8; font-size: 10pt; }
-    .cover-type-label { font-size: 20pt; font-weight: 700; text-align: center; padding: 16px 14mm 8px; }
-    .cover-info-block { margin: 0; padding: 0 14mm; }
-    .cover-info-row { display: flex; flex-direction: column; align-items: center; padding: 8px 0; border-bottom: 1px solid #f1f5f9; }
+    .cover-type-label { font-size: 20pt; font-weight: 700; text-align: center; padding: 16px 20px 8px; }
+    .cover-info-block { margin: 0; }
+    .cover-info-row { display: flex; flex-direction: column; align-items: center; padding: 8px 14px; border-bottom: 1px solid #f1f5f9; }
     .cover-info-lbl { font-size: 8pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: #94a3b8; }
     .cover-info-val { font-size: 11pt; font-weight: 600; text-align: center; }
     .cover-footer {
-      position: absolute; bottom: 0; left: 0; right: 0;
-      display: flex; justify-content: space-between; padding: 10px 14mm;
+      display: flex; justify-content: space-between; padding: 10px 14px;
       font-size: 9pt; font-weight: 500;
+      margin: 0 -14mm -12mm; /* bleed past all page margins */
       -webkit-print-color-adjust: exact; print-color-adjust: exact;
     }
 

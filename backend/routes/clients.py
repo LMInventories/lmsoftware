@@ -1,8 +1,15 @@
+import secrets
+import string
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required
-from models import db, Client
+from models import db, Client, User
 
 clients_bp = Blueprint('clients', __name__)
+
+def _generate_password(length=12):
+    """Generate a secure random password."""
+    alphabet = string.ascii_letters + string.digits + '!@#$%^&*'
+    return ''.join(secrets.choice(alphabet) for _ in range(length))
 
 @clients_bp.route('', methods=['GET'])
 @jwt_required()
@@ -40,9 +47,23 @@ def create_client():
     db.session.add(client)
     db.session.commit()
 
-    # Send welcome email if a password was provided (clients with portal access)
-    plain_password = data.get('password')
-    if plain_password and client.email:
+    # Always create a linked User account so the client can log in immediately
+    plain_password = _generate_password()
+    existing_user = User.query.filter_by(email=client.email).first() if client.email else None
+    if client.email and not existing_user:
+        portal_user = User(
+            name=client.name,
+            email=client.email,
+            phone=client.phone or '',
+            role='client',
+            client_id=client.id,
+            color='#6366f1',
+        )
+        portal_user.set_password(plain_password)
+        db.session.add(portal_user)
+        db.session.commit()
+
+        # Send welcome email with credentials
         try:
             from routes.email_notifications import trigger_welcome_client
             trigger_welcome_client(client, plain_password)

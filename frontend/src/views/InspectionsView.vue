@@ -516,8 +516,10 @@ function viewInspection(id) {
 onMounted(() => {
   fetchInspections()
   fetchProperties()
-  fetchClients()
-  fetchUsers()
+  if (!authStore.isClient) {
+    fetchClients()
+    fetchUsers()
+  }
   fetchTemplates()
 })
 </script>

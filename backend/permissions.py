@@ -6,6 +6,7 @@ Role hierarchy:
   manager → everything
   clerk   → own assigned inspections + properties only, read-only reports
   typist  → own assigned inspections in Processing stage only, full report edit
+  client  → inspections and properties belonging to their linked client_id, read-only
 """
 
 from functools import wraps
@@ -54,6 +55,10 @@ def is_typist(user):
     return user and user.role == 'typist' and not user.is_ai
 
 
+def is_client(user):
+    return user and user.role == 'client'
+
+
 def filter_inspections_for_user(query, user):
     """
     Apply role-based filtering to an Inspection query.
@@ -71,6 +76,11 @@ def filter_inspections_for_user(query, user):
         return query.filter(
             Inspection.typist_id == user.id,
             Inspection.status == 'processing'
+        )
+    elif user.role == 'client':
+        from models import Property
+        return query.join(Property, Inspection.property_id == Property.id).filter(
+            Property.client_id == user.client_id
         )
     # Unknown role — return nothing
     return query.filter(False)
@@ -98,4 +108,6 @@ def filter_properties_for_user(query, user):
     elif user.role == 'typist':
         # Typists don't need property lists — return empty
         return query.filter(False)
+    elif user.role == 'client':
+        return query.filter(Property.client_id == user.client_id)
     return query.filter(False)

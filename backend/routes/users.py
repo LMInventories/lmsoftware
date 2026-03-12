@@ -41,7 +41,8 @@ def create_user():
             name=data['name'],
             phone=data.get('phone') or None,
             role=data.get('role', 'clerk'),
-            color=data.get('color', '#6366f1')
+            color=data.get('color', '#6366f1'),
+            client_id=data.get('client_id') or None
         )
 
         user.set_password(plain_password)
@@ -86,6 +87,8 @@ def update_user(user_id):
             user.role = data['role']
         if 'color' in data and data['color']:
             user.color = data['color']
+        if 'client_id' in data:
+            user.client_id = data['client_id'] or None
         if 'password' in data and data['password']:
             user.set_password(data['password'])
 

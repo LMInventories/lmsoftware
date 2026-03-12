@@ -3,8 +3,10 @@ import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../services/api'
 import { useToast } from '../composables/useToast'
+import { useAuthStore } from '../stores/auth'
 const toast = useToast()
 const router = useRouter()
+const authStore = useAuthStore()
 
 const properties = ref([])
 const clients = ref([])
@@ -281,11 +283,11 @@ onMounted(() => { fetchProperties(); fetchClients() })
         <h1>Properties</h1>
         <p class="subtitle">{{ filteredProperties.length }} of {{ properties.length }} shown</p>
       </div>
-      <button @click="openCreateModal" class="btn-primary">+ Add Property</button>
+      <button v-if="!authStore.isClient" @click="openCreateModal" class="btn-primary">+ Add Property</button>
     </div>
 
     <div class="filters-bar">
-      <div class="filter-group">
+      <div v-if="!authStore.isClient" class="filter-group">
         <label>Portfolio</label>
         <select v-model="filters.client_id" class="filter-select">
           <option :value="null">All Portfolios</option>

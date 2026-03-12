@@ -14,9 +14,10 @@ class User(db.Model):
     email         = db.Column(db.String(120), unique=True, nullable=False)
     phone         = db.Column(db.String(20))
     password_hash = db.Column(db.String(255), nullable=False)
-    role          = db.Column(db.String(20), nullable=False)  # admin, manager, clerk, typist
+    role          = db.Column(db.String(20), nullable=False)  # admin, manager, clerk, typist, client
     color         = db.Column(db.String(7), default='#6366f1')
     is_ai         = db.Column(db.Boolean, default=False, nullable=False)
+    client_id     = db.Column(db.Integer, db.ForeignKey('clients.id'), nullable=True)  # client-role users only
     created_at    = db.Column(db.DateTime, default=datetime.utcnow)
 
     def set_password(self, password):
@@ -34,6 +35,7 @@ class User(db.Model):
             'role':       self.role,
             'color':      self.color,
             'is_ai':      self.is_ai,
+            'client_id':  self.client_id,
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
 

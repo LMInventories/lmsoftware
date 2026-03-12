@@ -31,7 +31,7 @@ SMTP_USER          = os.environ.get('SMTP_USER', '')
 SMTP_PASSWORD      = os.environ.get('SMTP_PASSWORD', '')
 SMTP_FROM          = os.environ.get('SMTP_FROM', 'no-reply@lminventories.co.uk')
 SMTP_FROM_REPORTS  = os.environ.get('SMTP_FROM_REPORTS', 'no-reply@lminventories.co.uk')
-APP_BASE_URL       = os.environ.get('APP_BASE_URL', 'https://lmsoftware.vercel.app')
+APP_BASE_URL       = os.environ.get('APP_BASE_URL', 'https://app.lminventories.co.uk/')
 
 
 # ── Low-level sender ─────────────────────────────────────────────────────────
@@ -429,7 +429,7 @@ def send_welcome_user(user, plain_password):
         + '''<p style="margin:0 0 8px;font-family:Arial,Helvetica,sans-serif;font-size:15px;font-weight:bold;color:#1e293b;">How to change your password</p>'''
         + f'''<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin:0 0 16px;">
   <tr><td style="padding:4px 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#475569;">1. &nbsp;Log in at <a href="{login_url}" style="color:#1e3a8a;">{login_url}</a></td></tr>
-  <tr><td style="padding:4px 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#475569;">2. &nbsp;Click your name icon in the top-right corner</td></tr>
+  <tr><td style="padding:4px 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#475569;">2. &nbsp;Click your name icon in the bottom-left corner</td></tr>
   <tr><td style="padding:4px 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#475569;">3. &nbsp;Select <strong>Change Password</strong></td></tr>
   <tr><td style="padding:4px 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#475569;">4. &nbsp;Enter your current password, then choose a new one</td></tr>
 </table>'''
@@ -464,7 +464,7 @@ def send_welcome_client(client, plain_password):
         + '''<p style="margin:0 0 8px;font-family:Arial,Helvetica,sans-serif;font-size:15px;font-weight:bold;color:#1e293b;">How to change your password</p>'''
         + f'''<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin:0 0 16px;">
   <tr><td style="padding:4px 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#475569;">1. &nbsp;Log in at <a href="{login_url}" style="color:#1e3a8a;">{login_url}</a></td></tr>
-  <tr><td style="padding:4px 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#475569;">2. &nbsp;Click your name icon in the top-right corner</td></tr>
+  <tr><td style="padding:4px 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#475569;">2. &nbsp;Click your name icon in the bottom-left corner</td></tr>
   <tr><td style="padding:4px 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#475569;">3. &nbsp;Select <strong>Change Password</strong></td></tr>
   <tr><td style="padding:4px 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#475569;">4. &nbsp;Enter your current password, then choose a new one</td></tr>
 </table>'''

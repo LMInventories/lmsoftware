@@ -169,9 +169,9 @@ class _PDFBuilder:
         self.rooms            = []
         self.action_catalogue = []
         tmpl = inspection.template
-        if tmpl and tmpl.template_data:
+        if tmpl and tmpl.content:
             try:
-                td = json.loads(tmpl.template_data) if isinstance(tmpl.template_data, str) else tmpl.template_data
+                td = json.loads(tmpl.content) if isinstance(tmpl.content, str) else tmpl.content
                 self.fixed_sections   = td.get('fixedSections', [])
                 self.rooms            = td.get('rooms', [])
                 self.action_catalogue = td.get('actionCatalogue', [])

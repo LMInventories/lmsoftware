@@ -30,7 +30,7 @@ SMTP_PORT          = int(os.environ.get('SMTP_PORT', 587))
 SMTP_USER          = os.environ.get('SMTP_USER', '')
 SMTP_PASSWORD      = os.environ.get('SMTP_PASSWORD', '')
 SMTP_FROM          = os.environ.get('SMTP_FROM', 'no-reply@lminventories.co.uk')
-SMTP_FROM_REPORTS  = os.environ.get('SMTP_FROM_REPORTS', 'reports@lminventories.co.uk')
+SMTP_FROM_REPORTS  = os.environ.get('SMTP_FROM_REPORTS', 'no-reply@lminventories.co.uk')
 APP_BASE_URL       = os.environ.get('APP_BASE_URL', 'https://lmsoftware.vercel.app')
 
 

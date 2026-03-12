@@ -370,7 +370,7 @@ class _PDFBuilder:
                 inner.append(Paragraph(ts_txt, self.s_small))
             cells.append(inner)
         while len(cells) % cols:
-            cells.append([''])
+            cells.append([Paragraph('', self.s_small)])
         rows   = [cells[i:i+cols] for i in range(0, len(cells), cols)]
         tbl    = Table(rows, colWidths=[cell_w]*cols)
         tbl.setStyle(TableStyle([

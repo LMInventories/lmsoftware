@@ -827,7 +827,7 @@ class _PDFBuilder:
                 Spacer(1, 12*mm),
                 HRFlowable(width=half, thickness=0.5, color=_SLATE_800),
                 Spacer(1, 3*mm),
-                Table([[Paragraph('Print Name', field_s),''],[Paragraph('Date', field_s),'']],
+                Table([[Paragraph('Print Name', field_s), Paragraph('', field_s)],[Paragraph('Date', field_s), Paragraph('', field_s)]],
                       colWidths=[22*mm, half-22*mm], rowHeights=[10*mm,10*mm]),
             ]
 

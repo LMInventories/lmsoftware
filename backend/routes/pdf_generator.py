@@ -677,14 +677,14 @@ class _PDFBuilder:
                 pg = self._photo_grid(sid, r['id'], cols=6)
                 if pg:
                     photo_row_indices.append(len(tbl_data))
-                    tbl_data.append([pg] + ['']*(len(cd['heads'])-1))
+                    tbl_data.append([pg] + [Paragraph('', self.s_small)]*(len(cd['heads'])-1))
             for r in extra_rows:
                 tbl_data.append(build_data_row(r, True))
                 rid = r.get('_eid')
                 pg  = self._photo_grid(sid, rid, cols=6)
                 if pg:
                     photo_row_indices.append(len(tbl_data))
-                    tbl_data.append([pg] + ['']*(len(cd['heads'])-1))
+                    tbl_data.append([pg] + [Paragraph('', self.s_small)]*(len(cd['heads'])-1))
 
             tbl = Table(tbl_data, colWidths=cd['widths'], repeatRows=1)
             ts  = self._table_style()
@@ -732,7 +732,7 @@ class _PDFBuilder:
             item_photo_tbl = None
             if item_photo_cells:
                 cols = 4
-                while len(item_photo_cells) % cols: item_photo_cells.append([''])
+                while len(item_photo_cells) % cols: item_photo_cells.append([Paragraph('', self.s_small)])
                 rows = [item_photo_cells[i:i+cols] for i in range(0,len(item_photo_cells),cols)]
                 item_photo_tbl = Table(rows, colWidths=[uw/cols]*cols)
                 item_photo_tbl.setStyle(TableStyle([

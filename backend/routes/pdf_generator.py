@@ -410,12 +410,24 @@ class _PDFBuilder:
         doc = BaseDocTemplate(buf, pagesize=self.pagesize,
                               leftMargin=self.margin, rightMargin=self.margin,
                               topMargin=self.margin,  bottomMargin=self.margin)
-        frame = Frame(self.margin, self.margin, uw, self.ph - 2*self.margin,
-                      leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0)
-        doc.addPageTemplates([PageTemplate(id='main', frames=[frame])])
+
+        # Cover page template — full-bleed, tiny frame just to hold the PageBreak
+        cover_frame = Frame(0, 0, self.pw, self.ph,
+                            leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0)
+        cover_template = PageTemplate(id='cover', frames=[cover_frame],
+                                      onPage=self._draw_cover)
+
+        # Main content template — margin-constrained
+        main_frame = Frame(self.margin, self.margin, uw, self.ph - 2*self.margin,
+                           leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0)
+        main_template = PageTemplate(id='main', frames=[main_frame])
+
+        doc.addPageTemplates([cover_template, main_template])
 
         story = []
-        story += self._cover()
+        from reportlab.platypus import NextPageTemplate
+        story += [NextPageTemplate('cover')]   # first page uses cover template
+        story += self._cover()                  # emits NextPageTemplate('main') + PageBreak
         story += self._contents()
         story += self._disclaimer()
         if self.is_check_out and self.act_pos == 'top':
@@ -430,74 +442,116 @@ class _PDFBuilder:
         return buf.getvalue()
 
     # ── Cover ─────────────────────────────────────────────────────────────────
+    # Drawn entirely on the canvas for true edge-to-edge bleed.
 
-    def _cover(self):
-        uw   = self._uw()
-        cl   = self.cl
-        insp = self.inspection
+    def _draw_cover(self, canvas, doc):
+        """onPage callback — draws the full-bleed cover page directly on canvas."""
+        from reportlab.lib.utils import ImageReader
+        canvas.saveState()
+        pw, ph = self.pagesize
+        cl     = self.cl
+        insp   = self.inspection
+        brand  = self.brand
+        hdr_c  = self.hdr_c
+        margin = self.margin
 
-        logo_img = _fetch_image(cl.get('logo'), 60, 22)
-        if not logo_img:
+        # ── Header bar (edge to edge, top of page) ───────────────────────────
+        hdr_h = 22 * mm
+        canvas.setFillColor(brand)
+        canvas.rect(0, ph - hdr_h, pw, hdr_h, fill=1, stroke=0)
+
+        # Logo
+        logo_url = cl.get('logo')
+        logo_drawn = False
+        if logo_url:
+            try:
+                req  = urllib.request.Request(logo_url, headers={'User-Agent': 'InspectPro/1.0'})
+                data = urllib.request.urlopen(req, timeout=8).read()
+                img  = ImageReader(io.BytesIO(data))
+                iw, ih = img.getSize()
+                max_h  = hdr_h - 6*mm
+                max_w  = 70*mm
+                scale  = min(max_w/iw, max_h/ih)
+                dw, dh = iw*scale, ih*scale
+                canvas.drawImage(img, margin, ph - hdr_h + (hdr_h - dh)/2, dw, dh, mask='auto')
+                logo_drawn = True
+            except Exception:
+                pass
+
+        if not logo_drawn:
             initials = ''.join(w[0] for w in (cl.get('company') or cl.get('name') or 'IP').split() if w)[:2].upper()
-            logo_img = Paragraph(initials, ParagraphStyle('init', fontName='Helvetica-Bold', fontSize=22, textColor=self.hdr_c))
+            canvas.setFillColor(hdr_c)
+            canvas.setFont('Helvetica-Bold', 20)
+            canvas.drawString(margin + 4*mm, ph - hdr_h + hdr_h*0.3, initials)
 
-        hdr_tbl = Table([[logo_img, Paragraph(self.type_label, self.s_title)]], colWidths=[65*mm, uw-65*mm])
-        hdr_tbl.setStyle(TableStyle([
-            ('BACKGROUND',    (0,0),(-1,-1), self.brand),
-            ('VALIGN',        (0,0),(-1,-1), 'MIDDLE'),
-            ('ALIGN',         (1,0),(1,0),   'CENTER'),
-            ('TOPPADDING',    (0,0),(-1,-1), 16),
-            ('BOTTOMPADDING', (0,0),(-1,-1), 16),
-            ('LEFTPADDING',   (0,0),(0,0),   12),
-            ('RIGHTPADDING',  (0,0),(-1,-1), 12),
-        ]))
+        # ── Property photo (edge to edge, below header) ──────────────────────
+        photo_h = 100 * mm
+        photo_y = ph - hdr_h - photo_h
+        photo_url = self.prop.get('overview_photo')
+        photo_drawn = False
+        if photo_url:
+            try:
+                req  = urllib.request.Request(photo_url, headers={'User-Agent': 'InspectPro/1.0'})
+                data = urllib.request.urlopen(req, timeout=8).read()
+                img  = ImageReader(io.BytesIO(data))
+                canvas.drawImage(img, 0, photo_y, pw, photo_h,
+                                 preserveAspectRatio=False, mask='auto')
+                photo_drawn = True
+            except Exception:
+                pass
+        if not photo_drawn:
+            canvas.setFillColor(_SLATE_100)
+            canvas.rect(0, photo_y, pw, photo_h, fill=1, stroke=0)
+            canvas.setFillColor(_SLATE_400)
+            canvas.setFont('Helvetica', 11)
+            canvas.drawCentredString(pw/2, photo_y + photo_h/2, 'Property overview photo')
 
-        prop_img = _fetch_image(self.prop.get('overview_photo'), uw/mm, 72)
-        if prop_img:
-            prop_img.drawWidth  = uw
-            prop_img.drawHeight = min(prop_img.drawHeight, 72*mm)
-            photo_flow = prop_img
-        else:
-            ph = Table([[Paragraph('Property overview photo', ParagraphStyle('ph', fontName='Helvetica',
-                fontSize=10, textColor=_SLATE_400, alignment=TA_CENTER))]],
-                colWidths=[uw], rowHeights=[52*mm])
-            ph.setStyle(TableStyle([('BACKGROUND',(0,0),(0,0),_SLATE_100),('VALIGN',(0,0),(0,0),'MIDDLE'),('ALIGN',(0,0),(0,0),'CENTER')]))
-            photo_flow = ph
+        # ── Type label — centred below photo ─────────────────────────────────
+        type_label_y = photo_y - 12*mm
+        canvas.setFillColor(self.body_c)
+        canvas.setFont('Helvetica-Bold', 18)
+        canvas.drawCentredString(pw/2, type_label_y, self.type_label)
 
+        # ── Info rows — centred, no Clerk ─────────────────────────────────────
         info_rows = [
             ('ADDRESS', self.prop.get('address') or ''),
             ('DATE',    self._fmt_date(insp.conduct_date or insp.scheduled_date)),
-            ('CLERK',   insp.inspector.name if insp.inspector else ''),
             ('CLIENT',  cl.get('company') or cl.get('name') or ''),
         ]
-        if insp.typist and insp.typist.name != 'AI Typist':
-            info_rows.append(('TYPIST', insp.typist.name))
 
-        lbl_s = ParagraphStyle('il', fontName='Helvetica-Bold', fontSize=7,  leading=10, textColor=_SLATE_400)
-        val_s = ParagraphStyle('iv', fontName='Helvetica-Bold', fontSize=11, leading=14, textColor=self.body_c)
-        info_tbl = Table([[Paragraph(l, lbl_s), Paragraph(v, val_s)] for l,v in info_rows], colWidths=[30*mm, uw-30*mm])
-        info_tbl.setStyle(TableStyle([
-            ('TOPPADDING',    (0,0),(-1,-1), 6),
-            ('BOTTOMPADDING', (0,0),(-1,-1), 6),
-            ('LEFTPADDING',   (0,0),(-1,-1), 10),
-            ('LINEBELOW',     (0,0),(-1,-2), 0.5, _SLATE_100),
-            ('VALIGN',        (0,0),(-1,-1), 'MIDDLE'),
-        ]))
+        footer_h = 10 * mm
+        row_h    = 10 * mm
+        info_top = type_label_y - 6*mm
 
+        for i, (lbl, val) in enumerate(info_rows):
+            y = info_top - (i + 1) * row_h + 3*mm
+            if i < len(info_rows) - 1:
+                canvas.setStrokeColor(_SLATE_100)
+                canvas.setLineWidth(0.5)
+                canvas.line(margin, y - 1*mm, pw - margin, y - 1*mm)
+            canvas.setFillColor(_SLATE_400)
+            canvas.setFont('Helvetica-Bold', 7)
+            canvas.drawCentredString(pw/2, y + 3*mm, lbl)
+            canvas.setFillColor(self.body_c)
+            canvas.setFont('Helvetica-Bold', 11)
+            canvas.drawCentredString(pw/2, y - 2*mm, val[:80])
+
+        # ── Footer bar (edge to edge, bottom of page) ────────────────────────
+        canvas.setFillColor(brand)
+        canvas.rect(0, 0, pw, footer_h, fill=1, stroke=0)
         footer_name = cl.get('company') or cl.get('name') or 'InspectPro'
-        footer_tbl = Table([
-            [Paragraph(footer_name, ParagraphStyle('fl', fontName='Helvetica-Bold', fontSize=9, textColor=self.hdr_c)),
-             Paragraph('Confidential', ParagraphStyle('fr', fontName='Helvetica', fontSize=9, textColor=self.hdr_c, alignment=TA_RIGHT))]
-        ], colWidths=[uw/2, uw/2])
-        footer_tbl.setStyle(TableStyle([
-            ('BACKGROUND',    (0,0),(-1,-1), self.brand),
-            ('TOPPADDING',    (0,0),(-1,-1), 8),
-            ('BOTTOMPADDING', (0,0),(-1,-1), 8),
-            ('LEFTPADDING',   (0,0),(0,0),   10),
-            ('RIGHTPADDING',  (-1,0),(-1,0), 10),
-        ]))
+        canvas.setFillColor(hdr_c)
+        canvas.setFont('Helvetica-Bold', 9)
+        canvas.drawString(margin, footer_h * 0.35, footer_name)
+        canvas.setFont('Helvetica', 9)
+        canvas.drawRightString(pw - margin, footer_h * 0.35, 'Confidential')
 
-        return [hdr_tbl, photo_flow, Spacer(1,3*mm), info_tbl, Spacer(1,3*mm), footer_tbl, PageBreak()]
+        canvas.restoreState()
+
+    def _cover(self):
+        """Returns a single NextPageTemplate + PageBreak — actual drawing happens in _draw_cover."""
+        from reportlab.platypus import NextPageTemplate
+        return [NextPageTemplate('main'), PageBreak()]
 
     # ── Contents ──────────────────────────────────────────────────────────────
 

@@ -165,25 +165,45 @@ class _PDFBuilder:
         self.add_ts   = ps.get('show_photo_timestamp',    False) is True
         self.act_pos  = ps.get('action_summary_position', 'bottom')
 
-        self.fixed_sections   = []
-        self.rooms            = []
-        self.action_catalogue = []
-        tmpl = inspection.template
-        if tmpl and tmpl.content:
-            try:
-                td = json.loads(tmpl.content) if isinstance(tmpl.content, str) else tmpl.content
-                self.fixed_sections   = td.get('fixedSections', [])
-                self.rooms            = td.get('rooms', [])
-                self.action_catalogue = td.get('actionCatalogue', [])
-            except Exception:
-                pass
+        # ── Fixed sections — from system_settings or DEFAULT_FIXED_SECTIONS ──
+        self.fixed_sections = _load_fixed_sections()
 
+        # ── Rooms — from template.sections filtered by section_type='room' ──
+        # report_data keys rooms by String(s.id) — the DB section id.
+        # Items use item.id as the row key, and item.name as the label.
+        self.rooms = []
+        tmpl = inspection.template
+        if tmpl:
+            # Apply any clerk-saved room name overrides from report_data
+            room_names = (self.rd or {}).get('_roomNames', {})
+            for s in sorted(tmpl.sections or [], key=lambda x: x.order_index):
+                if s.section_type == 'room':
+                    name = room_names.get(str(s.id), s.name)
+                    self.rooms.append({
+                        'id':   s.id,   # used as report_data key (String(s.id))
+                        'name': name,
+                        'sections': [
+                            {
+                                'id':          item.id,
+                                'name':        item.name,
+                                'label':       item.name,   # frontend uses label
+                                'description': item.description or '',
+                                'hasCondition': item.requires_condition is not False,
+                            }
+                            for item in sorted(s.items or [], key=lambda i: i.order_index)
+                        ],
+                    })
+
+        # ── Report data ──────────────────────────────────────────────────────
         self.rd = {}
         if inspection.report_data:
             try:
                 self.rd = json.loads(inspection.report_data) if isinstance(inspection.report_data, str) else inspection.report_data
             except Exception:
                 pass
+
+        # ── Action catalogue — not used in current schema, empty list ────────
+        self.action_catalogue = []
 
         itype = inspection.inspection_type or ''
         self.is_check_out = itype == 'check_out'
@@ -241,10 +261,11 @@ class _PDFBuilder:
         return (self.rd.get(str(rid)) or {}).get(f'_actions_{iid}', []) or []
 
     def _ordered_items(self, room):
-        stored = (self.rd.get(str(room['id'])) or {}).get('_itemOrder', None)
-        tmpl   = [dict(i, _type='template') for i in (room.get('sections') or [])]
-        extras = [dict(ex, id=ex.get('_eid'), label=ex.get('label', 'New item'), _type='extra')
-                  for ex in ((self.rd.get(str(room['id'])) or {}).get('_extra', []) or [])]
+        room_rd_key = str(room['id'])   # rooms keyed by String(section.id) in report_data
+        stored  = (self.rd.get(room_rd_key) or {}).get('_itemOrder', None)
+        tmpl    = [dict(i, _type='template', label=i.get('name','')) for i in (room.get('sections') or [])]
+        extras  = [dict(ex, id=ex.get('_eid'), label=ex.get('label') or ex.get('name','New item'), _type='extra')
+                   for ex in ((self.rd.get(room_rd_key) or {}).get('_extra', []) or [])]
         all_items = tmpl + extras
         if not stored:
             return all_items
@@ -742,6 +763,135 @@ class _PDFBuilder:
         sig_tbl.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),8)]))
 
         return [_HeaderBar('Declaration', self.brand, self.hdr_c), Spacer(1,6*mm), Paragraph(text, self.s_decl), Spacer(1,8*mm), sig_tbl]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Fixed sections loader — mirrors frontend's _get_setting() + slug ID logic
+# ─────────────────────────────────────────────────────────────────────────────
+
+DEFAULT_FIXED_SECTIONS = [
+    {
+        "name": "Condition Summary", "enabled": True,
+        "columns": ["name", "condition", "additional_notes"], "items": []
+    },
+    {
+        "name": "Cleaning Summary", "enabled": True,
+        "columns": ["name", "cleanliness", "additional_notes"], "items": []
+    },
+    {
+        "name": "Smoke & Carbon Alarms", "enabled": True,
+        "columns": ["name", "answer", "condition"],
+        "items": [
+            {"name": "Smoke Alarm — Hallway",    "answer": "Yes", "condition": ""},
+            {"name": "Smoke Alarm — Landing",    "answer": "Yes", "condition": ""},
+            {"name": "Carbon Monoxide Detector", "answer": "Yes", "condition": ""},
+            {"name": "Heat Alarm — Kitchen",     "answer": "Yes", "condition": ""},
+        ]
+    },
+    {
+        "name": "Fire Door Safety", "enabled": True,
+        "columns": ["name", "answer", "condition"],
+        "items": [
+            {"name": "Front Door — Self Closing", "answer": "Yes", "condition": ""},
+            {"name": "Fire Door Signage",          "answer": "Yes", "condition": ""},
+        ]
+    },
+    {
+        "name": "Health & Safety", "enabled": True,
+        "columns": ["name", "answer", "description"],
+        "items": [
+            {"name": "Electrical Consumer Unit",  "answer": "Yes", "description": ""},
+            {"name": "Water Stop Tap Location",   "answer": "Yes", "description": ""},
+        ]
+    },
+    {
+        "name": "Keys", "enabled": True,
+        "columns": ["name", "description"],
+        "items": [
+            {"name": "Full Sets",           "description": ""},
+            {"name": "Access at Check Out", "description": ""},
+        ]
+    },
+    {
+        "name": "Utility Meter Readings", "enabled": True,
+        "columns": ["name", "location_serial", "reading"],
+        "items": [
+            {"name": "Gas Meter",      "location_serial": "", "reading": ""},
+            {"name": "Electric Meter", "location_serial": "", "reading": ""},
+            {"name": "Water Meter",    "location_serial": "", "reading": ""},
+        ]
+    },
+]
+
+def _slugify(name: str) -> str:
+    import re
+    return re.sub(r'[^a-z0-9]+', '_', name.lower()).strip('_')
+
+def _infer_type(cols: list) -> str:
+    """Mirror of InspectionReportView._inferType()"""
+    c = cols or []
+    if 'reading'     in c: return 'meter_readings'
+    if 'cleanliness' in c: return 'cleaning_summary'
+    if 'condition'   in c: return 'condition_summary'
+    if 'name' in c and 'answer' in c and 'question' in c: return 'fire_door_safety'
+    if 'answer' in c and 'question' in c: return 'smoke_alarms'
+    if 'answer' in c and 'name'     in c: return 'smoke_alarms'
+    if 'description' in c: return 'keys'
+    return 'condition_summary'
+
+def _adapt_item(item: dict, sec_type: str, sec_idx: int, row_idx: int) -> dict:
+    """Mirror of InspectionReportView._adaptItem() — produces row with same id as frontend."""
+    rid = f'fs_{sec_idx}_{row_idx}'
+    if sec_type == 'meter_readings':
+        return {'id': rid, 'name': item.get('name',''), 'locationSerial': item.get('location_serial',''), 'reading': item.get('reading','')}
+    if sec_type == 'cleaning_summary':
+        return {'id': rid, 'name': item.get('name',''), 'cleanliness': '', 'cleanlinessNotes': item.get('additional_notes','')}
+    if sec_type == 'condition_summary':
+        return {'id': rid, 'name': item.get('name',''), 'condition': item.get('condition', item.get('description',''))}
+    if sec_type == 'fire_door_safety':
+        return {'id': rid, 'name': item.get('name',''), 'question': item.get('question',''), 'answer': '', 'notes': item.get('additional_notes','')}
+    if sec_type in ('smoke_alarms', 'health_safety'):
+        return {'id': rid, 'question': item.get('name', item.get('question','')), 'answer': '', 'notes': item.get('additional_notes','')}
+    if sec_type == 'keys':
+        return {'id': rid, 'name': item.get('name',''), 'description': item.get('description','')}
+    return {'id': rid, 'name': item.get('name',''), 'condition': ''}
+
+def _load_fixed_sections() -> list:
+    """
+    Load fixed sections from system_settings (or fall back to defaults).
+    Produces the same structure the frontend builds in its fixedSections computed:
+      - section id: fs_{secIdx}_{slugified_name}
+      - row id:     fs_{secIdx}_{rowIdx}
+    report_data is keyed by these same ids.
+    """
+    try:
+        from models import SystemSetting
+        s = SystemSetting.query.filter_by(key='fixed_sections').first()
+        sections = json.loads(s.value) if (s and s.value) else DEFAULT_FIXED_SECTIONS
+    except Exception:
+        sections = DEFAULT_FIXED_SECTIONS
+
+    result = []
+    sec_idx = 0  # only increment for enabled sections (matches frontend filter)
+    for raw in sections:
+        if not raw.get('enabled', True):
+            continue
+        cols     = raw.get('columns', [])
+        sec_type = _infer_type(cols)
+        rd_key   = f'fs_{sec_idx}_{raw["name"].lower().replace(chr(32),"_").replace(chr(38),"_").replace(chr(45),"_")}'
+        # Use same slug logic as frontend: /[^a-z0-9]/g → '_'
+        import re
+        rd_key = f'fs_{sec_idx}_{re.sub(chr(91)+"^a-z0-9"+chr(93), "_", raw["name"].lower())}'
+        rows    = [_adapt_item(item, sec_type, sec_idx, ri) for ri, item in enumerate(raw.get('items') or [])]
+        result.append({
+            'id':      rd_key,
+            'name':    raw['name'],
+            'type':    sec_type,
+            'columns': cols,
+            'rows':    rows,
+        })
+        sec_idx += 1
+    return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────

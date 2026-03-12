@@ -583,8 +583,7 @@ function buildReportHTML() {
   // ─────────────────────────────────────────────────────────────────────────
   const pageSize = orient === 'landscape' ? 'A4 landscape' : 'A4 portrait'
   const css = `
-    @page           { size: ${pageSize}; margin: 12mm 14mm; }
-    @page :first    { size: ${pageSize}; margin: 0; }
+    @page { size: ${pageSize}; margin: 12mm 14mm; }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
@@ -594,7 +593,11 @@ function buildReportHTML() {
     /* ── Pages ── */
     .page { page-break-after: always; }
     .page:last-child { page-break-after: auto; }
-    .page-cover { page-break-after: always; }
+    .page-cover {
+      page-break-after: always;
+      display: flex; flex-direction: column;
+      min-height: 100vh;
+    }
 
     /* ── Section header bar ── */
     .section-hdr {
@@ -643,7 +646,7 @@ function buildReportHTML() {
 
     /* ── Cover ── */
     .cover-top {
-      padding: 28px 14mm 20px;
+      padding: 36px 0 28px;
       display: flex; flex-direction: column; align-items: center; gap: 16px;
       -webkit-print-color-adjust: exact; print-color-adjust: exact;
     }
@@ -654,18 +657,22 @@ function buildReportHTML() {
       width: 90px; height: 90px; background: rgba(255,255,255,0.18); border-radius: 10px;
       font-size: 30px; font-weight: 700; color: white;
     }
-    /* Cover page uses @page :first { margin:0 } so everything is naturally full-bleed */
-    .cover-photo-area { background: #f1f5f9; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .cover-photo-area {
+      background: #f1f5f9;
+      margin: 0 -14mm; /* bleed past page margins */
+      -webkit-print-color-adjust: exact; print-color-adjust: exact;
+    }
     .cover-photo-img  { width: 100%; height: 300px; object-fit: cover; display: block; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .cover-photo-placeholder { height: 220px; display: flex; align-items: center; justify-content: center; color: #94a3b8; font-size: 10pt; }
-    .cover-type-label { font-size: 20pt; font-weight: 700; text-align: center; padding: 16px 14mm 8px; }
-    .cover-info-block { margin: 0; padding: 0 14mm; }
+    .cover-type-label { font-size: 20pt; font-weight: 700; text-align: center; padding: 16px 20px 8px; }
+    .cover-info-block { margin: 0; flex: 1; }
     .cover-info-row { display: flex; flex-direction: column; align-items: center; padding: 8px 14px; border-bottom: 1px solid #f1f5f9; }
     .cover-info-lbl { font-size: 8pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: #94a3b8; }
     .cover-info-val { font-size: 11pt; font-weight: 600; text-align: center; }
     .cover-footer {
       display: flex; justify-content: space-between; padding: 10px 14px;
       font-size: 9pt; font-weight: 500;
+      margin: 0 -14mm -12mm; /* bleed past all page margins */
       -webkit-print-color-adjust: exact; print-color-adjust: exact;
     }
 

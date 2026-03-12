@@ -237,7 +237,7 @@ function buildReportHTML() {
 
     return `<div class="page page-cover">
       <div class="cover-top" style="background:${e(brand)};-webkit-print-color-adjust:exact;print-color-adjust:exact;">
-        <div class="cover-logo-centered">${logoHtml}</div>
+        ${logoHtml}
       </div>
       <div class="cover-photo-area">${propPhotoHtml}</div>
       <div class="cover-type-label" style="color:${e(bodyTxt)};">${e(typeLabel.value)}</div>
@@ -594,12 +594,6 @@ function buildReportHTML() {
     /* ── Pages ── */
     .page { page-break-after: always; }
     .page:last-child { page-break-after: auto; }
-    .page-cover {
-      page-break-after: always;
-      position: relative;
-      height: 297mm;
-      overflow: hidden;
-    }
 
     /* ── Section header bar ── */
     .section-hdr {
@@ -647,26 +641,27 @@ function buildReportHTML() {
     .disclaimer-body { font-size: 9pt; line-height: 1.75; white-space: pre-wrap; }
 
     /* ── Cover ── */
-    /* First page has margin:0 so all elements are naturally full-bleed.
-       The cover div is exactly 297mm tall; the footer is absolutely pinned to the bottom. */
+    /* @page :first { margin:0 } — all cover elements are naturally full-bleed.
+       .page-cover is exactly 297mm tall; footer is absolute at bottom. */
+    .page-cover { page-break-after: always; position: relative; height: 297mm; overflow: hidden; }
     .cover-top {
-      padding: 48px 14mm 40px;
-      display: flex; flex-direction: column; align-items: center; gap: 16px;
+      padding: 20px 14mm 16px;
+      display: flex; flex-direction: column; justify-content: center; align-items: center; min-height: 42mm;
       -webkit-print-color-adjust: exact; print-color-adjust: exact;
     }
-    .cover-logo-centered { display: flex; justify-content: center; width: 100%; }
-    .cover-logo-img { max-height: 110px; max-width: 380px; width: auto; height: auto; object-fit: contain; display: block; }
+    .cover-logo-img { max-height: 28mm; max-width: calc(100% - 28mm); width: auto; height: auto; object-fit: contain; display: block; }
     .cover-logo-fallback {
       display: inline-flex; align-items: center; justify-content: center;
-      width: 90px; height: 90px; background: rgba(255,255,255,0.18); border-radius: 10px;
-      font-size: 30px; font-weight: 700; color: white;
+      width: 70px; height: 70px; background: rgba(255,255,255,0.18); border-radius: 10px;
+      font-size: 26px; font-weight: 700; color: white;
     }
     .cover-photo-area { background: #f1f5f9; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .cover-photo-img  { width: 100%; height: 260px; object-fit: cover; display: block; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .cover-photo-placeholder { height: 260px; display: flex; align-items: center; justify-content: center; color: #94a3b8; font-size: 10pt; }
-    .cover-type-label { font-size: 20pt; font-weight: 700; text-align: center; padding: 18px 14mm 6px; }
+    .cover-photo-img  { width: 100%; height: 90mm; object-fit: cover; display: block; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .cover-photo-placeholder { height: 90mm; display: flex; align-items: center; justify-content: center; color: #94a3b8; font-size: 10pt; }
+    .cover-type-label { font-size: 18pt; font-weight: 700; text-align: center; padding: 14px 14mm 6px; }
     .cover-info-block { padding: 0 14mm; }
-    .cover-info-row { display: flex; flex-direction: column; align-items: center; padding: 8px 0; border-bottom: 1px solid #f1f5f9; }
+    .cover-info-row { display: flex; flex-direction: column; align-items: center; padding: 7px 0; border-top: 1px solid #f1f5f9; }
+    .cover-info-row:last-child { border-bottom: 1px solid #f1f5f9; }
     .cover-info-lbl { font-size: 8pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: #94a3b8; }
     .cover-info-val { font-size: 11pt; font-weight: 600; text-align: center; }
     .cover-footer {

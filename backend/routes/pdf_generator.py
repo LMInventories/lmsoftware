@@ -445,22 +445,30 @@ class _PDFBuilder:
     # Drawn entirely on the canvas for true edge-to-edge bleed.
 
     def _draw_cover(self, canvas, doc):
-        """onPage callback — draws the full-bleed cover page directly on canvas."""
+        """onPage callback — draws the full-bleed cover page directly on canvas.
+        Layout matches PdfExportModal.vue exactly:
+          - Brand header bar, logo left-aligned with padding
+          - Full-width property photo
+          - Type label centred below photo
+          - Info rows (ADDRESS / DATE / CLIENT) centred with dividers
+          - Brand footer bar pinned to very bottom
+        """
         from reportlab.lib.utils import ImageReader
         canvas.saveState()
-        pw, ph = self.pagesize
-        cl     = self.cl
-        insp   = self.inspection
-        brand  = self.brand
-        hdr_c  = self.hdr_c
-        margin = self.margin
+        pw, ph  = self.pagesize
+        cl      = self.cl
+        insp    = self.inspection
+        brand   = self.brand
+        hdr_c   = self.hdr_c
+        margin  = self.margin          # 14mm — used for text inset only
 
-        # ── Header bar (edge to edge, top of page) ───────────────────────────
-        hdr_h = 22 * mm
+        # ── Header bar ───────────────────────────────────────────────────────
+        # Tall enough to give the logo generous space (matches cover-top padding ~48px+logo+40px)
+        hdr_h = 42 * mm
         canvas.setFillColor(brand)
         canvas.rect(0, ph - hdr_h, pw, hdr_h, fill=1, stroke=0)
 
-        # Logo
+        # Logo — centred horizontally, vertically centred in bar
         logo_url = cl.get('logo')
         logo_drawn = False
         if logo_url:
@@ -469,24 +477,25 @@ class _PDFBuilder:
                 data = urllib.request.urlopen(req, timeout=8).read()
                 img  = ImageReader(io.BytesIO(data))
                 iw, ih = img.getSize()
-                max_h  = hdr_h - 6*mm
-                max_w  = 70*mm
-                scale  = min(max_w/iw, max_h/ih)
+                max_h = hdr_h - 12*mm
+                max_w = pw - 2*margin
+                scale = min(max_w/iw, max_h/ih)
                 dw, dh = iw*scale, ih*scale
-                canvas.drawImage(img, margin, ph - hdr_h + (hdr_h - dh)/2, dw, dh, mask='auto')
+                x = (pw - dw) / 2
+                y = ph - hdr_h + (hdr_h - dh) / 2
+                canvas.drawImage(img, x, y, dw, dh, mask='auto')
                 logo_drawn = True
             except Exception:
                 pass
-
         if not logo_drawn:
             initials = ''.join(w[0] for w in (cl.get('company') or cl.get('name') or 'IP').split() if w)[:2].upper()
             canvas.setFillColor(hdr_c)
-            canvas.setFont('Helvetica-Bold', 20)
-            canvas.drawString(margin + 4*mm, ph - hdr_h + hdr_h*0.3, initials)
+            canvas.setFont('Helvetica-Bold', 24)
+            canvas.drawCentredString(pw/2, ph - hdr_h + (hdr_h - 8*mm) / 2, initials)
 
-        # ── Property photo (edge to edge, below header) ──────────────────────
-        photo_h = 100 * mm
-        photo_y = ph - hdr_h - photo_h
+        # ── Property photo — full width, below header ─────────────────────────
+        photo_h   = 90 * mm
+        photo_y   = ph - hdr_h - photo_h
         photo_url = self.prop.get('overview_photo')
         photo_drawn = False
         if photo_url:
@@ -504,47 +513,57 @@ class _PDFBuilder:
             canvas.rect(0, photo_y, pw, photo_h, fill=1, stroke=0)
             canvas.setFillColor(_SLATE_400)
             canvas.setFont('Helvetica', 11)
-            canvas.drawCentredString(pw/2, photo_y + photo_h/2, 'Property overview photo')
+            canvas.drawCentredString(pw/2, photo_y + photo_h/2 - 4, 'Property overview photo')
 
-        # ── Type label — centred below photo ─────────────────────────────────
-        type_label_y = photo_y - 12*mm
+        # ── Type label — centred below photo ──────────────────────────────────
+        type_y = photo_y - 14*mm
         canvas.setFillColor(self.body_c)
         canvas.setFont('Helvetica-Bold', 18)
-        canvas.drawCentredString(pw/2, type_label_y, self.type_label)
+        canvas.drawCentredString(pw/2, type_y, self.type_label)
 
-        # ── Info rows — centred, no Clerk ─────────────────────────────────────
+        # ── Info rows — centred, divider between every row ───────────────────
+        footer_h = 10 * mm
+        row_h    = 12 * mm
         info_rows = [
             ('ADDRESS', self.prop.get('address') or ''),
             ('DATE',    self._fmt_date(insp.conduct_date or insp.scheduled_date)),
             ('CLIENT',  cl.get('company') or cl.get('name') or ''),
         ]
-
-        footer_h = 10 * mm
-        row_h    = 10 * mm
-        info_top = type_label_y - 6*mm
+        info_top = type_y - 7*mm
 
         for i, (lbl, val) in enumerate(info_rows):
-            y = info_top - (i + 1) * row_h + 3*mm
-            if i < len(info_rows) - 1:
-                canvas.setStrokeColor(_SLATE_100)
-                canvas.setLineWidth(0.5)
-                canvas.line(margin, y - 1*mm, pw - margin, y - 1*mm)
+            # top of this row
+            row_top = info_top - i * row_h
+            # label sits near top of row, value below it
+            lbl_y = row_top - 3.5*mm
+            val_y = lbl_y   - 4.5*mm
+            # divider above every row
+            canvas.setStrokeColor(_SLATE_100)
+            canvas.setLineWidth(0.5)
+            canvas.line(margin, row_top, pw - margin, row_top)
+            # label
             canvas.setFillColor(_SLATE_400)
             canvas.setFont('Helvetica-Bold', 7)
-            canvas.drawCentredString(pw/2, y + 3*mm, lbl)
+            canvas.drawCentredString(pw/2, lbl_y, lbl)
+            # value
             canvas.setFillColor(self.body_c)
             canvas.setFont('Helvetica-Bold', 11)
-            canvas.drawCentredString(pw/2, y - 2*mm, val[:80])
+            canvas.drawCentredString(pw/2, val_y, val[:80])
+        # closing divider after last row
+        close_y = info_top - len(info_rows) * row_h
+        canvas.setStrokeColor(_SLATE_100)
+        canvas.setLineWidth(0.5)
+        canvas.line(margin, close_y, pw - margin, close_y)
 
-        # ── Footer bar (edge to edge, bottom of page) ────────────────────────
+        # ── Footer bar — edge to edge, pinned to very bottom ─────────────────
         canvas.setFillColor(brand)
         canvas.rect(0, 0, pw, footer_h, fill=1, stroke=0)
         footer_name = cl.get('company') or cl.get('name') or 'InspectPro'
         canvas.setFillColor(hdr_c)
         canvas.setFont('Helvetica-Bold', 9)
-        canvas.drawString(margin, footer_h * 0.35, footer_name)
+        canvas.drawString(margin, footer_h * 0.38, footer_name)
         canvas.setFont('Helvetica', 9)
-        canvas.drawRightString(pw - margin, footer_h * 0.35, 'Confidential')
+        canvas.drawRightString(pw - margin, footer_h * 0.38, 'Confidential')
 
         canvas.restoreState()
 

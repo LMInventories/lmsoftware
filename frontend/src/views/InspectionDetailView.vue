@@ -932,6 +932,7 @@ onMounted(() => {
         :inspection="inspection"
         :template="pdfTemplate"
         :report-data="pdfReportData"
+        :client-settings="inspection.client || {}"
         @close="showPdfExport = false"
       />
 

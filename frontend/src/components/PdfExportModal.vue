@@ -226,12 +226,8 @@ function buildReportHTML() {
     const infoRows = [
       { label: 'Address', value: pr.address || insp.property_address || '' },
       { label: 'Date',    value: fmtDate(insp.conduct_date) },
-      { label: 'Clerk',   value: insp.inspector?.name || insp.inspector_name || '' },
       { label: 'Client',  value: cl.company || cl.name || '' },
     ]
-    if (insp.typist?.name && insp.typist.name !== 'AI Typist') {
-      infoRows.push({ label: 'Typist', value: insp.typist.name })
-    }
     const infoHtml = infoRows.map(r =>
       `<div class="cover-info-row">
         <div class="cover-info-lbl">${e(r.label)}</div>
@@ -242,9 +238,9 @@ function buildReportHTML() {
     return `<div class="page page-cover">
       <div class="cover-top" style="background:${e(brand)};-webkit-print-color-adjust:exact;print-color-adjust:exact;">
         <div class="cover-logo-centered">${logoHtml}</div>
-        <div class="cover-type-badge" style="color:${e(hdrTxt)};">${e(typeLabel.value)}</div>
       </div>
       <div class="cover-photo-area">${propPhotoHtml}</div>
+      <div class="cover-type-label" style="color:${e(bodyTxt)};">${e(typeLabel.value)}</div>
       <div class="cover-info-block">${infoHtml}</div>
       <div class="cover-footer" style="background:${e(brand)};color:${e(hdrTxt)};-webkit-print-color-adjust:exact;print-color-adjust:exact;">
         <span>${e(cl.company || cl.name || 'InspectPro')}</span>
@@ -657,17 +653,22 @@ function buildReportHTML() {
       width: 90px; height: 90px; background: rgba(255,255,255,0.18); border-radius: 10px;
       font-size: 30px; font-weight: 700; color: white;
     }
-    .cover-type-badge { font-size: 20pt; font-weight: 700; text-align: center; padding: 0 20px; }
-    .cover-photo-area { background: #f1f5f9; margin: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .cover-photo-area {
+      background: #f1f5f9;
+      margin: 0 -14mm; /* bleed past page margins */
+      -webkit-print-color-adjust: exact; print-color-adjust: exact;
+    }
     .cover-photo-img  { width: 100%; height: 300px; object-fit: cover; display: block; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .cover-photo-placeholder { height: 220px; display: flex; align-items: center; justify-content: center; color: #94a3b8; font-size: 10pt; }
+    .cover-type-label { font-size: 20pt; font-weight: 700; text-align: center; padding: 16px 20px 8px; }
     .cover-info-block { margin: 0; }
-    .cover-info-row { display: flex; padding: 10px 14px; border-bottom: 1px solid #f1f5f9; align-items: baseline; gap: 14px; }
-    .cover-info-lbl { width: 120px; font-size: 8pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: #94a3b8; flex-shrink: 0; }
-    .cover-info-val { font-size: 11pt; font-weight: 600; }
+    .cover-info-row { display: flex; flex-direction: column; align-items: center; padding: 8px 14px; border-bottom: 1px solid #f1f5f9; }
+    .cover-info-lbl { font-size: 8pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: #94a3b8; }
+    .cover-info-val { font-size: 11pt; font-weight: 600; text-align: center; }
     .cover-footer {
       display: flex; justify-content: space-between; padding: 10px 14px;
       font-size: 9pt; font-weight: 500;
+      margin: 0 -14mm -12mm; /* bleed past all page margins */
       -webkit-print-color-adjust: exact; print-color-adjust: exact;
     }
 

@@ -12,7 +12,7 @@ Env vars required on Render:
   SMTP_USER       no-reply@inspectpro.co.uk  (or your sending address)
   SMTP_PASSWORD   mailbox password
   SMTP_FROM       no-reply@inspectpro.co.uk
-  SMTP_FROM_REPORTS  reports@inspectpro.co.uk  (for PDF emails)
+  SMTP_FROM_REPORTS  no-reply@inspectpro.co.uk  (for PDF emails)
   APP_BASE_URL    https://app.lminventories.co.uk   (used in email links)
 """
 

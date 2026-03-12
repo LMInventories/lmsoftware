@@ -278,41 +278,40 @@ def update_inspection(inspection_id):
         # ── Generate PDF and email report when inspection is Complete ───────
         if data['status'] == 'complete' and old_status != 'complete':
             try:
-                print(f'[pdf] inspection {inspection.id} marked complete — starting PDF generation')
+                import sys, traceback
+                def _log(msg): print(f'[pdf] {msg}', file=sys.stderr, flush=True)
 
-                # 1. Check property + client are accessible
+                _log(f'inspection {inspection.id} marked complete — starting PDF generation')
+
                 prop   = inspection.property
                 client = prop.client if prop else None
-                print(f'[pdf] property={getattr(prop,"address","NONE")} client={getattr(client,"name","NONE")} client_email={getattr(client,"email","NONE")}')
-                print(f'[pdf] client_email_override={inspection.client_email_override!r}  tenant_email={inspection.tenant_email!r}')
+                _log(f'property={getattr(prop, "address", "NONE")}  client={getattr(client, "name", "NONE")}  email={getattr(client, "email", "NONE")}')
+                _log(f'override={inspection.client_email_override!r}  tenant={inspection.tenant_email!r}')
 
-                # 2. Build recipient list
                 from routes.pdf_generator import generate_inspection_pdf, _get_report_recipients
                 recipients = _get_report_recipients(inspection)
-                print(f'[pdf] recipients resolved: {recipients}')
+                _log(f'recipients: {recipients}')
 
                 if not recipients:
-                    print(f'[pdf] WARNING: no recipients — PDF will not be sent. Set client email or client_email_override.')
+                    _log('WARNING: no recipients — skipping send')
                 elif not client:
-                    print(f'[pdf] WARNING: no client object — cannot send email.')
+                    _log('WARNING: no client object — skipping send')
                 else:
-                    # 3. Generate PDF
-                    print(f'[pdf] generating PDF...')
+                    _log('generating PDF...')
                     pdf_bytes = generate_inspection_pdf(inspection.id)
-                    print(f'[pdf] PDF generated OK — {len(pdf_bytes)} bytes')
+                    _log(f'PDF generated OK — {len(pdf_bytes)} bytes')
 
-                    # 4. Send email
                     from routes.email_service import send_report_complete
                     ok, err = send_report_complete(inspection, client, prop, pdf_bytes, recipients=recipients)
                     if ok:
-                        print(f'[pdf] email sent OK → {recipients}')
+                        _log(f'email sent OK → {recipients}')
                     else:
-                        print(f'[pdf] email FAILED: {err}')
+                        _log(f'email FAILED: {err}')
 
-            except Exception as pdf_err:
-                import traceback
-                print(f'[pdf] EXCEPTION during report generation/send:')
-                print(traceback.format_exc())
+            except Exception:
+                import sys, traceback
+                print('[pdf] EXCEPTION:', file=sys.stderr, flush=True)
+                print(traceback.format_exc(), file=sys.stderr, flush=True)
 
     if 'inspector_id' in data:
         if data['inspector_id'] is None:

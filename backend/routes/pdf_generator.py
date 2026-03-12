@@ -827,15 +827,20 @@ def _slugify(name: str) -> str:
     import re
     return re.sub(r'[^a-z0-9]+', '_', name.lower()).strip('_')
 
-def _infer_type(cols: list) -> str:
-    """Mirror of InspectionReportView._inferType()"""
+def _infer_type(cols: list, name: str = '') -> str:
+    """Mirror of InspectionReportView._inferType(), with name hint for ambiguous cases."""
     c = cols or []
+    n = name.lower()
     if 'reading'     in c: return 'meter_readings'
     if 'cleanliness' in c: return 'cleaning_summary'
-    if 'condition'   in c: return 'condition_summary'
+    # answer-based checks must come before 'condition' check
     if 'name' in c and 'answer' in c and 'question' in c: return 'fire_door_safety'
+    # Fire door and smoke alarms share identical columns — disambiguate by name
+    if 'answer' in c and 'name' in c and ('fire' in n or 'door' in n): return 'fire_door_safety'
     if 'answer' in c and 'question' in c: return 'smoke_alarms'
-    if 'answer' in c and 'name'     in c: return 'smoke_alarms'
+    if 'answer' in c and 'description' in c: return 'health_safety'
+    if 'answer' in c and 'name' in c: return 'smoke_alarms'
+    if 'condition'   in c: return 'condition_summary'
     if 'description' in c: return 'keys'
     return 'condition_summary'
 
@@ -877,11 +882,10 @@ def _load_fixed_sections() -> list:
         if not raw.get('enabled', True):
             continue
         cols     = raw.get('columns', [])
-        sec_type = _infer_type(cols)
-        rd_key   = f'fs_{sec_idx}_{raw["name"].lower().replace(chr(32),"_").replace(chr(38),"_").replace(chr(45),"_")}'
-        # Use same slug logic as frontend: /[^a-z0-9]/g → '_'
+        sec_type = _infer_type(cols, raw.get('name', ''))
         import re
-        rd_key = f'fs_{sec_idx}_{re.sub(chr(91)+"^a-z0-9"+chr(93), "_", raw["name"].lower())}'
+        slug   = re.sub(r'[^a-z0-9]', '_', raw['name'].lower())
+        rd_key = f'fs_{sec_idx}_{slug}'
         rows    = [_adapt_item(item, sec_type, sec_idx, ri) for ri, item in enumerate(raw.get('items') or [])]
         result.append({
             'id':      rd_key,

@@ -168,14 +168,21 @@ class _PDFBuilder:
         # ── Fixed sections — from system_settings or DEFAULT_FIXED_SECTIONS ──
         self.fixed_sections = _load_fixed_sections()
 
+        # ── Report data — loaded early so rooms can use _roomNames override ──
+        self.rd = {}
+        if inspection.report_data:
+            try:
+                self.rd = json.loads(inspection.report_data) if isinstance(inspection.report_data, str) else inspection.report_data
+            except Exception:
+                pass
+
         # ── Rooms — from template.sections filtered by section_type='room' ──
         # report_data keys rooms by String(s.id) — the DB section id.
         # Items use item.id as the row key, and item.name as the label.
         self.rooms = []
         tmpl = inspection.template
         if tmpl:
-            # Apply any clerk-saved room name overrides from report_data
-            room_names = (self.rd or {}).get('_roomNames', {})
+            room_names = self.rd.get('_roomNames', {})
             for s in sorted(tmpl.sections or [], key=lambda x: x.order_index):
                 if s.section_type == 'room':
                     name = room_names.get(str(s.id), s.name)
@@ -186,21 +193,13 @@ class _PDFBuilder:
                             {
                                 'id':          item.id,
                                 'name':        item.name,
-                                'label':       item.name,   # frontend uses label
+                                'label':       item.name,
                                 'description': item.description or '',
                                 'hasCondition': item.requires_condition is not False,
                             }
                             for item in sorted(s.items or [], key=lambda i: i.order_index)
                         ],
                     })
-
-        # ── Report data ──────────────────────────────────────────────────────
-        self.rd = {}
-        if inspection.report_data:
-            try:
-                self.rd = json.loads(inspection.report_data) if isinstance(inspection.report_data, str) else inspection.report_data
-            except Exception:
-                pass
 
         # ── Action catalogue — not used in current schema, empty list ────────
         self.action_catalogue = []

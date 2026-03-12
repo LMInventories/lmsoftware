@@ -347,7 +347,7 @@ async function fetchUsers() {
 
 function openModal() {
   form.value = {
-    client_id: null,
+    client_id: authStore.isClient ? authStore.user.client_id : null,
     property_id: null,
     inspection_type: 'check_in',
     inspector_id: null,
@@ -528,7 +528,7 @@ onMounted(() => {
   <div class="page">
     <div class="page-header">
       <h1>📋 Inspections</h1>
-      <button v-if="authStore.isAdmin || authStore.isManager" @click="openModal" class="btn-primary">➕ New Inspection</button>
+      <button v-if="authStore.isAdmin || authStore.isManager || authStore.isClient" @click="openModal" class="btn-primary">➕ New Inspection</button>
     </div>
 
     <!-- Tabs -->
@@ -686,8 +686,8 @@ onMounted(() => {
             <div class="modal-col">
               <div class="col-section-title">Location &amp; Scheduling</div>
 
-              <!-- Portfolio -->
-              <div class="form-group">
+              <!-- Portfolio — hidden for client role (auto-filled) -->
+              <div v-if="!authStore.isClient" class="form-group">
                 <label>Portfolio *</label>
                 <select v-model="form.client_id" @change="onClientChange" required>
                   <option :value="null" disabled>Select a portfolio...</option>

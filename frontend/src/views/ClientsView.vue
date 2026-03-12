@@ -18,7 +18,8 @@ const form = ref({
   company: '',
   address: '',
   primary_color: '#1E3A8A',
-  logo: null
+  logo: null,
+  password: ''
 })
 
 // Filter
@@ -97,7 +98,7 @@ async function openViewModal(client) {
 
 function openCreateModal() {
   editingClient.value = null
-  form.value = { name: '', email: '', phone: '', company: '', address: '', primary_color: '#1E3A8A', logo: null }
+  form.value = { name: '', email: '', phone: '', company: '', address: '', primary_color: '#1E3A8A', logo: null, password: '' }
   logoPreview.value = null
   showEditModal.value = true
 }
@@ -120,7 +121,8 @@ function openEditModal(client) {
 async function handleSubmit() {
   try {
     if (editingClient.value) {
-      await api.updateClient(editingClient.value.id, form.value)
+      const { password, ...updatePayload } = form.value
+      await api.updateClient(editingClient.value.id, updatePayload)
     } else {
       await api.createClient(form.value)
     }
@@ -383,6 +385,13 @@ onMounted(() => {
                   <label>Address</label>
                   <textarea v-model="form.address" class="input-field textarea-field" rows="3" placeholder="Client's business address"></textarea>
                 </div>
+
+                <!-- Portal access — only shown when creating a new client -->
+                <div v-if="!editingClient" class="form-group">
+                  <label>Portal Password <span class="label-optional">(optional)</span></label>
+                  <input v-model="form.password" type="password" class="input-field" placeholder="Leave blank to skip portal access" autocomplete="new-password" />
+                  <p class="helper-text">If set, the client will receive a welcome email with login credentials so they can access their inspections and properties directly.</p>
+                </div>
               </div>
 
               <!-- Right column — branding -->
@@ -585,6 +594,7 @@ h1 { font-size: 21px; font-weight: 700; color: #0f172a; margin: 0 0 1px; }
 .input-field:focus { outline: none; border-color: #6366f1; box-shadow: 0 0 0 2px rgba(99,102,241,0.08); }
 .textarea-field { resize: vertical; min-height: 70px; }
 .helper-text { margin-top: 4px; font-size: 11px; color: #94a3b8; }
+.label-optional { font-size: 10px; font-weight: 500; color: #94a3b8; margin-left: 4px; text-transform: uppercase; letter-spacing: 0.3px; }
 
 /* Logo upload */
 .logo-upload-area { border: 2px dashed #e2e8f0; border-radius: 9px; cursor: pointer; transition: all 0.15s; overflow: hidden; }

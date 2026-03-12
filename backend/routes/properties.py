@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required
 from models import db, Property
-from permissions import get_current_user, filter_properties_for_user, is_admin_or_manager
+from permissions import get_current_user, filter_properties_for_user, is_admin_or_manager, is_client
 
 properties_bp = Blueprint('properties', __name__)
 
@@ -18,6 +18,11 @@ def get_properties():
 def get_property(property_id):
     user = get_current_user()
     prop = Property.query.get_or_404(property_id)
+    # Clients can only view properties belonging to their client
+    if user.role == 'client':
+        if prop.client_id != user.client_id:
+            return jsonify({'error': 'Forbidden'}), 403
+        return jsonify(prop.to_dict())
     # Clerks can only view properties linked to their inspections
     if not is_admin_or_manager(user):
         from models import Inspection
@@ -33,9 +38,13 @@ def get_property(property_id):
 @jwt_required()
 def create_property():
     user = get_current_user()
-    if not is_admin_or_manager(user):
+    if not is_admin_or_manager(user) and not is_client(user):
         return jsonify({'error': 'Forbidden'}), 403
     data = request.json
+
+    # Clients can only create properties under their own client_id
+    if is_client(user):
+        data['client_id'] = user.client_id
     prop = Property(
         address=data.get('address'),
         property_type=data.get('property_type', 'residential'),
@@ -62,9 +71,12 @@ def create_property():
 @jwt_required()
 def update_property(property_id):
     user = get_current_user()
-    if not is_admin_or_manager(user):
-        return jsonify({'error': 'Forbidden'}), 403
     prop = Property.query.get_or_404(property_id)
+    if is_client(user):
+        if prop.client_id != user.client_id:
+            return jsonify({'error': 'Forbidden'}), 403
+    elif not is_admin_or_manager(user):
+        return jsonify({'error': 'Forbidden'}), 403
     data = request.json
     if 'address'           in data: prop.address           = data['address']
     if 'property_type'     in data: prop.property_type     = data['property_type']
@@ -91,9 +103,12 @@ def update_property(property_id):
 def upload_property_photo(property_id):
     """Accept a base64-encoded photo string and store it on the property."""
     user = get_current_user()
-    if not is_admin_or_manager(user):
-        return jsonify({'error': 'Forbidden'}), 403
     prop = Property.query.get_or_404(property_id)
+    if is_client(user):
+        if prop.client_id != user.client_id:
+            return jsonify({'error': 'Forbidden'}), 403
+    elif not is_admin_or_manager(user):
+        return jsonify({'error': 'Forbidden'}), 403
     data = request.json
     if not data or 'photo' not in data:
         return jsonify({'error': 'No photo provided'}), 400

@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from models import db, Inspection, Property, User, Template
-from permissions import get_current_user, require_admin_or_manager, filter_inspections_for_user, is_admin_or_manager
+from permissions import get_current_user, require_admin_or_manager, filter_inspections_for_user, is_admin_or_manager, is_client
 from datetime import datetime
 import json
 
@@ -128,6 +128,10 @@ def get_inspection(inspection_id):
     # Typists can only view their own inspections in processing
     if user.role == 'typist' and (inspection.typist_id != user.id or inspection.status != 'processing'):
         return jsonify({'error': 'Forbidden'}), 403
+    # Clients can only view inspections belonging to their client's properties
+    if user.role == 'client':
+        if not inspection.property or inspection.property.client_id != user.client_id:
+            return jsonify({'error': 'Forbidden'}), 403
     return jsonify(inspection_detail(inspection))
 
 
@@ -169,9 +173,16 @@ def get_property_history(property_id):
 @jwt_required()
 def create_inspection():
     user = get_current_user()
-    if not is_admin_or_manager(user):
+    if not is_admin_or_manager(user) and not is_client(user):
         return jsonify({'error': 'Forbidden'}), 403
     data = request.json
+
+    # Clients can only create inspections on their own properties
+    if is_client(user):
+        from models import Property
+        prop = Property.query.get(data.get('property_id'))
+        if not prop or prop.client_id != user.client_id:
+            return jsonify({'error': 'Forbidden'}), 403
 
     # ── Template resolution ──────────────────────────────────────────────
     template_id = data.get('template_id')
@@ -263,6 +274,10 @@ def update_inspection(inspection_id):
             return jsonify({'error': 'Typists can only update report data and status'}), 403
         if 'status' in data and data['status'] not in ('processing', 'review'):
             return jsonify({'error': 'Typists can only move inspection to review'}), 403
+    # Clients can only update inspections on their own properties
+    if user.role == 'client':
+        if not inspection.property or inspection.property.client_id != user.client_id:
+            return jsonify({'error': 'Forbidden'}), 403
 
     if 'status' in data:
         old_status = inspection.status
@@ -278,40 +293,41 @@ def update_inspection(inspection_id):
         # ── Generate PDF and email report when inspection is Complete ───────
         if data['status'] == 'complete' and old_status != 'complete':
             try:
-                import sys, traceback
-                def _log(msg): print(f'[pdf] {msg}', file=sys.stderr, flush=True)
+                print(f'[pdf] inspection {inspection.id} marked complete — starting PDF generation')
 
-                _log(f'inspection {inspection.id} marked complete — starting PDF generation')
-
+                # 1. Check property + client are accessible
                 prop   = inspection.property
                 client = prop.client if prop else None
-                _log(f'property={getattr(prop, "address", "NONE")}  client={getattr(client, "name", "NONE")}  email={getattr(client, "email", "NONE")}')
-                _log(f'override={inspection.client_email_override!r}  tenant={inspection.tenant_email!r}')
+                print(f'[pdf] property={getattr(prop,"address","NONE")} client={getattr(client,"name","NONE")} client_email={getattr(client,"email","NONE")}')
+                print(f'[pdf] client_email_override={inspection.client_email_override!r}  tenant_email={inspection.tenant_email!r}')
 
+                # 2. Build recipient list
                 from routes.pdf_generator import generate_inspection_pdf, _get_report_recipients
                 recipients = _get_report_recipients(inspection)
-                _log(f'recipients: {recipients}')
+                print(f'[pdf] recipients resolved: {recipients}')
 
                 if not recipients:
-                    _log('WARNING: no recipients — skipping send')
+                    print(f'[pdf] WARNING: no recipients — PDF will not be sent. Set client email or client_email_override.')
                 elif not client:
-                    _log('WARNING: no client object — skipping send')
+                    print(f'[pdf] WARNING: no client object — cannot send email.')
                 else:
-                    _log('generating PDF...')
+                    # 3. Generate PDF
+                    print(f'[pdf] generating PDF...')
                     pdf_bytes = generate_inspection_pdf(inspection.id)
-                    _log(f'PDF generated OK — {len(pdf_bytes)} bytes')
+                    print(f'[pdf] PDF generated OK — {len(pdf_bytes)} bytes')
 
+                    # 4. Send email
                     from routes.email_service import send_report_complete
                     ok, err = send_report_complete(inspection, client, prop, pdf_bytes, recipients=recipients)
                     if ok:
-                        _log(f'email sent OK → {recipients}')
+                        print(f'[pdf] email sent OK → {recipients}')
                     else:
-                        _log(f'email FAILED: {err}')
+                        print(f'[pdf] email FAILED: {err}')
 
-            except Exception:
-                import sys, traceback
-                print('[pdf] EXCEPTION:', file=sys.stderr, flush=True)
-                print(traceback.format_exc(), file=sys.stderr, flush=True)
+            except Exception as pdf_err:
+                import traceback
+                print(f'[pdf] EXCEPTION during report generation/send:')
+                print(traceback.format_exc())
 
     if 'inspector_id' in data:
         if data['inspector_id'] is None:

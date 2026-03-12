@@ -164,7 +164,7 @@ function blankForm() {
     detachment_type: '', elevation: '',
     parking: false, garden: false, elevator: false,
     meter_electricity: '', meter_gas: '', meter_heat: '', meter_water: '',
-    client_id: null
+    client_id: authStore.isClient ? authStore.user.client_id : null
   }
 }
 
@@ -215,7 +215,8 @@ function openEditModal(property) {
 
 async function handleSubmit() {
   const address = buildAddress()
-  if (!address || !form.value.client_id) { toast.warning('Address and portfolio are required'); return }
+  if (!address) { toast.warning('Address is required'); return }
+  if (!form.value.client_id) { toast.warning('Portfolio is required'); return }
   const payload = {
     address,
     property_type: 'residential',
@@ -283,7 +284,7 @@ onMounted(() => { fetchProperties(); fetchClients() })
         <h1>Properties</h1>
         <p class="subtitle">{{ filteredProperties.length }} of {{ properties.length }} shown</p>
       </div>
-      <button v-if="!authStore.isClient" @click="openCreateModal" class="btn-primary">+ Add Property</button>
+      <button v-if="authStore.isAdmin || authStore.isManager || authStore.isClient" @click="openCreateModal" class="btn-primary">+ Add Property</button>
     </div>
 
     <div class="filters-bar">
@@ -396,8 +397,8 @@ onMounted(() => { fetchProperties(); fetchClients() })
             <div class="modal-col">
               <div class="col-section-title">Property Details</div>
 
-              <!-- Portfolio -->
-              <div class="form-group">
+              <!-- Portfolio — hidden for client role (auto-filled) -->
+              <div v-if="!authStore.isClient" class="form-group">
                 <label>Portfolio *</label>
                 <select v-model="form.client_id" required>
                   <option :value="null" disabled>Select a portfolio...</option>

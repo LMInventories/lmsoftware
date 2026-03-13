@@ -11,7 +11,11 @@ export const useAuthStore = defineStore('auth', {
     isManager: (state) => state.user?.role === 'manager',
     isClerk:   (state) => state.user?.role === 'clerk',
     isTypist:  (state) => state.user?.role === 'typist' && !state.user?.is_ai,
-    isClient:  (state) => state.user?.role === 'client',
+    isClient:       (state) => state.user?.role === 'client',
+    typistMode:     (state) => state.user?.typist_mode ?? null,
+    isAiInstant:    (state) => state.user?.typist_mode === 'ai_instant',
+    isAiProcessing: (state) => state.user?.typist_mode === 'ai_processing',
+    isHumanTypist:  (state) => state.user?.typist_mode === 'human',
   },
   actions: {
     async login(credentials) {

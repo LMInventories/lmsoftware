@@ -14,12 +14,15 @@ class User(db.Model):
     email         = db.Column(db.String(120), unique=True, nullable=False)
     phone         = db.Column(db.String(20))
     password_hash      = db.Column(db.String(255), nullable=False)
-    role               = db.Column(db.String(20), nullable=False)  # admin, manager, clerk, typist
+    role               = db.Column(db.String(20), nullable=False)  # admin, manager, clerk, typist, client
     color              = db.Column(db.String(7), default='#6366f1')
     is_ai              = db.Column(db.Boolean, default=False, nullable=False)
     created_at         = db.Column(db.DateTime, default=datetime.utcnow)
     reset_token        = db.Column(db.String(100), nullable=True)
     reset_token_expiry = db.Column(db.DateTime, nullable=True)
+    client_id          = db.Column(db.Integer, db.ForeignKey('clients.id'), nullable=True)
+    # clerk-only: 'ai_instant' | 'ai_processing' | 'human'
+    typist_mode        = db.Column(db.String(20), nullable=True)
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -33,10 +36,12 @@ class User(db.Model):
             'name':       self.name,
             'email':      self.email,
             'phone':      self.phone,
-            'role':       self.role,
-            'color':      self.color,
-            'is_ai':      self.is_ai,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'role':        self.role,
+            'color':       self.color,
+            'is_ai':       self.is_ai,
+            'client_id':   self.client_id,
+            'typist_mode': self.typist_mode,
+            'created_at':  self.created_at.isoformat() if self.created_at else None,
         }
 
 

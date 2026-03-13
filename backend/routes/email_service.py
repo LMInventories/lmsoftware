@@ -476,7 +476,28 @@ def send_welcome_client(client, plain_password):
     return _send(SMTP_FROM, client.email, subject, _wrap(body, subject))
 
 
-# ── 4. Typist assigned to inspection (processing stage) ──────────────────────
+# ── 4. Password reset ────────────────────────────────────────────────────────
+
+def send_password_reset(user, reset_url):
+    """
+    Send a password reset link to the user.
+    reset_url: full URL including token, e.g. https://app.lminventories.co.uk/reset-password?token=abc123
+    """
+    if not getattr(user, 'email', ''):
+        return False, 'No email address'
+
+    body = (
+        f'''<p style="margin:0 0 12px;font-family:Arial,Helvetica,sans-serif;font-size:17px;font-weight:bold;color:#1e293b;">Reset your InspectPro password</p>'''
+        f'''<p style="margin:0 0 16px;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#475569;">Hi {user.name}, we received a request to reset your password. Click the button below to choose a new one. This link expires in 1 hour.</p>'''
+        + _btn('Reset Password', reset_url)
+        + '''<p style="margin:16px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#94a3b8;">If you didn\'t request a password reset, you can safely ignore this email — your password won\'t change.</p>'''
+    )
+
+    subject = 'InspectPro — Reset your password'
+    return _send(SMTP_FROM, user.email, subject, _wrap(body, subject))
+
+
+# ── 5. Typist assigned to inspection (processing stage) ──────────────────────
 
 def send_typist_assignment(typist, inspection, property_obj, client):
     """

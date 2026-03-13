@@ -18,6 +18,11 @@ const router = createRouter({
       name: 'Login',
       component: LoginView
     },
+    {
+      path: '/reset-password',
+      name: 'ResetPassword',
+      component: () => import('../views/ResetPasswordView.vue')
+    },
 
     // All desktop routes wrapped in MainLayout sidebar
     {

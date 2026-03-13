@@ -14,8 +14,9 @@ def create_app():
     # ── Database ──────────────────────────────────────────────────────────────
     database_url = os.environ.get('DATABASE_URL')
     if database_url:
-        database_url = database_url.replace('postgres://', 'postgresql+psycopg2://')
-        database_url = database_url.replace('postgresql://', 'postgresql+psycopg2://')
+        database_url = database_url.replace('postgres://', 'postgresql+psycopg://')
+        database_url = database_url.replace('postgresql://', 'postgresql+psycopg://')
+        database_url = database_url.replace('postgresql+psycopg2://', 'postgresql+psycopg://')
         app.config['SQLALCHEMY_DATABASE_URI'] = database_url
     else:
         db_path = os.path.join(instance_path, 'inspection_system.db')
@@ -47,6 +48,7 @@ def create_app():
 
     # ── Blueprints ────────────────────────────────────────────────────────────
     from routes.auth            import auth_bp
+    from routes.auth_reset      import auth_reset_bp
     from routes.users           import users_bp
     from routes.clients         import clients_bp
     from routes.properties      import properties_bp
@@ -62,6 +64,7 @@ def create_app():
     from routes.email_notifications  import email_bp  # ← email notifications
 
     app.register_blueprint(auth_bp,            url_prefix='/api/auth')
+    app.register_blueprint(auth_reset_bp,      url_prefix='/api/auth')
     app.register_blueprint(users_bp,           url_prefix='/api/users')
     app.register_blueprint(clients_bp,         url_prefix='/api/clients')
     app.register_blueprint(properties_bp,      url_prefix='/api/properties')

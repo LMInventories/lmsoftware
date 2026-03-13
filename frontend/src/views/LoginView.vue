@@ -2,15 +2,13 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
+import api from '../api'
 
 const router = useRouter()
 const authStore = useAuthStore()
 
-const form = ref({
-  email: '',
-  password: ''
-})
-
+// ── Login ──────────────────────────────────────────────────────────────────
+const form = ref({ email: '', password: '' })
 const loading = ref(false)
 const error = ref('')
 
@@ -19,18 +17,50 @@ async function handleLogin() {
     error.value = 'Please enter email and password'
     return
   }
-
   loading.value = true
   error.value = ''
-
   try {
     await authStore.login(form.value)
     router.push('/dashboard')
   } catch (err) {
-    console.error('Login error:', err)
     error.value = err.response?.data?.error || 'Login failed. Please check your credentials.'
   } finally {
     loading.value = false
+  }
+}
+
+// ── Forgot password ────────────────────────────────────────────────────────
+const showForgot = ref(false)
+const forgotEmail = ref('')
+const forgotLoading = ref(false)
+const forgotMessage = ref('')
+const forgotError = ref('')
+
+function openForgot() {
+  forgotEmail.value = form.value.email   // pre-fill if they already typed it
+  forgotMessage.value = ''
+  forgotError.value = ''
+  showForgot.value = true
+}
+
+function closeForgot() {
+  showForgot.value = false
+}
+
+async function handleForgot() {
+  if (!forgotEmail.value) {
+    forgotError.value = 'Please enter your email address.'
+    return
+  }
+  forgotLoading.value = true
+  forgotError.value = ''
+  try {
+    await api.post('/api/auth/forgot-password', { email: forgotEmail.value })
+    forgotMessage.value = 'Check your inbox — if that email is registered, a reset link is on its way.'
+  } catch {
+    forgotError.value = 'Something went wrong. Please try again.'
+  } finally {
+    forgotLoading.value = false
   }
 }
 </script>
@@ -42,7 +72,8 @@ async function handleLogin() {
         <img src="/ip-logo.png" alt="InspectPro" class="login-logo" />
       </div>
 
-      <form @submit.prevent="handleLogin" class="login-form">
+      <!-- ── Login form ── -->
+      <form v-if="!showForgot" @submit.prevent="handleLogin" class="login-form">
         <div class="form-group">
           <label for="email">Email</label>
           <input
@@ -67,14 +98,49 @@ async function handleLogin() {
           />
         </div>
 
-        <div v-if="error" class="error-message">
-          {{ error }}
-        </div>
+        <div v-if="error" class="error-message">{{ error }}</div>
 
         <button type="submit" class="btn-login" :disabled="loading">
           {{ loading ? 'Logging in...' : 'Login' }}
         </button>
+
+        <button type="button" class="btn-forgot" @click="openForgot">
+          Forgot your password?
+        </button>
       </form>
+
+      <!-- ── Forgot password panel ── -->
+      <div v-else class="forgot-panel">
+        <h2 class="forgot-title">Reset password</h2>
+        <p class="forgot-sub">Enter your email and we'll send you a reset link.</p>
+
+        <div v-if="!forgotMessage" class="login-form">
+          <div class="form-group">
+            <label for="forgot-email">Email</label>
+            <input
+              id="forgot-email"
+              v-model="forgotEmail"
+              type="email"
+              placeholder="your@email.com"
+              autocomplete="email"
+            />
+          </div>
+
+          <div v-if="forgotError" class="error-message">{{ forgotError }}</div>
+
+          <button class="btn-login" :disabled="forgotLoading" @click="handleForgot">
+            {{ forgotLoading ? 'Sending...' : 'Send reset link' }}
+          </button>
+        </div>
+
+        <div v-else class="success-message">
+          {{ forgotMessage }}
+        </div>
+
+        <button type="button" class="btn-forgot" @click="closeForgot">
+          ← Back to login
+        </button>
+      </div>
     </div>
   </div>
 </template>
@@ -151,6 +217,17 @@ async function handleLogin() {
   text-align: center;
 }
 
+.success-message {
+  padding: 14px;
+  background: #dcfce7;
+  color: #166534;
+  border-radius: 8px;
+  font-size: 14px;
+  text-align: center;
+  line-height: 1.5;
+  margin-bottom: 4px;
+}
+
 .btn-login {
   padding: 14px;
   background: #6366f1;
@@ -174,4 +251,22 @@ async function handleLogin() {
   opacity: 0.6;
   cursor: not-allowed;
 }
+
+.btn-forgot {
+  background: none;
+  border: none;
+  color: #6366f1;
+  font-size: 14px;
+  cursor: pointer;
+  text-align: center;
+  padding: 4px;
+  transition: color 0.2s;
+}
+
+.btn-forgot:hover { color: #4f46e5; text-decoration: underline; }
+
+/* Forgot panel */
+.forgot-panel { display: flex; flex-direction: column; gap: 20px; }
+.forgot-title { font-size: 20px; font-weight: 700; color: #1e293b; margin: 0; }
+.forgot-sub { font-size: 14px; color: #64748b; margin: -12px 0 0; }
 </style>

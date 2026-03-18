@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from models import db, Inspection, Property, User, Template
-from permissions import get_current_user, require_admin_or_manager, filter_inspections_for_user, is_admin_or_manager, is_client
+from permissions import get_current_user, require_admin_or_manager, filter_inspections_for_user, is_admin_or_manager
 from datetime import datetime
 import json
 
@@ -73,11 +73,13 @@ def inspection_detail(inspection):
 
     if inspection.typist:
         result['typist'] = {
-            'id': inspection.typist.id,
-            'name': inspection.typist.name,
+            'id':    inspection.typist.id,
+            'name':  inspection.typist.name,
             'email': inspection.typist.email,
             'phone': inspection.typist.phone,
+            'is_ai': inspection.typist.is_ai,
         }
+    result['typist_is_ai'] = inspection.typist.is_ai if inspection.typist else False
 
     if inspection.template:
         result['template_name'] = inspection.template.name
@@ -128,10 +130,6 @@ def get_inspection(inspection_id):
     # Typists can only view their own inspections in processing
     if user.role == 'typist' and (inspection.typist_id != user.id or inspection.status != 'processing'):
         return jsonify({'error': 'Forbidden'}), 403
-    # Clients can only view inspections belonging to their client's properties
-    if user.role == 'client':
-        if not inspection.property or inspection.property.client_id != user.client_id:
-            return jsonify({'error': 'Forbidden'}), 403
     return jsonify(inspection_detail(inspection))
 
 
@@ -173,16 +171,9 @@ def get_property_history(property_id):
 @jwt_required()
 def create_inspection():
     user = get_current_user()
-    if not is_admin_or_manager(user) and not is_client(user):
+    if not is_admin_or_manager(user):
         return jsonify({'error': 'Forbidden'}), 403
     data = request.json
-
-    # Clients can only create inspections on their own properties
-    if is_client(user):
-        from models import Property
-        prop = Property.query.get(data.get('property_id'))
-        if not prop or prop.client_id != user.client_id:
-            return jsonify({'error': 'Forbidden'}), 403
 
     # ── Template resolution ──────────────────────────────────────────────
     template_id = data.get('template_id')
@@ -274,10 +265,6 @@ def update_inspection(inspection_id):
             return jsonify({'error': 'Typists can only update report data and status'}), 403
         if 'status' in data and data['status'] not in ('processing', 'review'):
             return jsonify({'error': 'Typists can only move inspection to review'}), 403
-    # Clients can only update inspections on their own properties
-    if user.role == 'client':
-        if not inspection.property or inspection.property.client_id != user.client_id:
-            return jsonify({'error': 'Forbidden'}), 403
 
     if 'status' in data:
         old_status = inspection.status

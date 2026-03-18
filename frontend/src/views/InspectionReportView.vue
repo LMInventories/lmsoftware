@@ -1573,7 +1573,7 @@ const aiItemProcessing = ref(new Set())   // set of "sectionId:rowId" keys curre
 const aiError          = ref('')
 const hasAiTypist      = ref(false)       // true if this inspection is assigned to AI typist
 const hasHumanTypist       = ref(false)       // true if assigned to a human typist (no recording in UI)
-const _capturedRecordings  = ref<any[] | null>(null)  // holds _recordings before delete, for restore
+const _capturedRecordings  = ref(null)  // holds _recordings before delete, for restore
 const aiKeysAvailable  = ref(false)       // true if API keys are configured on the backend
 
 function checkAiTypist() {

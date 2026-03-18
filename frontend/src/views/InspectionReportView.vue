@@ -1568,6 +1568,7 @@ const aiProcessing     = ref(false)       // true while full-report AI call is i
 const aiItemProcessing = ref(new Set())   // set of "sectionId:rowId" keys currently processing
 const aiError          = ref('')
 const hasAiTypist      = ref(false)       // true if this inspection is assigned to AI typist
+const hasHumanTypist   = ref(false)       // true if assigned to a human typist (no recording in UI)
 const aiKeysAvailable  = ref(false)       // true if API keys are configured on the backend
 
 function checkAiTypist() {
@@ -1576,6 +1577,12 @@ function checkAiTypist() {
   hasAiTypist.value = inspection.value.typist_is_ai === true ||
                       inspection.value.typist?.name === 'AI Typist' ||
                       inspection.value.typist_name === 'AI Typist'
+  // Human typist: a typist is assigned and it's not AI
+  hasHumanTypist.value = !hasAiTypist.value && !!(
+    inspection.value.typist_id ||
+    inspection.value.typist?.id ||
+    inspection.value.typist_name
+  )
 }
 
 async function checkAiKeys() {
@@ -2040,7 +2047,7 @@ async function moveToReview() {
 <template>
   <div v-if="loading" class="loading-screen"><div class="ring"></div><p>Loading report…</p></div>
 
-  <div v-else-if="inspection" class="shell">
+  <div v-else-if="inspection" class="shell" :class="{ 'hide-mic-btns': hasHumanTypist }">
 
     <header class="topbar">
       <div class="topbar-l">
@@ -3262,7 +3269,7 @@ async function moveToReview() {
     </div>
 
   <!-- AUDIO MODULE — fixed footer -->
-  <div class="audio-module" :class="{ 'am-collapsed': !audioModule.expanded }">
+  <div class="audio-module" :class="{ 'am-collapsed': !audioModule.expanded, 'am-human-typist': hasHumanTypist }">
     <audio ref="audioEl" style="display:none" />
 
     <!-- Topbar -->
@@ -3291,8 +3298,8 @@ async function moveToReview() {
       <!-- Transport -->
       <div class="am-transport">
 
-        <!-- Record (general) -->
-        <button class="am-btn am-btn-rec" :class="{ recording: audioModule.mode === 'recording' && !itemRecordingKey }"
+        <!-- Record (general) — hidden when human typist assigned (recordings come from mobile app) -->
+        <button v-if="!hasHumanTypist" class="am-btn am-btn-rec" :class="{ recording: audioModule.mode === 'recording' && !itemRecordingKey }"
           @click="toggleGeneralRecording"
           :title="audioModule.mode === 'recording' && !itemRecordingKey ? 'Stop recording' : 'Record general audio'">
           <svg v-if="!(audioModule.mode === 'recording' && !itemRecordingKey)" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="8"/></svg>
@@ -3824,6 +3831,10 @@ async function moveToReview() {
 /* ═══════════════════════════════════════════════════════════════════ */
 /* AUDIO MODULE                                                        */
 /* ═══════════════════════════════════════════════════════════════════ */
+/* Hide per-item mic buttons when human typist assigned */
+.hide-mic-btns .mic-btn { display: none !important }
+/* Show a playback-only indicator in the audio module */
+.am-human-typist .am-btn-rec { display: none !important }
 .audio-module{
   position:fixed;bottom:0;left:0;right:0;z-index:200;
   background:#0f172a;border-top:2px solid #1e293b;

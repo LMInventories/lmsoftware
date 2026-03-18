@@ -10,8 +10,9 @@ import type { StackNavigationProp } from '@react-navigation/stack'
 import type { RootStackParamList } from '../../App'
 import { useInspectionStore } from '../stores/inspectionStore'
 import { useAuthStore } from '../stores/authStore'
-import { markSynced, deleteLocalInspection, getLocalInspection } from '../services/database'
+import { markSynced, deleteLocalInspection, getLocalInspection, getAudioRecordings } from '../services/database'
 import { api } from '../services/api'
+import * as FileSystem from 'expo-file-system'
 import Header from '../components/Header'
 import StatusBadge from '../components/StatusBadge'
 import { colors, font, radius, spacing, TYPE_LABELS } from '../utils/theme'
@@ -22,7 +23,7 @@ type SyncResult = { id: number; address: string; success: boolean; error?: strin
 export default function SyncScreen() {
   const navigation = useNavigation<Nav>()
   const insets     = useSafeAreaInsets()
-  const { inspections, loadInspections } = useInspectionStore()
+  const { inspections, loadInspections, humanRecordings } = useInspectionStore()
   const { user } = useAuthStore()
 
   const [selected, setSelected]       = useState<Set<number>>(new Set())
@@ -60,21 +61,89 @@ export default function SyncScreen() {
       try {
         // Read fresh from DB to guarantee latest report_data
         const fresh = await getLocalInspection(id)
-        const payload: any = { report_data: fresh?.report_data || '{}' }
+        const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
 
-        // Status transition based on user role and typist_mode:
-        // Clerk with ai_instant/ai_processing → move to Processing
-        // Clerk with human → move to Processing (human typist will handle it)
-        // Typist → move to Review
+        // Read audio recordings from SQLite — persists across app restarts
+        // unlike the in-memory Zustand store
+        const sqliteRecs = await getAudioRecordings(id)
+        console.log(`[Sync] found ${sqliteRecs.length} audio recordings in SQLite for inspection ${id}`)
+
+        if (sqliteRecs.length > 0) {
+          const serialised = await Promise.all(
+            sqliteRecs.map(async (rec: any) => {
+              let audioB64 = ''
+              try {
+                const info = await FileSystem.getInfoAsync(rec.file_uri)
+                if (info.exists) {
+                  audioB64 = await FileSystem.readAsStringAsync(rec.file_uri, {
+                    encoding: FileSystem.EncodingType.Base64,
+                  })
+                  console.log(`[Sync] encoded clip ${rec.id}: ${audioB64.length} chars`)
+                } else {
+                  console.warn(`[Sync] file missing for recording ${rec.id}:`, rec.file_uri)
+                }
+              } catch (e) {
+                console.warn(`[Sync] could not read audio ${rec.id}:`, e)
+              }
+              return {
+                id:         String(rec.id),
+                audioB64,
+                mimeType:   'audio/m4a',
+                duration:   (rec.duration_ms || 0) / 1000,  // web app expects seconds
+                createdAt:  rec.created_at,
+                label:      rec.label || rec.section_name || '',
+                itemKey:    rec.item_key
+                              ? `${rec.section_key}:${rec.item_key}`
+                              : null,
+                transcript: rec.transcription || null,
+                gptResult:  null,
+              }
+            })
+          )
+          const withAudio = serialised.filter(r => r.audioB64.length > 0)
+          if (withAudio.length > 0) {
+            rd._recordings = withAudio
+            console.log(`[Sync] ${withAudio.length}/${sqliteRecs.length} clips serialised successfully`)
+          } else {
+            console.warn('[Sync] all clips failed to encode — check file paths')
+          }
+        }
+
+        const payload: any = { report_data: JSON.stringify(rd) }
+
+        // Status transitions:
+        //
+        // Clerk + AI typist (ai_instant/ai_processing):
+        //   Report fields are already filled by AI → skip Processing → go straight to Review
+        //
+        // Clerk + human typist (human) or no typist assigned:
+        //   Human needs to type from audio → move to Processing so typist can access it
+        //
+        // Role = typist:
+        //   Typist has finished typing → move to Review
+        //
+        // Admin/manager: no auto-transition
         const role = user?.role
+        const typistMode = user?.typist_mode
         const currentStatus = inspection.status
+        const typistName = (fresh?.typist_name || fresh?.typist?.name || '').toLowerCase()
+        const typistIsAi = fresh?.typist_is_ai === true ||
+                           fresh?.typist?.is_ai === true ||
+                           typistName === 'ai typist' ||
+                           typistName.startsWith('ai ')
+        const isAiMode = typistIsAi ||
+                         typistMode === 'ai_instant' ||
+                         typistMode === 'ai_processing'
 
         if (role === 'clerk' && currentStatus === 'active') {
-          payload.status = 'processing'
+          // AI typist: fields already filled → Review
+          // Human typist: needs typing → Processing
+          payload.status = isAiMode ? 'review' : 'processing'
         } else if (role === 'typist' && currentStatus === 'processing') {
+          // Typist finished → Review
           payload.status = 'review'
         }
-        // Admins/managers: don't auto-transition, leave as-is
+        // Admins/managers: no auto-transition
 
         await api.updateInspection(id, payload)
         await markSynced(id)
@@ -106,8 +175,14 @@ export default function SyncScreen() {
 
   // Explain what status transition will happen for this user
   function syncNote() {
-    if (user?.role === 'clerk') return 'Syncing will upload your report and move the inspection to Processing.'
-    if (user?.role === 'typist') return 'Syncing will upload your report and move the inspection to Review.'
+    const typistMode = user?.typist_mode
+    const isAiMode = typistMode === 'ai_instant' || typistMode === 'ai_processing'
+    if (user?.role === 'clerk' && isAiMode)
+      return 'AI has filled the report fields. Syncing will upload and move to Review.'
+    if (user?.role === 'clerk')
+      return 'Syncing will upload your audio and move the inspection to Processing for the typist.'
+    if (user?.role === 'typist')
+      return 'Syncing will upload your report and move the inspection to Review.'
     return 'Syncing will upload report data to the server.'
   }
 

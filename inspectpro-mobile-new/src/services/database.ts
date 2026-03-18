@@ -22,7 +22,10 @@ export async function initDatabase(): Promise<void> {
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           inspection_id INTEGER NOT NULL,
           section_key TEXT NOT NULL,
-          item_key TEXT NOT NULL,
+          section_name TEXT NOT NULL DEFAULT '',
+          item_key TEXT,
+          item_name TEXT,
+          label TEXT NOT NULL DEFAULT '',
           file_uri TEXT NOT NULL,
           duration_ms INTEGER,
           transcription TEXT,
@@ -30,6 +33,11 @@ export async function initDatabase(): Promise<void> {
           synced INTEGER NOT NULL DEFAULT 0
         )
       `)
+      // Migrations — safe to run repeatedly (ALTER TABLE IF NOT EXISTS not supported,
+      // so we catch errors silently)
+      tx.executeSql("ALTER TABLE audio_recordings ADD COLUMN section_name TEXT NOT NULL DEFAULT ''", [], () => {}, () => false)
+      tx.executeSql("ALTER TABLE audio_recordings ADD COLUMN item_name TEXT", [], () => {}, () => false)
+      tx.executeSql("ALTER TABLE audio_recordings ADD COLUMN label TEXT NOT NULL DEFAULT ''", [], () => {}, () => false)
     }, reject, resolve)
   })
 }
@@ -119,11 +127,29 @@ export async function deleteLocalInspection(inspectionId: number) {
   await run('DELETE FROM audio_recordings WHERE inspection_id = ?', [inspectionId])
 }
 
-export async function saveAudioRecording(inspectionId: number, sectionKey: string, itemKey: string, fileUri: string, durationMs: number, transcription?: string) {
+export async function saveAudioRecording(
+  inspectionId: number,
+  sectionKey: string,
+  sectionName: string,
+  itemKey: string | undefined,
+  itemName: string | undefined,
+  label: string,
+  fileUri: string,
+  durationMs: number,
+  transcription?: string
+) {
   await run(
-    `INSERT INTO audio_recordings (inspection_id, section_key, item_key, file_uri, duration_ms, transcription, created_at, synced) VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
-    [inspectionId, sectionKey, itemKey, fileUri, durationMs, transcription || null, new Date().toISOString()]
+    `INSERT INTO audio_recordings (inspection_id, section_key, section_name, item_key, item_name, label, file_uri, duration_ms, transcription, created_at, synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+    [inspectionId, sectionKey, sectionName, itemKey || null, itemName || null, label, fileUri, durationMs, transcription || null, new Date().toISOString()]
   )
+}
+
+export async function deleteAudioRecording(id: number, fileUri: string) {
+  await run('DELETE FROM audio_recordings WHERE id = ?', [id])
+  try {
+    const { deleteAsync } = await import('expo-file-system') as any
+    await deleteAsync(fileUri, { idempotent: true })
+  } catch {}
 }
 
 export async function getAudioRecordings(inspectionId: number): Promise<any[]> {

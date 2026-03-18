@@ -24,7 +24,14 @@ type Nav   = StackNavigationProp<RootStackParamList, 'RoomInspection'>
 type Route = RouteProp<RootStackParamList, 'RoomInspection'>
 
 const ANSWER_OPTIONS      = ['Yes', 'No', 'N/A']
-const CLEANLINESS_OPTIONS = ['Clean', 'Acceptable', 'Dirty', 'Very Dirty', 'N/A']
+const CLEANLINESS_OPTIONS = [
+  'Professionally Cleaned',
+  'Professionally Cleaned — Receipt Seen',
+  'Professionally Cleaned with Omissions',
+  'Domestically Cleaned',
+  'Domestically Cleaned with Omissions',
+  'Not Clean',
+]
 
 function OptionPicker({ options, value, onSelect }: { options: string[]; value: string; onSelect: (v: string) => void }) {
   return (
@@ -43,7 +50,7 @@ export default function RoomInspectionScreen() {
   const route      = useRoute<Route>()
   const insets     = useSafeAreaInsets()
   const { inspectionId, sectionKey, sectionName, sectionType, templateSectionId, fixedSectionData } = route.params
-  const { activeInspection, loadInspection, setReportData } = useInspectionStore()
+  const { activeInspection, loadInspection, setReportData, humanRecordings, addHumanRecording, removeHumanRecording } = useInspectionStore()
   const { user } = useAuthStore()
 
   const [items, setItems]               = useState<any[]>([])
@@ -56,14 +63,20 @@ export default function RoomInspectionScreen() {
   const [renameItemId, setRenameItemId]       = useState('')
   const [renameItemName, setRenameItemName]   = useState('')
 
+  // Sub-item state — tracks which items have been expanded to show sub-items
+  // Sub-items stored in report_data[sectionKey][itemId]._subs matching web app format
+
   // AI typist state
   const [hasAiTypist, setHasAiTypist]           = useState(false)
   const [aiProcessingItem, setAiProcessingItem] = useState<string | null>(null)
   const [aiError, setAiError]                   = useState('')
 
+  // Cleanliness dropdown state
+  const [cleanlinessOpen, setCleanlinessOpen]   = useState(false)
+  const [cleanlinessItemId, setCleanlinessItemId] = useState('')
+
   // Human typist state
   const [isHumanTypist, setIsHumanTypist]   = useState(false)
-  const [humanRecordings, setHumanRecordings] = useState<HumanRecording[]>([])
   const [activeItemKey, setActiveItemKey]     = useState<string | undefined>(undefined)
   const [activeItemName, setActiveItemName]   = useState<string | undefined>(undefined)
 
@@ -80,31 +93,31 @@ export default function RoomInspectionScreen() {
       // Determine typist mode
       if (fresh) {
         const role = user?.role
-        const typistMode = user?.typist_mode  // set on the clerk's own user record
-        const typistName = fresh.typist_name || fresh.typist?.name || ''
+        const typistMode = user?.typist_mode   // clerk's own typist_mode setting
+        const typistName = (fresh.typist_name || fresh.typist?.name || '').toLowerCase()
         const typistIsAi = fresh.typist_is_ai === true ||
                            fresh.typist?.is_ai === true ||
-                           typistName === 'AI Typist' ||
-                           typistName.toLowerCase().includes('ai')
+                           typistName === 'ai typist' ||
+                           typistName.startsWith('ai ')
 
-        // Human typist flow applies when:
-        // 1. Logged-in clerk has typist_mode = 'human' (human will type it up)
-        // 2. Logged-in clerk has typist_mode = null and assigned typist is not AI
-        // 3. Logged-in user IS the typist (role = 'typist') — they are doing the typing
-        const humanMode =
-          role === 'typist' ||
-          (role === 'clerk' && typistMode === 'human') ||
-          (role === 'clerk' && !typistMode && !typistIsAi && !!fresh.typist_id)
+        // Debug — remove once confirmed working
+        console.log('[TypistMode] role:', role, 'typistMode:', typistMode,
+                    'typistName:', typistName, 'typistIsAi:', typistIsAi,
+                    'typist_id:', fresh.typist_id)
 
-        // AI typist flow applies when:
-        // Clerk has typist_mode = 'ai_instant' or 'ai_processing', OR assigned typist is AI
-        const aiMode =
-          (role === 'clerk' && (typistMode === 'ai_instant' || typistMode === 'ai_processing')) ||
-          (role === 'clerk' && !typistMode && typistIsAi) ||
-          typistIsAi
+        // AI mode: clerk explicitly set to ai_instant or ai_processing,
+        //          OR the assigned typist is flagged as AI
+        const aiMode = typistIsAi ||
+                       typistMode === 'ai_instant' ||
+                       typistMode === 'ai_processing'
 
-        setHasAiTypist(aiMode && !humanMode)
-        setIsHumanTypist(humanMode && !aiMode)
+        // Human mode: anyone who isn't in AI mode
+        // This includes: clerks with typist_mode='human', clerks with no typist assigned,
+        // clerks with a human typist assigned, and users with role='typist'
+        const humanMode = !aiMode
+
+        setHasAiTypist(aiMode)
+        setIsHumanTypist(humanMode)
       }
 
       if (sectionType === 'fixed' && fixedSectionData) {
@@ -308,6 +321,57 @@ export default function RoomInspectionScreen() {
     }
   }
 
+  async function handleSubItemRecordingComplete(
+    parentItemId: string,
+    sid: string,
+    subLabel: string,
+    uri: string,
+    durationMs: number
+  ) {
+    // Save audio under the sid key
+    await saveAudioRecording(inspectionId, sectionKey, sid, uri, durationMs)
+    const recs = await getAudioRecordingsForItem(inspectionId, sectionKey, sid)
+    setRecordings(prev => ({ ...prev, [sid]: recs }))
+
+    if (!hasAiTypist) return
+
+    // Transcribe and fill this sub-item's description + condition
+    setAiProcessingItem(sid)
+    setAiError('')
+    try {
+      const { readAsStringAsync, EncodingType } = await import('expo-file-system') as any
+      const audioB64 = await readAsStringAsync(uri, { encoding: EncodingType.Base64 })
+      const response = await api.transcribeItem({
+        audio:       audioB64,
+        mimeType:    'audio/m4a',
+        itemLabel:   subLabel,
+        roomName:    sectionName,
+        sectionId:   sectionKey,
+        rowId:       sid,
+        sectionType: 'room',
+      })
+      const result = response.data
+      const fresh = await getLocalInspection(inspectionId)
+      const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+      const subs: any[] = rd[sectionKey]?.[String(parentItemId)]?._subs || []
+      const sub = subs.find((s: any) => s._sid === sid)
+      if (sub) {
+        let changed = false
+        if (result.description && !sub.description) { sub.description = result.description; changed = true }
+        if (result.condition   && !sub.condition)   { sub.condition   = result.condition;   changed = true }
+        if (changed) {
+          await setReportData(inspectionId, rd)
+          Alert.alert('✨ AI filled', `Sub-item updated: ${subLabel}`)
+        }
+      }
+    } catch (err: any) {
+      const msg = err.response?.data?.error || err.message || 'Transcription failed'
+      setAiError(msg)
+    } finally {
+      setAiProcessingItem(null)
+    }
+  }
+
   async function handleAddItem() {
     if (!newItemName.trim()) return
     const key = `extra_${Date.now()}`
@@ -378,6 +442,48 @@ export default function RoomInspectionScreen() {
     setRenameItemModal(false)
   }
 
+  // ── Sub-items — stored as report_data[sectionKey][itemId]._subs
+  // Matches web app: { _sid, description, condition }
+  function getSubs(itemId: string): any[] {
+    return getReportData()[sectionKey]?.[String(itemId)]?._subs ?? []
+  }
+
+  async function addSubItem(itemId: string) {
+    const fresh = await getLocalInspection(inspectionId)
+    const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+    if (!rd[sectionKey]) rd[sectionKey] = {}
+    if (!rd[sectionKey][String(itemId)]) rd[sectionKey][String(itemId)] = {}
+    if (!rd[sectionKey][String(itemId)]._subs) rd[sectionKey][String(itemId)]._subs = []
+    const sid = `sub_${Date.now()}`
+    rd[sectionKey][String(itemId)]._subs.push({ _sid: sid, description: '', condition: '' })
+    await setReportData(inspectionId, rd)
+  }
+
+  async function removeSubItem(itemId: string, sid: string) {
+    Alert.alert('Remove sub-item?', '', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Remove', style: 'destructive', onPress: async () => {
+        const fresh = await getLocalInspection(inspectionId)
+        const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+        if (rd[sectionKey]?.[String(itemId)]?._subs) {
+          rd[sectionKey][String(itemId)]._subs = rd[sectionKey][String(itemId)]._subs.filter((s: any) => s._sid !== sid)
+          await setReportData(inspectionId, rd)
+        }
+      }},
+    ])
+  }
+
+  async function setSubField(itemId: string, sid: string, field: string, value: string) {
+    const fresh = await getLocalInspection(inspectionId)
+    const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+    if (!rd[sectionKey]) rd[sectionKey] = {}
+    if (!rd[sectionKey][String(itemId)]) rd[sectionKey][String(itemId)] = {}
+    if (!rd[sectionKey][String(itemId)]._subs) rd[sectionKey][String(itemId)]._subs = []
+    const sub = rd[sectionKey][String(itemId)]._subs.find((s: any) => s._sid === sid)
+    if (sub) sub[field] = value
+    await setReportData(inspectionId, rd)
+  }
+
   function isItemDone(item: any) {
     const id = item.id
     return !!(
@@ -427,28 +533,12 @@ export default function RoomInspectionScreen() {
   }
 
   function renderVoiceNotes(item: any) {
+    // Human typist: no per-item recorder — the floating bar handles all recording
+    if (isHumanTypist) return null
+
     const isProcessing = aiProcessingItem === item.id
-    const label = item.label || item.name || ''
 
-    // Human typist: show a tap-to-focus button that sets context on the recorder bar
-    if (isHumanTypist) {
-      const isActive = activeItemKey === item.id
-      return (
-        <TouchableOpacity
-          style={[styles.focusBtn, isActive && styles.focusBtnActive]}
-          onPress={() => {
-            setActiveItemKey(isActive ? undefined : item.id)
-            setActiveItemName(isActive ? undefined : label)
-          }}
-        >
-          <Text style={[styles.focusBtnText, isActive && styles.focusBtnTextActive]}>
-            {isActive ? '🎙 Recording context set' : '🎙 Record for this item'}
-          </Text>
-        </TouchableOpacity>
-      )
-    }
-
-    // AI typist or standard: per-item recorder widget
+    // AI typist or no typist assigned: per-item recorder widget
     return (
       <View style={styles.voiceBlock}>
         {isProcessing && (
@@ -472,7 +562,7 @@ export default function RoomInspectionScreen() {
   function renderItem(item: any) {
     const label = item.label || item.name || ''
 
-    const itemActions = [
+    const baseActions = [
       {
         icon: '✏️',
         label: 'Rename',
@@ -492,6 +582,10 @@ export default function RoomInspectionScreen() {
         onPress: () => deleteItemConfirmed(item.id, label),
       },
     ]
+    // Add sub-item action for room items (hasDescription = room items)
+    const itemActions = (item.hasDescription && sectionType_ === 'room')
+      ? [{ icon: '⊕', label: 'Sub-item', bg: '#f0fdf4', onPress: () => addSubItem(item.id) }, ...baseActions]
+      : baseActions
 
     return (
       <SwipeableRow
@@ -576,18 +670,26 @@ export default function RoomInspectionScreen() {
           </View>
         )}
 
-        {/* Cleanliness — cleaning summary */}
+        {/* Cleanliness — cleaning summary — dropdown */}
         {item.hasCleanliness && (
           <View style={styles.fieldGroup}>
             <Text style={styles.fieldLabel}>Cleanliness</Text>
-            <OptionPicker options={CLEANLINESS_OPTIONS} value={getField(item.id, 'cleanliness')} onSelect={v => setField(item.id, 'cleanliness', v)} />
+            <TouchableOpacity
+              style={styles.dropdownBtn}
+              onPress={() => { setCleanlinessItemId(item.id); setCleanlinessOpen(true) }}
+            >
+              <Text style={[styles.dropdownBtnText, !getField(item.id, 'cleanliness') && styles.dropdownBtnPlaceholder]}>
+                {getField(item.id, 'cleanliness') || 'Select cleanliness…'}
+              </Text>
+              <Text style={styles.dropdownChevron}>▾</Text>
+            </TouchableOpacity>
           </View>
         )}
 
         {/* Cleanliness notes */}
         {item.hasCleanlinessNotes && (
           <View style={styles.fieldGroup}>
-            <Text style={styles.fieldLabel}>Cleanliness Notes</Text>
+            <Text style={styles.fieldLabel}>Additional Notes</Text>
             <TextInput
               style={styles.notesInput}
               value={getField(item.id, 'cleanlinessNotes')}
@@ -643,8 +745,73 @@ export default function RoomInspectionScreen() {
         {/* Photos */}
         {renderPhotos(item)}
 
-        {/* Voice notes */}
+        {/* Voice notes for main item — always above sub-items */}
         {renderVoiceNotes(item)}
+
+        {/* Sub-items — only for room items */}
+        {sectionType_ === 'room' && getSubs(item.id).length > 0 && (
+          <View style={styles.subsContainer}>
+            <View style={styles.subsDivider} />
+            {getSubs(item.id).map((sub: any, idx: number) => (
+              <View key={sub._sid} style={styles.subItem}>
+                <View style={styles.subItemHeader}>
+                  <Text style={styles.subItemTitle}>—</Text>
+                  <TouchableOpacity onPress={() => removeSubItem(item.id, sub._sid)}>
+                    <Text style={styles.subItemDelete}>✕</Text>
+                  </TouchableOpacity>
+                </View>
+                <View style={styles.fieldGroup}>
+                  <Text style={styles.fieldLabel}>Description</Text>
+                  <TextInput
+                    style={styles.notesInput}
+                    value={sub.description}
+                    onChangeText={v => setSubField(item.id, sub._sid, 'description', v)}
+                    placeholder="Describe sub-item…"
+                    placeholderTextColor={colors.textLight}
+                    multiline numberOfLines={2} textAlignVertical="top"
+                  />
+                </View>
+                <View style={styles.fieldGroup}>
+                  <Text style={styles.fieldLabel}>Condition</Text>
+                  <TextInput
+                    style={styles.notesInput}
+                    value={sub.condition}
+                    onChangeText={v => setSubField(item.id, sub._sid, 'condition', v)}
+                    placeholder="e.g. Good, Fair, Worn…"
+                    placeholderTextColor={colors.textLight}
+                    multiline numberOfLines={2} textAlignVertical="top"
+                  />
+                </View>
+                {/* Per-sub-item recorder — AI typist only */}
+                {hasAiTypist && (
+                  <View style={[styles.voiceBlock, { marginTop: 8 }]}>
+                    {aiProcessingItem === sub._sid && (
+                      <View style={styles.aiProcessingBadge}>
+                        <ActivityIndicator size="small" color={colors.accent} />
+                        <Text style={styles.aiProcessingText}>AI transcribing…</Text>
+                      </View>
+                    )}
+                    <AudioRecorderWidget
+                      recordings={recordings[sub._sid] || []}
+                      onRecordingComplete={async (uri, dur) =>
+                        handleSubItemRecordingComplete(
+                          item.id, sub._sid,
+                          `${item.label || item.name} — Sub-item ${idx + 1}`,
+                          uri, dur
+                        )
+                      }
+                      onDeleteRecording={async (uri) => {
+                        setRecordings(prev => ({ ...prev, [sub._sid]: (prev[sub._sid] || []).filter((r: any) => r.file_uri !== uri) }))
+                      }}
+                      compact
+                    />
+                  </View>
+                )}
+              </View>
+            ))}
+          </View>
+        )}
+
       </View>
       </SwipeableRow>
     )
@@ -663,13 +830,6 @@ export default function RoomInspectionScreen() {
           </View>
         )}
 
-        {/* Human Typist banner */}
-        {isHumanTypist && (
-          <View style={styles.humanBanner}>
-            <Text style={styles.humanBannerIcon}>🎙</Text>
-            <Text style={styles.humanBannerText}>Human Typist — tap an item to set recording context, then use the recorder below</Text>
-          </View>
-        )}
 
         {/* AI error banner */}
         {aiError ? (
@@ -710,11 +870,46 @@ export default function RoomInspectionScreen() {
             currentSectionName={sectionName}
             currentItemKey={activeItemKey}
             currentItemName={activeItemName}
-            recordings={humanRecordings}
-            onRecordingAdded={(rec) => setHumanRecordings(prev => [...prev, rec])}
-            onRecordingDeleted={(id) => setHumanRecordings(prev => prev.filter(r => r.id !== id))}
+            recordings={humanRecordings[inspectionId] || []}
+            onRecordingAdded={(rec) => addHumanRecording(inspectionId, rec)}
+            onRecordingDeleted={(id) => removeHumanRecording(inspectionId, id)}
           />
         )}
+
+        {/* Cleanliness dropdown modal */}
+        <Modal visible={cleanlinessOpen} transparent animationType="fade">
+          <View style={mStyles.overlay}>
+            <View style={mStyles.box}>
+              <Text style={mStyles.title}>Cleanliness</Text>
+              <View style={styles.dropdownList}>
+                <TouchableOpacity
+                  style={styles.dropdownListItem}
+                  onPress={() => { setField(cleanlinessItemId, 'cleanliness', ''); setCleanlinessOpen(false) }}
+                >
+                  <Text style={[styles.dropdownListItemText, styles.dropdownListItemPlaceholder]}>Clear selection</Text>
+                </TouchableOpacity>
+                {CLEANLINESS_OPTIONS.map(opt => {
+                  const isSelected = getField(cleanlinessItemId, 'cleanliness') === opt
+                  return (
+                    <TouchableOpacity
+                      key={opt}
+                      style={[styles.dropdownListItem, isSelected && styles.dropdownListItemActive]}
+                      onPress={() => { setField(cleanlinessItemId, 'cleanliness', opt); setCleanlinessOpen(false) }}
+                    >
+                      <Text style={[styles.dropdownListItemText, isSelected && styles.dropdownListItemTextActive]}>
+                        {opt}
+                      </Text>
+                      {isSelected && <Text style={styles.dropdownCheck}>✓</Text>}
+                    </TouchableOpacity>
+                  )
+                })}
+              </View>
+              <TouchableOpacity style={[mStyles.cancel, { marginTop: spacing.sm }]} onPress={() => setCleanlinessOpen(false)}>
+                <Text style={mStyles.cancelText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
 
         {/* Rename item modal */}
         <Modal visible={renameItemModal} transparent animationType="fade">
@@ -809,6 +1004,23 @@ const styles = StyleSheet.create({
   addItemBtn: { borderWidth: 1, borderColor: colors.border, borderStyle: 'dashed', borderRadius: radius.md, padding: spacing.sm, alignItems: 'center', marginTop: spacing.xs },
   addItemText: { fontSize: font.sm, color: colors.textMid, fontWeight: '600' },
   emptyNote: { backgroundColor: colors.muted, borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.md },
+  subsContainer: { marginTop: spacing.sm },
+  subsDivider: { height: 1, backgroundColor: colors.border, marginBottom: spacing.sm, borderStyle: 'dashed' },
+  subItem: { backgroundColor: '#fafafa', borderRadius: radius.sm, padding: spacing.sm, marginBottom: spacing.sm, borderLeftWidth: 3, borderLeftColor: colors.primaryLight, borderWidth: 1, borderColor: colors.border },
+  subItemHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+  subItemTitle: { fontSize: font.md, fontWeight: '400', color: colors.textLight },
+  subItemDelete: { fontSize: font.sm, color: colors.danger, padding: 4 },
+  dropdownList: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, overflow: 'hidden', marginBottom: 4 },
+  dropdownListItem: { paddingVertical: 13, paddingHorizontal: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.border, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  dropdownListItemActive: { backgroundColor: colors.primaryLight },
+  dropdownListItemText: { fontSize: font.sm, color: colors.text, flex: 1 },
+  dropdownListItemPlaceholder: { color: colors.textLight, fontStyle: 'italic' },
+  dropdownListItemTextActive: { color: colors.primary, fontWeight: '700' },
+  dropdownCheck: { fontSize: font.sm, color: colors.primary, fontWeight: '700' },
+  dropdownBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, paddingHorizontal: spacing.sm, paddingVertical: 10, backgroundColor: colors.surface },
+  dropdownBtnText: { fontSize: font.sm, color: colors.text, flex: 1 },
+  dropdownBtnPlaceholder: { color: colors.textLight },
+  dropdownChevron: { fontSize: font.sm, color: colors.textLight, marginLeft: spacing.xs },
   swipeHint: { fontSize: 10, color: colors.textLight, textAlign: 'center', marginBottom: spacing.xs, fontStyle: 'italic' },
   emptyNoteText: { fontSize: font.sm, color: colors.textLight, textAlign: 'center' },
 })

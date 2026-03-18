@@ -228,14 +228,15 @@ function _restoreRecordings() {
         _savedB64:  r.audioB64,  // cache so re-save doesn't re-encode
         mimeType:   r.mimeType,
         duration:   r.duration,
-        createdAt:  r.createdAt,
-        label:      r.label,
-        itemKey:    r.itemKey,
-        transcript: r.transcript,
-        gptResult:  r.gptResult,
+        // Always a Date object — createdAt from mobile arrives as ISO string
+        createdAt:  r.createdAt instanceof Date ? r.createdAt : new Date(r.createdAt),
+        label:      r.label || '',
+        itemKey:    r.itemKey || null,
+        transcript: r.transcript || null,
+        gptResult:  r.gptResult  || null,
       }
     })
-  if (recordings.value.length) loadRecording(recordings.value[0], true)
+  if (recordings.value.length) loadRecording(recordings.value[0], false)
 }
 
 // Source Check In data (read-only reference for Check Out)
@@ -1777,7 +1778,7 @@ function loadRecording(rec, autoPlay = false) {
 
 function togglePlay() {
   if (!audioEl.value) return
-  if (!activeRec.value && recordings.value.length) loadRecording(recordings.value[0], true)
+  if (!activeRec.value && recordings.value.length) loadRecording(recordings.value[0], false)
   else if (audioModule.value.mode === 'playing') { audioEl.value.pause(); audioModule.value.mode = 'paused' }
   else { audioEl.value.play(); audioModule.value.mode = 'playing' }
 }
@@ -3383,7 +3384,7 @@ async function moveToReview() {
 
                   <div class="am-rec-row-info">
                     <span class="am-rec-row-label">{{ rec.label }}</span>
-                    <span class="am-rec-row-meta">{{ fmtTime(rec.duration) }} · {{ rec.createdAt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) }}</span>
+                    <span class="am-rec-row-meta">{{ fmtTime(rec.duration) }} · {{ (rec.createdAt instanceof Date ? rec.createdAt : new Date(rec.createdAt)).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) }}</span>
                   </div>
 
                   <!-- Future: transcript / GPT status badges -->
@@ -3408,7 +3409,7 @@ async function moveToReview() {
         <span>⚠ {{ aiError }}</span>
         <button class="am-ai-error-dismiss" @click="aiError = ''">×</button>
       </div>
-      <div v-else-if="hasAiTypist || aiKeysAvailable" class="am-ai-status am-ai-ready">
+      <div v-else-if="(hasAiTypist || aiKeysAvailable) && !hasHumanTypist" class="am-ai-status am-ai-ready">
         <span>✨ AI Typist active — item recordings fill automatically</span>
         <button
           v-if="recordings.filter(r => !r.itemKey).length"

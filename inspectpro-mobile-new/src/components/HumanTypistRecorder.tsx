@@ -71,6 +71,7 @@ const REC_OPTIONS = {
 }
 
 export default function HumanTypistRecorder({
+  inspectionId,
   currentSectionKey,
   currentSectionName,
   currentItemKey,

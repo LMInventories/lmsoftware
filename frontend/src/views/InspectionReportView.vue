@@ -137,6 +137,7 @@ async function load() {
       if (inspection.value.report_data) {
         try {
           reportData.value = JSON.parse(inspection.value.report_data)
+          _capturedRecordings.value = reportData.value._recordings || null
           delete reportData.value._recordings  // stored separately, restored by _restoreRecordings()
           // Restore imported source data if previously imported from PDF
           if (reportData.value._importedSource && Object.keys(sourceReportData.value).length === 0) {
@@ -163,6 +164,7 @@ async function load() {
       if (inspection.value.report_data) {
         try {
           reportData.value = JSON.parse(inspection.value.report_data)
+          _capturedRecordings.value = reportData.value._recordings || null
           delete reportData.value._recordings  // stored separately, restored by _restoreRecordings()
         } catch { reportData.value = {} }
       }
@@ -206,7 +208,9 @@ async function load() {
 // Base64 audio is converted back to Blob objects so playback works normally.
 function _restoreRecordings() {
   // _importedRooms is already in reportData — rooms computed reads it reactively, no extra restore needed
-  const saved = reportData.value._recordings
+  // Use _capturedRecordings if available (set before _recordings was deleted on load)
+  const saved = _capturedRecordings.value ?? reportData.value._recordings
+  _capturedRecordings.value = null  // clear after use
   if (!Array.isArray(saved) || !saved.length) return
   recordings.value = saved
     .filter(r => r.audioB64)
@@ -1568,7 +1572,8 @@ const aiProcessing     = ref(false)       // true while full-report AI call is i
 const aiItemProcessing = ref(new Set())   // set of "sectionId:rowId" keys currently processing
 const aiError          = ref('')
 const hasAiTypist      = ref(false)       // true if this inspection is assigned to AI typist
-const hasHumanTypist   = ref(false)       // true if assigned to a human typist (no recording in UI)
+const hasHumanTypist       = ref(false)       // true if assigned to a human typist (no recording in UI)
+const _capturedRecordings  = ref<any[] | null>(null)  // holds _recordings before delete, for restore
 const aiKeysAvailable  = ref(false)       // true if API keys are configured on the backend
 
 function checkAiTypist() {

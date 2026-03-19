@@ -318,6 +318,8 @@ function onSectionDragOver(e, index) {
 async function onSectionDrop(e, toIndex) {
   e.preventDefault()
   e.stopPropagation()
+  // Ignore if this is actually an item being dragged
+  if (dragItemKey.value) { dragSectionIdx.value = null; dragOverSectIdx.value = null; return }
   const fromIndex = dragSectionIdx.value
   dragSectionIdx.value  = null
   dragOverSectIdx.value = null
@@ -326,7 +328,6 @@ async function onSectionDrop(e, toIndex) {
   if (!sectionId) return
   const dir   = toIndex > fromIndex ? 'down' : 'up'
   const count = Math.abs(toIndex - fromIndex)
-  // Call all steps first, then fetch once at end
   for (let i = 0; i < count; i++) {
     await api.reorderSection(sectionId, dir)
   }
@@ -362,7 +363,10 @@ async function onItemDrop(e, section, toIdx) {
   const fromIdx = parseInt(fromIdxStr)
   const sectionId = parseInt(sid)
   if (sectionId !== section.id || fromIdx === toIdx) return
-  const itemId = section.items[fromIdx]?.id
+  // Rebuild fresh item list from current reactive data to avoid stale references
+  const freshSection = roomSections.value.find(s => s.id === sectionId)
+  if (!freshSection) return
+  const itemId = freshSection.items[fromIdx]?.id
   if (!itemId) return
   const dir   = toIdx > fromIdx ? 'down' : 'up'
   const count = Math.abs(toIdx - fromIdx)

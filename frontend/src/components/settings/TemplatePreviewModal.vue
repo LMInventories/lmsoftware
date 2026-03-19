@@ -1,5 +1,6 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import api from '../services/api'
 
 const props = defineProps({
   template: {
@@ -27,34 +28,39 @@ const demoBranding = computed(() => ({
   disclaimer:   props.branding?.disclaimer    || null,
 }))
 
-// Read directly from template.sections (the proper API structure)
-// template.sections is [{id, name, section_type:'room'|'fixed', items:[{id,name,...}]}]
-const allSections = computed(() => props.template.sections || [])
+// System-wide fixed sections loaded from /api/fixed-sections
+const systemFixedSections = ref([])
 
-// Infer fixed section display type from name
+// Infer display type from section name for table layout selection
 function inferSectionType(name) {
   const n = (name || '').toLowerCase()
-  if (n.includes('clean'))   return 'cleaning_summary'
-  if (n.includes('meter'))   return 'meter_readings'
-  if (n.includes('key'))     return 'keys'
-  if (n.includes('smoke') || n.includes('alarm') || n.includes('carbon')) return 'smoke_alarms'
-  if (n.includes('fire') || n.includes('door') && n.includes('safe')) return 'fire_door_safety'
-  if (n.includes('health') || n.includes('safety')) return 'health_safety'
+  if (n.includes('clean'))                                                   return 'cleaning_summary'
+  if (n.includes('meter') || n.includes('utility'))                         return 'meter_readings'
+  if (n.includes('key'))                                                     return 'keys'
+  if (n.includes('smoke') || n.includes('alarm') || n.includes('carbon'))  return 'smoke_alarms'
+  if (n.includes('fire') || n.includes('door'))                             return 'fire_door_safety'
+  if (n.includes('health') || n.includes('safety'))                         return 'health_safety'
   return 'condition_summary'
 }
 
-const fixedSections = computed(() =>
-  allSections.value
-    .filter(s => s.section_type === 'fixed')
-    .map(s => ({ ...s, type: inferSectionType(s.name), rows: s.items || [] }))
+// Fixed sections come from the system-wide setting, not from the template
+const enabledFixedSections = computed(() =>
+  systemFixedSections.value
+    .filter(s => s.enabled !== false)
+    .map(s => ({
+      ...s,
+      type: inferSectionType(s.name),
+      rows: s.items || [],
+    }))
 )
-const rooms = computed(() =>
-  allSections.value
+
+// Room sections come from the template's sections relationship
+const enabledRooms = computed(() =>
+  (props.template.sections || [])
     .filter(s => s.section_type === 'room')
     .map(r => ({
       ...r,
       enabled: true,
-      // Map items to the shape the template expects
       sections: (r.items || []).map(item => ({
         ...item,
         label:          item.name,
@@ -64,8 +70,6 @@ const rooms = computed(() =>
       }))
     }))
 )
-const enabledFixedSections = computed(() => fixedSections.value)
-const enabledRooms = computed(() => rooms.value)
 
 // Table of contents items
 const tocItems = computed(() => {
@@ -101,6 +105,17 @@ const today = new Date().toLocaleDateString('en-GB', {
 
 // Active page for scrolling/navigation
 const previewContainer = ref(null)
+
+// Load system fixed sections when modal opens
+onMounted(async () => {
+  try {
+    const res = await api.getFixedSections()
+    systemFixedSections.value = Array.isArray(res.data) ? res.data : []
+  } catch (e) {
+    console.error('Failed to load fixed sections for preview', e)
+    systemFixedSections.value = []
+  }
+})
 
 function close() {
   emit('close')

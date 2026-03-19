@@ -297,98 +297,80 @@ function goBackToTemplates() {
   router.push('/settings')
 }
 
-// Drag-to-reorder state
-const dragSectionIdx  = ref(null)
-const dragOverSectIdx = ref(null)  // which section is being hovered over
-const dragItemKey     = ref(null)  // 'sectionId:itemIdx' of item being dragged
-const dragOverItemKey = ref(null)  // 'sectionId:itemIdx' of item being hovered over
+// ── Drag-to-reorder (mouse-based, no HTML5 drag API) ─────────────────────────
+// We reorder locally for instant feedback, then persist to API once on release.
 
-// ── Section drag ──────────────────────────────────────────────────────────
-function onSectionDragStart(e, index) {
-  dragSectionIdx.value = index
-  dragOverSectIdx.value = null
-  e.dataTransfer.effectAllowed = 'move'
-  e.dataTransfer.setData('text/plain', String(index))
-}
-function onSectionDragOver(e, index) {
+const dragging = ref(null)   // { type:'section'|'item', sectionId, itemIdx, startY, currentY }
+const dragOverInfo = ref(null) // { type, sectionId, itemIdx } — where cursor is
+
+function startSectionDrag(e, sectionIdx) {
   e.preventDefault()
-  e.dataTransfer.dropEffect = 'move'
-  dragOverSectIdx.value = index
-}
-async function onSectionDrop(e, toIndex) {
-  e.preventDefault()
-  e.stopPropagation()
-  // Ignore if this is actually an item being dragged
-  if (dragItemKey.value) { dragSectionIdx.value = null; dragOverSectIdx.value = null; return }
-  const fromIndex = dragSectionIdx.value
-  dragSectionIdx.value  = null
-  dragOverSectIdx.value = null
-  if (fromIndex === null || fromIndex === toIndex) return
-  const sectionId = roomSections.value[fromIndex]?.id
-  if (!sectionId) return
-  const dir   = toIndex > fromIndex ? 'down' : 'up'
-  const count = Math.abs(toIndex - fromIndex)
-  for (let i = 0; i < count; i++) {
-    await api.reorderSection(sectionId, dir)
-  }
-  await fetchTemplate()
-}
-function onSectionDragEnd() {
-  dragSectionIdx.value  = null
-  dragOverSectIdx.value = null
+  dragging.value = { type: 'section', sectionIdx, startY: e.clientY, currentY: e.clientY }
+  window.addEventListener('mousemove', onMouseMove)
+  window.addEventListener('mouseup',   onMouseUp)
 }
 
-// ── Item drag ─────────────────────────────────────────────────────────────
-function onItemDragStart(e, sectionId, itemIdx) {
-  dragItemKey.value     = `${sectionId}:${itemIdx}`
-  dragOverItemKey.value = null
-  e.dataTransfer.effectAllowed = 'move'
-  e.dataTransfer.setData('text/plain', dragItemKey.value)
-  e.stopPropagation()  // prevent section drag from firing
-}
-function onItemDragOver(e, sectionId, itemIdx) {
+function startItemDrag(e, sectionId, itemIdx) {
   e.preventDefault()
-  e.stopPropagation()
-  e.dataTransfer.dropEffect = 'move'
-  dragOverItemKey.value = `${sectionId}:${itemIdx}`
+  dragging.value = { type: 'item', sectionId, itemIdx, startY: e.clientY, currentY: e.clientY }
+  window.addEventListener('mousemove', onMouseMove)
+  window.addEventListener('mouseup',   onMouseUp)
 }
-async function onItemDrop(e, section, toIdx) {
-  e.preventDefault()
-  e.stopPropagation()
-  const key = dragItemKey.value
-  dragItemKey.value     = null
-  dragOverItemKey.value = null
-  if (!key) return
-  const [sid, fromIdxStr] = key.split(':')
-  const fromIdx = parseInt(fromIdxStr)
-  const sectionId = parseInt(sid)
-  if (sectionId !== section.id || fromIdx === toIdx) return
-  // Rebuild fresh item list from current reactive data to avoid stale references
-  const freshSection = roomSections.value.find(s => s.id === sectionId)
-  if (!freshSection) return
-  const itemId = freshSection.items[fromIdx]?.id
-  if (!itemId) return
-  const dir   = toIdx > fromIdx ? 'down' : 'up'
-  const count = Math.abs(toIdx - fromIdx)
-  // Call all steps first WITHOUT fetching between — the backend swaps
-  // adjacent order_index values each call, so consecutive calls on the
-  // same ID correctly walk it through the list. Fetching between calls
-  // triggers Vue re-render which invalidates our section reference.
-  for (let i = 0; i < count; i++) {
-    await api.reorderItem(itemId, dir)
+
+function onMouseMove(e) {
+  if (!dragging.value) return
+  dragging.value = { ...dragging.value, currentY: e.clientY }
+}
+
+async function onMouseUp() {
+  window.removeEventListener('mousemove', onMouseMove)
+  window.removeEventListener('mouseup',   onMouseUp)
+  const d    = dragging.value
+  const over = dragOverInfo.value
+  dragging.value     = null
+  dragOverInfo.value = null
+  if (!d || !over) return
+
+  if (d.type === 'item' && over.type === 'item') {
+    const fromIdx = d.itemIdx
+    const toIdx   = over.itemIdx
+    if (d.sectionId !== over.sectionId || fromIdx === toIdx) return
+    const sec    = roomSections.value.find(s => s.id === d.sectionId)
+    const itemId = sec?.items[fromIdx]?.id
+    if (!itemId) return
+    const dir   = toIdx > fromIdx ? 'down' : 'up'
+    const count = Math.abs(toIdx - fromIdx)
+    for (let i = 0; i < count; i++) {
+      await api.reorderItem(itemId, dir)
+    }
+    await fetchTemplate()
   }
-  await fetchTemplate()
+
+  if (d.type === 'section' && over.type === 'section') {
+    const fromIdx = d.sectionIdx
+    const toIdx   = over.sectionIdx
+    if (fromIdx === toIdx) return
+    const secId = roomSections.value[fromIdx]?.id
+    if (!secId) return
+    const dir   = toIdx > fromIdx ? 'down' : 'up'
+    const count = Math.abs(toIdx - fromIdx)
+    for (let i = 0; i < count; i++) {
+      await api.reorderSection(secId, dir)
+    }
+    await fetchTemplate()
+  }
 }
-function onItemDragEnd() {
-  dragItemKey.value     = null
-  dragOverItemKey.value = null
+
+function setDragOver(type, sectionId, itemIdx, sectionIdx) {
+  dragOverInfo.value = { type, sectionId, itemIdx, sectionIdx }
 }
 
 onMounted(fetchTemplate)
+</script>onMounted(fetchTemplate)
 </script>
 
 <template>
-  <div class="template-editor">
+  <div class="template-editor" :class="{ 'is-dragging': !!dragging }">
 
     <!-- ── Header ──────────────────────────────────────────────────────────── -->
     <div class="page-header">
@@ -434,18 +416,15 @@ onMounted(fetchTemplate)
             v-for="(section, index) in roomSections"
             :key="section.id"
             class="section-card"
-            :class="{ 'drag-over': dragOverSectIdx === index && dragSectionIdx !== index }"
-            @dragover="onSectionDragOver($event, index)"
-            @drop="onSectionDrop($event, index)"
+            :class="{ 'drag-over': dragOverInfo?.type === 'section' && dragOverInfo?.sectionIdx === index && dragging?.sectionIdx !== index }"
+            @mouseenter="dragging?.type === 'section' && setDragOver('section', section.id, null, index)"
           >
 
             <div class="section-header">
               <!-- Drag handle on the LEFT -->
               <span
                 class="drag-handle"
-                draggable="true"
-                @dragstart.stop="onSectionDragStart($event, index)"
-                @dragend.stop="onSectionDragEnd"
+                @mousedown.stop="startSectionDrag($event, index)"
                 title="Drag to reorder"
               >⠿</span>
 
@@ -480,14 +459,14 @@ onMounted(fetchTemplate)
                 v-for="(item, itemIndex) in section.items"
                 :key="item.id"
                 class="item-row"
-                :class="{ 'item-drag-over': dragOverItemKey === String(section.id) + ':' + itemIndex }"
-                draggable="true"
-                @dragstart.stop="onItemDragStart($event, section.id, itemIndex)"
-                @dragend.stop="onItemDragEnd"
-                @dragover.stop.prevent="onItemDragOver($event, section.id, itemIndex)"
-                @drop.stop="onItemDrop($event, section, itemIndex)"
+                :class="{ 'item-drag-over': dragOverInfo?.type === 'item' && dragOverInfo?.sectionId === section.id && dragOverInfo?.itemIdx === itemIndex && !(dragging?.sectionId === section.id && dragging?.itemIdx === itemIndex) }"
+                @mouseenter="dragging?.type === 'item' && setDragOver('item', section.id, itemIndex, null)"
               >
-                <span class="drag-handle drag-handle-sm" title="Drag to reorder">⠿</span>
+                <span
+                  class="drag-handle drag-handle-sm"
+                  @mousedown.stop="startItemDrag($event, section.id, itemIndex)"
+                  title="Drag to reorder"
+                >⠿</span>
                 <div class="item-info">
                   <span class="item-name">{{ item.name }}</span>
                   <div class="item-meta">
@@ -949,8 +928,16 @@ onMounted(fetchTemplate)
 .drag-handle:hover { color: #6366f1; }
 .drag-handle:active { cursor: grabbing; }
 .drag-handle-sm { font-size: 15px; padding: 2px 4px 2px 0; }
-.section-card.drag-over { border-color: #6366f1; background: #f5f3ff; box-shadow: 0 0 0 2px rgba(99,102,241,0.15); }
-.item-row.item-drag-over { border-color: #6366f1; background: #f5f3ff; }
+
+/* Drop target: line above the target item/section */
+.section-card.drag-over {
+  border-top: 2px solid #6366f1;
+  margin-top: -1px;
+}
+.item-row.item-drag-over {
+  border-top: 2px solid #6366f1;
+  margin-top: -1px;
+}
 
 .btn-icon {
   width: 30px; height: 30px;
@@ -1255,4 +1242,8 @@ onMounted(fetchTemplate)
 .checkbox-label input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; }
 
 .optional { font-weight: 400; color: #94a3b8; }
+
+/* While dragging, force grab cursor everywhere */
+.template-editor.is-dragging,
+.template-editor.is-dragging * { cursor: grabbing !important; user-select: none !important; }
 </style>

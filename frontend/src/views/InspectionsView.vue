@@ -14,8 +14,9 @@ import interactionPlugin from '@fullcalendar/interaction'
 
 const router = useRouter()
 
-const activeTab = ref('list') // 'list' or 'calendar'
+const activeTab = ref(localStorage.getItem('inspections_view') || 'list')
 const calendarView = ref('dayGridMonth')
+watch(activeTab, val => localStorage.setItem('inspections_view', val))
 const calendarRef = ref(null)
 const selectedDate = ref('')
 const showDatePicker = ref(false)
@@ -31,14 +32,14 @@ const showModal = ref(false)
 const filters = ref({
   client_id: null,
   postcode: '',
-  status: null,
+  statuses: [],   // multi-select array
   clerk_id: null
 })
 
 // Calendar filters
 const calendarFilters = ref({
   client_id: null,
-  status: null,
+  statuses: [],   // multi-select array
   clerk_id: null
 })
 
@@ -247,8 +248,8 @@ const filteredInspections = computed(() => {
     const s = filters.value.postcode.toLowerCase()
     result = result.filter(i => i.property_address && i.property_address.toLowerCase().includes(s))
   }
-  if (filters.value.status)
-    result = result.filter(i => i.status === filters.value.status)
+  if (filters.value.statuses && filters.value.statuses.length)
+    result = result.filter(i => filters.value.statuses.includes(i.status))
   if (filters.value.clerk_id)
     result = result.filter(i => i.inspector_id === filters.value.clerk_id)
   return result
@@ -272,12 +273,29 @@ function convertDateToUKFormat(isoDate) {
   return `${day}/${month}/${year}`
 }
 
+const statusColors = {
+  created: '#94a3b8', assigned: '#3b82f6', active: '#10b981',
+  processing: '#f59e0b', review: '#8b5cf6', complete: '#10b981'
+}
+
+function toggleStatus(val) {
+  const i = filters.value.statuses.indexOf(val)
+  if (i >= 0) filters.value.statuses.splice(i, 1)
+  else filters.value.statuses.push(val)
+}
+
+function toggleCalStatus(val) {
+  const i = calendarFilters.value.statuses.indexOf(val)
+  if (i >= 0) calendarFilters.value.statuses.splice(i, 1)
+  else calendarFilters.value.statuses.push(val)
+}
+
 function clearFilters() {
-  filters.value = { client_id: null, postcode: '', status: null, clerk_id: null }
+  filters.value = { client_id: null, postcode: '', statuses: [], clerk_id: null }
 }
 
 function clearCalendarFilters() {
-  calendarFilters.value = { client_id: null, status: null, clerk_id: null }
+  calendarFilters.value = { client_id: null, statuses: [], clerk_id: null }
 }
 
 function handleEventClick(info) {
@@ -294,6 +312,17 @@ function goToDate() {
     calendarRef.value.getApi().changeView('timeGridDay', selectedDate.value)
     showDatePicker.value = false
   }
+}
+
+const calendarViews = [
+  { value: 'dayGridMonth', label: 'Month' },
+  { value: 'timeGridWeek', label: 'Week' },
+  { value: 'timeGridDay',  label: 'Day' },
+]
+
+function switchCalView(view) {
+  calendarView.value = view
+  if (calendarRef.value) calendarRef.value.getApi().changeView(view)
 }
 
 async function fetchTemplates() {
@@ -527,8 +556,11 @@ onMounted(() => {
 <template>
   <div class="page">
     <div class="page-header">
-      <h1>📋 Inspections</h1>
-      <button v-if="authStore.isAdmin || authStore.isManager || authStore.isClient" @click="openModal" class="btn-primary">➕ New Inspection</button>
+      <div>
+        <h1 class="page-title">Inspections</h1>
+        <p class="page-sub">Manage and track property inspections</p>
+      </div>
+      <button v-if="authStore.isAdmin || authStore.isManager || authStore.isClient" @click="openModal" class="btn-primary">+ Add Inspection</button>
     </div>
 
     <!-- Tabs -->
@@ -555,11 +587,18 @@ onMounted(() => {
           <label>Postcode</label>
           <input v-model="filters.postcode" type="text" placeholder="Search postcode..." class="filter-input" />
         </div>
-        <div class="filter-group">
+        <div class="filter-group filter-group-multi">
           <label>Workflow Stage</label>
-          <select v-model="filters.status" class="filter-select">
-            <option v-for="option in statusOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
-          </select>
+          <div class="multi-status-pills">
+            <button
+              v-for="option in statusOptions.filter(o => o.value)"
+              :key="option.value"
+              class="status-pill"
+              :class="{ 'status-pill-active': filters.statuses.includes(option.value) }"
+              :style="filters.statuses.includes(option.value) ? { background: statusColors[option.value] } : {}"
+              @click="toggleStatus(option.value)"
+            >{{ option.label }}</button>
+          </div>
         </div>
         <div v-if="authStore.isAdmin || authStore.isManager" class="filter-group">
           <label>Clerk</label>
@@ -617,7 +656,7 @@ onMounted(() => {
           </div>
         </div>
         <div v-if="filteredInspections.length === 0" class="empty-state">
-          {{ filters.client_id || filters.postcode || filters.status || filters.clerk_id
+          {{ filters.client_id || filters.postcode || filters.statuses.length || filters.clerk_id
             ? 'No inspections match your filters.'
             : 'No inspections yet. Create your first inspection!' }}
         </div>
@@ -636,9 +675,16 @@ onMounted(() => {
         </div>
         <div class="filter-group">
           <label>Workflow Stage</label>
-          <select v-model="calendarFilters.status" class="filter-select">
-            <option v-for="option in statusOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
-          </select>
+          <div class="multi-status-pills">
+            <button
+              v-for="option in statusOptions.filter(o => o.value)"
+              :key="option.value"
+              class="status-pill"
+              :class="{ 'status-pill-active': calendarFilters.statuses.includes(option.value) }"
+              :style="calendarFilters.statuses.includes(option.value) ? { background: statusColors[option.value] } : {}"
+              @click="toggleCalStatus(option.value)"
+            >{{ option.label }}</button>
+          </div>
         </div>
         <div class="filter-group">
           <label>Clerk</label>
@@ -648,12 +694,20 @@ onMounted(() => {
           </select>
         </div>
         <button @click="clearCalendarFilters" class="btn-clear-filters">Clear Filters</button>
-        <button @click="openDatePicker" class="btn-date-picker">📅 Go to Date</button>
       </div>
 
       <div v-if="loading" class="loading">Loading calendar...</div>
 
       <div v-else class="calendar-container">
+        <div class="calendar-toolbar">
+          <div class="cal-view-btns">
+            <button
+              v-for="v in calendarViews" :key="v.value"
+              class="cal-view-btn" :class="{ active: calendarView === v.value }"
+              @click="switchCalView(v.value)">{{ v.label }}</button>
+            <button class="cal-view-btn cal-goto-btn" @click="openDatePicker">📅 Go to Date</button>
+          </div>
+        </div>
         <FullCalendar ref="calendarRef" :options="calendarOptions" />
       </div>
 
@@ -918,15 +972,11 @@ onMounted(() => {
 .page-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  margin-bottom: 32px;
+  align-items: flex-start;
+  margin-bottom: 24px;
 }
-
-.page-header h1 {
-  font-size: 32px;
-  font-weight: 700;
-  color: #1e293b;
-}
+.page-title { font-size: 22px; font-weight: 700; color: #1e293b; margin: 0 0 4px; }
+.page-sub   { font-size: 13px; color: #94a3b8; margin: 0; }
 
 .btn-primary {
   padding: 12px 24px;
@@ -952,6 +1002,39 @@ onMounted(() => {
   cursor: pointer;
 }
 .btn-secondary:hover { background: #f8fafc; }
+
+/* Multi-select status pills */
+.filter-group-multi { min-width: 200px; }
+.multi-status-pills { display: flex; flex-wrap: wrap; gap: 5px; padding-top: 2px; }
+.status-pill {
+  padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 700;
+  border: 1.5px solid #e2e8f0; background: #f8fafc; color: #64748b;
+  cursor: pointer; transition: all 0.12s; white-space: nowrap;
+}
+.status-pill:hover { border-color: #cbd5e1; color: #1e293b; }
+.status-pill-active { color: #fff !important; border-color: transparent !important; }
+
+/* Calendar toolbar */
+.calendar-toolbar { display: flex; align-items: center; justify-content: flex-end; margin-bottom: 10px; }
+.cal-view-btns { display: flex; gap: 4px; }
+.cal-view-btn {
+  padding: 6px 14px; border-radius: 6px; font-size: 12px; font-weight: 600;
+  border: 1.5px solid #e2e8f0; background: #fff; color: #64748b; cursor: pointer;
+  transition: all 0.12s;
+}
+.cal-view-btn:hover { background: #f1f5f9; border-color: #c7d2fe; color: #1e293b; }
+.cal-view-btn.active { background: #6366f1; border-color: #6366f1; color: #fff; }
+.cal-goto-btn { border-color: #c7d2fe; color: #6366f1; }
+.cal-goto-btn:hover { background: #eef2ff; }
+
+/* btn-primary uniform style */
+.btn-primary {
+  background: #6366f1; color: #fff; border: none;
+  padding: 9px 18px; border-radius: 8px;
+  font-size: 13px; font-weight: 700; cursor: pointer; transition: background 0.12s;
+  white-space: nowrap;
+}
+.btn-primary:hover { background: #4f46e5; }
 
 .tabs {
   display: flex;

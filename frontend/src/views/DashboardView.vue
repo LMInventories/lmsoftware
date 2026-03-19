@@ -69,11 +69,12 @@ const upcomingTomorrow = computed(() => {
     return d.getTime() === tom.getTime()
   })
 })
-const upcomingBeyond = computed(() => {
+const upcomingNext7Days = computed(() => {
   const tom = new Date(); tom.setHours(0,0,0,0); tom.setDate(tom.getDate()+1)
+  const cutoff = new Date(); cutoff.setHours(0,0,0,0); cutoff.setDate(cutoff.getDate()+8)
   return (stats.value.upcoming || []).filter(i => {
     const d = new Date(i.conduct_date); d.setHours(0,0,0,0)
-    return d.getTime() > tom.getTime()
+    return d.getTime() > tom.getTime() && d.getTime() < cutoff.getTime()
   })
 })
 
@@ -120,8 +121,12 @@ onMounted(fetchDashboardStats)
     </div>
 
     <div v-else>
-      <!-- Status tiles -->
-      <div class="status-tiles">
+      <!-- Top layout: workflow tiles left, account stats top-right -->
+      <div class="dash-top">
+        <div class="dash-top-left">
+          <div class="section-label">At a Glance</div>
+          <!-- Status tiles -->
+          <div class="status-tiles">
         <div
           v-for="(cfg, key) in statusConfig"
           :key="key"
@@ -134,28 +139,31 @@ onMounted(fetchDashboardStats)
         </div>
       </div>
 
-      <!-- Totals strip (admin/manager) -->
-      <div class="totals-strip" v-if="authStore.isAdmin || authStore.isManager">
-        <div class="total-chip">
-          <span class="total-num">{{ stats.totals.clients }}</span>
-          <span class="total-txt">Portfolios</span>
+
+
+          </div><!-- /status-tiles -->
+        </div><!-- /dash-top-left -->
+
+        <!-- Account stats 2x2 (admin/manager only) -->
+        <div class="account-stats" v-if="authStore.isAdmin || authStore.isManager">
+          <div class="stat-card" @click="router.push('/clients')">
+            <span class="stat-num">{{ stats.totals.clients }}</span>
+            <span class="stat-lbl">Portfolios</span>
+          </div>
+          <div class="stat-card" @click="router.push('/properties')">
+            <span class="stat-num">{{ stats.totals.properties }}</span>
+            <span class="stat-lbl">Properties</span>
+          </div>
+          <div class="stat-card" @click="router.push('/users')">
+            <span class="stat-num">{{ stats.totals.users }}</span>
+            <span class="stat-lbl">Users</span>
+          </div>
+          <div class="stat-card" @click="router.push('/inspections')">
+            <span class="stat-num">{{ stats.totals.inspections }}</span>
+            <span class="stat-lbl">Total Inspections</span>
+          </div>
         </div>
-        <div class="strip-div"></div>
-        <div class="total-chip">
-          <span class="total-num">{{ stats.totals.properties }}</span>
-          <span class="total-txt">Properties</span>
-        </div>
-        <div class="strip-div"></div>
-        <div class="total-chip">
-          <span class="total-num">{{ stats.totals.users }}</span>
-          <span class="total-txt">Users</span>
-        </div>
-        <div class="strip-div"></div>
-        <div class="total-chip">
-          <span class="total-num">{{ stats.totals.inspections }}</span>
-          <span class="total-txt">Total Inspections</span>
-        </div>
-      </div>
+      </div><!-- /dash-top -->
 
       <!-- Two-col content -->
       <div class="main-grid">
@@ -236,11 +244,11 @@ onMounted(fetchDashboardStats)
 
             <div class="upcoming-section">
               <div class="upcoming-heading">
-                <span class="uphead-dot" style="background:#94a3b8"></span>Beyond
-                <span class="uphead-count">{{ upcomingBeyond.length }}</span>
+                <span class="uphead-dot" style="background:#94a3b8"></span>Next 7 Days
+                <span class="uphead-count">{{ upcomingNext7Days.length }}</span>
               </div>
-              <p v-if="upcomingBeyond.length === 0" class="up-empty">Nothing further ahead</p>
-              <div v-for="insp in upcomingBeyond.slice(0,8)" :key="insp.id" class="up-card beyond-card" @click="viewInspection(insp.id)">
+              <p v-if="upcomingNext7Days.length === 0" class="up-empty">Nothing in the next 7 days</p>
+              <div v-for="insp in upcomingNext7Days" :key="insp.id" class="up-card beyond-card" @click="viewInspection(insp.id)">
                 <div class="up-date-col">
                   <div class="up-day">{{ new Date(insp.conduct_date).getDate() }}</div>
                   <div class="up-mon">{{ new Date(insp.conduct_date).toLocaleDateString('en-GB',{month:'short'}) }}</div>
@@ -312,12 +320,7 @@ h1 { font-size: 21px; font-weight: 700; color: #0f172a; margin: 0 0 2px; }
 .tile-label { font-size: 10px; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.4px; }
 
 /* Totals strip */
-.totals-strip {
-  display: flex; align-items: center;
-  background: white; border: 1px solid #e9ecef;
-  border-radius: 9px; padding: 10px 18px;
-  margin-bottom: 16px;
-}
+
 .total-chip { display: flex; align-items: baseline; gap: 6px; flex: 1; justify-content: center; }
 .total-num { font-size: 18px; font-weight: 700; color: #0f172a; }
 .total-txt { font-size: 11px; color: #94a3b8; }
@@ -372,6 +375,14 @@ h1 { font-size: 21px; font-weight: 700; color: #0f172a; margin: 0 0 2px; }
 .feed-empty { padding: 40px 20px; text-align: center; color: #cbd5e1; font-size: 13px; }
 
 /* Upcoming */
+.dash-top { display: flex; align-items: flex-start; gap: 20px; margin-bottom: 20px; }
+.dash-top-left { flex: 1; }
+.section-label { font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 8px; }
+.account-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; min-width: 200px; }
+.stat-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 2px; cursor: pointer; transition: box-shadow 0.12s, border-color 0.12s; }
+.stat-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.07); border-color: #c7d2fe; }
+.stat-num { font-size: 22px; font-weight: 800; color: #1e293b; }
+.stat-lbl { font-size: 11px; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.3px; }
 .upcoming-scroll { flex: 1; overflow-y: auto; max-height: 500px; }
 
 .upcoming-section { padding: 10px 14px 6px; border-bottom: 1px solid #f1f5f9; }

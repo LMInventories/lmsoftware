@@ -575,10 +575,18 @@ onMounted(() => fetchClients())
           {{ form.report_orientation === 'portrait' ? 'Portrait' : 'Landscape' }}
         </div>
 
-        <div class="preview-note">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-          To change the logo or base brand colour, edit the
-          <a href="#" @click.prevent="$router.push('/clients')" class="lnk">client record</a>.
+        <div class="client-settings-note">
+          <span class="client-settings-text">To change the logo or base brand colour, edit the</span>
+          <a
+            href="#"
+            @click.prevent="$router.push('/clients')"
+            class="client-settings-pill"
+            :style="{
+              background: brandColor + '18',
+              color: brandColor,
+              borderColor: brandColor + '40'
+            }"
+          >Client Settings</a>
         </div>
       </div>
 
@@ -1196,15 +1204,32 @@ onMounted(() => fetchClients())
 
 .orient-pill--l { background: #f0fdf4; color: #166534; }
 
-.preview-note {
+.client-settings-note {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   margin-top: 12px;
-  font-size: 11px;
+}
+.client-settings-text {
+  font-size: 12px;
   color: #94a3b8;
   line-height: 1.5;
+  white-space: nowrap;
 }
-
-.preview-note svg { flex-shrink: 0; margin-top: 1px; }
+.client-settings-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 20px;
+  border: 1px solid;
+  font-size: 11px;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+  transition: opacity 0.12s;
+  white-space: nowrap;
+  letter-spacing: 0.2px;
+}
+.client-settings-pill:hover { opacity: 0.75; }
 </style>

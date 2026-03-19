@@ -945,14 +945,14 @@ onMounted(() => {
                     @input="onConductDateInput"
                   />
                   <label class="date-cal-btn" title="Pick from calendar">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="pointer-events:none;position:relative;z-index:0">
                       <rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
                     </svg>
                     <input
                       type="date"
                       :value="form.conduct_date"
                       @change="onConductNativeChange"
-                      style="position:absolute;inset:0;opacity:0;width:100%;height:100%;cursor:pointer"
+                      style="position:absolute;inset:0;opacity:0;width:100%;height:100%;cursor:pointer;z-index:1"
                     />
                   </label>
                 </div>
@@ -1136,14 +1136,14 @@ onMounted(() => {
                 @input="onDateDisplayInput"
               />
               <label class="date-cal-btn" title="Pick from calendar">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="pointer-events:none;position:relative;z-index:0">
                   <rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
                 </svg>
                 <input
                   type="date"
                   :value="selectedDate"
                   @change="onNativeDateChange"
-                  style="position:absolute;inset:0;opacity:0;width:100%;height:100%;cursor:pointer"
+                  style="position:absolute;inset:0;opacity:0;width:100%;height:100%;cursor:pointer;z-index:1"
                 />
               </label>
             </div>
@@ -2013,6 +2013,7 @@ onMounted(() => {
   flex-shrink: 0;
   color: #64748b;
   transition: border-color 0.12s, background 0.12s;
+  overflow: hidden;
 }
 .date-cal-btn:hover {
   border-color: #6366f1;

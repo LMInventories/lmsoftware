@@ -298,54 +298,81 @@ function goBackToTemplates() {
 }
 
 // Drag-to-reorder state
-const dragSectionIdx = ref(null)
-const dragItemKey    = ref(null)
+const dragSectionIdx  = ref(null)
+const dragOverSectIdx = ref(null)  // which section is being hovered over
+const dragItemKey     = ref(null)  // 'sectionId:itemIdx' of item being dragged
+const dragOverItemKey = ref(null)  // 'sectionId:itemIdx' of item being hovered over
 
+// ── Section drag ──────────────────────────────────────────────────────────
 function onSectionDragStart(e, index) {
   dragSectionIdx.value = index
+  dragOverSectIdx.value = null
   e.dataTransfer.effectAllowed = 'move'
+  e.dataTransfer.setData('text/plain', String(index))
 }
 function onSectionDragOver(e, index) {
   e.preventDefault()
   e.dataTransfer.dropEffect = 'move'
+  dragOverSectIdx.value = index
 }
 async function onSectionDrop(e, toIndex) {
   e.preventDefault()
+  e.stopPropagation()
   const fromIndex = dragSectionIdx.value
-  if (fromIndex === null || fromIndex === toIndex) { dragSectionIdx.value = null; return }
+  dragSectionIdx.value  = null
+  dragOverSectIdx.value = null
+  if (fromIndex === null || fromIndex === toIndex) return
   const section = roomSections.value[fromIndex]
   const steps = toIndex - fromIndex
-  const dir = steps > 0 ? 'down' : 'up'
+  const dir   = steps > 0 ? 'down' : 'up'
   const count = Math.abs(steps)
   for (let i = 0; i < count; i++) {
     await api.reorderSection(section.id, dir)
   }
-  dragSectionIdx.value = null
-  fetchTemplate()
+  await fetchTemplate()
 }
-function onSectionDragEnd() { dragSectionIdx.value = null }
+function onSectionDragEnd() {
+  dragSectionIdx.value  = null
+  dragOverSectIdx.value = null
+}
 
+// ── Item drag ─────────────────────────────────────────────────────────────
 function onItemDragStart(e, sectionId, itemIdx) {
-  dragItemKey.value = `${sectionId}:${itemIdx}`
+  dragItemKey.value     = `${sectionId}:${itemIdx}`
+  dragOverItemKey.value = null
   e.dataTransfer.effectAllowed = 'move'
+  e.dataTransfer.setData('text/plain', dragItemKey.value)
+  e.stopPropagation()  // prevent section drag from firing
+}
+function onItemDragOver(e, sectionId, itemIdx) {
+  e.preventDefault()
+  e.stopPropagation()
+  e.dataTransfer.dropEffect = 'move'
+  dragOverItemKey.value = `${sectionId}:${itemIdx}`
 }
 async function onItemDrop(e, section, toIdx) {
   e.preventDefault()
-  if (!dragItemKey.value) return
-  const [sid, fromIdxStr] = dragItemKey.value.split(':')
+  e.stopPropagation()
+  const key = dragItemKey.value
+  dragItemKey.value     = null
+  dragOverItemKey.value = null
+  if (!key) return
+  const [sid, fromIdxStr] = key.split(':')
   const fromIdx = parseInt(fromIdxStr)
-  if (String(section.id) !== sid || fromIdx === toIdx) { dragItemKey.value = null; return }
-  const item = section.items[fromIdx]
+  if (String(section.id) !== sid || fromIdx === toIdx) return
+  const item  = section.items[fromIdx]
   const steps = toIdx - fromIdx
-  const dir = steps > 0 ? 'down' : 'up'
+  const dir   = steps > 0 ? 'down' : 'up'
   const count = Math.abs(steps)
   for (let i = 0; i < count; i++) {
     await api.reorderItem(item.id, dir)
   }
-  dragItemKey.value = null
-  fetchTemplate()
+  await fetchTemplate()
 }
-function onItemDragEnd() { dragItemKey.value = null }
+function onItemDragEnd() {
+  dragItemKey.value     = null
+  dragOverItemKey.value = null
+}
 
 onMounted(fetchTemplate)
 </script>
@@ -398,13 +425,19 @@ onMounted(fetchTemplate)
             v-for="(section, index) in roomSections"
             :key="section.id"
             class="section-card"
-            :class="{ 'drag-over': dragSectionIdx !== null && dragSectionIdx !== index }"
+            :class="{ 'drag-over': dragOverSectIdx === index && dragSectionIdx !== index }"
+            draggable="true"
+            @dragstart="onSectionDragStart($event, index)"
+            @dragend="onSectionDragEnd"
             @dragover="onSectionDragOver($event, index)"
             @drop="onSectionDrop($event, index)"
           >
 
             <div class="section-header">
-              <!-- Inline rename: click the name to edit, blur/enter to save, Escape to cancel -->
+              <!-- Drag handle on the LEFT -->
+              <span class="drag-handle" title="Drag to reorder">⠿</span>
+
+              <!-- Inline rename -->
               <template v-if="renamingSection && renamingSection.id === section.id">
                 <input
                   class="section-name-input"
@@ -422,13 +455,6 @@ onMounted(fetchTemplate)
                 title="Click to rename"
               >{{ section.name }} ✎</span>
               <div class="section-actions">
-                <span
-                  class="drag-handle"
-                  draggable="true"
-                  @dragstart="onSectionDragStart($event, index)"
-                  @dragend="onSectionDragEnd"
-                  title="Drag to reorder"
-                >::</span>
                 <button @click="openSavePresetModal(section)" class="btn-icon preset-btn" title="Save as Preset">💾</button>
                 <button @click="duplicateSection(section)" class="btn-icon" title="Duplicate">⧉</button>
                 <button @click="deleteSection(section)"   class="btn-icon danger" title="Delete">✕</button>
@@ -442,9 +468,14 @@ onMounted(fetchTemplate)
                 v-for="(item, itemIndex) in section.items"
                 :key="item.id"
                 class="item-row"
-                @dragover.prevent
+                :class="{ 'item-drag-over': dragOverItemKey === section.id + ':' + itemIndex }"
+                draggable="true"
+                @dragstart="onItemDragStart($event, section.id, itemIndex)"
+                @dragend="onItemDragEnd"
+                @dragover="onItemDragOver($event, section.id, itemIndex)"
                 @drop="onItemDrop($event, section, itemIndex)"
               >
+                <span class="drag-handle drag-handle-sm" title="Drag to reorder">⠿</span>
                 <div class="item-info">
                   <span class="item-name">{{ item.name }}</span>
                   <div class="item-meta">
@@ -453,16 +484,9 @@ onMounted(fetchTemplate)
                   </div>
                 </div>
                 <div class="item-actions">
-                  <span
-                    class="drag-handle drag-handle-sm"
-                    draggable="true"
-                    @dragstart="onItemDragStart($event, section.id, itemIndex)"
-                    @dragend="onItemDragEnd"
-                    title="Drag to reorder"
-                  >::</span>
-                  <button @click="openEditItemModal(item)"                                                        class="btn-icon-sm" title="Edit">✎</button>
-                  <button @click="duplicateItem(item, section)"                                                   class="btn-icon-sm" title="Duplicate">⧉</button>
-                  <button @click="deleteItem(item, section)"                                                      class="btn-icon-sm danger" title="Delete">✕</button>
+                  <button @click="openEditItemModal(item)"         class="btn-icon-sm" title="Edit">✎</button>
+                  <button @click="duplicateItem(item, section)"    class="btn-icon-sm" title="Duplicate">⧉</button>
+                  <button @click="deleteItem(item, section)"       class="btn-icon-sm danger" title="Delete">✕</button>
                 </div>
               </div>
               <button @click="openAddItemModal(section.id)" class="btn-add-item">＋ Add Item</button>
@@ -906,21 +930,20 @@ onMounted(fetchTemplate)
 /* ── Icon buttons ────────────────────────────────────────────────────────── */
 .drag-handle {
   cursor: grab;
-  font-size: 14px;
-  font-weight: 900;
-  color: #94a3b8;
-  padding: 4px 6px;
+  font-size: 18px;
+  color: #cbd5e1;
+  padding: 2px 6px 2px 2px;
   border-radius: 4px;
-  letter-spacing: -1px;
   user-select: none;
   flex-shrink: 0;
   line-height: 1;
-  transition: color 0.12s, background 0.12s;
+  transition: color 0.12s;
 }
-.drag-handle:hover { color: #6366f1; background: #f1f5f9; }
+.drag-handle:hover { color: #6366f1; }
 .drag-handle:active { cursor: grabbing; }
-.drag-handle-sm { font-size: 12px; padding: 2px 4px; }
-.section-card.drag-over { border-color: #6366f1; background: #fafafe; }
+.drag-handle-sm { font-size: 15px; padding: 2px 4px 2px 0; }
+.section-card.drag-over { border-color: #6366f1; background: #f5f3ff; box-shadow: 0 0 0 2px rgba(99,102,241,0.15); }
+.item-row.item-drag-over { border-color: #6366f1; background: #f5f3ff; }
 
 .btn-icon {
   width: 30px; height: 30px;

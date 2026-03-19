@@ -59,7 +59,9 @@ const addingFromPreset = ref(false)
 // ── Forms ─────────────────────────────────────────────────────────────────────
 const newSectionName = ref('')
 
-const savePresetForm = ref({ name: '', description: '' })
+const savePresetForm  = ref({ name: '', description: '' })
+const deletingPreset  = ref(null)   // preset being confirmed for deletion
+const savingPreset    = ref(false)  // loading state while saving
 
 const newItemForm = ref({
   name: '', description: '', requires_photo: true, requires_condition: true
@@ -190,19 +192,82 @@ function openSavePresetModal(section) {
   showSavePresetModal.value = section
 }
 
-async function handleSaveAsPreset() {
+async function handleSaveAsPreset(forceOverwrite = false) {
   const section = showSavePresetModal.value
-  if (!savePresetForm.value.name.trim()) { alert('Name is required'); return }
+  const name = savePresetForm.value.name.trim()
+  if (!name) { alert('Name is required'); return }
+  savingPreset.value = true
   try {
-    await api.saveSectionAsPreset(section.id, {
-      name:        savePresetForm.value.name.trim(),
-      description: savePresetForm.value.description,
-    })
+    // Load current presets to check for name collision
+    const existing = presets.value.length
+      ? presets.value
+      : (await api.getSectionPresets()).data
+
+    const match = existing.find(p => p.name.toLowerCase() === name.toLowerCase())
+
+    if (match && !forceOverwrite) {
+      // Ask user whether to overwrite or save as new
+      savingPreset.value = false
+      savePresetForm.value._conflictId = match.id
+      savePresetForm.value._conflicting = true
+      return
+    }
+
+    if (match && forceOverwrite) {
+      // Overwrite — build updated items snapshot and PUT
+      const itemsRes = await api.getSectionPresets()
+      const fresh = itemsRes.data.find(p => p.id === match.id)
+      // Build items from the live section
+      const sectionRes = await api.getTemplate(template.value.id)
+      const liveSection = (sectionRes.data.sections || []).find(s => s.id === section.id)
+      const items = (liveSection?.items || []).map(it => ({
+        name:               it.name,
+        description:        it.description || '',
+        requires_photo:     it.requires_photo,
+        requires_condition: it.requires_condition,
+        order_index:        it.order_index,
+      }))
+      await api.updateSectionPreset(match.id, {
+        name,
+        description: savePresetForm.value.description,
+        items,
+      })
+      // Refresh presets list
+      presets.value = (await api.getSectionPresets()).data
+    } else {
+      // Fresh save
+      await api.saveSectionAsPreset(section.id, {
+        name,
+        description: savePresetForm.value.description,
+      })
+      presets.value = (await api.getSectionPresets()).data
+    }
+
     showSavePresetModal.value = null
-    alert(`"${savePresetForm.value.name}" saved to presets!`)
+    savePresetForm.value = { name: '', description: '' }
   } catch (err) {
     console.error(err)
     alert('Failed to save preset')
+  } finally {
+    savingPreset.value = false
+  }
+}
+
+async function handleDeletePreset(preset) {
+  deletingPreset.value = preset
+}
+
+async function confirmDeletePreset() {
+  if (!deletingPreset.value) return
+  try {
+    await api.deleteSectionPreset(deletingPreset.value.id)
+    presets.value = presets.value.filter(p => p.id !== deletingPreset.value.id)
+    // Also deselect if it was selected
+    selectedPresets.value = selectedPresets.value.filter(s => s.preset.id !== deletingPreset.value.id)
+    deletingPreset.value = null
+  } catch (err) {
+    console.error(err)
+    alert('Failed to delete preset')
   }
 }
 
@@ -579,17 +644,16 @@ onMounted(fetchTemplate)
               :key="preset.id"
               class="picker-row"
               :class="{ selected: isPresetSelected(preset) }"
-              @click="togglePreset(preset)"
             >
               <!-- Checkbox -->
-              <div class="picker-check">
+              <div class="picker-check" @click="togglePreset(preset)">
                 <div class="check-box" :class="{ checked: isPresetSelected(preset) }">
                   <span v-if="isPresetSelected(preset)">✓</span>
                 </div>
               </div>
 
               <!-- Preset info -->
-              <div class="picker-info">
+              <div class="picker-info" @click="togglePreset(preset)">
                 <div class="picker-name">{{ preset.name }}</div>
                 <div class="picker-meta">{{ preset.item_count }} item{{ preset.item_count !== 1 ? 's' : '' }}
                   <span v-if="preset.description" class="picker-desc"> · {{ preset.description }}</span>
@@ -603,6 +667,13 @@ onMounted(fetchTemplate)
                   </span>
                 </div>
               </div>
+
+              <!-- Delete button -->
+              <button
+                class="preset-delete-btn"
+                @click.stop="handleDeletePreset(preset)"
+                title="Delete preset"
+              >✕</button>
             </div>
           </div>
 
@@ -654,26 +725,84 @@ onMounted(fetchTemplate)
           <button @click="showSavePresetModal = null" class="btn-close">✕</button>
         </div>
         <div class="modal-body">
-          <p class="save-info">
-            Save <strong>{{ showSavePresetModal.name }}</strong> and its
-            {{ (showSavePresetModal.items || []).length }} item(s) as a reusable preset.
-          </p>
-          <div class="form-group">
-            <label>Preset name *</label>
-            <input v-model="savePresetForm.name" type="text" placeholder="e.g. Standard Bedroom" autofocus />
-          </div>
-          <div class="form-group">
-            <label>Notes <span class="optional">(optional)</span></label>
-            <input v-model="savePresetForm.description" type="text" placeholder="e.g. Double room with en-suite" />
-          </div>
+          <!-- Normal state -->
+          <template v-if="!savePresetForm._conflicting">
+            <p class="save-info">
+              Save <strong>{{ showSavePresetModal.name }}</strong> and its
+              {{ (showSavePresetModal.items || []).length }} item(s) as a reusable preset.
+            </p>
+            <div class="form-group">
+              <label>Preset name *</label>
+              <input v-model="savePresetForm.name" type="text" placeholder="e.g. Standard Bedroom" autofocus />
+            </div>
+            <div class="form-group">
+              <label>Notes <span class="optional">(optional)</span></label>
+              <input v-model="savePresetForm.description" type="text" placeholder="e.g. Double room with en-suite" />
+            </div>
+          </template>
+
+          <!-- Conflict state — preset with same name exists -->
+          <template v-else>
+            <div class="conflict-banner">
+              <div class="conflict-icon">⚠️</div>
+              <div>
+                <div class="conflict-title">Preset already exists</div>
+                <div class="conflict-sub">A preset named <strong>"{{ savePresetForm.name }}"</strong> already exists. What would you like to do?</div>
+              </div>
+            </div>
+          </template>
         </div>
         <div class="modal-footer">
-          <button @click="showSavePresetModal = null" class="btn-secondary">Cancel</button>
-          <button @click="handleSaveAsPreset" class="btn-primary">Save Preset</button>
+          <button
+            @click="showSavePresetModal = null; savePresetForm = { name: '', description: '' }"
+            class="btn-secondary"
+          >Cancel</button>
+
+          <!-- Normal footer -->
+          <template v-if="!savePresetForm._conflicting">
+            <button @click="handleSaveAsPreset(false)" class="btn-primary" :disabled="savingPreset">
+              {{ savingPreset ? 'Saving…' : 'Save Preset' }}
+            </button>
+          </template>
+
+          <!-- Conflict footer -->
+          <template v-else>
+            <button
+              @click="savePresetForm._conflicting = false"
+              class="btn-secondary"
+            >Rename</button>
+            <button
+              @click="handleSaveAsPreset(true)"
+              class="btn-primary"
+              :disabled="savingPreset"
+            >{{ savingPreset ? 'Saving…' : 'Overwrite' }}</button>
+          </template>
         </div>
       </div>
     </div>
 
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         MODAL: Confirm delete preset
+    ═══════════════════════════════════════════════════════════════════════════ -->
+    <div v-if="deletingPreset" class="modal-overlay" @click.self="deletingPreset = null">
+      <div class="modal modal-narrow">
+        <div class="modal-header">
+          <h2>Delete Preset</h2>
+          <button @click="deletingPreset = null" class="btn-close">✕</button>
+        </div>
+        <div class="modal-body">
+          <p class="save-info">
+            Delete <strong>"{{ deletingPreset.name }}"</strong>?
+            This cannot be undone. Templates that already used this preset are not affected.
+          </p>
+        </div>
+        <div class="modal-footer">
+          <button @click="deletingPreset = null" class="btn-secondary">Cancel</button>
+          <button @click="confirmDeletePreset" class="btn-danger">Delete Preset</button>
+        </div>
+      </div>
+    </div>
 
     <!-- ═══════════════════════════════════════════════════════════════════════
          MODAL: Add Item
@@ -1200,6 +1329,41 @@ onMounted(fetchTemplate)
   background: white;
 }
 .rename-input:focus { outline: none; border-color: #059669; }
+
+.preset-delete-btn {
+  flex-shrink: 0;
+  width: 26px; height: 26px;
+  border-radius: 5px;
+  border: 1px solid #fecaca;
+  background: #fff;
+  color: #dc2626;
+  font-size: 11px;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  opacity: 0;
+  transition: opacity 0.12s, background 0.12s;
+  margin-left: 8px;
+  align-self: center;
+}
+.picker-row:hover .preset-delete-btn { opacity: 1; }
+.preset-delete-btn:hover { background: #fee2e2; }
+
+.conflict-banner {
+  display: flex; align-items: flex-start; gap: 12px;
+  background: #fffbeb; border: 1px solid #fcd34d;
+  border-radius: 8px; padding: 14px 16px;
+  margin-bottom: 4px;
+}
+.conflict-icon { font-size: 20px; flex-shrink: 0; }
+.conflict-title { font-size: 14px; font-weight: 700; color: #1e293b; margin-bottom: 4px; }
+.conflict-sub { font-size: 13px; color: #64748b; line-height: 1.5; }
+
+.btn-danger {
+  padding: 9px 18px; background: #dc2626; color: white;
+  border: none; border-radius: 7px; font-size: 13px;
+  font-weight: 600; cursor: pointer; transition: background 0.15s;
+}
+.btn-danger:hover { background: #b91c1c; }
 
 /* ── Save preset modal ───────────────────────────────────────────────────── */
 .save-info {

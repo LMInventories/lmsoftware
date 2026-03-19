@@ -51,11 +51,9 @@ export default function ItemGalleryScreen() {
 
   // Reassign modal
   const [showReassign, setShowReassign]     = useState(false)
-  const [rooms, setRooms]                   = useState<RoomOption[]>([])
-  const [targetRoom, setTargetRoom]         = useState<RoomOption | null>(null)
+  const [currentRoomItems, setCurrentRoomItems] = useState<ItemOption[]>([])
   const [targetItem, setTargetItem]         = useState<ItemOption | null>(null)
   const [roomsLoading, setRoomsLoading]     = useState(false)
-  const [roomPickerOpen, setRoomPickerOpen] = useState(false)
   const [itemPickerOpen, setItemPickerOpen] = useState(false)
 
   // AI reassign
@@ -156,42 +154,40 @@ export default function ItemGalleryScreen() {
         setShowReassign(false); return
       }
       const tmplRes = await api.getTemplate(activeInspection.template_id)
-      const sections: any[] = (tmplRes.data.sections || []).filter((s: any) => s.section_type === 'room')
-      const roomOptions: RoomOption[] = sections.map((s: any) => ({
-        key:   String(s.id),
-        name:  s.name,
-        items: (s.items || []).map((it: any) => ({ key: String(it.id), name: it.name })),
+      const sections: any[] = tmplRes.data.sections || []
+      // Find only this room's section and its items
+      const thisSection = sections.find((s: any) => String(s.id) === sectionKey)
+      const items: ItemOption[] = (thisSection?.items || []).map((it: any) => ({
+        key:  String(it.id),
+        name: it.name,
       }))
-      setRooms(roomOptions)
-      const currentRoom = roomOptions.find(r => r.key === sectionKey) || roomOptions[0] || null
-      setTargetRoom(currentRoom)
-      setTargetItem(currentRoom?.items[0] || null)
-    } catch { Alert.alert('Error', 'Could not load rooms.'); setShowReassign(false) }
+      setCurrentRoomItems(items)
+      setTargetItem(items[0] || null)
+    } catch { Alert.alert('Error', 'Could not load room items.'); setShowReassign(false) }
     finally { setRoomsLoading(false) }
   }
 
   async function confirmReassign() {
-    if (!targetRoom || !targetItem) return
-    if (targetRoom.key === sectionKey && targetItem.key === itemKey) {
-      Alert.alert('Same location', 'Photos are already here.'); return
+    if (!targetItem) return
+    if (targetItem.key === itemKey) {
+      Alert.alert('Same item', 'Photos are already assigned here.'); return
     }
     const rd = JSON.parse(activeInspection?.report_data || '{}')
     const photosToMove = getPhotos().filter(u => selected.has(u))
-    // Remove from source
+    // Remove from source item
     if (!rd[sectionKey]) rd[sectionKey] = {}
     if (!rd[sectionKey][itemKey]) rd[sectionKey][itemKey] = {}
     rd[sectionKey][itemKey]._photos = getPhotos().filter(u => !selected.has(u))
-    // Add to target
-    if (!rd[targetRoom.key]) rd[targetRoom.key] = {}
-    if (!rd[targetRoom.key][targetItem.key]) rd[targetRoom.key][targetItem.key] = {}
-    rd[targetRoom.key][targetItem.key]._photos = [
-      ...(rd[targetRoom.key][targetItem.key]._photos || []),
+    // Add to target item (same room)
+    if (!rd[sectionKey][targetItem.key]) rd[sectionKey][targetItem.key] = {}
+    rd[sectionKey][targetItem.key]._photos = [
+      ...(rd[sectionKey][targetItem.key]._photos || []),
       ...photosToMove,
     ]
     await setReportData(inspectionId, rd)
     setShowReassign(false)
     exitSelect()
-    Alert.alert('Done', `${photosToMove.length} photo${photosToMove.length !== 1 ? 's' : ''} moved to ${targetRoom.name} › ${targetItem.name}`)
+    Alert.alert('Done', `${photosToMove.length} photo${photosToMove.length !== 1 ? 's' : ''} moved to ${targetItem.name}`)
   }
 
   // ── AI Reassign ────────────────────────────────────────────────────────────
@@ -203,16 +199,13 @@ export default function ItemGalleryScreen() {
         Alert.alert('No template', 'This inspection has no template assigned.'); return
       }
       const tmplRes = await api.getTemplate(activeInspection.template_id)
-      const sections: any[] = (tmplRes.data.sections || []).filter((s: any) => s.section_type === 'room')
-      const roomList = sections.map((s: any) => ({
-        sectionKey: String(s.id), sectionName: s.name,
-        items: (s.items || []).map((it: any) => ({ itemKey: String(it.id), itemName: it.name })),
-      }))
-
-      const roomContextStr = roomList.map((r: any) =>
-        `Room: "${r.sectionName}" (key: ${r.sectionKey})\n` +
-        r.items.map((it: any) => `  - "${it.itemName}" (key: ${it.itemKey})`).join('\n')
-      ).join('\n\n')
+      const sections: any[] = tmplRes.data.sections || []
+      // Constrain to current room only — photos should only move within the same room
+      const thisSection = sections.find((s: any) => String(s.id) === sectionKey)
+      const roomContextStr = thisSection
+        ? `Room: "${thisSection.name}" (key: ${sectionKey})\n` +
+          (thisSection.items || []).map((it: any) => `  - "${it.name}" (key: ${it.id})`).join('\n')
+        : ''
 
       const selectedPhotos = getPhotos().filter(u => selected.has(u))
       const suggestions: AiSuggestion[] = []
@@ -270,7 +263,7 @@ export default function ItemGalleryScreen() {
       } else {
         exitSelect()
         Alert.alert('AI Reassign Complete',
-          `${autoMoved.length} photo${autoMoved.length !== 1 ? 's' : ''} automatically reassigned.`)
+          `${autoMoved.length} photo${autoMoved.length !== 1 ? 's' : ''} automatically moved within ${sectionName}.`)
       }
     } catch { Alert.alert('Error', 'AI analysis failed. Please try again.') }
     finally { setAiLoading(false) }
@@ -392,7 +385,7 @@ export default function ItemGalleryScreen() {
             </TouchableOpacity>
             <Text style={mStyles.title}>Reassign Photos</Text>
             <TouchableOpacity onPress={confirmReassign}>
-              <Text style={[mStyles.confirm, (!targetRoom || !targetItem) && mStyles.confirmDisabled]}>Move</Text>
+              <Text style={[mStyles.confirm, !targetItem && mStyles.confirmDisabled]}>Move</Text>
             </TouchableOpacity>
           </View>
           {roomsLoading ? (
@@ -404,33 +397,15 @@ export default function ItemGalleryScreen() {
             <ScrollView contentContainerStyle={mStyles.body} keyboardShouldPersistTaps="handled">
               <Text style={mStyles.desc}>
                 Moving <Text style={mStyles.bold}>{selected.size}</Text> photo{selected.size !== 1 ? 's' : ''} from{' '}
-                <Text style={mStyles.bold}>{sectionName} › {itemName}</Text>
+                <Text style={mStyles.bold}>{itemName}</Text> to another item in this room
               </Text>
 
-              {/* Room picker */}
+              {/* Room — locked to current, shown as info only */}
               <Text style={mStyles.label}>Room</Text>
-              <TouchableOpacity
-                style={[mStyles.picker, roomPickerOpen && mStyles.pickerOpen]}
-                onPress={() => { setRoomPickerOpen(v => !v); setItemPickerOpen(false) }}
-              >
-                <Text style={mStyles.pickerVal}>{targetRoom?.name || 'Select room…'}</Text>
-                <Text style={mStyles.chevron}>{roomPickerOpen ? '▲' : '▼'}</Text>
-              </TouchableOpacity>
-              {roomPickerOpen && (
-                <View style={mStyles.dropdown}>
-                  {rooms.map(room => (
-                    <TouchableOpacity key={room.key}
-                      style={[mStyles.option, targetRoom?.key === room.key && mStyles.optionActive]}
-                      onPress={() => { setTargetRoom(room); setTargetItem(room.items[0] || null); setRoomPickerOpen(false) }}
-                    >
-                      <Text style={[mStyles.optionText, targetRoom?.key === room.key && mStyles.optionTextActive]}>
-                        {room.name}
-                      </Text>
-                      {targetRoom?.key === room.key && <Text style={mStyles.tick}>✓</Text>}
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              )}
+              <View style={mStyles.lockedRoom}>
+                <Text style={mStyles.lockedRoomText}>{sectionName}</Text>
+                <Text style={mStyles.lockedRoomBadge}>Current room</Text>
+              </View>
 
               {/* Item picker */}
               <Text style={[mStyles.label, { marginTop: spacing.md }]}>Item</Text>
@@ -443,9 +418,9 @@ export default function ItemGalleryScreen() {
               </TouchableOpacity>
               {itemPickerOpen && (
                 <View style={mStyles.dropdown}>
-                  {(targetRoom?.items || []).length === 0
+                  {currentRoomItems.length === 0
                     ? <Text style={mStyles.emptyOpts}>No items in this room</Text>
-                    : (targetRoom?.items || []).map(item => (
+                    : currentRoomItems.map(item => (
                         <TouchableOpacity key={item.key}
                           style={[mStyles.option, targetItem?.key === item.key && mStyles.optionActive]}
                           onPress={() => { setTargetItem(item); setItemPickerOpen(false) }}
@@ -689,6 +664,14 @@ const mStyles = StyleSheet.create({
   desc:            { fontSize: font.sm, color: colors.textMid, marginBottom: spacing.md, lineHeight: 20 },
   bold:            { fontWeight: '700', color: colors.text },
   label:           { fontSize: font.xs, fontWeight: '700', color: colors.textLight, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 },
+  lockedRoom: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: colors.muted,
+    borderWidth: 1.5, borderColor: colors.border,
+    borderRadius: radius.md, paddingHorizontal: spacing.md, paddingVertical: 13,
+  },
+  lockedRoomText:  { fontSize: font.md, color: colors.textMid, fontWeight: '500' },
+  lockedRoomBadge: { fontSize: font.xs, color: colors.textLight, fontStyle: 'italic' },
   picker: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     backgroundColor: colors.surface,

@@ -1793,4 +1793,107 @@ onMounted(() => {
 }
 .mobile-fab-add:hover { transform: scale(1.07); }
 
+
+/* ── Multi-select dropdown filters ─────────────────────────────────────── */
+.filter-group { position: relative; }
+
+.ms-dropdown {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 7px;
+  padding: 7px 10px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 13px;
+  color: #1e293b;
+  min-width: 140px;
+  user-select: none;
+  white-space: nowrap;
+  transition: border-color 0.12s;
+}
+.ms-dropdown:hover { border-color: #a5b4fc; }
+.ms-dropdown.open {
+  border-color: #6366f1;
+  border-bottom-color: transparent;
+  border-radius: 7px 7px 0 0;
+}
+
+.ms-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #1e293b;
+  font-size: 13px;
+}
+.ms-chevron {
+  font-size: 10px;
+  color: #94a3b8;
+  margin-left: 8px;
+  flex-shrink: 0;
+  transition: transform 0.15s;
+}
+.ms-dropdown.open .ms-chevron { transform: rotate(180deg); }
+
+.ms-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 400;
+  background: #fff;
+  border: 1.5px solid #6366f1;
+  border-top: none;
+  border-radius: 0 0 7px 7px;
+  box-shadow: 0 6px 20px rgba(99,102,241,0.13);
+  min-width: 100%;
+  padding: 4px 0;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.ms-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #1e293b;
+  white-space: nowrap;
+  transition: background 0.08s;
+}
+.ms-item:hover { background: #f5f3ff; }
+.ms-item input[type=checkbox] {
+  accent-color: #6366f1;
+  cursor: pointer;
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+}
+
+.ms-status-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.ms-clerk-dot {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.ms-empty {
+  padding: 10px 12px;
+  font-size: 12px;
+  color: #94a3b8;
+  font-style: italic;
+}
+
+/* ── FullCalendar event cursor ──────────────────────────────────────────── */
+.calendar-container :deep(.fc-event) { cursor: pointer !important; }
+.calendar-container :deep(.fc-event *) { cursor: pointer !important; }
+.calendar-container :deep(.fc-daygrid-event) { cursor: pointer !important; }
+.calendar-container :deep(.fc-timegrid-event) { cursor: pointer !important; }
+
 </style>

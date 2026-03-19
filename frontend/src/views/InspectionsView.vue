@@ -28,20 +28,40 @@ watch(activeTab, val => {
 const calendarRef = ref(null)
 const selectedDate        = ref('')
 const selectedDateDisplay = ref('')  // DD/MM/YYYY for display
+const conductDateDisplay  = ref('')  // DD/MM/YYYY for Add Inspection form
 
-function onDateDisplayInput() {
-  // Auto-insert slashes
-  let v = selectedDateDisplay.value.replace(/[^0-9]/g, '')
+function onDateDisplayInput(e) {
+  let v = e.target.value.replace(/[^0-9]/g, '')
   if (v.length > 2) v = v.slice(0,2) + '/' + v.slice(2)
   if (v.length > 5) v = v.slice(0,5) + '/' + v.slice(5,9)
   selectedDateDisplay.value = v
-  // Convert DD/MM/YYYY → YYYY-MM-DD for FullCalendar
   if (v.length === 10) {
     const [dd, mm, yyyy] = v.split('/')
     selectedDate.value = `${yyyy}-${mm}-${dd}`
   } else {
     selectedDate.value = ''
   }
+}
+
+function onConductDateInput(e) {
+  let v = e.target.value.replace(/[^0-9]/g, '')
+  if (v.length > 2) v = v.slice(0,2) + '/' + v.slice(2)
+  if (v.length > 5) v = v.slice(0,5) + '/' + v.slice(5,9)
+  conductDateDisplay.value = v
+  if (v.length === 10) {
+    const [dd, mm, yyyy] = v.split('/')
+    form.value.conduct_date = `${yyyy}-${mm}-${dd}`
+  } else {
+    form.value.conduct_date = ''
+  }
+}
+
+function onConductNativeChange(e) {
+  const val = e.target.value // YYYY-MM-DD
+  if (!val) return
+  const [yyyy, mm, dd] = val.split('-')
+  conductDateDisplay.value = `${dd}/${mm}/${yyyy}`
+  form.value.conduct_date = val
 }
 const showDatePicker = ref(false)
 const inspections = ref([])
@@ -359,6 +379,15 @@ function openDatePicker() {
   showDatePicker.value = true
 }
 
+// Called when user picks from native calendar icon
+function onNativeDateChange(e) {
+  const val = e.target.value // YYYY-MM-DD
+  if (!val) return
+  const [yyyy, mm, dd] = val.split('-')
+  selectedDateDisplay.value = `${dd}/${mm}/${yyyy}`
+  selectedDate.value = val
+}
+
 function goToDate() {
   if (selectedDate.value && calendarRef.value) {
     calendarRef.value.getApi().changeView('timeGridDay', selectedDate.value)
@@ -463,6 +492,7 @@ async function fetchUsers() {
 }
 
 function openModal() {
+  conductDateDisplay.value = ''
   form.value = {
     client_id: authStore.isClient ? authStore.user.client_id : null,
     property_id: null,
@@ -905,7 +935,27 @@ onMounted(() => {
               <!-- Date -->
               <div class="form-group">
                 <label>Conduct Date</label>
-                <input v-model="form.conduct_date" type="date" class="input-field date-picker" lang="en-GB" />
+                <div class="date-input-row">
+                  <input
+                    :value="conductDateDisplay"
+                    type="text"
+                    placeholder="DD/MM/YYYY"
+                    class="input-field date-text-input"
+                    maxlength="10"
+                    @input="onConductDateInput"
+                  />
+                  <label class="date-cal-btn" title="Pick from calendar">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
+                    </svg>
+                    <input
+                      type="date"
+                      :value="form.conduct_date"
+                      @change="onConductNativeChange"
+                      style="position:absolute;opacity:0;width:0;height:0;pointer-events:none"
+                    />
+                  </label>
+                </div>
               </div>
 
               <!-- Time -->
@@ -1075,15 +1125,28 @@ onMounted(() => {
         </div>
         <div class="modal-body">
           <div class="form-group">
-            <label>Select a date to view in Day view</label>
-            <input
-              v-model="selectedDateDisplay"
-              type="text"
-              placeholder="DD/MM/YYYY"
-              class="input-field date-picker-input"
-              maxlength="10"
-              @input="onDateDisplayInput"
-            />
+            <label>Select a date</label>
+            <div class="date-input-row">
+              <input
+                v-model="selectedDateDisplay"
+                type="text"
+                placeholder="DD/MM/YYYY"
+                class="input-field date-text-input"
+                maxlength="10"
+                @input="onDateDisplayInput"
+              />
+              <label class="date-cal-btn" title="Pick from calendar">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
+                </svg>
+                <input
+                  type="date"
+                  :value="selectedDate"
+                  @change="onNativeDateChange"
+                  style="position:absolute;opacity:0;width:0;height:0;pointer-events:none"
+                />
+              </label>
+            </div>
           </div>
         </div>
         <div class="modal-footer">
@@ -1924,4 +1987,36 @@ onMounted(() => {
 .calendar-container :deep(.fc-daygrid-event) { cursor: pointer !important; }
 .calendar-container :deep(.fc-timegrid-event) { cursor: pointer !important; }
 
+
+/* Date input with calendar icon */
+.date-input-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.date-text-input {
+  flex: 1;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.5px;
+}
+.date-cal-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 7px;
+  background: #f8fafc;
+  cursor: pointer;
+  flex-shrink: 0;
+  color: #64748b;
+  transition: border-color 0.12s, background 0.12s;
+}
+.date-cal-btn:hover {
+  border-color: #6366f1;
+  background: #eef2ff;
+  color: #6366f1;
+}
 </style>

@@ -31,7 +31,13 @@ export type RootStackParamList = {
     templateSectionId?: number
     fixedSectionData?: string  // JSON stringified fixed section for 'fixed' type
   }
-  ItemGallery: { inspectionId: number; sectionKey: string; itemKey: string; itemName: string }
+  ItemGallery: {
+    inspectionId: number
+    sectionKey:   string   // current room's key
+    sectionName:  string   // current room's display name
+    itemKey:      string
+    itemName:     string
+  }
   Sync: undefined
 }
 

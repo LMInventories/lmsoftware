@@ -287,6 +287,11 @@ Return ONLY valid JSON in this exact shape (no markdown):
 
 # ── Endpoints ─────────────────────────────────────────────────────────────
 
+@transcribe_bp.route('/classify-photo', methods=['OPTIONS'])
+def classify_photo_options():
+    return '', 204
+
+
 @transcribe_bp.route('/status', methods=['GET'])
 @jwt_required()
 def transcribe_status():
@@ -398,6 +403,120 @@ def transcribe_item():
     except Exception as e:
         import traceback
         print(f'[transcribe/item] Error: {e}')
+        print(traceback.format_exc())
+        return jsonify({'error': str(e)}), 500
+
+
+@transcribe_bp.route('/classify-photo', methods=['POST'])
+@jwt_required()
+def classify_photo():
+    """
+    Accepts a base64 image and room/item context string.
+    Uses Claude vision to identify which room and item the photo belongs to.
+
+    Request JSON:
+    {
+      "imageBase64": "<base64 jpeg>",
+      "mimeType":    "image/jpeg",
+      "roomContext": "<formatted room+item list string>"
+    }
+
+    Response JSON:
+    {
+      "sectionKey":  "42",
+      "sectionName": "Bedroom 1",
+      "itemKey":     "87",
+      "itemName":    "Door & Frame",
+      "confidence":  0.92
+    }
+    """
+    data = request.get_json(force=True)
+    image_base64 = data.get('imageBase64', '')
+    mime_type    = data.get('mimeType', 'image/jpeg')
+    room_context = data.get('roomContext', '')
+
+    if not image_base64 or not room_context:
+        return jsonify({'error': 'imageBase64 and roomContext are required'}), 400
+
+    if not os.environ.get('ANTHROPIC_API_KEY'):
+        return jsonify({'error': 'ANTHROPIC_API_KEY not configured on server'}), 503
+
+    client = anthropic.Anthropic(api_key=os.environ.get('ANTHROPIC_API_KEY'))
+
+    prompt = f"""You are a property inspection assistant. Look at this photo carefully and identify which room and item it belongs to from the list below.
+
+{room_context}
+
+Common property inspection items and what they look like:
+- Door Fittings / Door & Frame: door handles, hinges, door frames, locks, letterboxes, door furniture
+- Lighting / Light Fitting: ceiling lights, pendant lights, light shades, lampshades, wall lights, spotlights, bulbs, light fittings
+- Walls: painted surfaces, wallpaper, plasterwork, wall damage, marks, dado rails
+- Ceiling: ceiling surfaces, coving, cornices, ceiling roses
+- Floor / Flooring: carpet, hardwood, laminate, tiles, vinyl, skirting boards
+- Windows / Window & Frame: glass panes, window frames, window sills, blinds, curtains, curtain rails
+- Radiator / Heating: radiators, heating units, thermostats, towel rails
+- Sockets & Switches: electrical outlets, light switches, fuse boxes, consumer units
+- Smoke Alarm / Carbon Monoxide Alarm: round alarm units mounted on ceiling or wall
+- Kitchen appliances: oven, hob, microwave, dishwasher, fridge, extractor fan
+- Bathroom: bath, shower, sink, toilet, taps, shower screen, tiles
+
+Respond ONLY with a raw JSON object — no markdown, no backticks, no explanation, just the JSON:
+{{"sectionKey":"<key>","sectionName":"<room name>","itemKey":"<key>","itemName":"<item name>","confidence":0.92}}
+
+Rules:
+- confidence is a number from 0.0 to 1.0
+- Give confidence above 0.8 only when you are certain of both the room AND the item
+- If you can identify the item type but are unsure which room, give 0.5-0.7
+- sectionKey and itemKey must be copied exactly from the provided context list
+- Match to the single closest item in the list"""
+
+    try:
+        message = client.messages.create(
+            model='claude-opus-4-5',
+            max_tokens=150,
+            messages=[{
+                'role': 'user',
+                'content': [
+                    {
+                        'type': 'image',
+                        'source': {
+                            'type':       'base64',
+                            'media_type': mime_type,
+                            'data':       image_base64,
+                        },
+                    },
+                    {
+                        'type': 'text',
+                        'text': prompt,
+                    },
+                ],
+            }],
+        )
+
+        raw = message.content[0].text.strip()
+        raw = raw.replace('```json', '').replace('```', '').strip()
+        result = json.loads(raw)
+
+        # Ensure all required fields are present
+        for field in ('sectionKey', 'sectionName', 'itemKey', 'itemName'):
+            if field not in result:
+                result[field] = ''
+        result['confidence'] = float(result.get('confidence', 0))
+
+        return jsonify(result)
+
+    except json.JSONDecodeError as e:
+        # Claude returned something that wasn't valid JSON — return gracefully
+        print(f'[classify-photo] JSON parse error: {e}, raw: {raw!r}')
+        return jsonify({
+            'sectionKey': '', 'sectionName': '',
+            'itemKey': '',    'itemName': '',
+            'confidence': 0,
+        })
+
+    except Exception as e:
+        import traceback
+        print(f'[classify-photo] Error: {e}')
         print(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
 

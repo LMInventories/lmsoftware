@@ -230,6 +230,49 @@ export default function RoomInspectionScreen() {
     await setReportData(inspectionId, rd)
   }
 
+  // ── Room overview photos ──────────────────────────────────────────────────
+  function getOverviewPhotos(): string[] {
+    try {
+      const rd = JSON.parse(activeInspection?.report_data || '{}')
+      return rd[sectionKey]?._overviewPhotos || []
+    } catch { return [] }
+  }
+
+  async function addOverviewPhoto(base64: string) {
+    const fresh = await getLocalInspection(inspectionId)
+    const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+    if (!rd[sectionKey]) rd[sectionKey] = {}
+    rd[sectionKey]._overviewPhotos = [
+      ...(rd[sectionKey]._overviewPhotos || []),
+      `data:image/jpeg;base64,${base64}`,
+    ]
+    await setReportData(inspectionId, rd)
+  }
+
+  async function removeOverviewPhoto(idx: number) {
+    const fresh = await getLocalInspection(inspectionId)
+    const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+    if (!rd[sectionKey]) rd[sectionKey] = {}
+    const photos: string[] = rd[sectionKey]._overviewPhotos || []
+    photos.splice(idx, 1)
+    rd[sectionKey]._overviewPhotos = [...photos]
+    await setReportData(inspectionId, rd)
+  }
+
+  async function handleTakeOverviewPhoto() {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync()
+    if (status !== 'granted') { Alert.alert('Permission required', 'Camera permission is needed.'); return }
+    const result = await ImagePicker.launchCameraAsync({ quality: 0.8, base64: true })
+    if (!result.canceled && result.assets[0].base64) await addOverviewPhoto(result.assets[0].base64)
+  }
+
+  async function handlePickOverviewPhoto() {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
+    if (status !== 'granted') { Alert.alert('Permission required', 'Photo library permission is needed.'); return }
+    const result = await ImagePicker.launchImageLibraryAsync({ quality: 0.8, base64: true })
+    if (!result.canceled && result.assets[0].base64) await addOverviewPhoto(result.assets[0].base64)
+  }
+
   async function handleTakePhoto(itemId: string) {
     const { status } = await ImagePicker.requestCameraPermissionsAsync()
     if (status !== 'granted') { Alert.alert('Permission required', 'Camera access is needed.'); return }
@@ -517,7 +560,7 @@ export default function RoomInspectionScreen() {
             {photos.map((uri: string, idx: number) => (
               <TouchableOpacity key={idx}
                 onPress={() => navigation.navigate('ItemGallery', {
-                  inspectionId, sectionKey, itemKey: String(item.id), itemName: item.label || item.name,
+                  inspectionId, sectionKey, sectionName, itemKey: String(item.id), itemName: item.label || item.name,
                 })}
                 onLongPress={() => Alert.alert('Remove photo?', '', [
                   { text: 'Cancel', style: 'cancel' },
@@ -846,7 +889,52 @@ export default function RoomInspectionScreen() {
             contentContainerStyle={[styles.scroll, isHumanTypist && { paddingBottom: 120 }]}
             keyboardShouldPersistTaps="handled"
           >
-            {items.length > 0 && (
+            {/* ── Room Overview Photos ──────────────────────────────────── */}
+            {sectionType_ === 'room' && (() => {
+              const ovPhotos = getOverviewPhotos()
+              return (
+                <View style={styles.overviewBlock}>
+                  <View style={styles.overviewHeader}>
+                    <View>
+                      <Text style={styles.overviewTitle}>Room Overview</Text>
+                      <Text style={styles.overviewSub}>
+                        {ovPhotos.length > 0
+                          ? `${ovPhotos.length} photo${ovPhotos.length !== 1 ? 's' : ''}`
+                          : 'Photos from each corner of the room'}
+                      </Text>
+                    </View>
+                    <View style={styles.overviewBtns}>
+                      <TouchableOpacity style={styles.overviewIconBtn} onPress={handleTakeOverviewPhoto}>
+                        <Text style={styles.overviewIconEmoji}>📷</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity style={styles.overviewIconBtn} onPress={handlePickOverviewPhoto}>
+                        <Text style={styles.overviewIconEmoji}>🖼</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                  {ovPhotos.length > 0 && (
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.overviewStrip}>
+                      {ovPhotos.map((uri: string, idx: number) => (
+                        <TouchableOpacity
+                          key={idx}
+                          onLongPress={() => Alert.alert('Remove overview photo?', '', [
+                            { text: 'Cancel', style: 'cancel' },
+                            { text: 'Remove', style: 'destructive', onPress: () => removeOverviewPhoto(idx) },
+                          ])}
+                        >
+                          <Image source={{ uri }} style={styles.overviewThumb} />
+                          <View style={styles.overviewThumbNum}>
+                            <Text style={styles.overviewThumbNumText}>{idx + 1}</Text>
+                          </View>
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                  )}
+                </View>
+              )
+            })()}
+
+                        {items.length > 0 && (
               <Text style={styles.swipeHint}>Swipe left or right for options</Text>
             )}
             {items.length === 0 && (
@@ -985,6 +1073,39 @@ const styles = StyleSheet.create({
   fieldLabel: { fontSize: font.xs, fontWeight: '700', color: colors.textLight, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 4 },
   notesInput: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, padding: 8, fontSize: font.sm, color: colors.text, backgroundColor: colors.surface, minHeight: 60 },
   inlineInput: { minHeight: 0, height: 42 },
+  overviewBlock: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  overviewHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  overviewTitle: { fontSize: font.md, fontWeight: '700', color: colors.text },
+  overviewSub:   { fontSize: font.xs, color: colors.textLight, marginTop: 2 },
+  overviewBtns:  { flexDirection: 'row', gap: spacing.xs },
+  overviewIconBtn: {
+    width: 36, height: 36,
+    borderRadius: radius.sm,
+    backgroundColor: colors.muted,
+    borderWidth: 1, borderColor: colors.border,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  overviewIconEmoji: { fontSize: 17 },
+  overviewStrip: { marginTop: 6 },
+  overviewThumb: { width: 90, height: 90, borderRadius: radius.md, marginRight: spacing.sm },
+  overviewThumbNum: {
+    position: 'absolute', bottom: 4, right: spacing.sm + 4,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4,
+  },
+  overviewThumbNumText: { color: '#fff', fontSize: 10, fontWeight: '600' },
   photoBlock: { marginTop: 8 },
   photosHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
   photoIconBtns: { flexDirection: 'row', gap: spacing.xs },

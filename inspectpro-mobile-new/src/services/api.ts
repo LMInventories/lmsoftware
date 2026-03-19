@@ -58,6 +58,10 @@ export const api = {
   transcribeItem: (data: any) =>
     http.post('/api/transcribe/item', data),
 
+  // AI photo classification (for reassign)
+  classifyPhoto: (data: { imageBase64: string; mimeType: string; roomContext: string }) =>
+    http.post('/api/transcribe/classify-photo', data),
+
   checkAiStatus: () =>
     http.get('/api/ai/status'),
 }

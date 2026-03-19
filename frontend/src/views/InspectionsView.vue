@@ -16,7 +16,15 @@ const router = useRouter()
 
 const activeTab = ref(localStorage.getItem('inspections_view') || 'list')
 const calendarView = ref('dayGridMonth')
-watch(activeTab, val => localStorage.setItem('inspections_view', val))
+watch(activeTab, val => {
+  localStorage.setItem('inspections_view', val)
+  if (val === 'calendar') {
+    // Give FullCalendar time to mount before reading title
+    setTimeout(() => {
+      if (calendarRef.value) calendarTitle.value = calendarRef.value.getApi().view.title
+    }, 100)
+  }
+})
 const calendarRef = ref(null)
 const selectedDate = ref('')
 const showDatePicker = ref(false)
@@ -30,17 +38,17 @@ const showModal = ref(false)
 
 // Filters
 const filters = ref({
-  client_id: null,
+  client_ids: [],  // multi-select array
   postcode: '',
-  statuses: [],   // multi-select array
-  clerk_id: null
+  statuses: [],    // multi-select array
+  clerk_ids: [],   // multi-select array
 })
 
 // Calendar filters
 const calendarFilters = ref({
-  client_id: null,
-  statuses: [],   // multi-select array
-  clerk_id: null
+  client_ids: [],  // multi-select array
+  statuses: [],    // multi-select array
+  clerk_ids: []    // multi-select array
 })
 
 const form = ref({
@@ -164,11 +172,7 @@ const calendarOptions = computed(() => ({
   plugins: [dayGridPlugin, timeGridPlugin, interactionPlugin],
   initialView: calendarView.value,
   firstDay: 1,
-  headerToolbar: {
-    left: 'prev,next today',
-    center: 'title',
-    right: 'dayGridMonth,timeGridWeek,timeGridDay'
-  },
+  headerToolbar: false,
   events: calendarEvents.value,
   eventClick: handleEventClick,
   height: 'auto',
@@ -187,12 +191,12 @@ const calendarOptions = computed(() => ({
 const calendarEvents = computed(() => {
   let filtered = [...inspections.value]
 
-  if (calendarFilters.value.client_id)
-    filtered = filtered.filter(i => i.client_id === calendarFilters.value.client_id)
+  if (calendarFilters.value.client_ids?.length)
+    filtered = filtered.filter(i => calendarFilters.value.client_ids.includes(i.client_id))
   if (calendarFilters.value.status)
     filtered = filtered.filter(i => i.status === calendarFilters.value.status)
-  if (calendarFilters.value.clerk_id)
-    filtered = filtered.filter(i => i.inspector_id === calendarFilters.value.clerk_id)
+  if (calendarFilters.value.clerk_ids?.length)
+    filtered = filtered.filter(i => calendarFilters.value.clerk_ids.includes(i.inspector_id))
 
   return filtered
     .filter(i => i.conduct_date)
@@ -242,16 +246,16 @@ const calendarEvents = computed(() => {
 
 const filteredInspections = computed(() => {
   let result = [...inspections.value]
-  if (filters.value.client_id)
-    result = result.filter(i => i.client_id === filters.value.client_id)
+  if (filters.value.client_ids?.length)
+    result = result.filter(i => filters.value.client_ids.includes(i.client_id))
   if (filters.value.postcode) {
     const s = filters.value.postcode.toLowerCase()
     result = result.filter(i => i.property_address && i.property_address.toLowerCase().includes(s))
   }
   if (filters.value.statuses && filters.value.statuses.length)
     result = result.filter(i => filters.value.statuses.includes(i.status))
-  if (filters.value.clerk_id)
-    result = result.filter(i => i.inspector_id === filters.value.clerk_id)
+  if (filters.value.clerk_ids?.length)
+    result = result.filter(i => filters.value.clerk_ids.includes(i.inspector_id))
   return result
 })
 
@@ -273,6 +277,20 @@ function convertDateToUKFormat(isoDate) {
   return `${day}/${month}/${year}`
 }
 
+function toggleClientFilter(val, isCalendar = false) {
+  const arr = isCalendar ? calendarFilters.value.client_ids : filters.value.client_ids
+  const i = arr.indexOf(val)
+  if (i >= 0) arr.splice(i, 1)
+  else arr.push(val)
+}
+
+function toggleClerkFilter(val, isCalendar = false) {
+  const arr = isCalendar ? calendarFilters.value.clerk_ids : filters.value.clerk_ids
+  const i = arr.indexOf(val)
+  if (i >= 0) arr.splice(i, 1)
+  else arr.push(val)
+}
+
 function toggleStatus(val) {
   const i = filters.value.statuses.indexOf(val)
   if (i >= 0) filters.value.statuses.splice(i, 1)
@@ -286,11 +304,11 @@ function toggleCalStatus(val) {
 }
 
 function clearFilters() {
-  filters.value = { client_id: null, postcode: '', statuses: [], clerk_id: null }
+  filters.value = { client_ids: [], postcode: '', statuses: [], clerk_ids: [] }
 }
 
 function clearCalendarFilters() {
-  calendarFilters.value = { client_id: null, statuses: [], clerk_id: null }
+  calendarFilters.value = { client_ids: [], statuses: [], clerk_ids: [] }
 }
 
 function handleEventClick(info) {
@@ -315,9 +333,30 @@ const calendarViews = [
   { value: 'timeGridDay',  label: 'Day' },
 ]
 
+const calendarTitle = ref('')
+
 function switchCalView(view) {
   calendarView.value = view
-  if (calendarRef.value) calendarRef.value.getApi().changeView(view)
+  if (calendarRef.value) {
+    calendarRef.value.getApi().changeView(view)
+    calendarTitle.value = calendarRef.value.getApi().view.title
+  }
+}
+
+function calNav(action) {
+  if (!calendarRef.value) return
+  const api = calendarRef.value.getApi()
+  if (action === 'prev')  api.prev()
+  if (action === 'next')  api.next()
+  if (action === 'today') api.today()
+  calendarTitle.value = api.view.title
+}
+
+// Update title after calendar mounts
+function onCalendarMounted() {
+  if (calendarRef.value) {
+    calendarTitle.value = calendarRef.value.getApi().view.title
+  }
 }
 
 async function fetchTemplates() {
@@ -571,12 +610,16 @@ onMounted(() => {
     <!-- List View -->
     <div v-if="activeTab === 'list'">
       <div class="filters-bar">
-        <div v-if="authStore.isAdmin || authStore.isManager" class="filter-group">
-          <label>Portfolio</label>
-          <select v-model="filters.client_id" class="filter-select">
-            <option :value="null">All Portfolio</option>
-            <option v-for="client in clients" :key="client.id" :value="client.id">{{ client.name }}</option>
-          </select>
+        <div v-if="authStore.isAdmin || authStore.isManager" class="filter-group filter-group-multi">
+          <label>Client</label>
+          <div class="multi-status-pills">
+            <button
+              v-for="client in clients" :key="client.id"
+              class="status-pill"
+              :class="{ 'status-pill-active status-pill-client': filters.client_ids.includes(client.id) }"
+              @click="toggleClientFilter(client.id)"
+            >{{ client.name }}</button>
+          </div>
         </div>
         <div class="filter-group">
           <label>Postcode</label>
@@ -595,12 +638,17 @@ onMounted(() => {
             >{{ option.label }}</button>
           </div>
         </div>
-        <div v-if="authStore.isAdmin || authStore.isManager" class="filter-group">
+        <div v-if="authStore.isAdmin || authStore.isManager" class="filter-group filter-group-multi">
           <label>Clerk</label>
-          <select v-model="filters.clerk_id" class="filter-select">
-            <option :value="null">All Clerks</option>
-            <option v-for="clerk in clerks" :key="clerk.id" :value="clerk.id">{{ clerk.name }}</option>
-          </select>
+          <div class="multi-status-pills">
+            <button
+              v-for="clerk in clerks" :key="clerk.id"
+              class="status-pill"
+              :class="{ 'status-pill-active status-pill-clerk': filters.clerk_ids.includes(clerk.id) }"
+              :style="filters.clerk_ids.includes(clerk.id) ? { background: clerk.color } : {}"
+              @click="toggleClerkFilter(clerk.id)"
+            >{{ clerk.name }}</button>
+          </div>
         </div>
         <button @click="clearFilters" class="btn-clear-filters">Clear Filters</button>
       </div>
@@ -651,7 +699,7 @@ onMounted(() => {
           </div>
         </div>
         <div v-if="filteredInspections.length === 0" class="empty-state">
-          {{ filters.client_id || filters.postcode || filters.statuses.length || filters.clerk_id
+          {{ filters.client_ids.length || filters.postcode || filters.statuses.length || filters.clerk_ids.length
             ? 'No inspections match your filters.'
             : 'No inspections yet. Create your first inspection!' }}
         </div>
@@ -661,12 +709,16 @@ onMounted(() => {
     <!-- Calendar View -->
     <div v-if="activeTab === 'calendar'" class="calendar-view">
       <div class="filters-bar calendar-filters">
-        <div class="filter-group">
-          <label>Portfolio</label>
-          <select v-model="calendarFilters.client_id" class="filter-select">
-            <option :value="null">All Portfolio</option>
-            <option v-for="client in clients" :key="client.id" :value="client.id">{{ client.name }}</option>
-          </select>
+        <div v-if="authStore.isAdmin || authStore.isManager" class="filter-group filter-group-multi">
+          <label>Client</label>
+          <div class="multi-status-pills">
+            <button
+              v-for="client in clients" :key="client.id"
+              class="status-pill"
+              :class="{ 'status-pill-active status-pill-client': calendarFilters.client_ids.includes(client.id) }"
+              @click="toggleClientFilter(client.id, true)"
+            >{{ client.name }}</button>
+          </div>
         </div>
         <div class="filter-group">
           <label>Workflow Stage</label>
@@ -681,12 +733,17 @@ onMounted(() => {
             >{{ option.label }}</button>
           </div>
         </div>
-        <div class="filter-group">
+        <div v-if="authStore.isAdmin || authStore.isManager" class="filter-group filter-group-multi">
           <label>Clerk</label>
-          <select v-model="calendarFilters.clerk_id" class="filter-select">
-            <option :value="null">All Clerks</option>
-            <option v-for="clerk in clerks" :key="clerk.id" :value="clerk.id">{{ clerk.name }}</option>
-          </select>
+          <div class="multi-status-pills">
+            <button
+              v-for="clerk in clerks" :key="clerk.id"
+              class="status-pill"
+              :class="{ 'status-pill-active status-pill-clerk': calendarFilters.clerk_ids.includes(clerk.id) }"
+              :style="calendarFilters.clerk_ids.includes(clerk.id) ? { background: clerk.color } : {}"
+              @click="toggleClerkFilter(clerk.id, true)"
+            >{{ clerk.name }}</button>
+          </div>
         </div>
         <button @click="clearCalendarFilters" class="btn-clear-filters">Clear Filters</button>
       </div>
@@ -695,6 +752,12 @@ onMounted(() => {
 
       <div v-else class="calendar-container">
         <div class="calendar-toolbar">
+          <div class="cal-toolbar-left">
+            <button class="cal-nav-btn" @click="calNav('prev')">‹</button>
+            <button class="cal-nav-btn" @click="calNav('next')">›</button>
+            <button class="cal-nav-btn cal-today-btn" @click="calNav('today')">Today</button>
+            <span class="cal-title">{{ calendarTitle }}</span>
+          </div>
           <div class="cal-view-btns">
             <button
               v-for="v in calendarViews" :key="v.value"
@@ -1010,8 +1073,20 @@ onMounted(() => {
 .status-pill-active { color: #fff !important; border-color: transparent !important; }
 
 /* Calendar toolbar */
-.calendar-toolbar { display: flex; align-items: center; justify-content: flex-end; margin-bottom: 10px; }
-.cal-view-btns { display: flex; gap: 4px; }
+.calendar-toolbar {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 12px; gap: 10px; flex-wrap: wrap;
+}
+.cal-toolbar-left { display: flex; align-items: center; gap: 4px; }
+.cal-nav-btn {
+  padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600;
+  border: 1.5px solid #e2e8f0; background: #fff; color: #64748b; cursor: pointer;
+  transition: all 0.12s; line-height: 1;
+}
+.cal-nav-btn:hover { background: #f1f5f9; border-color: #c7d2fe; color: #1e293b; }
+.cal-today-btn { font-size: 12px; padding: 6px 14px; }
+.cal-title { font-size: 15px; font-weight: 700; color: #1e293b; margin-left: 8px; white-space: nowrap; }
+.cal-view-btns { display: flex; gap: 4px; flex-wrap: wrap; }
 .cal-view-btn {
   padding: 6px 14px; border-radius: 6px; font-size: 12px; font-weight: 600;
   border: 1.5px solid #e2e8f0; background: #fff; color: #64748b; cursor: pointer;
@@ -1021,6 +1096,8 @@ onMounted(() => {
 .cal-view-btn.active { background: #6366f1; border-color: #6366f1; color: #fff; }
 .cal-goto-btn { border-color: #c7d2fe; color: #6366f1; }
 .cal-goto-btn:hover { background: #eef2ff; }
+/* Client pill active colour */
+.status-pill-client { background: #0f172a !important; }
 
 /* btn-primary uniform style */
 .btn-primary {

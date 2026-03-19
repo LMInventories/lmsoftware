@@ -141,7 +141,13 @@ onMounted(fetchDashboardStats)
         </div><!-- /dash-top-left -->
 
         <!-- Account stats 2x2 (admin/manager only) -->
-        <div class="account-stats" v-if="authStore.isAdmin || authStore.isManager">
+        <div class="account-stats-wrap" v-if="authStore.isAdmin || authStore.isManager">
+          <div class="stats-header">
+            <span class="stats-divider"></span>
+            <span class="stats-label">Account Statistics</span>
+            <span class="stats-divider"></span>
+          </div>
+          <div class="account-stats">
           <div class="stat-card" @click="router.push('/clients')">
             <span class="stat-num">{{ stats.totals.clients }}</span>
             <span class="stat-lbl">Portfolios</span>
@@ -158,7 +164,8 @@ onMounted(fetchDashboardStats)
             <span class="stat-num">{{ stats.totals.inspections }}</span>
             <span class="stat-lbl">Total Inspections</span>
           </div>
-        </div>
+          </div><!-- /account-stats -->
+        </div><!-- /account-stats-wrap -->
       </div><!-- /dash-top -->
 
       <!-- Two-col content -->
@@ -291,17 +298,24 @@ h1 { font-size: 21px; font-weight: 700; color: #0f172a; margin: 0 0 2px; }
   grid-template-columns: repeat(6, 1fr);
   gap: 8px;
   margin-bottom: 10px;
+  align-items: stretch;
 }
 
 .status-tile {
   background: white;
   border-radius: 9px;
-  padding: 12px 14px 10px;
+  padding: 16px 14px;
   border: 1px solid #e9ecef;
   cursor: pointer;
   transition: box-shadow 0.15s, transform 0.12s;
   position: relative;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  min-height: 90px;
 }
 .status-tile:hover {
   box-shadow: 0 3px 10px rgba(0,0,0,0.07);
@@ -374,11 +388,15 @@ h1 { font-size: 21px; font-weight: 700; color: #0f172a; margin: 0 0 2px; }
 .dash-top { display: flex; align-items: flex-start; gap: 20px; margin-bottom: 20px; }
 .dash-top-left { flex: 1; }
 .section-label { font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 8px; }
-.account-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; min-width: 200px; }
-.stat-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 2px; cursor: pointer; transition: box-shadow 0.12s, border-color 0.12s; }
+.account-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.stat-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 3px; cursor: pointer; transition: box-shadow 0.12s, border-color 0.12s; min-height: 90px; }
 .stat-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.07); border-color: #c7d2fe; }
-.stat-num { font-size: 22px; font-weight: 800; color: #1e293b; }
+.stat-num { font-size: 26px; font-weight: 700; color: #0f172a; line-height: 1; margin-bottom: 4px; }
 .stat-lbl { font-size: 11px; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.3px; }
+.account-stats-wrap { min-width: 220px; display: flex; flex-direction: column; gap: 8px; }
+.stats-header { display: flex; align-items: center; gap: 8px; }
+.stats-label { font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.6px; white-space: nowrap; }
+.stats-divider { flex: 1; height: 1px; background: #e2e8f0; }
 .upcoming-scroll { flex: 1; overflow-y: auto; max-height: 500px; }
 
 .upcoming-section { padding: 10px 14px 6px; border-bottom: 1px solid #f1f5f9; }

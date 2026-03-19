@@ -91,7 +91,7 @@ async function fetchTemplate() {
   } catch (err) {
     console.error(err)
     alert('Failed to load template')
-    localStorage.setItem('settings_tab', 'templates'); router.push('/settings')
+    goBackToTemplates()
   } finally {
     loading.value = false
   }
@@ -292,6 +292,11 @@ async function moveItemDown(item) {
   try { await api.reorderItem(item.id, 'down'); fetchTemplate() } catch (err) { console.error(err) }
 }
 
+function goBackToTemplates() {
+  localStorage.setItem('settings_tab', 'templates')
+  router.push('/settings')
+}
+
 // Drag-to-reorder state
 const dragSectionIdx = ref(null)
 const dragItemKey    = ref(null)
@@ -351,7 +356,7 @@ onMounted(fetchTemplate)
     <!-- ── Header ──────────────────────────────────────────────────────────── -->
     <div class="page-header">
       <div class="header-left">
-        <button @click="localStorage.setItem('settings_tab', 'templates'); router.push('/settings')" class="btn-back">← Back</button>
+        <button @click="goBackToTemplates" class="btn-back">← Back</button>
         <div v-if="!loading">
           <input
             v-model="template.name"

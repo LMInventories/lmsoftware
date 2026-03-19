@@ -575,10 +575,7 @@ onMounted(() => fetchClients())
           {{ form.report_orientation === 'portrait' ? 'Portrait' : 'Landscape' }}
         </div>
 
-        <p class="preview-note-inline">
-          ℹ️ To change the logo or base brand colour, edit the
-          <a href="#" @click.prevent="$router.push('/clients')" class="lnk">client record</a>.
-        </p>
+        <p class="preview-note-inline">ℹ️ To change the logo or base brand colour, edit the <a href="#" @click.prevent="$router.push('/clients')" class="lnk">client record</a>.</p>
       </div>
 
     </div>
@@ -1200,5 +1197,7 @@ onMounted(() => fetchClients())
   font-size: 12px;
   color: #94a3b8;
   line-height: 1.5;
+  display: block;
 }
+.preview-note-inline .lnk { white-space: nowrap; }
 </style>

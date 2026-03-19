@@ -26,7 +26,23 @@ watch(activeTab, val => {
   }
 })
 const calendarRef = ref(null)
-const selectedDate = ref('')
+const selectedDate        = ref('')
+const selectedDateDisplay = ref('')  // DD/MM/YYYY for display
+
+function onDateDisplayInput() {
+  // Auto-insert slashes
+  let v = selectedDateDisplay.value.replace(/[^0-9]/g, '')
+  if (v.length > 2) v = v.slice(0,2) + '/' + v.slice(2)
+  if (v.length > 5) v = v.slice(0,5) + '/' + v.slice(5,9)
+  selectedDateDisplay.value = v
+  // Convert DD/MM/YYYY → YYYY-MM-DD for FullCalendar
+  if (v.length === 10) {
+    const [dd, mm, yyyy] = v.split('/')
+    selectedDate.value = `${yyyy}-${mm}-${dd}`
+  } else {
+    selectedDate.value = ''
+  }
+}
 const showDatePicker = ref(false)
 const inspections = ref([])
 const properties = ref([])
@@ -334,7 +350,12 @@ function handleEventClick(info) {
 }
 
 function openDatePicker() {
-  selectedDate.value = new Date().toISOString().split('T')[0]
+  const today = new Date()
+  const dd   = String(today.getDate()).padStart(2,'0')
+  const mm   = String(today.getMonth()+1).padStart(2,'0')
+  const yyyy = today.getFullYear()
+  selectedDateDisplay.value = `${dd}/${mm}/${yyyy}`
+  selectedDate.value = today.toISOString().split('T')[0]
   showDatePicker.value = true
 }
 
@@ -884,7 +905,7 @@ onMounted(() => {
               <!-- Date -->
               <div class="form-group">
                 <label>Conduct Date</label>
-                <input v-model="form.conduct_date" type="date" class="input-field date-picker" />
+                <input v-model="form.conduct_date" type="date" class="input-field date-picker" lang="en-GB" />
               </div>
 
               <!-- Time -->
@@ -1055,7 +1076,14 @@ onMounted(() => {
         <div class="modal-body">
           <div class="form-group">
             <label>Select a date to view in Day view</label>
-            <input v-model="selectedDate" type="date" class="input-field date-picker-input" />
+            <input
+              v-model="selectedDateDisplay"
+              type="text"
+              placeholder="DD/MM/YYYY"
+              class="input-field date-picker-input"
+              maxlength="10"
+              @input="onDateDisplayInput"
+            />
           </div>
         </div>
         <div class="modal-footer">

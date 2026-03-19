@@ -426,16 +426,19 @@ onMounted(fetchTemplate)
             :key="section.id"
             class="section-card"
             :class="{ 'drag-over': dragOverSectIdx === index && dragSectionIdx !== index }"
-            draggable="true"
-            @dragstart="onSectionDragStart($event, index)"
-            @dragend="onSectionDragEnd"
             @dragover="onSectionDragOver($event, index)"
             @drop="onSectionDrop($event, index)"
           >
 
             <div class="section-header">
               <!-- Drag handle on the LEFT -->
-              <span class="drag-handle" title="Drag to reorder">⠿</span>
+              <span
+                class="drag-handle"
+                draggable="true"
+                @dragstart.stop="onSectionDragStart($event, index)"
+                @dragend.stop="onSectionDragEnd"
+                title="Drag to reorder"
+              >⠿</span>
 
               <!-- Inline rename -->
               <template v-if="renamingSection && renamingSection.id === section.id">
@@ -468,12 +471,12 @@ onMounted(fetchTemplate)
                 v-for="(item, itemIndex) in section.items"
                 :key="item.id"
                 class="item-row"
-                :class="{ 'item-drag-over': dragOverItemKey === section.id + ':' + itemIndex }"
+                :class="{ 'item-drag-over': dragOverItemKey === String(section.id) + ':' + itemIndex }"
                 draggable="true"
-                @dragstart="onItemDragStart($event, section.id, itemIndex)"
-                @dragend="onItemDragEnd"
-                @dragover="onItemDragOver($event, section.id, itemIndex)"
-                @drop="onItemDrop($event, section, itemIndex)"
+                @dragstart.stop="onItemDragStart($event, section.id, itemIndex)"
+                @dragend.stop="onItemDragEnd"
+                @dragover.stop.prevent="onItemDragOver($event, section.id, itemIndex)"
+                @drop.stop="onItemDrop($event, section, itemIndex)"
               >
                 <span class="drag-handle drag-handle-sm" title="Drag to reorder">⠿</span>
                 <div class="item-info">
@@ -774,16 +777,18 @@ onMounted(fetchTemplate)
 .btn-back:hover { background: #f8fafc; }
 
 .template-name-input {
-  font-size: 26px;
+  font-size: 16px;
   font-weight: 600;
   color: #1e293b;
-  border: none;
-  border-bottom: 2px solid transparent;
-  padding: 4px 8px;
-  transition: border-color 0.2s;
+  background: #f8fafc;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 7px;
+  padding: 6px 10px;
+  min-width: 220px;
+  transition: border-color 0.15s, background 0.15s;
 }
-.template-name-input:hover { border-bottom-color: #e5e7eb; }
-.template-name-input:focus { outline: none; border-bottom-color: #6366f1; }
+.template-name-input:hover { border-color: #a5b4fc; background: #fff; }
+.template-name-input:focus { outline: none; border-color: #6366f1; background: #fff; }
 
 .subtitle {
   color: #64748b;

@@ -323,13 +323,13 @@ async function onSectionDrop(e, toIndex) {
   dragOverSectIdx.value = null
   if (fromIndex === null || fromIndex === toIndex) return
   const section = roomSections.value[fromIndex]
-  const steps = toIndex - fromIndex
-  const dir   = steps > 0 ? 'down' : 'up'
-  const count = Math.abs(steps)
+  const dir   = toIndex > fromIndex ? 'down' : 'up'
+  const count = Math.abs(toIndex - fromIndex)
+  // Call one step at a time, fetching between each so order_index stays in sync
   for (let i = 0; i < count; i++) {
     await api.reorderSection(section.id, dir)
+    await fetchTemplate()
   }
-  await fetchTemplate()
 }
 function onSectionDragEnd() {
   dragSectionIdx.value  = null
@@ -361,13 +361,13 @@ async function onItemDrop(e, section, toIdx) {
   const fromIdx = parseInt(fromIdxStr)
   if (String(section.id) !== sid || fromIdx === toIdx) return
   const item  = section.items[fromIdx]
-  const steps = toIdx - fromIdx
-  const dir   = steps > 0 ? 'down' : 'up'
-  const count = Math.abs(steps)
+  const dir   = toIdx > fromIdx ? 'down' : 'up'
+  const count = Math.abs(toIdx - fromIdx)
+  // Call one step at a time, fetching between each so order_index stays in sync
   for (let i = 0; i < count; i++) {
     await api.reorderItem(item.id, dir)
+    await fetchTemplate()
   }
-  await fetchTemplate()
 }
 function onItemDragEnd() {
   dragItemKey.value     = null
@@ -391,7 +391,6 @@ onMounted(fetchTemplate)
             class="template-name-input"
             placeholder="Template Name"
           />
-          <p class="subtitle">{{ template.inspection_type.replace('_', ' ').toUpperCase() }}</p>
         </div>
       </div>
       <button @click="openAddSectionModal" class="btn-primary">＋ Add Section</button>
@@ -790,14 +789,7 @@ onMounted(fetchTemplate)
 .template-name-input:hover { border-color: #a5b4fc; background: #fff; }
 .template-name-input:focus { outline: none; border-color: #6366f1; background: #fff; }
 
-.subtitle {
-  color: #64748b;
-  font-size: 12px;
-  text-transform: uppercase;
-  font-weight: 700;
-  letter-spacing: 0.6px;
-  padding-left: 8px;
-}
+
 
 /* ── Buttons ─────────────────────────────────────────────────────────────── */
 .btn-primary {

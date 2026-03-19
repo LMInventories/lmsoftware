@@ -91,7 +91,7 @@ async function fetchTemplate() {
   } catch (err) {
     console.error(err)
     alert('Failed to load template')
-    router.push('/settings/templates')
+    localStorage.setItem('settings_tab', 'templates'); router.push('/settings')
   } finally {
     loading.value = false
   }
@@ -292,6 +292,56 @@ async function moveItemDown(item) {
   try { await api.reorderItem(item.id, 'down'); fetchTemplate() } catch (err) { console.error(err) }
 }
 
+// Drag-to-reorder state
+const dragSectionIdx = ref(null)
+const dragItemKey    = ref(null)
+
+function onSectionDragStart(e, index) {
+  dragSectionIdx.value = index
+  e.dataTransfer.effectAllowed = 'move'
+}
+function onSectionDragOver(e, index) {
+  e.preventDefault()
+  e.dataTransfer.dropEffect = 'move'
+}
+async function onSectionDrop(e, toIndex) {
+  e.preventDefault()
+  const fromIndex = dragSectionIdx.value
+  if (fromIndex === null || fromIndex === toIndex) { dragSectionIdx.value = null; return }
+  const section = roomSections.value[fromIndex]
+  const steps = toIndex - fromIndex
+  const dir = steps > 0 ? 'down' : 'up'
+  const count = Math.abs(steps)
+  for (let i = 0; i < count; i++) {
+    await api.reorderSection(section.id, dir)
+  }
+  dragSectionIdx.value = null
+  fetchTemplate()
+}
+function onSectionDragEnd() { dragSectionIdx.value = null }
+
+function onItemDragStart(e, sectionId, itemIdx) {
+  dragItemKey.value = `${sectionId}:${itemIdx}`
+  e.dataTransfer.effectAllowed = 'move'
+}
+async function onItemDrop(e, section, toIdx) {
+  e.preventDefault()
+  if (!dragItemKey.value) return
+  const [sid, fromIdxStr] = dragItemKey.value.split(':')
+  const fromIdx = parseInt(fromIdxStr)
+  if (String(section.id) !== sid || fromIdx === toIdx) { dragItemKey.value = null; return }
+  const item = section.items[fromIdx]
+  const steps = toIdx - fromIdx
+  const dir = steps > 0 ? 'down' : 'up'
+  const count = Math.abs(steps)
+  for (let i = 0; i < count; i++) {
+    await api.reorderItem(item.id, dir)
+  }
+  dragItemKey.value = null
+  fetchTemplate()
+}
+function onItemDragEnd() { dragItemKey.value = null }
+
 onMounted(fetchTemplate)
 </script>
 
@@ -301,7 +351,7 @@ onMounted(fetchTemplate)
     <!-- ── Header ──────────────────────────────────────────────────────────── -->
     <div class="page-header">
       <div class="header-left">
-        <button @click="router.push('/settings/templates')" class="btn-back">← Back</button>
+        <button @click="localStorage.setItem('settings_tab', 'templates'); router.push('/settings')" class="btn-back">← Back</button>
         <div v-if="!loading">
           <input
             v-model="template.name"
@@ -339,7 +389,14 @@ onMounted(fetchTemplate)
         <p class="group-description">Customise these sections for different property types.</p>
 
         <div class="sections-list">
-          <div v-for="(section, index) in roomSections" :key="section.id" class="section-card">
+          <div
+            v-for="(section, index) in roomSections"
+            :key="section.id"
+            class="section-card"
+            :class="{ 'drag-over': dragSectionIdx !== null && dragSectionIdx !== index }"
+            @dragover="onSectionDragOver($event, index)"
+            @drop="onSectionDrop($event, index)"
+          >
 
             <div class="section-header">
               <!-- Inline rename: click the name to edit, blur/enter to save, Escape to cancel -->
@@ -360,8 +417,13 @@ onMounted(fetchTemplate)
                 title="Click to rename"
               >{{ section.name }} ✎</span>
               <div class="section-actions">
-                <button @click="moveSectionUp(section)"   :disabled="index === 0"                      class="btn-icon" title="Move Up">↑</button>
-                <button @click="moveSectionDown(section)" :disabled="index === roomSections.length - 1" class="btn-icon" title="Move Down">↓</button>
+                <span
+                  class="drag-handle"
+                  draggable="true"
+                  @dragstart="onSectionDragStart($event, index)"
+                  @dragend="onSectionDragEnd"
+                  title="Drag to reorder"
+                >::</span>
                 <button @click="openSavePresetModal(section)" class="btn-icon preset-btn" title="Save as Preset">💾</button>
                 <button @click="duplicateSection(section)" class="btn-icon" title="Duplicate">⧉</button>
                 <button @click="deleteSection(section)"   class="btn-icon danger" title="Delete">✕</button>
@@ -371,7 +433,13 @@ onMounted(fetchTemplate)
             <div class="item-count-label">{{ (section.items || []).length }} item{{ (section.items || []).length !== 1 ? 's' : '' }}</div>
 
             <div class="items-list">
-              <div v-for="(item, itemIndex) in section.items" :key="item.id" class="item-row">
+              <div
+                v-for="(item, itemIndex) in section.items"
+                :key="item.id"
+                class="item-row"
+                @dragover.prevent
+                @drop="onItemDrop($event, section, itemIndex)"
+              >
                 <div class="item-info">
                   <span class="item-name">{{ item.name }}</span>
                   <div class="item-meta">
@@ -380,8 +448,13 @@ onMounted(fetchTemplate)
                   </div>
                 </div>
                 <div class="item-actions">
-                  <button @click="moveItemUp(item)"              :disabled="itemIndex === 0"                     class="btn-icon-sm" title="Up">↑</button>
-                  <button @click="moveItemDown(item)"            :disabled="itemIndex === section.items.length-1" class="btn-icon-sm" title="Down">↓</button>
+                  <span
+                    class="drag-handle drag-handle-sm"
+                    draggable="true"
+                    @dragstart="onItemDragStart($event, section.id, itemIndex)"
+                    @dragend="onItemDragEnd"
+                    title="Drag to reorder"
+                  >::</span>
                   <button @click="openEditItemModal(item)"                                                        class="btn-icon-sm" title="Edit">✎</button>
                   <button @click="duplicateItem(item, section)"                                                   class="btn-icon-sm" title="Duplicate">⧉</button>
                   <button @click="deleteItem(item, section)"                                                      class="btn-icon-sm danger" title="Delete">✕</button>
@@ -826,6 +899,24 @@ onMounted(fetchTemplate)
 }
 
 /* ── Icon buttons ────────────────────────────────────────────────────────── */
+.drag-handle {
+  cursor: grab;
+  font-size: 14px;
+  font-weight: 900;
+  color: #94a3b8;
+  padding: 4px 6px;
+  border-radius: 4px;
+  letter-spacing: -1px;
+  user-select: none;
+  flex-shrink: 0;
+  line-height: 1;
+  transition: color 0.12s, background 0.12s;
+}
+.drag-handle:hover { color: #6366f1; background: #f1f5f9; }
+.drag-handle:active { cursor: grabbing; }
+.drag-handle-sm { font-size: 12px; padding: 2px 4px; }
+.section-card.drag-over { border-color: #6366f1; background: #fafafe; }
+
 .btn-icon {
   width: 30px; height: 30px;
   background: white;

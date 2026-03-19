@@ -1,3 +1,5 @@
+
+.form-textarea { min-height: 80px; resize: vertical; font-family: inherit; }
 <script setup>
 import { ref, onMounted } from 'vue'
 import api from '../../services/api'
@@ -426,7 +428,14 @@ onMounted(load)
               <option v-for="opt in colDef(colKey).options" :key="opt" :value="opt">{{ opt }}</option>
             </select>
 
-            <!-- Text columns -->
+            <!-- Text columns: notes/additional_notes get textarea -->
+            <textarea
+              v-else-if="['additional_notes','notes'].includes(colKey)"
+              v-model="itemModal.form[colKey]"
+              :placeholder="colDef(colKey)?.label"
+              class="form-textarea"
+              rows="3"
+            ></textarea>
             <input
               v-else
               v-model="itemModal.form[colKey]"
@@ -593,6 +602,7 @@ onMounted(load)
 
 /* ── Items table ─────────────────────────────────────────────────────────── */
 .items-table-wrap { overflow-x: auto; margin-bottom: 10px; }
+.items-table td { min-width: 80px; }
 
 .items-table {
   width: 100%; border-collapse: collapse; font-size: 13px;
@@ -601,7 +611,7 @@ onMounted(load)
   text-align: left; padding: 8px 12px;
   background: #f1f5f9; border-bottom: 2px solid #e5e7eb;
   font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase;
-  letter-spacing: 0.4px; white-space: nowrap;
+  letter-spacing: 0.4px; white-space: normal; word-break: break-word;
 }
 .items-table td {
   padding: 9px 12px; border-bottom: 1px solid #f1f5f9;
@@ -609,7 +619,7 @@ onMounted(load)
 }
 .items-table tr:last-child td { border-bottom: none; }
 .items-table tr:hover td { background: #fafbff; }
-.item-cell { max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.item-cell { max-width: 280px; white-space: pre-wrap; word-break: break-word; vertical-align: top; }
 
 .col-actions { white-space: nowrap; width: 1%; }
 .col-actions .btn-icon-sm { display: inline-flex; }

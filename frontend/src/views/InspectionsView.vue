@@ -359,6 +359,15 @@ function toggleDropdown(name) {
 }
 function closeDropdowns() { openDropdown.value = null }
 
+// Directive: v-click-outside — closes dropdowns when clicking outside filters-bar
+const vClickOutside = {
+  mounted(el, binding) {
+    el._outsideClick = (e) => { if (!el.contains(e.target)) binding.value(e) }
+    document.addEventListener('mousedown', el._outsideClick)
+  },
+  unmounted(el) { document.removeEventListener('mousedown', el._outsideClick) }
+}
+
 function switchCalView(view) {
   calendarView.value = view
   if (calendarRef.value) {

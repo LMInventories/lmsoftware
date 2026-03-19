@@ -150,7 +150,7 @@ onMounted(fetchDashboardStats)
           <div class="account-stats">
           <div class="stat-card" @click="router.push('/clients')">
             <span class="stat-num">{{ stats.totals.clients }}</span>
-            <span class="stat-lbl">Portfolios</span>
+            <span class="stat-lbl">Clients</span>
           </div>
           <div class="stat-card" @click="router.push('/properties')">
             <span class="stat-num">{{ stats.totals.properties }}</span>

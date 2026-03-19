@@ -8,7 +8,8 @@ import TranscriptionSettings from '../components/settings/TranscriptionSettings.
 import EmailsSettings        from '../components/settings/EmailsSettings.vue'
 import FixedSectionsSettings from './settings/FixedSectionsSettings.vue'
 
-const activeTab = ref('general')
+const activeTab = ref(localStorage.getItem('settings_tab') || 'general')
+function setTab(id) { activeTab.value = id; localStorage.setItem('settings_tab', id) }
 
 const tabs = [
   { id: 'general',        label: 'General',          icon: '⚙️' },
@@ -35,7 +36,7 @@ const tabs = [
           :key="tab.id"
           class="tab-btn"
           :class="{ active: activeTab === tab.id }"
-          @click="activeTab = tab.id"
+          @click="setTab(tab.id)"
         >
           <span class="tab-icon">{{ tab.icon }}</span>
           <span class="tab-label">{{ tab.label }}</span>

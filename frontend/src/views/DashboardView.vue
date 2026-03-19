@@ -137,10 +137,6 @@ onMounted(fetchDashboardStats)
           <div class="tile-count">{{ stats.status_counts[key] || 0 }}</div>
           <div class="tile-label">{{ cfg.label }}</div>
         </div>
-      </div>
-
-
-
           </div><!-- /status-tiles -->
         </div><!-- /dash-top-left -->
 

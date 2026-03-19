@@ -156,7 +156,14 @@ def reorder_section(section_id):
 
     siblings = Section.query.filter_by(
         template_id=section.template_id
-    ).order_by(Section.order_index).all()
+    ).order_by(Section.order_index, Section.id).all()
+
+    # Normalise order_index values so they are guaranteed unique and sequential
+    needs_normalise = len(set(s.order_index for s in siblings)) < len(siblings)
+    if needs_normalise:
+        for i, s in enumerate(siblings):
+            s.order_index = i
+        db.session.flush()
 
     idx = next((i for i, s in enumerate(siblings) if s.id == section_id), None)
     if idx is None:
@@ -275,7 +282,15 @@ def reorder_item(item_id):
 
     siblings = Item.query.filter_by(
         section_id=item.section_id
-    ).order_by(Item.order_index).all()
+    ).order_by(Item.order_index, Item.id).all()
+
+    # Normalise order_index values so they are guaranteed unique and sequential
+    # This fixes cases where all items have order_index=0 (e.g. legacy data)
+    needs_normalise = len(set(s.order_index for s in siblings)) < len(siblings)
+    if needs_normalise:
+        for i, s in enumerate(siblings):
+            s.order_index = i
+        db.session.flush()
 
     idx = next((i for i, it in enumerate(siblings) if it.id == item_id), None)
     if idx is None:

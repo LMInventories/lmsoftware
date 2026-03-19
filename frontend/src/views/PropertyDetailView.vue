@@ -199,9 +199,9 @@ const inspectionCount = computed(() => property.value?.inspections?.length || 0)
 const featureChips = computed(() => {
   if (!property.value) return []
   const chips = []
-  if (property.value.parking) chips.push({ icon: '🚗', label: 'Parking' })
-  if (property.value.garden) chips.push({ icon: '🌿', label: 'Garden' })
-  if (property.value.elevator) chips.push({ icon: '🛗', label: 'Elevator' })
+  if (property.value.parking) chips.push({ label: 'Parking' })
+  if (property.value.garden) chips.push({ label: 'Garden' })
+  if (property.value.elevator) chips.push({ label: 'Elevator' })
   return chips
 })
 
@@ -249,13 +249,12 @@ onMounted(fetchProperty)
           <!-- Property photo -->
           <div class="info-card photo-card">
             <div class="card-header">
-              <h3>🏠 Property Photo</h3>
+              <h3>Property Photo</h3>
               <button class="btn-edit" @click="showPhotoModal = true">{{ localPhoto ? 'Edit' : 'Add Photo' }}</button>
             </div>
             <div class="photo-card-body">
               <img v-if="localPhoto" :src="localPhoto" alt="Property photo" class="property-photo-img" />
               <div v-else class="photo-placeholder">
-                <span class="photo-icon">🏠</span>
                 <p>No photo yet</p>
               </div>
             </div>
@@ -264,8 +263,8 @@ onMounted(fetchProperty)
           <!-- Property details -->
           <div class="info-card">
             <div class="card-header">
-              <h3>🏘 Property Details</h3>
-              <button class="btn-edit" @click="openEditDetails">✏️ Edit</button>
+              <h3>Property Details</h3>
+              <button class="btn-edit" @click="openEditDetails">Edit</button>
             </div>
             <div class="card-content">
               <div class="detail-row">
@@ -326,38 +325,26 @@ onMounted(fetchProperty)
           <!-- Meter locations -->
           <div class="info-card">
             <div class="card-header">
-              <h3>🔧 Meter Locations</h3>
-              <button class="btn-edit" @click="openEditMeters">✏️ Edit</button>
+              <h3>Meter Locations</h3>
+              <button class="btn-edit" @click="openEditMeters">Edit</button>
             </div>
             <div class="card-content">
               <div v-if="hasMeters">
                 <div v-if="property.meter_electricity" class="meter-row">
                   <span class="meter-lbl">Electricity</span>
-                  <div>
-                    <div class="meter-label">Electricity</div>
-                    <div class="meter-value">{{ property.meter_electricity }}</div>
-                  </div>
+                  <div class="meter-value">{{ property.meter_electricity }}</div>
                 </div>
                 <div v-if="property.meter_gas" class="meter-row">
                   <span class="meter-lbl">Gas</span>
-                  <div>
-                    <div class="meter-label">Gas</div>
-                    <div class="meter-value">{{ property.meter_gas }}</div>
-                  </div>
+                  <div class="meter-value">{{ property.meter_gas }}</div>
                 </div>
                 <div v-if="property.meter_heat" class="meter-row">
                   <span class="meter-lbl">Heat</span>
-                  <div>
-                    <div class="meter-label">Heat</div>
-                    <div class="meter-value">{{ property.meter_heat }}</div>
-                  </div>
+                  <div class="meter-value">{{ property.meter_heat }}</div>
                 </div>
                 <div v-if="property.meter_water" class="meter-row">
                   <span class="meter-lbl">Water</span>
-                  <div>
-                    <div class="meter-label">Water</div>
-                    <div class="meter-value">{{ property.meter_water }}</div>
-                  </div>
+                  <div class="meter-value">{{ property.meter_water }}</div>
                 </div>
               </div>
               <p v-else class="empty-hint">No meter locations recorded yet.</p>
@@ -367,7 +354,7 @@ onMounted(fetchProperty)
           <!-- Inspection history -->
           <div class="info-card">
             <div class="card-header">
-              <h3>📋 Inspection History</h3>
+              <h3>Inspection History</h3>
               <span class="count-badge">{{ inspectionCount }}</span>
             </div>
             <div class="card-content card-content-flush">
@@ -506,15 +493,15 @@ onMounted(fetchProperty)
                 <label>Features</label>
                 <div class="toggle-group">
                   <label class="toggle-row" :class="{ 'toggle-on': editForm.parking }">
-                    <span class="toggle-label">🚗 Parking</span>
+                    <span class="toggle-label">Parking</span>
                     <div class="toggle-switch" @click="editForm.parking = !editForm.parking"><div class="toggle-knob" :class="{ 'toggle-knob-on': editForm.parking }"></div></div>
                   </label>
                   <label class="toggle-row" :class="{ 'toggle-on': editForm.garden }">
-                    <span class="toggle-label">🌿 Garden</span>
+                    <span class="toggle-label">Garden</span>
                     <div class="toggle-switch" @click="editForm.garden = !editForm.garden"><div class="toggle-knob" :class="{ 'toggle-knob-on': editForm.garden }"></div></div>
                   </label>
                   <label class="toggle-row" :class="{ 'toggle-on': editForm.elevator }">
-                    <span class="toggle-label">🛗 Elevator / Lift</span>
+                    <span class="toggle-label">Elevator / Lift</span>
                     <div class="toggle-switch" @click="editForm.elevator = !editForm.elevator"><div class="toggle-knob" :class="{ 'toggle-knob-on': editForm.elevator }"></div></div>
                   </label>
                 </div>

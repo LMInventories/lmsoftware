@@ -317,7 +317,7 @@ onMounted(() => { fetchProperties(); fetchClients() })
       <div v-for="property in filteredProperties" :key="property.id" class="property-card">
         <div class="card-photo">
           <img v-if="property.overview_photo" :src="property.overview_photo" alt="" class="prop-img" />
-          <div v-else class="photo-placeholder"><span>🏠</span></div>
+          <div v-else class="photo-placeholder"><span class="photo-placeholder-txt">No Photo</span></div>
         </div>
         <div class="card-body">
           <div v-if="extractPostcode(property.address)" class="card-postcode">{{ extractPostcode(property.address) }}</div>
@@ -327,13 +327,13 @@ onMounted(() => { fetchProperties(); fetchClients() })
             <span v-if="property.bedrooms" class="spec-chip">{{ property.bedrooms }} bed</span>
             <span v-if="property.bathrooms" class="spec-chip">{{ property.bathrooms }} bath</span>
             <span v-if="property.furnished" class="spec-chip">{{ property.furnished }}</span>
-            <span v-if="property.parking" class="spec-chip spec-icon">🚗</span>
-            <span v-if="property.garden" class="spec-chip spec-icon">🌿</span>
-            <span v-if="property.elevator" class="spec-chip spec-icon">🛗</span>
+            <span v-if="property.parking" class="spec-chip">Parking</span>
+            <span v-if="property.garden" class="spec-chip">Garden</span>
+            <span v-if="property.elevator" class="spec-chip">Lift</span>
           </div>
         </div>
         <div class="card-footer">
-          <button @click="openMapForProperty(property)" class="btn-map" title="View on map">📍</button>
+          <button @click="openMapForProperty(property)" class="btn-map" title="View on map">Map</button>
           <button @click="router.push(`/properties/${property.id}`)" class="btn-view">View</button>
           <button @click="openEditModal(property)" class="btn-edit">Edit</button>
           <button @click="deleteProperty(property.id)" class="btn-delete">Delete</button>
@@ -350,7 +350,7 @@ onMounted(() => { fetchProperties(); fetchClients() })
         <div class="map-sidebar-header">{{ filteredProperties.length }} properties</div>
         <div class="map-list">
           <div v-for="property in filteredProperties" :key="property.id" class="map-list-item" @click="openMapForProperty(property)">
-            <div class="mli-pin">📍</div>
+            <div class="mli-pin">↗</div>
             <div class="mli-body">
               <div class="mli-addr">{{ property.address }}</div>
               <div class="mli-meta">
@@ -369,7 +369,7 @@ onMounted(() => { fetchProperties(); fetchClients() })
           <div class="map-content">
             <div class="map-pins-wrap">
               <div v-for="(p, i) in filteredProperties.slice(0,16)" :key="p.id" class="map-pin-chip" :style="{ animationDelay: (i*35)+'ms' }" @click="openMapForProperty(p)">
-                <span>📍</span>
+                <span>↗</span>
                 <span class="pin-txt">{{ extractPostcode(p.address) || p.address.split(',').pop()?.trim() }}</span>
               </div>
             </div>

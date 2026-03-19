@@ -633,14 +633,14 @@ onMounted(() => {
 
     <!-- List View -->
     <div v-if="activeTab === 'list'">
-      <div class="filters-bar">
-        <div v-if="authStore.isAdmin || authStore.isManager" class="filter-group" v-click-outside="closeDropdowns">
+      <div class="filters-bar" v-click-outside="closeDropdowns">
+        <div v-if="authStore.isAdmin || authStore.isManager" class="filter-group">
           <label>Client</label>
           <div class="ms-dropdown" :class="{ open: openDropdown === 'client' }" @click="toggleDropdown('client')">
             <span class="ms-label">{{ clientFilterLabel(filters.client_ids) }}</span>
             <span class="ms-chevron">▾</span>
           </div>
-          <div v-if="openDropdown === 'client'" class="ms-menu">
+          <div v-show="openDropdown === 'client'" class="ms-menu">
             <label v-for="client in clients" :key="client.id" class="ms-item" @click.stop>
               <input type="checkbox" :checked="filters.client_ids.includes(client.id)" @change="toggleClientFilter(client.id)" />
               <span>{{ client.name }}</span>
@@ -658,7 +658,7 @@ onMounted(() => {
             <span class="ms-label">{{ filterLabel(filters.statuses, statusOptions, 'All Stages') }}</span>
             <span class="ms-chevron">▾</span>
           </div>
-          <div v-if="openDropdown === 'status'" class="ms-menu">
+          <div v-show="openDropdown === 'status'" class="ms-menu">
             <label v-for="option in statusOptions.filter(o => o.value)" :key="option.value" class="ms-item" @click.stop>
               <input type="checkbox" :checked="filters.statuses.includes(option.value)" @change="toggleStatus(option.value)" />
               <span class="ms-status-dot" :style="{ background: statusColors[option.value] }"></span>
@@ -672,7 +672,7 @@ onMounted(() => {
             <span class="ms-label">{{ clerkFilterLabel(filters.clerk_ids) }}</span>
             <span class="ms-chevron">▾</span>
           </div>
-          <div v-if="openDropdown === 'clerk'" class="ms-menu">
+          <div v-show="openDropdown === 'clerk'" class="ms-menu">
             <label v-for="clerk in clerks" :key="clerk.id" class="ms-item" @click.stop>
               <input type="checkbox" :checked="filters.clerk_ids.includes(clerk.id)" @change="toggleClerkFilter(clerk.id)" />
               <span class="ms-clerk-dot" :style="{ background: clerk.color }"></span>
@@ -739,14 +739,14 @@ onMounted(() => {
 
     <!-- Calendar View -->
     <div v-if="activeTab === 'calendar'" class="calendar-view">
-      <div class="filters-bar calendar-filters">
+      <div class="filters-bar calendar-filters" v-click-outside="closeDropdowns">
         <div v-if="authStore.isAdmin || authStore.isManager" class="filter-group">
           <label>Client</label>
           <div class="ms-dropdown" :class="{ open: openDropdown === 'cal_client' }" @click="toggleDropdown('cal_client')">
             <span class="ms-label">{{ clientFilterLabel(calendarFilters.client_ids, true) }}</span>
             <span class="ms-chevron">▾</span>
           </div>
-          <div v-if="openDropdown === 'cal_client'" class="ms-menu">
+          <div v-show="openDropdown === 'cal_client'" class="ms-menu">
             <label v-for="client in clients" :key="client.id" class="ms-item" @click.stop>
               <input type="checkbox" :checked="calendarFilters.client_ids.includes(client.id)" @change="toggleClientFilter(client.id, true)" />
               <span>{{ client.name }}</span>
@@ -759,7 +759,7 @@ onMounted(() => {
             <span class="ms-label">{{ filterLabel(calendarFilters.statuses, statusOptions, 'All Stages') }}</span>
             <span class="ms-chevron">▾</span>
           </div>
-          <div v-if="openDropdown === 'cal_status'" class="ms-menu">
+          <div v-show="openDropdown === 'cal_status'" class="ms-menu">
             <label v-for="option in statusOptions.filter(o => o.value)" :key="option.value" class="ms-item" @click.stop>
               <input type="checkbox" :checked="calendarFilters.statuses.includes(option.value)" @change="toggleCalStatus(option.value)" />
               <span class="ms-status-dot" :style="{ background: statusColors[option.value] }"></span>
@@ -773,7 +773,7 @@ onMounted(() => {
             <span class="ms-label">{{ clerkFilterLabel(calendarFilters.clerk_ids, true) }}</span>
             <span class="ms-chevron">▾</span>
           </div>
-          <div v-if="openDropdown === 'cal_clerk'" class="ms-menu">
+          <div v-show="openDropdown === 'cal_clerk'" class="ms-menu">
             <label v-for="clerk in clerks" :key="clerk.id" class="ms-item" @click.stop>
               <input type="checkbox" :checked="calendarFilters.clerk_ids.includes(clerk.id)" @change="toggleClerkFilter(clerk.id, true)" />
               <span class="ms-clerk-dot" :style="{ background: clerk.color }"></span>

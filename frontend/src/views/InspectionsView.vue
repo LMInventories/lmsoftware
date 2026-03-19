@@ -273,11 +273,6 @@ function convertDateToUKFormat(isoDate) {
   return `${day}/${month}/${year}`
 }
 
-const statusColors = {
-  created: '#94a3b8', assigned: '#3b82f6', active: '#10b981',
-  processing: '#f59e0b', review: '#8b5cf6', complete: '#10b981'
-}
-
 function toggleStatus(val) {
   const i = filters.value.statuses.indexOf(val)
   if (i >= 0) filters.value.statuses.splice(i, 1)

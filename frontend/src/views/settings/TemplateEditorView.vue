@@ -322,14 +322,15 @@ async function onSectionDrop(e, toIndex) {
   dragSectionIdx.value  = null
   dragOverSectIdx.value = null
   if (fromIndex === null || fromIndex === toIndex) return
-  const section = roomSections.value[fromIndex]
+  const sectionId = roomSections.value[fromIndex]?.id
+  if (!sectionId) return
   const dir   = toIndex > fromIndex ? 'down' : 'up'
   const count = Math.abs(toIndex - fromIndex)
-  // Call one step at a time, fetching between each so order_index stays in sync
+  // Call all steps first, then fetch once at end
   for (let i = 0; i < count; i++) {
-    await api.reorderSection(section.id, dir)
-    await fetchTemplate()
+    await api.reorderSection(sectionId, dir)
   }
+  await fetchTemplate()
 }
 function onSectionDragEnd() {
   dragSectionIdx.value  = null
@@ -359,15 +360,20 @@ async function onItemDrop(e, section, toIdx) {
   if (!key) return
   const [sid, fromIdxStr] = key.split(':')
   const fromIdx = parseInt(fromIdxStr)
-  if (String(section.id) !== sid || fromIdx === toIdx) return
-  const item  = section.items[fromIdx]
+  const sectionId = parseInt(sid)
+  if (sectionId !== section.id || fromIdx === toIdx) return
+  const itemId = section.items[fromIdx]?.id
+  if (!itemId) return
   const dir   = toIdx > fromIdx ? 'down' : 'up'
   const count = Math.abs(toIdx - fromIdx)
-  // Call one step at a time, fetching between each so order_index stays in sync
+  // Call all steps first WITHOUT fetching between — the backend swaps
+  // adjacent order_index values each call, so consecutive calls on the
+  // same ID correctly walk it through the list. Fetching between calls
+  // triggers Vue re-render which invalidates our section reference.
   for (let i = 0; i < count; i++) {
-    await api.reorderItem(item.id, dir)
-    await fetchTemplate()
+    await api.reorderItem(itemId, dir)
   }
+  await fetchTemplate()
 }
 function onItemDragEnd() {
   dragItemKey.value     = null

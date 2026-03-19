@@ -27,19 +27,45 @@ const demoBranding = computed(() => ({
   disclaimer:   props.branding?.disclaimer    || null,
 }))
 
-// Parse template content
-const content = computed(() => {
-  try {
-    return JSON.parse(props.template.content)
-  } catch {
-    return { fixedSections: [], rooms: [] }
-  }
-})
+// Read directly from template.sections (the proper API structure)
+// template.sections is [{id, name, section_type:'room'|'fixed', items:[{id,name,...}]}]
+const allSections = computed(() => props.template.sections || [])
 
-const fixedSections = computed(() => content.value.fixedSections || [])
-const rooms = computed(() => content.value.rooms || [])
-const enabledFixedSections = computed(() => fixedSections.value.filter(s => s.enabled))
-const enabledRooms = computed(() => rooms.value.filter(r => r.enabled))
+// Infer fixed section display type from name
+function inferSectionType(name) {
+  const n = (name || '').toLowerCase()
+  if (n.includes('clean'))   return 'cleaning_summary'
+  if (n.includes('meter'))   return 'meter_readings'
+  if (n.includes('key'))     return 'keys'
+  if (n.includes('smoke') || n.includes('alarm') || n.includes('carbon')) return 'smoke_alarms'
+  if (n.includes('fire') || n.includes('door') && n.includes('safe')) return 'fire_door_safety'
+  if (n.includes('health') || n.includes('safety')) return 'health_safety'
+  return 'condition_summary'
+}
+
+const fixedSections = computed(() =>
+  allSections.value
+    .filter(s => s.section_type === 'fixed')
+    .map(s => ({ ...s, type: inferSectionType(s.name), rows: s.items || [] }))
+)
+const rooms = computed(() =>
+  allSections.value
+    .filter(s => s.section_type === 'room')
+    .map(r => ({
+      ...r,
+      enabled: true,
+      // Map items to the shape the template expects
+      sections: (r.items || []).map(item => ({
+        ...item,
+        label:          item.name,
+        hasDescription: true,
+        hasCondition:   item.requires_condition !== false,
+        hasPhoto:       item.requires_photo !== false,
+      }))
+    }))
+)
+const enabledFixedSections = computed(() => fixedSections.value)
+const enabledRooms = computed(() => rooms.value)
 
 // Table of contents items
 const tocItems = computed(() => {

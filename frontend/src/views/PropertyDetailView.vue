@@ -250,7 +250,7 @@ onMounted(fetchProperty)
           <div class="info-card photo-card">
             <div class="card-header">
               <h3>🏠 Property Photo</h3>
-              <button class="btn-edit" @click="showPhotoModal = true">{{ localPhoto ? '✏️ Change' : '+ Add Photo' }}</button>
+              <button class="btn-edit" @click="showPhotoModal = true">{{ localPhoto ? 'Edit' : 'Add Photo' }}</button>
             </div>
             <div class="photo-card-body">
               <img v-if="localPhoto" :src="localPhoto" alt="Property photo" class="property-photo-img" />
@@ -304,7 +304,7 @@ onMounted(fetchProperty)
           <!-- Portfolio -->
           <div class="info-card" v-if="property.client_name">
             <div class="card-header">
-              <h3>👤 Portfolio</h3>
+              <h3>Client</h3>
             </div>
             <div class="card-content">
               <div class="detail-row">
@@ -332,28 +332,28 @@ onMounted(fetchProperty)
             <div class="card-content">
               <div v-if="hasMeters">
                 <div v-if="property.meter_electricity" class="meter-row">
-                  <span class="meter-icon">⚡</span>
+                  <span class="meter-lbl">Electricity</span>
                   <div>
                     <div class="meter-label">Electricity</div>
                     <div class="meter-value">{{ property.meter_electricity }}</div>
                   </div>
                 </div>
                 <div v-if="property.meter_gas" class="meter-row">
-                  <span class="meter-icon">🔥</span>
+                  <span class="meter-lbl">Gas</span>
                   <div>
                     <div class="meter-label">Gas</div>
                     <div class="meter-value">{{ property.meter_gas }}</div>
                   </div>
                 </div>
                 <div v-if="property.meter_heat" class="meter-row">
-                  <span class="meter-icon">🌡</span>
+                  <span class="meter-lbl">Heat</span>
                   <div>
                     <div class="meter-label">Heat</div>
                     <div class="meter-value">{{ property.meter_heat }}</div>
                   </div>
                 </div>
                 <div v-if="property.meter_water" class="meter-row">
-                  <span class="meter-icon">💧</span>
+                  <span class="meter-lbl">Water</span>
                   <div>
                     <div class="meter-label">Water</div>
                     <div class="meter-value">{{ property.meter_water }}</div>
@@ -539,28 +539,28 @@ onMounted(fetchProperty)
         <div class="modal-body">
           <div class="meter-edit-grid">
             <div class="meter-edit-row">
-              <span class="meter-icon-lg">⚡</span>
+              <span class="meter-lbl-lg">Electricity</span>
               <div class="form-group" style="flex:1">
                 <label>Electricity Meter</label>
                 <input v-model="metersForm.meter_electricity" type="text" placeholder="e.g. Under stairs cupboard" />
               </div>
             </div>
             <div class="meter-edit-row">
-              <span class="meter-icon-lg">🔥</span>
+              <span class="meter-lbl-lg">Gas</span>
               <div class="form-group" style="flex:1">
                 <label>Gas Meter</label>
                 <input v-model="metersForm.meter_gas" type="text" placeholder="e.g. External box on front wall" />
               </div>
             </div>
             <div class="meter-edit-row">
-              <span class="meter-icon-lg">🌡</span>
+              <span class="meter-lbl-lg">Heat</span>
               <div class="form-group" style="flex:1">
                 <label>Heat Meter</label>
                 <input v-model="metersForm.meter_heat" type="text" placeholder="e.g. Boiler cupboard" />
               </div>
             </div>
             <div class="meter-edit-row">
-              <span class="meter-icon-lg">💧</span>
+              <span class="meter-lbl-lg">Water</span>
               <div class="form-group" style="flex:1">
                 <label>Water Meter</label>
                 <input v-model="metersForm.meter_water" type="text" placeholder="e.g. Under kitchen sink" />
@@ -634,7 +634,8 @@ onMounted(fetchProperty)
 .photo-placeholder p { font-size: 13px; font-weight: 500; opacity: 0.7; }
 
 /* Meters */
-.meter-row { display: flex; align-items: flex-start; gap: 12px; padding: 10px 0; border-bottom: 1px solid #f8fafc; }
+.meter-row { display: flex; align-items: center; gap: 0; padding: 8px 0; border-bottom: 1px solid #f8fafc; }
+.meter-lbl { font-size: 11px; font-weight: 600; color: #64748b; width: 80px; flex-shrink: 0; text-transform: uppercase; letter-spacing: 0.3px; }
 .meter-row:last-child { border-bottom: none; }
 .meter-icon { font-size: 16px; flex-shrink: 0; margin-top: 1px; }
 .meter-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; color: #94a3b8; margin-bottom: 2px; }
@@ -708,8 +709,8 @@ onMounted(fetchProperty)
 
 /* Meter edit */
 .meter-edit-grid { display: flex; flex-direction: column; gap: 14px; }
-.meter-edit-row { display: flex; align-items: flex-end; gap: 12px; }
-.meter-icon-lg { font-size: 20px; padding-bottom: 8px; flex-shrink: 0; }
+.meter-edit-row { display: flex; align-items: center; gap: 12px; }
+.meter-lbl-lg { font-size: 12px; font-weight: 600; color: #64748b; width: 90px; flex-shrink: 0; text-transform: uppercase; }
 
 /* Photo modal */
 .photo-preview { display: flex; flex-direction: column; gap: 10px; margin-bottom: 6px; }

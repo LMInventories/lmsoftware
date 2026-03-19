@@ -303,6 +303,24 @@ function toggleCalStatus(val) {
   else calendarFilters.value.statuses.push(val)
 }
 
+function filterLabel(arr, options, emptyLabel) {
+  if (!arr.length) return emptyLabel
+  if (arr.length === 1) return options.find(o => o.value === arr[0])?.label || arr[0]
+  return `${arr.length} selected`
+}
+function clientFilterLabel(ids, isCalendar) {
+  const arr = isCalendar ? calendarFilters.value.client_ids : filters.value.client_ids
+  if (!arr.length) return 'All Clients'
+  if (arr.length === 1) return clients.value.find(c => c.id === arr[0])?.name || 'Client'
+  return `${arr.length} clients`
+}
+function clerkFilterLabel(ids, isCalendar) {
+  const arr = isCalendar ? calendarFilters.value.clerk_ids : filters.value.clerk_ids
+  if (!arr.length) return 'All Clerks'
+  if (arr.length === 1) return users.value.find(u => u.id === arr[0])?.name || 'Clerk'
+  return `${arr.length} clerks`
+}
+
 function clearFilters() {
   filters.value = { client_ids: [], postcode: '', statuses: [], clerk_ids: [] }
 }
@@ -334,6 +352,12 @@ const calendarViews = [
 ]
 
 const calendarTitle = ref('')
+// Dropdown open state for custom multi-select dropdowns
+const openDropdown = ref(null) // 'status' | 'client' | 'clerk' | 'cal_status' | 'cal_client' | 'cal_clerk'
+function toggleDropdown(name) {
+  openDropdown.value = openDropdown.value === name ? null : name
+}
+function closeDropdowns() { openDropdown.value = null }
 
 function switchCalView(view) {
   calendarView.value = view
@@ -610,44 +634,51 @@ onMounted(() => {
     <!-- List View -->
     <div v-if="activeTab === 'list'">
       <div class="filters-bar">
-        <div v-if="authStore.isAdmin || authStore.isManager" class="filter-group filter-group-multi">
+        <div v-if="authStore.isAdmin || authStore.isManager" class="filter-group" v-click-outside="closeDropdowns">
           <label>Client</label>
-          <div class="multi-status-pills">
-            <button
-              v-for="client in clients" :key="client.id"
-              class="status-pill"
-              :class="{ 'status-pill-active status-pill-client': filters.client_ids.includes(client.id) }"
-              @click="toggleClientFilter(client.id)"
-            >{{ client.name }}</button>
+          <div class="ms-dropdown" :class="{ open: openDropdown === 'client' }" @click="toggleDropdown('client')">
+            <span class="ms-label">{{ clientFilterLabel(filters.client_ids) }}</span>
+            <span class="ms-chevron">▾</span>
+          </div>
+          <div v-if="openDropdown === 'client'" class="ms-menu">
+            <label v-for="client in clients" :key="client.id" class="ms-item" @click.stop>
+              <input type="checkbox" :checked="filters.client_ids.includes(client.id)" @change="toggleClientFilter(client.id)" />
+              <span>{{ client.name }}</span>
+            </label>
+            <div v-if="!clients.length" class="ms-empty">No clients</div>
           </div>
         </div>
         <div class="filter-group">
           <label>Postcode</label>
           <input v-model="filters.postcode" type="text" placeholder="Search postcode..." class="filter-input" />
         </div>
-        <div class="filter-group filter-group-multi">
+        <div class="filter-group">
           <label>Workflow Stage</label>
-          <div class="multi-status-pills">
-            <button
-              v-for="option in statusOptions.filter(o => o.value)"
-              :key="option.value"
-              class="status-pill"
-              :class="{ 'status-pill-active': filters.statuses.includes(option.value) }"
-              :style="filters.statuses.includes(option.value) ? { background: statusColors[option.value] } : {}"
-              @click="toggleStatus(option.value)"
-            >{{ option.label }}</button>
+          <div class="ms-dropdown" :class="{ open: openDropdown === 'status' }" @click="toggleDropdown('status')">
+            <span class="ms-label">{{ filterLabel(filters.statuses, statusOptions, 'All Stages') }}</span>
+            <span class="ms-chevron">▾</span>
+          </div>
+          <div v-if="openDropdown === 'status'" class="ms-menu">
+            <label v-for="option in statusOptions.filter(o => o.value)" :key="option.value" class="ms-item" @click.stop>
+              <input type="checkbox" :checked="filters.statuses.includes(option.value)" @change="toggleStatus(option.value)" />
+              <span class="ms-status-dot" :style="{ background: statusColors[option.value] }"></span>
+              <span>{{ option.label }}</span>
+            </label>
           </div>
         </div>
-        <div v-if="authStore.isAdmin || authStore.isManager" class="filter-group filter-group-multi">
+        <div v-if="authStore.isAdmin || authStore.isManager" class="filter-group">
           <label>Clerk</label>
-          <div class="multi-status-pills">
-            <button
-              v-for="clerk in clerks" :key="clerk.id"
-              class="status-pill"
-              :class="{ 'status-pill-active status-pill-clerk': filters.clerk_ids.includes(clerk.id) }"
-              :style="filters.clerk_ids.includes(clerk.id) ? { background: clerk.color } : {}"
-              @click="toggleClerkFilter(clerk.id)"
-            >{{ clerk.name }}</button>
+          <div class="ms-dropdown" :class="{ open: openDropdown === 'clerk' }" @click="toggleDropdown('clerk')">
+            <span class="ms-label">{{ clerkFilterLabel(filters.clerk_ids) }}</span>
+            <span class="ms-chevron">▾</span>
+          </div>
+          <div v-if="openDropdown === 'clerk'" class="ms-menu">
+            <label v-for="clerk in clerks" :key="clerk.id" class="ms-item" @click.stop>
+              <input type="checkbox" :checked="filters.clerk_ids.includes(clerk.id)" @change="toggleClerkFilter(clerk.id)" />
+              <span class="ms-clerk-dot" :style="{ background: clerk.color }"></span>
+              <span>{{ clerk.name }}</span>
+            </label>
+            <div v-if="!clerks.length" class="ms-empty">No clerks</div>
           </div>
         </div>
         <button @click="clearFilters" class="btn-clear-filters">Clear Filters</button>
@@ -709,40 +740,45 @@ onMounted(() => {
     <!-- Calendar View -->
     <div v-if="activeTab === 'calendar'" class="calendar-view">
       <div class="filters-bar calendar-filters">
-        <div v-if="authStore.isAdmin || authStore.isManager" class="filter-group filter-group-multi">
+        <div v-if="authStore.isAdmin || authStore.isManager" class="filter-group">
           <label>Client</label>
-          <div class="multi-status-pills">
-            <button
-              v-for="client in clients" :key="client.id"
-              class="status-pill"
-              :class="{ 'status-pill-active status-pill-client': calendarFilters.client_ids.includes(client.id) }"
-              @click="toggleClientFilter(client.id, true)"
-            >{{ client.name }}</button>
+          <div class="ms-dropdown" :class="{ open: openDropdown === 'cal_client' }" @click="toggleDropdown('cal_client')">
+            <span class="ms-label">{{ clientFilterLabel(calendarFilters.client_ids, true) }}</span>
+            <span class="ms-chevron">▾</span>
+          </div>
+          <div v-if="openDropdown === 'cal_client'" class="ms-menu">
+            <label v-for="client in clients" :key="client.id" class="ms-item" @click.stop>
+              <input type="checkbox" :checked="calendarFilters.client_ids.includes(client.id)" @change="toggleClientFilter(client.id, true)" />
+              <span>{{ client.name }}</span>
+            </label>
           </div>
         </div>
         <div class="filter-group">
           <label>Workflow Stage</label>
-          <div class="multi-status-pills">
-            <button
-              v-for="option in statusOptions.filter(o => o.value)"
-              :key="option.value"
-              class="status-pill"
-              :class="{ 'status-pill-active': calendarFilters.statuses.includes(option.value) }"
-              :style="calendarFilters.statuses.includes(option.value) ? { background: statusColors[option.value] } : {}"
-              @click="toggleCalStatus(option.value)"
-            >{{ option.label }}</button>
+          <div class="ms-dropdown" :class="{ open: openDropdown === 'cal_status' }" @click="toggleDropdown('cal_status')">
+            <span class="ms-label">{{ filterLabel(calendarFilters.statuses, statusOptions, 'All Stages') }}</span>
+            <span class="ms-chevron">▾</span>
+          </div>
+          <div v-if="openDropdown === 'cal_status'" class="ms-menu">
+            <label v-for="option in statusOptions.filter(o => o.value)" :key="option.value" class="ms-item" @click.stop>
+              <input type="checkbox" :checked="calendarFilters.statuses.includes(option.value)" @change="toggleCalStatus(option.value)" />
+              <span class="ms-status-dot" :style="{ background: statusColors[option.value] }"></span>
+              <span>{{ option.label }}</span>
+            </label>
           </div>
         </div>
-        <div v-if="authStore.isAdmin || authStore.isManager" class="filter-group filter-group-multi">
+        <div v-if="authStore.isAdmin || authStore.isManager" class="filter-group">
           <label>Clerk</label>
-          <div class="multi-status-pills">
-            <button
-              v-for="clerk in clerks" :key="clerk.id"
-              class="status-pill"
-              :class="{ 'status-pill-active status-pill-clerk': calendarFilters.clerk_ids.includes(clerk.id) }"
-              :style="calendarFilters.clerk_ids.includes(clerk.id) ? { background: clerk.color } : {}"
-              @click="toggleClerkFilter(clerk.id, true)"
-            >{{ clerk.name }}</button>
+          <div class="ms-dropdown" :class="{ open: openDropdown === 'cal_clerk' }" @click="toggleDropdown('cal_clerk')">
+            <span class="ms-label">{{ clerkFilterLabel(calendarFilters.clerk_ids, true) }}</span>
+            <span class="ms-chevron">▾</span>
+          </div>
+          <div v-if="openDropdown === 'cal_clerk'" class="ms-menu">
+            <label v-for="clerk in clerks" :key="clerk.id" class="ms-item" @click.stop>
+              <input type="checkbox" :checked="calendarFilters.clerk_ids.includes(clerk.id)" @change="toggleClerkFilter(clerk.id, true)" />
+              <span class="ms-clerk-dot" :style="{ background: clerk.color }"></span>
+              <span>{{ clerk.name }}</span>
+            </label>
           </div>
         </div>
         <button @click="clearCalendarFilters" class="btn-clear-filters">Clear Filters</button>

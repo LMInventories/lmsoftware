@@ -297,8 +297,8 @@ h1 { font-size: 21px; font-weight: 700; color: #0f172a; margin: 0 0 2px; }
   display: grid;
   grid-template-columns: repeat(6, 1fr);
   gap: 8px;
-  margin-bottom: 10px;
-  align-items: stretch;
+  margin-bottom: 0;
+  flex: 1;
 }
 
 .status-tile {
@@ -315,7 +315,6 @@ h1 { font-size: 21px; font-weight: 700; color: #0f172a; margin: 0 0 2px; }
   align-items: center;
   justify-content: center;
   text-align: center;
-  min-height: 90px;
 }
 .status-tile:hover {
   box-shadow: 0 3px 10px rgba(0,0,0,0.07);
@@ -385,8 +384,8 @@ h1 { font-size: 21px; font-weight: 700; color: #0f172a; margin: 0 0 2px; }
 .feed-empty { padding: 40px 20px; text-align: center; color: #cbd5e1; font-size: 13px; }
 
 /* Upcoming */
-.dash-top { display: flex; align-items: flex-start; gap: 20px; margin-bottom: 20px; }
-.dash-top-left { flex: 1; }
+.dash-top { display: flex; align-items: stretch; gap: 20px; margin-bottom: 20px; }
+.dash-top-left { flex: 1; display: flex; flex-direction: column; }
 .section-label { font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 8px; }
 .account-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .stat-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 3px; cursor: pointer; transition: box-shadow 0.12s, border-color 0.12s; min-height: 90px; }

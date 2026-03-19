@@ -215,8 +215,10 @@ function openEditModal(property) {
 
 async function handleSubmit() {
   const address = buildAddress()
+  if (!form.value.address_line1.trim()) { toast.warning('Address Line 1 is required'); return }
+  if (!form.value.postcode.trim()) { toast.warning('Postcode is required'); return }
   if (!address) { toast.warning('Address is required'); return }
-  if (!form.value.client_id) { toast.warning('Portfolio is required'); return }
+  if (!form.value.client_id) { toast.warning('Client is required'); return }
   const payload = {
     address,
     property_type: 'residential',
@@ -289,9 +291,9 @@ onMounted(() => { fetchProperties(); fetchClients() })
 
     <div class="filters-bar">
       <div v-if="!authStore.isClient" class="filter-group">
-        <label>Portfolio</label>
+        <label>Client</label>
         <select v-model="filters.client_id" class="filter-select">
-          <option :value="null">All Portfolios</option>
+          <option :value="null">All Clients</option>
           <option v-for="c in clients" :key="c.id" :value="c.id">{{ c.name }}</option>
         </select>
       </div>
@@ -399,9 +401,9 @@ onMounted(() => { fetchProperties(); fetchClients() })
 
               <!-- Portfolio — hidden for client role (auto-filled) -->
               <div v-if="!authStore.isClient" class="form-group">
-                <label>Portfolio *</label>
+                <label>Client *</label>
                 <select v-model="form.client_id" required>
-                  <option :value="null" disabled>Select a portfolio...</option>
+                  <option :value="null" disabled>Select a client...</option>
                   <option v-for="c in clients" :key="c.id" :value="c.id">{{ c.name }}{{ c.company ? ' ('+c.company+')' : '' }}</option>
                 </select>
               </div>
@@ -467,7 +469,7 @@ onMounted(() => { fetchProperties(); fetchClients() })
               </div>
               <div class="form-group">
                 <label>Address Line 2</label>
-                <input v-model="form.address_line2" type="text" placeholder="Flat 2" />
+                <input v-model="form.address_line2" type="text" />
               </div>
               <div class="form-row">
                 <div class="form-group">
@@ -476,7 +478,7 @@ onMounted(() => { fetchProperties(); fetchClients() })
                 </div>
                 <div class="form-group">
                   <label>Postcode *</label>
-                  <input v-model="form.postcode" type="text" placeholder="SW1A 1AA" />
+                  <input v-model="form.postcode" type="text" placeholder="SW1A 1AA" required />
                 </div>
               </div>
 
@@ -547,19 +549,19 @@ onMounted(() => { fetchProperties(); fetchClients() })
                 <label>Features</label>
                 <div class="toggle-group">
                   <label class="toggle-row" :class="{ 'toggle-on': form.parking }">
-                    <span class="toggle-label">🚗 Parking</span>
+                    <span class="toggle-label">Parking</span>
                     <div class="toggle-switch" @click="form.parking = !form.parking">
                       <div class="toggle-knob" :class="{ 'toggle-knob-on': form.parking }"></div>
                     </div>
                   </label>
                   <label class="toggle-row" :class="{ 'toggle-on': form.garden }">
-                    <span class="toggle-label">🌿 Garden</span>
+                    <span class="toggle-label">Garden</span>
                     <div class="toggle-switch" @click="form.garden = !form.garden">
                       <div class="toggle-knob" :class="{ 'toggle-knob-on': form.garden }"></div>
                     </div>
                   </label>
                   <label class="toggle-row" :class="{ 'toggle-on': form.elevator }">
-                    <span class="toggle-label">🛗 Elevator / Lift</span>
+                    <span class="toggle-label">Elevator / Lift</span>
                     <div class="toggle-switch" @click="form.elevator = !form.elevator">
                       <div class="toggle-knob" :class="{ 'toggle-knob-on': form.elevator }"></div>
                     </div>
@@ -572,19 +574,19 @@ onMounted(() => { fetchProperties(); fetchClients() })
                 <label>Meter Locations</label>
                 <div class="meter-grid">
                   <div class="meter-field">
-                    <span class="meter-icon">⚡</span>
+                    <span class="meter-label-txt">Electricity</span>
                     <input v-model="form.meter_electricity" type="text" placeholder="Electricity meter location" />
                   </div>
                   <div class="meter-field">
-                    <span class="meter-icon">🔥</span>
+                    <span class="meter-label-txt">Gas</span>
                     <input v-model="form.meter_gas" type="text" placeholder="Gas meter location" />
                   </div>
                   <div class="meter-field">
-                    <span class="meter-icon">🌡</span>
+                    <span class="meter-label-txt">Heat</span>
                     <input v-model="form.meter_heat" type="text" placeholder="Heat meter location" />
                   </div>
                   <div class="meter-field">
-                    <span class="meter-icon">💧</span>
+                    <span class="meter-label-txt">Water</span>
                     <input v-model="form.meter_water" type="text" placeholder="Water meter location" />
                   </div>
                 </div>
@@ -732,8 +734,8 @@ h1 { font-size: 21px; font-weight: 700; color: #0f172a; margin: 0 0 2px; }
 
 /* Meters */
 .meter-grid { display: flex; flex-direction: column; gap: 6px; }
-.meter-field { display: flex; align-items: center; gap: 8px; }
-.meter-icon { font-size: 14px; width: 20px; text-align: center; flex-shrink: 0; }
+.meter-field { display: flex; align-items: center; gap: 0; }
+.meter-label-txt { font-size: 11px; font-weight: 600; color: #64748b; width: 72px; flex-shrink: 0; text-transform: uppercase; letter-spacing: 0.3px; }
 .meter-field input { flex: 1; padding: 6px 10px; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 12px; font-family: inherit; color: #1e293b; }
 .meter-field input:focus { outline: none; border-color: #6366f1; }
 

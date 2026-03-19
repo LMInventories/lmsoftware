@@ -366,7 +366,6 @@ function setDragOver(type, sectionId, itemIdx, sectionIdx) {
 }
 
 onMounted(fetchTemplate)
-</script>onMounted(fetchTemplate)
 </script>
 
 <template>

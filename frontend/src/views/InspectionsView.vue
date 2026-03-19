@@ -192,11 +192,11 @@ const calendarEvents = computed(() => {
   let filtered = [...inspections.value]
 
   if (calendarFilters.value.client_ids?.length)
-    filtered = filtered.filter(i => calendarFilters.value.client_ids.includes(i.client_id))
-  if (calendarFilters.value.status)
-    filtered = filtered.filter(i => i.status === calendarFilters.value.status)
+    filtered = filtered.filter(i => calendarFilters.value.client_ids.map(Number).includes(Number(i.client_id)))
+  if (calendarFilters.value.statuses?.length)
+    filtered = filtered.filter(i => calendarFilters.value.statuses.includes(i.status))
   if (calendarFilters.value.clerk_ids?.length)
-    filtered = filtered.filter(i => calendarFilters.value.clerk_ids.includes(i.inspector_id))
+    filtered = filtered.filter(i => calendarFilters.value.clerk_ids.map(Number).includes(Number(i.inspector_id)))
 
   return filtered
     .filter(i => i.conduct_date)
@@ -247,7 +247,7 @@ const calendarEvents = computed(() => {
 const filteredInspections = computed(() => {
   let result = [...inspections.value]
   if (filters.value.client_ids?.length)
-    result = result.filter(i => filters.value.client_ids.includes(i.client_id))
+    result = result.filter(i => filters.value.client_ids.map(Number).includes(Number(i.client_id)))
   if (filters.value.postcode) {
     const s = filters.value.postcode.toLowerCase()
     result = result.filter(i => i.property_address && i.property_address.toLowerCase().includes(s))
@@ -255,7 +255,7 @@ const filteredInspections = computed(() => {
   if (filters.value.statuses && filters.value.statuses.length)
     result = result.filter(i => filters.value.statuses.includes(i.status))
   if (filters.value.clerk_ids?.length)
-    result = result.filter(i => filters.value.clerk_ids.includes(i.inspector_id))
+    result = result.filter(i => filters.value.clerk_ids.map(Number).includes(Number(i.inspector_id)))
   return result
 })
 

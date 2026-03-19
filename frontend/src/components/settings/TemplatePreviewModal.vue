@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import api from '../services/api'
+import api from '../../services/api'
 
 const props = defineProps({
   template: {

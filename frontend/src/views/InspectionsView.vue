@@ -952,7 +952,7 @@ onMounted(() => {
                       type="date"
                       :value="form.conduct_date"
                       @change="onConductNativeChange"
-                      style="position:absolute;opacity:0;width:0;height:0;pointer-events:none"
+                      style="position:absolute;inset:0;opacity:0;width:100%;height:100%;cursor:pointer"
                     />
                   </label>
                 </div>
@@ -1143,7 +1143,7 @@ onMounted(() => {
                   type="date"
                   :value="selectedDate"
                   @change="onNativeDateChange"
-                  style="position:absolute;opacity:0;width:0;height:0;pointer-events:none"
+                  style="position:absolute;inset:0;opacity:0;width:100%;height:100%;cursor:pointer"
                 />
               </label>
             </div>

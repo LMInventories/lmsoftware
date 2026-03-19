@@ -575,7 +575,19 @@ onMounted(() => fetchClients())
           {{ form.report_orientation === 'portrait' ? 'Portrait' : 'Landscape' }}
         </div>
 
-        <p class="preview-note-inline">ℹ️ To change the logo or base brand colour, edit the <a href="#" @click.prevent="$router.push('/clients')" class="lnk">client record</a>.</p>
+        <div class="client-settings-note">
+          <span class="client-settings-text">To change the logo or base brand colour, edit the</span>
+          <a
+            href="#"
+            @click.prevent="$router.push('/clients')"
+            class="client-settings-pill"
+            :style="{
+              background: brandColor + '18',
+              color: brandColor,
+              borderColor: brandColor + '40'
+            }"
+          >Client Settings</a>
+        </div>
       </div>
 
     </div>
@@ -1192,12 +1204,32 @@ onMounted(() => fetchClients())
 
 .orient-pill--l { background: #f0fdf4; color: #166534; }
 
-.preview-note-inline {
+.client-settings-note {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
   margin-top: 12px;
+}
+.client-settings-text {
   font-size: 12px;
   color: #94a3b8;
   line-height: 1.5;
-  display: block;
+  white-space: nowrap;
 }
-.preview-note-inline .lnk { white-space: nowrap; }
+.client-settings-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 20px;
+  border: 1px solid;
+  font-size: 11px;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+  transition: opacity 0.12s;
+  white-space: nowrap;
+  letter-spacing: 0.2px;
+}
+.client-settings-pill:hover { opacity: 0.75; }
 </style>

@@ -16,6 +16,7 @@ import RoomSelectionScreen from './src/screens/RoomSelectionScreen'
 import RoomInspectionScreen from './src/screens/RoomInspectionScreen'
 import ItemGalleryScreen from './src/screens/ItemGalleryScreen'
 import SyncScreen from './src/screens/SyncScreen'
+import CameraScreen from './src/screens/CameraScreen'
 
 export type RootStackParamList = {
   Login: undefined
@@ -38,6 +39,7 @@ export type RootStackParamList = {
     itemKey:      string
     itemName:     string
   }
+  Camera: { inspectionId: number }
   Sync: undefined
 }
 
@@ -49,7 +51,7 @@ export default function App() {
 
   useEffect(() => {
     async function bootstrap() {
-      await initDatabase()
+      initDatabase()
       await initAuth()
       setDbReady(true)
     }
@@ -74,6 +76,7 @@ export default function App() {
                 <Stack.Screen name="RoomSelection"     component={RoomSelectionScreen} />
                 <Stack.Screen name="RoomInspection"    component={RoomInspectionScreen} />
                 <Stack.Screen name="ItemGallery"       component={ItemGalleryScreen} />
+                <Stack.Screen name="Camera"            component={CameraScreen} options={{ presentation: 'fullScreenModal', animation: 'slide_from_bottom' }} />
                 <Stack.Screen name="Sync"              component={SyncScreen} />
               </>
             )}

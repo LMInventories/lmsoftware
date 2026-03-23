@@ -5,14 +5,14 @@ import {
   ScrollView,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { useNavigation, useRoute } from '@react-navigation/native'
+import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native'
 import type { StackNavigationProp, RouteProp } from '@react-navigation/stack'
 import * as ImageManipulator from 'expo-image-manipulator'
 import * as FileSystem from 'expo-file-system'
-import * as ImagePicker from 'expo-image-picker'
 
 import type { RootStackParamList } from '../../App'
 import { useInspectionStore } from '../stores/inspectionStore'
+import { setCameraTarget, processPendingPhotos } from '../services/cameraStore'
 import Header from '../components/Header'
 import { colors, font, radius, spacing } from '../utils/theme'
 import { api } from '../services/api'
@@ -62,6 +62,12 @@ export default function ItemGalleryScreen() {
   const [showAiReview, setShowAiReview]   = useState(false)
   const [autoAssigned, setAutoAssigned]   = useState<string[]>([])
 
+  // Pick up any photo parked in cameraStore (fallback if handler was GC'd)
+  useFocusEffect(useCallback(() => {
+    const pending = processPendingPhotos()
+    if (pending) updatePhotos([...getPhotos(), pending])
+  }, []))
+
   // ── Helpers ────────────────────────────────────────────────────────────────
   function getPhotos(): string[] {
     if (!activeInspection?.report_data) return []
@@ -102,14 +108,19 @@ export default function ItemGalleryScreen() {
         [{ rotate: direction === 'cw' ? 90 : 270 }],
         { compress: 0.85, format: ImageManipulator.SaveFormat.JPEG }
       )
+      // Save rotated version to a new file; do NOT delete the original
+      const dir = `${FileSystem.documentDirectory}photos/${inspectionId}/`
+      await FileSystem.makeDirectoryAsync(dir, { intermediates: true })
+      const dest = `${dir}${Date.now()}_rot.jpg`
+      await FileSystem.copyAsync({ from: result.uri, to: dest })
+
       const photos = getPhotos()
       const idx = photos.indexOf(uri)
       if (idx >= 0) {
         const next = [...photos]
-        try { await FileSystem.deleteAsync(uri, { idempotent: true }) } catch {}
-        next[idx] = result.uri
+        next[idx] = dest
         await updatePhotos(next)
-        setLightboxUri(result.uri)
+        setLightboxUri(dest)
       }
     } catch { Alert.alert('Error', 'Could not rotate photo.') }
     finally { setRotating(false) }
@@ -125,12 +136,9 @@ export default function ItemGalleryScreen() {
     ])
   }
 
-  async function handleAddMore() {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync()
-    if (status !== 'granted') { Alert.alert('Permission required', 'Camera permission is needed.'); return }
-    const result = await ImagePicker.launchCameraAsync({ quality: 0.75, base64: true })
-    if (!result.canceled && result.assets[0].base64)
-      await updatePhotos([...getPhotos(), `data:image/jpeg;base64,${result.assets[0].base64}`])
+  function handleAddMore() {
+    setCameraTarget((uri) => updatePhotos([...getPhotos(), uri]))
+    navigation.navigate('Camera', { inspectionId })
   }
 
   // ── Multi-select delete ────────────────────────────────────────────────────
@@ -213,7 +221,15 @@ export default function ItemGalleryScreen() {
       const rd = JSON.parse(activeInspection?.report_data || '{}')
 
       for (const photoUri of selectedPhotos) {
-        const base64 = photoUri.startsWith('data:') ? photoUri.split(',')[1] : null
+        // Support both legacy data: URIs and new file:// URIs
+        let base64: string | null = null
+        if (photoUri.startsWith('data:')) {
+          base64 = photoUri.split(',')[1]
+        } else if (photoUri.startsWith('file://') || photoUri.startsWith('/')) {
+          try {
+            base64 = await FileSystem.readAsStringAsync(photoUri, { encoding: FileSystem.EncodingType.Base64 })
+          } catch { base64 = null }
+        }
         if (!base64) continue
 
         try {

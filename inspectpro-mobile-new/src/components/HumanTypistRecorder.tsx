@@ -9,15 +9,20 @@
  * Clips are grouped by section in the drawer and can be played individually.
  * Full sequential playback plays all clips in order.
  */
-import React, { useState, useRef, useEffect } from 'react'
+import React, { useState, useRef, useEffect, useCallback } from 'react'
 import {
   View, Text, TouchableOpacity, StyleSheet, Modal,
   ScrollView, Alert, ActivityIndicator,
 } from 'react-native'
-import { Audio } from 'expo-av'
+import {
+  useAudioRecorder as useExpoAudioRecorder,
+  AudioModule,
+  RecordingPresets,
+  createAudioPlayer,
+} from 'expo-audio'
 import * as FileSystem from 'expo-file-system'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { saveAudioRecording, deleteAudioRecording } from '../services/database'
+import { saveAudioRecording, deleteAudioRecording, getAudioRecordings } from '../services/database'
 import { colors, font, radius, spacing } from '../utils/theme'
 
 export interface HumanRecording {
@@ -46,30 +51,6 @@ interface Props {
 
 type Mode = 'idle' | 'recording' | 'playing'
 
-// Android-compatible recording options
-const REC_OPTIONS = {
-  android: {
-    extension: '.m4a',
-    outputFormat: Audio.AndroidOutputFormat.MPEG_4,
-    audioEncoder: Audio.AndroidAudioEncoder.AAC,
-    sampleRate: 44100,
-    numberOfChannels: 1,
-    bitRate: 128000,
-  },
-  ios: {
-    extension: '.m4a',
-    outputFormat: Audio.IOSOutputFormat.MPEG4AAC,
-    audioQuality: Audio.IOSAudioQuality.MEDIUM,
-    sampleRate: 44100,
-    numberOfChannels: 1,
-    bitRate: 128000,
-    linearPCMBitDepth: 16 as const,
-    linearPCMIsBigEndian: false,
-    linearPCMIsFloat: false,
-  },
-  web: {},
-}
-
 export default function HumanTypistRecorder({
   inspectionId,
   currentSectionKey,
@@ -80,7 +61,8 @@ export default function HumanTypistRecorder({
   onRecordingAdded,
   onRecordingDeleted,
 }: Props) {
-  const insets = useSafeAreaInsets()
+  const insets  = useSafeAreaInsets()
+  const recorder = useExpoAudioRecorder(RecordingPresets.HIGH_QUALITY)
 
   const [mode, setMode]           = useState<Mode>('idle')
   const [elapsed, setElapsed]     = useState(0)
@@ -90,16 +72,17 @@ export default function HumanTypistRecorder({
   const [saving, setSaving]       = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(false)
 
-  const recRef   = useRef<Audio.Recording | null>(null)
-  const soundRef = useRef<Audio.Sound | null>(null)
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const playerRef    = useRef<ReturnType<typeof createAudioPlayer> | null>(null)
+  const timerRef     = useRef<ReturnType<typeof setInterval> | null>(null)
+  const startTimeRef = useRef<number>(0)
+
   // Queue for sequential playback
   const playQueueRef = useRef<HumanRecording[]>([])
   const playQueueIdx = useRef(0)
 
   useEffect(() => () => {
     timerRef.current && clearInterval(timerRef.current)
-    soundRef.current?.unloadAsync()
+    playerRef.current?.remove()
   }, [])
 
   // ── Helpers ──────────────────────────────────────────────────────────────
@@ -114,6 +97,7 @@ export default function HumanTypistRecorder({
   }
   function startTimer() {
     setElapsed(0)
+    startTimeRef.current = Date.now()
     timerRef.current = setInterval(() => setElapsed(e => e + 1), 1000)
   }
   function stopTimer() {
@@ -149,15 +133,15 @@ export default function HumanTypistRecorder({
       console.warn('[HumanRecorder] copy failed, using cache uri:', e)
     }
 
-    const finalUri   = destUri
-    const now        = new Date().toISOString()
-    const dur        = durationMs > 0 ? durationMs : elapsed * 1000
-    const label      = currentLabel()
+    const finalUri = destUri
+    const now      = new Date().toISOString()
+    const dur      = durationMs > 0 ? durationMs : elapsed * 1000
+    const label    = currentLabel()
 
     // Persist to SQLite so recordings survive app restarts
     let sqliteId: number | undefined
     try {
-      await saveAudioRecording(
+      saveAudioRecording(
         inspectionId,
         currentSectionKey,
         currentSectionName,
@@ -167,9 +151,8 @@ export default function HumanTypistRecorder({
         finalUri,
         dur,
       )
-      // Get the inserted id
-      const { getAudioRecordings } = await import('../services/database') as any
-      const all = await getAudioRecordings(inspectionId)
+      // Get the inserted id (synchronous now)
+      const all = getAudioRecordings(inspectionId)
       sqliteId = all[0]?.id  // most recent first
     } catch (e) {
       console.warn('[HumanRecorder] SQLite save failed:', e)
@@ -196,17 +179,14 @@ export default function HumanTypistRecorder({
     if (mode === 'playing') await stopPlayback()
 
     try {
-      const { status } = await Audio.requestPermissionsAsync()
-      if (status !== 'granted') {
+      const { granted } = await AudioModule.requestRecordingPermissionsAsync()
+      if (!granted) {
         Alert.alert('Permission required', 'Microphone access is needed.')
         return
       }
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true })
+      await AudioModule.setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true })
 
-      const rec = new Audio.Recording()
-      await rec.prepareToRecordAsync(REC_OPTIONS)
-      await rec.startAsync()
-      recRef.current = rec
+      recorder.record()
       setMode('recording')
       startTimer()
     } catch (err) {
@@ -217,24 +197,28 @@ export default function HumanTypistRecorder({
 
   // ── Pause — saves clip immediately ───────────────────────────────────────
   async function handlePause() {
-    if (!recRef.current) return
+    if (mode !== 'recording') return
     setSaving(true)
     stopTimer()
 
     try {
-      // Read URI and status BEFORE unloading
-      const uri    = recRef.current.getURI() ?? ''
-      const status = await recRef.current.getStatusAsync()
-      const dur    = status.isLoaded ? (status.durationMillis ?? 0) : 0
+      const durationMs = Date.now() - startTimeRef.current
+      await recorder.stop()
 
-      await recRef.current.stopAndUnloadAsync()
-      recRef.current = null
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: false })
+      // Poll for URI — may take a brief moment to flush on Android
+      let uri: string | null = null
+      for (let i = 0; i < 15; i++) {
+        uri = recorder.uri ?? null
+        if (uri) break
+        await new Promise(r => setTimeout(r, 20))
+      }
 
-      // Small delay to let Android flush the file to disk
+      await AudioModule.setAudioModeAsync({ allowsRecording: false })
+
+      // Small extra delay to let Android flush the file to disk
       await new Promise(r => setTimeout(r, 300))
 
-      await finaliseClip(uri, dur)
+      if (uri) await finaliseClip(uri, durationMs)
     } catch (err) {
       console.error('[HumanRecorder] pause error:', err)
     } finally {
@@ -244,14 +228,14 @@ export default function HumanTypistRecorder({
     }
   }
 
-  // ── Stop — alias for pause (same outcome: clip saved, back to idle) ───────
+  // ── Stop — alias for pause ────────────────────────────────────────────────
   const handleStop = handlePause
 
   // ── Play single clip ──────────────────────────────────────────────────────
-  async function playClip(rec: HumanRecording) {
-    if (soundRef.current) {
-      await soundRef.current.unloadAsync()
-      soundRef.current = null
+  const playClip = useCallback(async (rec: HumanRecording) => {
+    if (playerRef.current) {
+      playerRef.current.remove()
+      playerRef.current = null
     }
     if (playingId === rec.id) {
       setPlayingId(null)
@@ -261,41 +245,42 @@ export default function HumanTypistRecorder({
     }
 
     try {
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: true })
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: rec.uri },
-        { shouldPlay: true },
-        (s) => {
-          if (s.isLoaded) {
-            setPlayPos(s.positionMillis ?? 0)
-            setPlayDur(s.durationMillis ?? rec.durationMs)
-            if (s.didJustFinish) {
-              // Advance queue if playing all
-              if (playQueueRef.current.length > 0) {
-                playQueueIdx.current += 1
-                if (playQueueIdx.current < playQueueRef.current.length) {
-                  playClip(playQueueRef.current[playQueueIdx.current])
-                  return
-                } else {
-                  playQueueRef.current = []
-                  playQueueIdx.current = 0
-                }
-              }
-              setPlayingId(null)
-              setPlayPos(0)
-              setMode('idle')
-            }
-          }
-        }
-      )
-      soundRef.current = sound
+      await AudioModule.setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true })
+
+      const player = createAudioPlayer({ uri: rec.uri })
+      playerRef.current = player
       setPlayingId(rec.id)
       setPlayDur(rec.durationMs)
       setMode('playing')
+
+      player.addListener('playbackStatusUpdate', (s: any) => {
+        if (s.currentTime !== undefined) setPlayPos(s.currentTime * 1000)
+        if (s.duration !== undefined && s.duration > 0) setPlayDur(s.duration * 1000)
+        if (s.didJustFinish) {
+          // Advance queue if playing all
+          if (playQueueRef.current.length > 0) {
+            playQueueIdx.current += 1
+            if (playQueueIdx.current < playQueueRef.current.length) {
+              playClip(playQueueRef.current[playQueueIdx.current])
+              return
+            } else {
+              playQueueRef.current = []
+              playQueueIdx.current = 0
+            }
+          }
+          setPlayingId(null)
+          setPlayPos(0)
+          setMode('idle')
+          player.remove()
+          playerRef.current = null
+        }
+      })
+
+      await player.play()
     } catch (err) {
       console.error('[HumanRecorder] playClip error:', err)
     }
-  }
+  }, [playingId])
 
   // ── Play all clips in sequence ────────────────────────────────────────────
   async function playAll() {
@@ -309,10 +294,10 @@ export default function HumanTypistRecorder({
   async function stopPlayback() {
     playQueueRef.current = []
     playQueueIdx.current = 0
-    if (soundRef.current) {
-      await soundRef.current.stopAsync()
-      await soundRef.current.unloadAsync()
-      soundRef.current = null
+    if (playerRef.current) {
+      await playerRef.current.pause()
+      playerRef.current.remove()
+      playerRef.current = null
     }
     setPlayingId(null)
     setPlayPos(0)
@@ -326,7 +311,6 @@ export default function HumanTypistRecorder({
         text: 'Delete', style: 'destructive',
         onPress: async () => {
           if (playingId === rec.id) await stopPlayback()
-          // Remove from SQLite and disk
           if (rec.sqliteId) {
             try { await deleteAudioRecording(rec.sqliteId, rec.uri) } catch {}
           } else {
@@ -345,10 +329,10 @@ export default function HumanTypistRecorder({
     return acc
   }, {})
 
-  const recCount = recordings.length
-  const progress = playDur > 0 ? playPos / playDur : 0
-  const isRecording = mode === 'recording'
-  const isPlaying   = mode === 'playing'
+  const recCount    = recordings.length
+  const progress    = playDur > 0 ? playPos / playDur : 0
+  const isRec       = mode === 'recording'
+  const isPlay      = mode === 'playing'
 
   return (
     <>
@@ -363,12 +347,12 @@ export default function HumanTypistRecorder({
         <View style={bar.row}>
           {/* ▶ Play all / stop */}
           <TouchableOpacity
-            style={[bar.sideBtn, (recCount === 0 || isRecording) && bar.disabled]}
+            style={[bar.sideBtn, (recCount === 0 || isRec) && bar.disabled]}
             onPress={playAll}
-            disabled={recCount === 0 || isRecording || saving}
+            disabled={recCount === 0 || isRec || saving}
           >
-            <Text style={bar.sideBtnIcon}>{isPlaying ? '⏹' : '▶'}</Text>
-            <Text style={bar.sideBtnLabel}>{isPlaying ? 'Stop' : 'Play all'}</Text>
+            <Text style={bar.sideBtnIcon}>{isPlay ? '⏹' : '▶'}</Text>
+            <Text style={bar.sideBtnLabel}>{isPlay ? 'Stop' : 'Play all'}</Text>
           </TouchableOpacity>
 
           {/* Centre record / pause button */}
@@ -377,9 +361,8 @@ export default function HumanTypistRecorder({
               <View style={[bar.recBtn, bar.recBtnSaving]}>
                 <ActivityIndicator color="#fff" />
               </View>
-            ) : isRecording ? (
+            ) : isRec ? (
               <TouchableOpacity style={[bar.recBtn, bar.recBtnLive]} onPress={handlePause}>
-                {/* Two pause bars */}
                 <View style={bar.pauseIcon}>
                   <View style={bar.pauseBar} />
                   <View style={bar.pauseBar} />
@@ -387,15 +370,15 @@ export default function HumanTypistRecorder({
               </TouchableOpacity>
             ) : (
               <TouchableOpacity
-                style={[bar.recBtn, isPlaying && bar.disabled]}
+                style={[bar.recBtn, isPlay && bar.disabled]}
                 onPress={handleRecord}
-                disabled={isPlaying || saving}
+                disabled={isPlay || saving}
               >
                 <View style={bar.recDot} />
               </TouchableOpacity>
             )}
             <Text style={bar.recLabel}>
-              {saving ? 'Saving…' : isRecording ? fmt(elapsed * 1000) : 'Record'}
+              {saving ? 'Saving…' : isRec ? fmt(elapsed * 1000) : 'Record'}
             </Text>
           </View>
 
@@ -417,9 +400,9 @@ export default function HumanTypistRecorder({
 
         {/* Context label */}
         <Text style={bar.context} numberOfLines={1}>
-          {isRecording
+          {isRec
             ? `● ${currentLabel()}`
-            : isPlaying && playingId
+            : isPlay && playingId
             ? `▶ ${recordings.find(r => r.id === playingId)?.label ?? ''}`
             : recCount > 0
             ? `${recCount} clip${recCount !== 1 ? 's' : ''} recorded`
@@ -447,8 +430,10 @@ export default function HumanTypistRecorder({
             </View>
           ) : (
             <ScrollView contentContainerStyle={dr.scroll}>
-              {/* Play all button */}
-              <TouchableOpacity style={dr.playAllBtn} onPress={() => { setDrawerOpen(false); setTimeout(playAll, 300) }}>
+              <TouchableOpacity
+                style={dr.playAllBtn}
+                onPress={() => { setDrawerOpen(false); setTimeout(playAll, 300) }}
+              >
                 <Text style={dr.playAllText}>▶  Play All Clips in Order</Text>
               </TouchableOpacity>
 
@@ -459,7 +444,11 @@ export default function HumanTypistRecorder({
                     <View key={rec.id} style={dr.row}>
                       <TouchableOpacity
                         style={[dr.playBtn, playingId === rec.id && dr.playBtnActive]}
-                        onPress={() => { setDrawerOpen(false); setTimeout(() => playingId === rec.id ? stopPlayback() : playClip(rec), 300) }}
+                        onPress={() => {
+                          setDrawerOpen(false)
+                          setTimeout(() =>
+                            playingId === rec.id ? stopPlayback() : playClip(rec), 300)
+                        }}
                       >
                         <Text style={dr.playBtnIcon}>{playingId === rec.id ? '⏸' : '▶'}</Text>
                       </TouchableOpacity>
@@ -494,8 +483,8 @@ export default function HumanTypistRecorder({
 }
 
 // ── Styles ────────────────────────────────────────────────────────────────────
-const BG = '#1a1a2e'
-const FG = '#ffffff'
+const BG  = '#1a1a2e'
+const FG  = '#ffffff'
 const RED = '#e63946'
 
 const bar = StyleSheet.create({
@@ -522,19 +511,15 @@ const bar = StyleSheet.create({
     justifyContent: 'space-between',
     paddingBottom: 6,
   },
-
-  // Side buttons
   sideBtn: {
     width: 60,
     alignItems: 'center',
     gap: 4,
   },
-  disabled: { opacity: 0.3 },
+  disabled:     { opacity: 0.3 },
   sideBtnIcon:  { fontSize: 22, color: FG },
   sideBtnLabel: { fontSize: 9, color: 'rgba(255,255,255,0.6)', fontWeight: '600' },
-
-  // Centre record button
-  centreWrap: { alignItems: 'center', gap: 5 },
+  centreWrap:   { alignItems: 'center', gap: 5 },
   recBtn: {
     width: 64, height: 64, borderRadius: 32,
     backgroundColor: RED,
@@ -545,25 +530,23 @@ const bar = StyleSheet.create({
     shadowRadius: 10,
     elevation: 8,
   },
-  recBtnLive: { backgroundColor: '#f87171' },
+  recBtnLive:   { backgroundColor: '#f87171' },
   recBtnSaving: { backgroundColor: '#6b7280' },
   recDot: {
     width: 26, height: 26, borderRadius: 13,
     backgroundColor: FG,
   },
-  pauseIcon: { flexDirection: 'row', gap: 5 },
-  pauseBar: { width: 5, height: 20, borderRadius: 3, backgroundColor: FG },
+  pauseIcon:  { flexDirection: 'row', gap: 5 },
+  pauseBar:   { width: 5, height: 20, borderRadius: 3, backgroundColor: FG },
   recLabel: {
     fontSize: 10,
     color: 'rgba(255,255,255,0.65)',
     fontWeight: '700',
     letterSpacing: 0.3,
   },
-
-  // Files button
-  filesIcon: { gap: 3.5, alignItems: 'flex-end' },
-  filesLine: { width: 20, height: 2.5, backgroundColor: FG, borderRadius: 2 },
-  filesLineShort: { width: 13 },
+  filesIcon:     { gap: 3.5, alignItems: 'flex-end' },
+  filesLine:     { width: 20, height: 2.5, backgroundColor: FG, borderRadius: 2 },
+  filesLineShort:{ width: 13 },
   badge: {
     position: 'absolute', top: -4, right: -4,
     backgroundColor: RED,
@@ -571,8 +554,6 @@ const bar = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   badgeText: { fontSize: 10, color: FG, fontWeight: '800' },
-
-  // Context label
   context: {
     fontSize: 10,
     color: 'rgba(255,255,255,0.45)',
@@ -594,13 +575,11 @@ const dr = StyleSheet.create({
   doneBtn:     { backgroundColor: colors.primary, paddingHorizontal: spacing.md, paddingVertical: 7, borderRadius: radius.md },
   doneBtnText: { color: '#fff', fontWeight: '700', fontSize: font.sm },
   scroll:      { padding: spacing.md, paddingBottom: 40 },
-
   playAllBtn: {
     backgroundColor: colors.primary, borderRadius: radius.md,
     padding: spacing.md, alignItems: 'center', marginBottom: spacing.md,
   },
   playAllText: { color: '#fff', fontWeight: '700', fontSize: font.md },
-
   groupLabel: {
     fontSize: font.xs, fontWeight: '700', color: colors.textLight,
     textTransform: 'uppercase', letterSpacing: 0.6,
@@ -626,9 +605,8 @@ const dr = StyleSheet.create({
   miniFill:      { height: '100%', backgroundColor: colors.primary, borderRadius: 2 },
   delBtn:        { width: 34, height: 34, borderRadius: 17, backgroundColor: colors.dangerLight, alignItems: 'center', justifyContent: 'center' },
   delBtnText:    { fontSize: 16 },
-
-  empty:      { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.md, paddingTop: 80 },
-  emptyIcon:  { fontSize: 48 },
-  emptyTitle: { fontSize: font.lg, fontWeight: '700', color: colors.textMid },
-  emptySub:   { fontSize: font.sm, color: colors.textLight, textAlign: 'center', lineHeight: 20, paddingHorizontal: spacing.lg },
+  empty:         { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.md, paddingTop: 80 },
+  emptyIcon:     { fontSize: 48 },
+  emptyTitle:    { fontSize: font.lg, fontWeight: '700', color: colors.textMid },
+  emptySub:      { fontSize: font.sm, color: colors.textLight, textAlign: 'center', lineHeight: 20, paddingHorizontal: spacing.lg },
 })

@@ -21,7 +21,10 @@ class User(db.Model):
     reset_token        = db.Column(db.String(100), nullable=True)
     reset_token_expiry = db.Column(db.DateTime, nullable=True)
     client_id          = db.Column(db.Integer, db.ForeignKey('clients.id'), nullable=True)
-    # clerk-only: 'ai_instant' | 'ai_processing' | 'human'
+    # clerk-only: 'ai_instant' | 'ai_room' | 'human'
+    # ai_instant — per-item mic, fills fields immediately on-device
+    # ai_room    — whole-room recorder + AI Transcribe button, fills all items at once
+    # human      — audio clips synced to server; typist receives email and types the report
     typist_mode        = db.Column(db.String(20), nullable=True)
 
     def set_password(self, password):

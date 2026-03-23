@@ -562,11 +562,154 @@ def transcribe_usage():
     })
 
 
+def _claude_fill_room(transcript: str, section_name: str, items: list) -> dict:
+    """
+    Fill a single room's items from a continuous dictation transcript.
+    Item names are used as 'chapter headings' — the clerk says the item name
+    then describes it, so the AI maps each passage to the correct item.
+
+    items: [{ 'id': str, 'name': str, 'hasCondition': bool, 'hasDescription': bool }]
+
+    Returns: { itemId: { 'description': '...', 'condition': '...' } }
+    """
+    client = anthropic.Anthropic(api_key=os.environ.get('ANTHROPIC_API_KEY'))
+
+    items_list = '\n'.join(
+        f'  - ID: "{item["id"]}", Name: "{item["name"]}"'
+        for item in items
+    )
+
+    prompt = f"""You are processing a UK property inventory inspection dictation for a single room.
+
+The clerk walked through the room and spoke each item name aloud followed by its description and condition.
+Item names act as CHAPTER HEADINGS — when the clerk says an item name (or something close to it), everything that follows until the next item name is the description and/or condition for that item.
+
+Room: {section_name}
+
+Items to fill (use the ID as the JSON key, match by Name):
+{items_list}
+
+Transcript:
+"{transcript}"
+
+RULES:
+1. Match each passage to the closest item name. The clerk may abbreviate (e.g. "Door" for "Door & Frame") — use fuzzy matching.
+2. Extract description and condition separately. If the clerk says a single phrase, put it in description.
+3. CRITICAL: Use the EXACT words the clerk spoke. Do not rephrase or substitute synonyms.
+   - "good order" → "Good order" (NOT "Good condition")
+   - "fair wear and tear" → "Fair wear and tear"
+   - "as new" or "as inventory" → preserve exactly
+4. Clean up only: filler words (um, uh, er), obvious repetition, false starts.
+5. Only fill items that are mentioned. Omit unmentioned items entirely from the output.
+6. Use British English spelling for any connecting words.
+7. If only one piece of information is given for an item, put it in description.
+
+Return ONLY valid JSON — no markdown, no extra text:
+{{
+  "<itemId>": {{
+    "description": "...",
+    "condition": "..."
+  }}
+}}"""
+
+    message = client.messages.create(
+        model='claude-haiku-4-5',
+        max_tokens=3000,
+        messages=[{'role': 'user', 'content': prompt}]
+    )
+
+    raw = message.content[0].text.strip()
+    raw = raw.replace('```json', '').replace('```', '').strip()
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        print(f'[_claude_fill_room] JSON parse error: {raw[:200]}')
+        return {}
+
+
+@transcribe_bp.route('/room', methods=['POST'])
+@jwt_required()
+def transcribe_room():
+    """
+    Per-room dictation — the clerk records the whole room in one go (with pause/resume),
+    then presses 'AI Transcribe' in the app to fill all item fields at once.
+
+    This replaces the old 'ai_processing' server-side flow. All processing now happens
+    on demand from the app before syncing.
+
+    Request JSON:
+    {
+      "clips":       [{"audio": "<base64>", "mimeType": "audio/m4a"}, ...],
+      "sectionName": "Living Room",
+      "sectionKey":  "123",
+      "items": [
+        {"id": "456", "name": "Ceiling", "hasCondition": true, "hasDescription": true},
+        ...
+      ]
+    }
+
+    Response JSON:
+    {
+      "transcript": "Ceiling. Good condition, white painted...",
+      "filled": {
+        "456": {"description": "White painted", "condition": "Good condition"}
+      }
+    }
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': 'No data provided'}), 400
+
+    clips        = data.get('clips', [])
+    section_name = data.get('sectionName', 'Room')
+    items        = data.get('items', [])
+
+    if not clips:
+        return jsonify({'error': 'No audio clips provided'}), 400
+    if not items:
+        return jsonify({'error': 'No items provided'}), 400
+
+    if not os.environ.get('OPENAI_API_KEY'):
+        return jsonify({'error': 'OPENAI_API_KEY not configured on server'}), 503
+    if not os.environ.get('ANTHROPIC_API_KEY'):
+        return jsonify({'error': 'ANTHROPIC_API_KEY not configured on server'}), 503
+
+    # Transcribe each clip with Whisper, then join
+    transcripts = []
+    for i, clip in enumerate(clips):
+        audio_b64 = clip.get('audio')
+        mime_type = clip.get('mimeType', 'audio/m4a')
+        if not audio_b64:
+            continue
+        try:
+            audio_bytes = base64.b64decode(audio_b64)
+            text = _whisper_transcribe(audio_bytes, mime_type)
+            if text:
+                transcripts.append(text.strip())
+        except Exception as e:
+            print(f'[transcribe/room] clip {i} whisper error: {e}')
+
+    full_transcript = ' '.join(transcripts)
+    if not full_transcript:
+        return jsonify({'error': 'No speech detected in recording'}), 422
+
+    try:
+        filled = _claude_fill_room(full_transcript, section_name, items)
+    except Exception as e:
+        print(f'[transcribe/room] claude error: {e}')
+        return jsonify({'error': f'AI fill error: {str(e)}'}), 500
+
+    return jsonify({
+        'transcript': full_transcript,
+        'filled':     filled,
+    })
+
+
 @transcribe_bp.route('/full', methods=['POST'])
 @jwt_required()
 def transcribe_full():
     """
-    Full inspection continuous recording — called at Processing stage for AI typist.
+    Full inspection continuous recording — legacy endpoint, kept for backward compatibility.
 
     Request JSON:
     {

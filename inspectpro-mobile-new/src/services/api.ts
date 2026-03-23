@@ -8,6 +8,23 @@ const http = axios.create({
   timeout: 30000,
 })
 
+// Separate instance with a longer timeout for AI audio endpoints
+const httpAi = axios.create({
+  baseURL: BASE_URL,
+  timeout: 120000,   // 2 min — Whisper + Claude can take a while for multi-clip rooms
+})
+
+httpAi.interceptors.request.use(async (config) => {
+  const token = await SecureStore.getItemAsync('token')
+  if (token) config.headers.Authorization = `Bearer ${token}`
+  return config
+})
+
+httpAi.interceptors.response.use(
+  (response) => response,
+  (error) => Promise.reject(error)
+)
+
 http.interceptors.request.use(async (config) => {
   const token = await SecureStore.getItemAsync('token')
   if (token) config.headers.Authorization = `Bearer ${token}`
@@ -54,13 +71,22 @@ export const api = {
   getSectionPresets: () =>
     http.get('/api/section-presets'),
 
-  // AI transcription
+  // AI transcription — per-item (AI instant mode)
   transcribeItem: (data: any) =>
-    http.post('/api/transcribe/item', data),
+    httpAi.post('/api/transcribe/item', data),
+
+  // AI transcription — per-room dictation (replaces ai_processing server-side flow)
+  transcribeRoom: (data: {
+    clips: Array<{ audio: string; mimeType: string }>
+    sectionName: string
+    sectionKey: string
+    items: Array<{ id: string; name: string; hasCondition?: boolean; hasDescription?: boolean }>
+  }) =>
+    httpAi.post('/api/transcribe/room', data),
 
   // AI photo classification (for reassign)
   classifyPhoto: (data: { imageBase64: string; mimeType: string; roomContext: string }) =>
-    http.post('/api/transcribe/classify-photo', data),
+    httpAi.post('/api/transcribe/classify-photo', data),
 
   checkAiStatus: () =>
     http.get('/api/ai/status'),

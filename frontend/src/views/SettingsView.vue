@@ -1,12 +1,13 @@
 <script setup>
 import { ref } from 'vue'
-import TemplatesSettings     from '../components/settings/TemplatesSettings.vue'
-import GeneralSettings       from '../components/settings/GeneralSettings.vue'
-import ReportsSettings       from '../components/settings/ReportsSettings.vue'
-import ActionsSettings       from '../components/settings/ActionsSettings.vue'
-import TranscriptionSettings from '../components/settings/TranscriptionSettings.vue'
-import EmailsSettings        from '../components/settings/EmailsSettings.vue'
-import FixedSectionsSettings from './settings/FixedSectionsSettings.vue'
+import TemplatesSettings      from '../components/settings/TemplatesSettings.vue'
+import GeneralSettings        from '../components/settings/GeneralSettings.vue'
+import ReportsSettings        from '../components/settings/ReportsSettings.vue'
+import ActionsSettings        from '../components/settings/ActionsSettings.vue'
+import TranscriptionSettings  from '../components/settings/TranscriptionSettings.vue'
+import EmailsSettings         from '../components/settings/EmailsSettings.vue'
+import IntegrationsSettings   from '../components/settings/IntegrationsSettings.vue'
+import FixedSectionsSettings  from './settings/FixedSectionsSettings.vue'
 
 const activeTab = ref(localStorage.getItem('settings_tab') || 'general')
 function setTab(id) { activeTab.value = id; localStorage.setItem('settings_tab', id) }
@@ -19,6 +20,7 @@ const tabs = [
   { id: 'fixed-sections', label: 'Fixed Sections',    icon: '📌' },
   { id: 'transcription',  label: 'Transcription',     icon: '✍️' },
   { id: 'emails',         label: 'Emails',            icon: '📧' },
+  { id: 'integrations',  label: 'Integrations',      icon: '🔗' },
 ]
 </script>
 
@@ -52,6 +54,7 @@ const tabs = [
         <FixedSectionsSettings  v-if="activeTab === 'fixed-sections'"  />
         <TranscriptionSettings  v-if="activeTab === 'transcription'"   />
         <EmailsSettings         v-if="activeTab === 'emails'"          />
+        <IntegrationsSettings   v-if="activeTab === 'integrations'"    />
       </div>
     </div>
   </div>

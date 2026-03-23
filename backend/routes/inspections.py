@@ -83,6 +83,10 @@ def inspection_detail(inspection):
 
     if inspection.template:
         result['template_name'] = inspection.template.name
+        # Embed full template so mobile app can work offline after download.
+        # The app caches this inside the inspection's `data` blob in SQLite —
+        # no extra network call is needed when the clerk opens a room section.
+        result['template'] = inspection.template.to_dict()
 
     return result
 

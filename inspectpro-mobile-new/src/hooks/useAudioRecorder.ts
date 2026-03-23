@@ -1,5 +1,10 @@
 import { useState, useRef, useCallback } from 'react'
-import { Audio } from 'expo-av'
+import {
+  useAudioRecorder as useExpoAudioRecorder,
+  AudioModule,
+  RecordingPresets,
+  createAudioPlayer,
+} from 'expo-audio'
 import * as FileSystem from 'expo-file-system'
 import { Alert } from 'react-native'
 
@@ -10,28 +15,31 @@ export interface Recording {
 }
 
 export function useAudioRecorder() {
-  const recordingRef = useRef<Audio.Recording | null>(null)
-  const [isRecording, setIsRecording]   = useState(false)
-  const [isPlaying, setIsPlaying]       = useState(false)
-  const soundRef = useRef<Audio.Sound | null>(null)
+  const recorder = useExpoAudioRecorder(RecordingPresets.HIGH_QUALITY)
+
+  const [isRecording, setIsRecording] = useState(false)
+  const [isPlaying, setIsPlaying]     = useState(false)
+
+  // Track elapsed time for duration since recorder.currentTime may not be
+  // available post-stop on all platforms
+  const startTimeRef = useRef<number>(0)
+  const playerRef    = useRef<ReturnType<typeof createAudioPlayer> | null>(null)
 
   const startRecording = useCallback(async (): Promise<boolean> => {
     try {
-      const { status } = await Audio.requestPermissionsAsync()
-      if (status !== 'granted') {
+      const { granted } = await AudioModule.requestRecordingPermissionsAsync()
+      if (!granted) {
         Alert.alert('Permission required', 'Microphone access is needed for audio dictation.')
         return false
       }
 
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
+      await AudioModule.setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
       })
 
-      const rec = new Audio.Recording()
-      await rec.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY)
-      await rec.startAsync()
-      recordingRef.current = rec
+      recorder.record()
+      startTimeRef.current = Date.now()
       setIsRecording(true)
       return true
     } catch (err) {
@@ -39,41 +47,54 @@ export function useAudioRecorder() {
       Alert.alert('Recording error', 'Could not start recording. Please try again.')
       return false
     }
-  }, [])
+  }, [recorder])
 
   const stopRecording = useCallback(async (): Promise<Recording | null> => {
-    if (!recordingRef.current) return null
+    if (!isRecording) return null
     try {
-      await recordingRef.current.stopAndUnloadAsync()
-      const status = await recordingRef.current.getStatusAsync()
-      const uri    = recordingRef.current.getURI()
-      recordingRef.current = null
-      setIsRecording(false)
+      const durationMs = Date.now() - startTimeRef.current
+      await recorder.stop()
 
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: false })
+      // Poll for URI — may take a brief moment to flush on Android
+      let uri: string | null = null
+      for (let i = 0; i < 10; i++) {
+        uri = recorder.uri ?? null
+        if (uri) break
+        await new Promise(r => setTimeout(r, 20))
+      }
+
+      setIsRecording(false)
+      await AudioModule.setAudioModeAsync({ allowsRecording: false })
 
       if (!uri) return null
-      return { uri, durationMs: status.durationMillis ?? 0 }
+      return { uri, durationMs }
     } catch (err) {
       console.error('stopRecording error', err)
       setIsRecording(false)
       return null
     }
-  }, [])
+  }, [isRecording, recorder])
 
   const playRecording = useCallback(async (uri: string) => {
     try {
-      if (soundRef.current) {
-        await soundRef.current.unloadAsync()
-        soundRef.current = null
+      if (playerRef.current) {
+        playerRef.current.remove()
+        playerRef.current = null
       }
-      const { sound } = await Audio.Sound.createAsync({ uri })
-      soundRef.current = sound
+
+      const player = createAudioPlayer({ uri })
+      playerRef.current = player
       setIsPlaying(true)
-      sound.setOnPlaybackStatusUpdate((s) => {
-        if (s.isLoaded && s.didJustFinish) setIsPlaying(false)
+
+      player.addListener('playbackStatusUpdate', (status: any) => {
+        if (status.didJustFinish) {
+          setIsPlaying(false)
+          player.remove()
+          playerRef.current = null
+        }
       })
-      await sound.playAsync()
+
+      await player.play()
     } catch (err) {
       console.error('playRecording error', err)
       setIsPlaying(false)
@@ -81,10 +102,10 @@ export function useAudioRecorder() {
   }, [])
 
   const stopPlayback = useCallback(async () => {
-    if (soundRef.current) {
-      await soundRef.current.stopAsync()
-      await soundRef.current.unloadAsync()
-      soundRef.current = null
+    if (playerRef.current) {
+      await playerRef.current.pause()
+      playerRef.current.remove()
+      playerRef.current = null
     }
     setIsPlaying(false)
   }, [])

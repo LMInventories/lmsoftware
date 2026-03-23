@@ -23,7 +23,7 @@ type SyncResult = { id: number; address: string; success: boolean; error?: strin
 export default function SyncScreen() {
   const navigation = useNavigation<Nav>()
   const insets     = useSafeAreaInsets()
-  const { inspections, loadInspections, humanRecordings } = useInspectionStore()
+  const { inspections, loadInspections } = useInspectionStore()
   const { user } = useAuthStore()
 
   const [selected, setSelected]       = useState<Set<number>>(new Set())
@@ -47,6 +47,49 @@ export default function SyncScreen() {
     setSelected(selected.size === syncable.length ? new Set() : new Set(syncable.map(i => i.id)))
   }
 
+  // Walk all _photos and _overviewPhotos arrays in report_data.
+  // For each entry that is a file URI, read and encode to base64 data URI.
+  // Legacy data: URIs are passed through unchanged.
+  // Returns the mutated (deep-copied) object — does NOT touch the stored data.
+  async function convertPhotoUrisToBase64(rd: any): Promise<any> {
+    for (const sectionKey of Object.keys(rd)) {
+      const section = rd[sectionKey]
+      if (!section || typeof section !== 'object') continue
+
+      // Section-level overview photos
+      if (Array.isArray(section._overviewPhotos)) {
+        section._overviewPhotos = await encodePhotoArray(section._overviewPhotos)
+      }
+
+      // Item-level photos
+      for (const itemKey of Object.keys(section)) {
+        const item = section[itemKey]
+        if (!item || typeof item !== 'object') continue
+        if (Array.isArray(item._photos)) {
+          item._photos = await encodePhotoArray(item._photos)
+        }
+      }
+    }
+    return rd
+  }
+
+  async function encodePhotoArray(photos: string[]): Promise<string[]> {
+    return Promise.all(photos.map(async (uri) => {
+      // Already a data URI — nothing to do
+      if (uri.startsWith('data:')) return uri
+      // File URI — read and encode
+      try {
+        const b64 = await FileSystem.readAsStringAsync(uri, {
+          encoding: FileSystem.EncodingType.Base64,
+        })
+        return `data:image/jpeg;base64,${b64}`
+      } catch (e) {
+        console.warn('[Sync] could not encode photo:', uri, e)
+        return uri  // keep original so the field isn't silently dropped
+      }
+    }))
+  }
+
   async function runSync() {
     setConfirmModal(false)
     setSyncing(true)
@@ -60,12 +103,12 @@ export default function SyncScreen() {
 
       try {
         // Read fresh from DB to guarantee latest report_data
-        const fresh = await getLocalInspection(id)
+        const fresh = getLocalInspection(id)
         const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
 
         // Read audio recordings from SQLite — persists across app restarts
         // unlike the in-memory Zustand store
-        const sqliteRecs = await getAudioRecordings(id)
+        const sqliteRecs = getAudioRecordings(id)
         console.log(`[Sync] found ${sqliteRecs.length} audio recordings in SQLite for inspection ${id}`)
 
         if (sqliteRecs.length > 0) {
@@ -109,12 +152,15 @@ export default function SyncScreen() {
           }
         }
 
-        const payload: any = { report_data: JSON.stringify(rd) }
+        // Convert any file:// photo URIs → base64 data URIs for the server payload.
+        // We deep-copy rd first so on-device storage always keeps file URIs.
+        const rdForSync = await convertPhotoUrisToBase64(JSON.parse(JSON.stringify(rd)))
+        const payload: any = { report_data: JSON.stringify(rdForSync) }
 
         // Status transitions:
         //
-        // Clerk + AI typist (ai_instant/ai_processing):
-        //   Report fields are already filled by AI → skip Processing → go straight to Review
+        // Clerk + AI typist (ai_instant / ai_room) or typist flagged as AI:
+        //   Fields already filled on-device → skip Processing → go straight to Review
         //
         // Clerk + human typist (human) or no typist assigned:
         //   Human needs to type from audio → move to Processing so typist can access it
@@ -133,7 +179,7 @@ export default function SyncScreen() {
                            typistName.startsWith('ai ')
         const isAiMode = typistIsAi ||
                          typistMode === 'ai_instant' ||
-                         typistMode === 'ai_processing'
+                         typistMode === 'ai_room'
 
         if (role === 'clerk' && currentStatus === 'active') {
           // AI typist: fields already filled → Review
@@ -176,11 +222,11 @@ export default function SyncScreen() {
   // Explain what status transition will happen for this user
   function syncNote() {
     const typistMode = user?.typist_mode
-    const isAiMode = typistMode === 'ai_instant' || typistMode === 'ai_processing'
+    const isAiMode = typistMode === 'ai_instant' || typistMode === 'ai_room'
     if (user?.role === 'clerk' && isAiMode)
-      return 'AI has filled the report fields. Syncing will upload and move to Review.'
+      return 'AI has filled report fields on-device. Syncing will upload and move to Review.'
     if (user?.role === 'clerk')
-      return 'Syncing will upload your audio and move the inspection to Processing for the typist.'
+      return 'Syncing will upload your report and audio, and move the inspection to Processing for the typist.'
     if (user?.role === 'typist')
       return 'Syncing will upload your report and move the inspection to Review.'
     return 'Syncing will upload report data to the server.'

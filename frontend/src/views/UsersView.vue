@@ -15,8 +15,17 @@ const form = ref({
   phone: '',
   password: '',
   role: 'clerk',
-  color: '#6366f1'
+  color: '#6366f1',
+  typist_mode: null,
 })
+
+// Typist mode options — shown only when role = 'clerk'
+const typistModeOptions = [
+  { value: null,         label: 'None (manual only)' },
+  { value: 'ai_instant', label: 'AI Instant — per-item mic, fills fields automatically' },
+  { value: 'ai_room',    label: 'AI by Room — record whole room, AI transcribes' },
+  { value: 'human',      label: 'Human Typist — audio synced to typist queue' },
+]
 
 const roles = [
   { value: 'admin', label: 'Admin' },
@@ -58,7 +67,8 @@ function openModal() {
     phone: '',
     password: '',
     role: 'clerk',
-    color: '#6366f1'
+    color: '#6366f1',
+    typist_mode: null,
   }
   editingUser.value = null
   showModal.value = true
@@ -71,7 +81,8 @@ function editUser(user) {
     phone: user.phone || '',
     password: '',
     role: user.role,
-    color: user.color || '#6366f1'
+    color: user.color || '#6366f1',
+    typist_mode: user.typist_mode || null,
   }
   editingUser.value = user
   showModal.value = true
@@ -187,6 +198,12 @@ onMounted(() => {
           <div class="user-details">
             <div class="detail-row"><span class="detail-icon">✉</span>{{ user.email }}</div>
             <div v-if="user.phone" class="detail-row"><span class="detail-icon">📞</span>{{ user.phone }}</div>
+            <div v-if="user.role === 'clerk' && user.typist_mode" class="detail-row">
+              <span class="detail-icon">🎙</span>
+              <span class="typist-mode-pill" :class="'tm-' + user.typist_mode">
+                {{ { ai_instant: 'AI Instant', ai_room: 'AI by Room', human: 'Human Typist' }[user.typist_mode] || user.typist_mode }}
+              </span>
+            </div>
             <div class="detail-row detail-muted"><span class="detail-icon">📅</span>Since {{ new Date(user.created_at).toLocaleDateString('en-GB', {day:'2-digit',month:'short',year:'numeric'}) }}</div>
           </div>
         </div>
@@ -250,11 +267,27 @@ onMounted(() => {
             <p class="helper-text">This color will be used in the calendar view to identify this {{ form.role }}'s inspections</p>
           </div>
 
+          <!-- Typist mode — clerks only (admin-facing, not visible to clerks) -->
+          <div v-if="form.role === 'clerk'" class="form-group">
+            <label>Typist Mode</label>
+            <select v-model="form.typist_mode">
+              <option v-for="opt in typistModeOptions" :key="String(opt.value)" :value="opt.value">
+                {{ opt.label }}
+              </option>
+            </select>
+            <p class="helper-text">
+              Controls the recording &amp; AI behaviour in the mobile app for this clerk.
+              <br/><strong>AI Instant</strong> — mic next to each item, fills fields immediately.
+              <br/><strong>AI by Room</strong> — records full room, AI fills all items at once.
+              <br/><strong>Human Typist</strong> — audio synced to server, typist receives email &amp; types the report.
+            </p>
+          </div>
+
           <div class="form-group">
             <label>{{ editingUser ? 'Password (leave blank to keep current)' : 'Password *' }}</label>
-            <input 
-              v-model="form.password" 
-              type="password" 
+            <input
+              v-model="form.password"
+              type="password"
               :required="!editingUser"
             />
           </div>
@@ -353,6 +386,12 @@ h3 { font-size: 13px; font-weight: 700; color: #1e293b; white-space: nowrap; ove
 .color-preview { width: 34px; height: 34px; border-radius: 6px; border: 1px solid #e2e8f0; flex-shrink: 0; }
 .color-value { font-family: monospace; font-size: 12px; color: #64748b; font-weight: 600; }
 .helper-text { font-size: 11px; color: #64748b; line-height: 1.5; }
+
+/* Typist mode pill on user cards */
+.typist-mode-pill { display: inline-block; padding: 1px 7px; border-radius: 8px; font-size: 10px; font-weight: 700; }
+.tm-ai_instant { background: #eef2ff; color: #4338ca; }
+.tm-ai_room    { background: #f0fdf4; color: #166534; }
+.tm-human      { background: #fff7ed; color: #9a3412; }
 
 .modal-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: 1px solid #f1f5f9; background: #f8fafc; }
 .btn-secondary { padding: 7px 14px; background: white; color: #64748b; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; }

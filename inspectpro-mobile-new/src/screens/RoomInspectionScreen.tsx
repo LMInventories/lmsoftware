@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react'
+import React, { useEffect, useState, useCallback, useRef } from 'react'
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   TextInput, Alert, Image, Modal, ActivityIndicator,
@@ -8,17 +8,19 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native'
 import type { StackNavigationProp, RouteProp } from '@react-navigation/stack'
 import * as ImagePicker from 'expo-image-picker'
+import * as FileSystem from 'expo-file-system'
 
 import type { RootStackParamList } from '../../App'
 import { useInspectionStore } from '../stores/inspectionStore'
 import { useAuthStore } from '../stores/authStore'
 import { saveAudioRecording, getAudioRecordingsForItem, getLocalInspection } from '../services/database'
+import { setCameraTarget, processPendingPhotos, clearCameraTarget } from '../services/cameraStore'
 import AudioRecorderWidget from '../components/AudioRecorderWidget'
+import RoomDictationRecorder, { RoomDictationItem } from '../components/RoomDictationRecorder'
 import Header from '../components/Header'
 import { colors, font, radius, spacing } from '../utils/theme'
 import { api } from '../services/api'
 import SwipeableRow from '../components/SwipeableRow'
-import HumanTypistRecorder, { HumanRecording } from '../components/HumanTypistRecorder'
 
 type Nav   = StackNavigationProp<RootStackParamList, 'RoomInspection'>
 type Route = RouteProp<RootStackParamList, 'RoomInspection'>
@@ -50,7 +52,7 @@ export default function RoomInspectionScreen() {
   const route      = useRoute<Route>()
   const insets     = useSafeAreaInsets()
   const { inspectionId, sectionKey, sectionName, sectionType, templateSectionId, fixedSectionData } = route.params
-  const { activeInspection, loadInspection, setReportData, humanRecordings, addHumanRecording, removeHumanRecording } = useInspectionStore()
+  const { activeInspection, loadInspection, setReportData } = useInspectionStore()
   const { user } = useAuthStore()
 
   const [items, setItems]               = useState<any[]>([])
@@ -67,7 +69,13 @@ export default function RoomInspectionScreen() {
   // Sub-items stored in report_data[sectionKey][itemId]._subs matching web app format
 
   // AI typist state
-  const [hasAiTypist, setHasAiTypist]           = useState(false)
+  // typistMode_: resolved mode for THIS inspection — drives which UI is shown
+  //   'ai_instant' → per-item mic + immediate AI fill (no room recorder)
+  //   'ai_room'    → room recorder + AI Transcribe button (no per-item mic)
+  //   'human'      → room recorder WITHOUT AI button (clips synced for typist)
+  //   null         → no typist mode set
+  const [typistMode_, setTypistMode_]           = useState<'ai_instant' | 'ai_room' | 'human' | null>(null)
+  const [hasAiTypist, setHasAiTypist]           = useState(false)   // true only for ai_instant
   const [aiProcessingItem, setAiProcessingItem] = useState<string | null>(null)
   const [aiError, setAiError]                   = useState('')
 
@@ -75,12 +83,24 @@ export default function RoomInspectionScreen() {
   const [cleanlinessOpen, setCleanlinessOpen]   = useState(false)
   const [cleanlinessItemId, setCleanlinessItemId] = useState('')
 
-  // Human typist state
-  const [isHumanTypist, setIsHumanTypist]   = useState(false)
-  const [activeItemKey, setActiveItemKey]     = useState<string | undefined>(undefined)
-  const [activeItemName, setActiveItemName]   = useState<string | undefined>(undefined)
+  // Room dictation state — always visible for all modes
+  const [roomTranscribing, setRoomTranscribing] = useState(false)
+
+  // Track which photo target is pending (for camera handoff)
+  const cameraTargetRef = useRef<{ type: 'item'; itemId: string } | { type: 'overview' } | null>(null)
 
   useFocusEffect(useCallback(() => { loadInspection(inspectionId) }, [inspectionId]))
+
+  // Pick up any photo parked in cameraStore (fallback if handler was GC'd)
+  useFocusEffect(useCallback(() => {
+    const pending = processPendingPhotos()
+    if (pending && cameraTargetRef.current) {
+      const target = cameraTargetRef.current
+      cameraTargetRef.current = null
+      if (target.type === 'item') addPhotoUri(target.itemId, pending)
+      else addOverviewPhotoUri(pending)
+    }
+  }, []))
 
   useEffect(() => { buildItems() }, [sectionKey])
 
@@ -105,19 +125,15 @@ export default function RoomInspectionScreen() {
                     'typistName:', typistName, 'typistIsAi:', typistIsAi,
                     'typist_id:', fresh.typist_id)
 
-        // AI mode: clerk explicitly set to ai_instant or ai_processing,
-        //          OR the assigned typist is flagged as AI
-        const aiMode = typistIsAi ||
-                       typistMode === 'ai_instant' ||
-                       typistMode === 'ai_processing'
+        // Resolve the active mode for this inspection.
+        // typistIsAi (legacy: typist record flagged is_ai) → treat as ai_instant.
+        let resolved: 'ai_instant' | 'ai_room' | 'human' | null = null
+        if (typistMode === 'ai_instant' || typistIsAi) resolved = 'ai_instant'
+        else if (typistMode === 'ai_room')             resolved = 'ai_room'
+        else if (typistMode === 'human')               resolved = 'human'
 
-        // Human mode: anyone who isn't in AI mode
-        // This includes: clerks with typist_mode='human', clerks with no typist assigned,
-        // clerks with a human typist assigned, and users with role='typist'
-        const humanMode = !aiMode
-
-        setHasAiTypist(aiMode)
-        setIsHumanTypist(humanMode)
+        setTypistMode_(resolved)
+        setHasAiTypist(resolved === 'ai_instant')  // per-item mic only in ai_instant
       }
 
       if (sectionType === 'fixed' && fixedSectionData) {
@@ -130,16 +146,30 @@ export default function RoomInspectionScreen() {
         let templateItems: any[] = []
 
         if (templateSectionId && fresh?.template_id) {
-          const tmplRes = await api.getTemplate(fresh.template_id)
-          const tmplSection = (tmplRes.data.sections ?? []).find((s: any) => s.id === templateSectionId)
-          if (tmplSection) {
-            templateItems = tmplSection.items.map((item: any) => ({
-              id: String(item.id),
-              label: item.name || item.label || '',
-              hasDescription: true,
-              hasCondition: item.requires_condition !== false,
-              hasPhotos: item.requires_photo !== false,
-            }))
+          // Prefer the template embedded in the locally saved inspection (offline-safe).
+          // This is populated at download time by the backend. Falls back to a live API
+          // call only if the cached data pre-dates the template embedding feature.
+          let templateData: any = fresh?.template ?? null
+          if (!templateData) {
+            try {
+              const tmplRes = await api.getTemplate(fresh.template_id)
+              templateData = tmplRes.data
+            } catch (e) {
+              console.warn('[buildItems] template fetch failed (offline?) — using cached extras only:', e)
+            }
+          }
+
+          if (templateData) {
+            const tmplSection = (templateData.sections ?? []).find((s: any) => s.id === templateSectionId)
+            if (tmplSection) {
+              templateItems = tmplSection.items.map((item: any) => ({
+                id: String(item.id),
+                label: item.name || item.label || '',
+                hasDescription: true,
+                hasCondition: item.requires_condition !== false,
+                hasPhotos: item.requires_photo !== false,
+              }))
+            }
           }
         }
 
@@ -209,14 +239,14 @@ export default function RoomInspectionScreen() {
     await setReportData(inspectionId, rd)
   }
 
-  async function addPhoto(itemId: string, base64: string) {
-    const fresh = await getLocalInspection(inspectionId)
+  async function addPhotoUri(itemId: string, fileUri: string) {
+    const fresh = getLocalInspection(inspectionId)
     const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
     if (!rd[sectionKey]) rd[sectionKey] = {}
     if (!rd[sectionKey][String(itemId)]) rd[sectionKey][String(itemId)] = {}
     const existing: string[] = rd[sectionKey][String(itemId)]._photos || []
-    rd[sectionKey][String(itemId)]._photos = [...existing, `data:image/jpeg;base64,${base64}`]
-    await setReportData(inspectionId, rd)
+    rd[sectionKey][String(itemId)]._photos = [...existing, fileUri]
+    setReportData(inspectionId, rd)
   }
 
   async function removePhoto(itemId: string, idx: number) {
@@ -238,15 +268,15 @@ export default function RoomInspectionScreen() {
     } catch { return [] }
   }
 
-  async function addOverviewPhoto(base64: string) {
-    const fresh = await getLocalInspection(inspectionId)
+  async function addOverviewPhotoUri(fileUri: string) {
+    const fresh = getLocalInspection(inspectionId)
     const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
     if (!rd[sectionKey]) rd[sectionKey] = {}
     rd[sectionKey]._overviewPhotos = [
       ...(rd[sectionKey]._overviewPhotos || []),
-      `data:image/jpeg;base64,${base64}`,
+      fileUri,
     ]
-    await setReportData(inspectionId, rd)
+    setReportData(inspectionId, rd)
   }
 
   async function removeOverviewPhoto(idx: number) {
@@ -259,32 +289,48 @@ export default function RoomInspectionScreen() {
     await setReportData(inspectionId, rd)
   }
 
-  async function handleTakeOverviewPhoto() {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync()
-    if (status !== 'granted') { Alert.alert('Permission required', 'Camera permission is needed.'); return }
-    const result = await ImagePicker.launchCameraAsync({ quality: 0.8, base64: true })
-    if (!result.canceled && result.assets[0].base64) await addOverviewPhoto(result.assets[0].base64)
+  function handleTakeOverviewPhoto() {
+    cameraTargetRef.current = { type: 'overview' }
+    setCameraTarget((uri) => {
+      cameraTargetRef.current = null
+      addOverviewPhotoUri(uri)
+    })
+    navigation.navigate('Camera', { inspectionId })
   }
 
   async function handlePickOverviewPhoto() {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
     if (status !== 'granted') { Alert.alert('Permission required', 'Photo library permission is needed.'); return }
-    const result = await ImagePicker.launchImageLibraryAsync({ quality: 0.8, base64: true })
-    if (!result.canceled && result.assets[0].base64) await addOverviewPhoto(result.assets[0].base64)
+    const result = await ImagePicker.launchImageLibraryAsync({ quality: 0.8, mediaTypes: ImagePicker.MediaTypeOptions.Images })
+    if (result.canceled || !result.assets[0]?.uri) return
+    const src = result.assets[0].uri
+    const dir = `${FileSystem.documentDirectory}photos/${inspectionId}/`
+    await FileSystem.makeDirectoryAsync(dir, { intermediates: true })
+    const dest = `${dir}${Date.now()}.jpg`
+    await FileSystem.copyAsync({ from: src, to: dest })
+    addOverviewPhotoUri(dest)
   }
 
-  async function handleTakePhoto(itemId: string) {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync()
-    if (status !== 'granted') { Alert.alert('Permission required', 'Camera access is needed.'); return }
-    const result = await ImagePicker.launchCameraAsync({ quality: 0.75, base64: true })
-    if (!result.canceled && result.assets[0].base64) await addPhoto(itemId, result.assets[0].base64)
+  function handleTakePhoto(itemId: string) {
+    cameraTargetRef.current = { type: 'item', itemId }
+    setCameraTarget((uri) => {
+      cameraTargetRef.current = null
+      addPhotoUri(itemId, uri)
+    })
+    navigation.navigate('Camera', { inspectionId })
   }
 
   async function handlePickPhoto(itemId: string) {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
     if (status !== 'granted') { Alert.alert('Permission required', 'Photo library access is needed.'); return }
-    const result = await ImagePicker.launchImageLibraryAsync({ quality: 0.75, base64: true, mediaTypes: ImagePicker.MediaTypeOptions.Images })
-    if (!result.canceled && result.assets[0].base64) await addPhoto(itemId, result.assets[0].base64)
+    const result = await ImagePicker.launchImageLibraryAsync({ quality: 0.75, mediaTypes: ImagePicker.MediaTypeOptions.Images })
+    if (result.canceled || !result.assets[0]?.uri) return
+    const src = result.assets[0].uri
+    const dir = `${FileSystem.documentDirectory}photos/${inspectionId}/`
+    await FileSystem.makeDirectoryAsync(dir, { intermediates: true })
+    const dest = `${dir}${Date.now()}.jpg`
+    await FileSystem.copyAsync({ from: src, to: dest })
+    addPhotoUri(itemId, dest)
   }
 
   // ── AI Transcription ──────────────────────────────────────────────────────
@@ -352,8 +398,32 @@ export default function RoomInspectionScreen() {
     }
   }
 
+  // ── Room dictation callback ────────────────────────────────────────────────
+  // Called by RoomDictationRecorder when AI returns filled fields.
+  // filled = { itemId: { description?: string; condition?: string } }
+  function handleRoomTranscribed(filled: Record<string, { description?: string; condition?: string }>) {
+    const rd = getReportData()
+    if (!rd[sectionKey]) rd[sectionKey] = {}
+    let changed = false
+
+    for (const [itemId, fields] of Object.entries(filled)) {
+      if (!rd[sectionKey][itemId]) rd[sectionKey][itemId] = {}
+      const row = rd[sectionKey][itemId]
+      if (fields.description && !row.description) { row.description = fields.description; changed = true }
+      if (fields.condition   && !row.condition)   { row.condition   = fields.condition;   changed = true }
+    }
+
+    if (changed) {
+      setReportData(inspectionId, rd)
+      const count = Object.keys(filled).length
+      Alert.alert('✨ Room filled', `AI filled ${count} item${count !== 1 ? 's' : ''} in ${sectionName}.`)
+    } else {
+      Alert.alert('Already filled', 'All fields mentioned were already filled. Existing content was preserved.')
+    }
+  }
+
   async function handleRecordingComplete(item: any, uri: string, durationMs: number) {
-    await saveAudioRecording(inspectionId, sectionKey, item.id, uri, durationMs)
+    saveAudioRecording(inspectionId, sectionKey, sectionName, item.id, item.label || item.name || '', item.label || item.name || '', uri, durationMs)
     const recs = await getAudioRecordingsForItem(inspectionId, sectionKey, item.id)
     setRecordings(prev => ({ ...prev, [item.id]: recs }))
 
@@ -372,7 +442,7 @@ export default function RoomInspectionScreen() {
     durationMs: number
   ) {
     // Save audio under the sid key
-    await saveAudioRecording(inspectionId, sectionKey, sid, uri, durationMs)
+    saveAudioRecording(inspectionId, sectionKey, sectionName, sid, subLabel, subLabel, uri, durationMs)
     const recs = await getAudioRecordingsForItem(inspectionId, sectionKey, sid)
     setRecordings(prev => ({ ...prev, [sid]: recs }))
 
@@ -576,12 +646,13 @@ export default function RoomInspectionScreen() {
   }
 
   function renderVoiceNotes(item: any) {
-    // Human typist: no per-item recorder — the floating bar handles all recording
-    if (isHumanTypist) return null
+    // Only show per-item recorder in AI instant mode
+    // All other modes use the room dictation recorder at the bottom
+    if (!hasAiTypist) return null
 
     const isProcessing = aiProcessingItem === item.id
 
-    // AI typist or no typist assigned: per-item recorder widget
+    // AI instant mode: per-item recorder widget
     return (
       <View style={styles.voiceBlock}>
         {isProcessing && (
@@ -865,11 +936,23 @@ export default function RoomInspectionScreen() {
       <View style={[styles.screen, { paddingTop: insets.top }]}>
         <Header title={sectionName} subtitle={activeInspection?.property_address} onBack={() => navigation.goBack()} />
 
-        {/* AI Typist banner */}
-        {hasAiTypist && (
+        {/* Typist mode banner */}
+        {typistMode_ === 'ai_instant' && (
           <View style={styles.aiBanner}>
             <Text style={styles.aiBannerIcon}>✨</Text>
-            <Text style={styles.aiBannerText}>AI Typist active — recordings fill fields automatically</Text>
+            <Text style={styles.aiBannerText}>AI Instant — tap 🎙 next to each item to fill fields automatically</Text>
+          </View>
+        )}
+        {typistMode_ === 'ai_room' && (
+          <View style={styles.aiBanner}>
+            <Text style={styles.aiBannerIcon}>✨</Text>
+            <Text style={styles.aiBannerText}>AI by Room — record the whole room, then tap Transcribe to fill fields</Text>
+          </View>
+        )}
+        {typistMode_ === 'human' && (
+          <View style={[styles.aiBanner, styles.aiBannerHuman]}>
+            <Text style={styles.aiBannerIcon}>🎙</Text>
+            <Text style={styles.aiBannerText}>Human Typist assigned — record audio below, it will sync to the typist</Text>
           </View>
         )}
 
@@ -886,7 +969,12 @@ export default function RoomInspectionScreen() {
           <View style={styles.loading}><ActivityIndicator color={colors.primary} size="large" /></View>
         ) : (
           <ScrollView
-            contentContainerStyle={[styles.scroll, isHumanTypist && { paddingBottom: 120 }]}
+            contentContainerStyle={[
+              styles.scroll,
+              sectionType_ === 'room' &&
+              (typistMode_ === 'ai_room' || typistMode_ === 'human') &&
+              { paddingBottom: 140 },
+            ]}
             keyboardShouldPersistTaps="handled"
           >
             {/* ── Room Overview Photos ──────────────────────────────────── */}
@@ -950,17 +1038,20 @@ export default function RoomInspectionScreen() {
           </ScrollView>
         )}
 
-        {/* Human typist recorder — fixed at bottom */}
-        {isHumanTypist && (
-          <HumanTypistRecorder
+        {/* Room dictation recorder — fixed at bottom for ai_room and human modes */}
+        {sectionType_ === 'room' && (typistMode_ === 'ai_room' || typistMode_ === 'human') && (
+          <RoomDictationRecorder
             inspectionId={inspectionId}
-            currentSectionKey={sectionKey}
-            currentSectionName={sectionName}
-            currentItemKey={activeItemKey}
-            currentItemName={activeItemName}
-            recordings={humanRecordings[inspectionId] || []}
-            onRecordingAdded={(rec) => addHumanRecording(inspectionId, rec)}
-            onRecordingDeleted={(id) => removeHumanRecording(inspectionId, id)}
+            sectionKey={sectionKey}
+            sectionName={sectionName}
+            items={items.map((it: any): RoomDictationItem => ({
+              id:             it.id,
+              name:           it.label || it.name || '',
+              hasCondition:   it.hasCondition !== false,
+              hasDescription: it.hasDescription !== false,
+            }))}
+            onTranscribed={handleRoomTranscribed}
+            showAiButton={typistMode_ === 'ai_room'}
           />
         )}
 
@@ -1057,6 +1148,7 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
   loading: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   aiBanner: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, backgroundColor: '#eef2ff', borderBottomWidth: 1, borderBottomColor: '#c7d2fe', paddingHorizontal: spacing.md, paddingVertical: 10 },
+  aiBannerHuman: { backgroundColor: '#f0fdf4', borderBottomColor: '#bbf7d0' },   // green tint for human mode
   aiBannerIcon: { fontSize: 16 },
   aiBannerText: { fontSize: font.sm, color: '#3730a3', fontWeight: '600', flex: 1 },
   aiErrorBanner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: colors.dangerLight, paddingHorizontal: spacing.md, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#fca5a5' },

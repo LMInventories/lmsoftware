@@ -14,7 +14,7 @@ export const useAuthStore = defineStore('auth', {
     isClient:       (state) => state.user?.role === 'client',
     typistMode:     (state) => state.user?.typist_mode ?? null,
     isAiInstant:    (state) => state.user?.typist_mode === 'ai_instant',
-    isAiProcessing: (state) => state.user?.typist_mode === 'ai_processing',
+    isAiRoom:       (state) => state.user?.typist_mode === 'ai_room',
     isHumanTypist:  (state) => state.user?.typist_mode === 'human',
   },
   actions: {

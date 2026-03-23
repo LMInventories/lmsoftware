@@ -6,6 +6,7 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
+    "newArchEnabled": true,
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",
@@ -28,16 +29,28 @@
     "plugins": [
       "expo-secure-store",
       [
-        "expo-image-picker",
+        "expo-camera",
         {
-          "photosPermission": "InspectPro needs access to photos for attaching images to inspection reports.",
           "cameraPermission": "InspectPro needs camera access to photograph inspection items."
         }
       ],
       [
-        "expo-av",
+        "expo-image-picker",
+        {
+          "photosPermission": "InspectPro needs access to photos for attaching images to inspection reports."
+        }
+      ],
+      [
+        "expo-audio",
         {
           "microphonePermission": "InspectPro needs microphone access for audio dictation."
+        }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "InspectPro needs access to your photo library.",
+          "savePhotosPermission": "InspectPro needs permission to save photos."
         }
       ]
     ],

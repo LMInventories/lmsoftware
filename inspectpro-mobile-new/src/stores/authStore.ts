@@ -8,7 +8,7 @@ interface User {
   email: string
   role: string
   color: string
-  typist_mode: 'ai_instant' | 'ai_processing' | 'human' | null
+  typist_mode: 'ai_instant' | 'ai_room' | 'human' | null
   client_id: number | null
 }
 

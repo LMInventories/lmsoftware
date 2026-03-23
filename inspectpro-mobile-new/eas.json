@@ -1,0 +1,41 @@
+{
+  "cli": {
+    "version": ">= 18.4.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "android": {
+        "image": "ubuntu-22.04-jdk-17-ndk-r26b"
+      },
+      "env": {
+        "GRADLE_OPTS": "-Dkotlin.compiler.execution.strategy=in-process -Dorg.gradle.daemon=false"
+      }
+    },
+    "preview": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk",
+        "image": "ubuntu-22.04-jdk-17-ndk-r26b"
+      },
+      "env": {
+        "GRADLE_OPTS": "-Dkotlin.compiler.execution.strategy=in-process -Dorg.gradle.daemon=false"
+      }
+    },
+    "production": {
+      "autoIncrement": true,
+      "android": {
+        "buildType": "app-bundle",
+        "image": "ubuntu-22.04-jdk-17-ndk-r26b"
+      },
+      "env": {
+        "GRADLE_OPTS": "-Dkotlin.compiler.execution.strategy=in-process -Dorg.gradle.daemon=false"
+      }
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}

@@ -1,48 +1,70 @@
 /**
  * withKotlinBuildFix.js
  *
- * Expo config plugin — runs during `expo prebuild` (always executed by EAS
- * for managed-workflow builds before the Gradle build starts).
+ * Expo config plugin — runs during `expo prebuild`.
  *
- * ROOT CAUSE OF THE BUILD FAILURE
- * ────────────────────────────────
- * @react-native/gradle-plugin (RN 0.79) bundles a settings plugin whose
- * build.gradle.kts contains:
+ * ROOT CAUSE (confirmed from full build log)
+ * ─────────────────────────────────────────
+ * Gradle 9.0.0 bundles Kotlin 2.2.0 internally.
+ * @react-native/gradle-plugin (RN 0.79.0) uses KGP 2.0.21.
+ * KGP 2.0.21 cannot read Kotlin 2.2.0 binary metadata, so it crashes:
  *
- *   kotlin { jvmToolchain(17) }
+ *   e: gradle-api-9.0.0.jar — binary version of its metadata is 2.2.0,
+ *      expected version is 2.0.0
+ *   e: Compiler terminated with internal error
  *
- * In Kotlin Gradle Plugin 2.0.21, specifying jvmToolchain ALWAYS forces the
- * Gradle Workers API for Kotlin compilation and completely overrides the
- * kotlin.compiler.execution.strategy property.  The worker spawns in a
- * separate JVM context and crashes with "Internal compiler error".
+ * Expo SDK 55 generates an Android project with Gradle 9.0.0 in its wrapper,
+ * but RN 0.79.0's own gradle-plugin ships with Gradle 8.13 — meaning 8.13 is
+ * the version Meta actually tested and supports for RN 0.79.0.
  *
- * Removing that single line makes KGP compile directly in the Gradle daemon
- * JVM.  The explicit jvmTarget.set(JvmTarget.JVM_11) in the same file is
- * untouched, so output bytecode compatibility is identical.
+ * THE FIX
+ * ───────
+ * 1. Downgrade the Android project's Gradle wrapper from 9.0.0 → 8.13.
+ *    Gradle 8.13 bundles Kotlin 2.0.x, which is compatible with KGP 2.0.21.
+ *    AGP 8.8.2 (also used by RN 0.79.0) is fully supported on Gradle 8.13.
  *
- * DELIVERY: TWO INDEPENDENT PATHS
- * ────────────────────────────────
- * 1. withDangerousMod (this file) — runs during expo prebuild, which EAS
- *    always executes for managed-workflow projects.
+ * 2. Remove `kotlin { jvmToolchain(17) }` from settings-plugin/build.gradle.kts.
+ *    Belt-and-suspenders: prevents the Gradle Workers API from being forced by
+ *    jvmToolchain even on Gradle 8.13.
  *
- * 2. scripts/eas-gradle-patch.js via package.json "postinstall" — runs on
- *    every `npm ci` / `npm install`, including the one EAS runs before
- *    prebuild.  Belt-and-suspenders: if prebuild is cached or skipped, the
- *    postinstall path still applies the patch.
- *
- * ADDITIONALLY: android/gradle.properties entries via withGradleProperties
- * ────────────────────────────────────────────────────────────────────────
- * Sets kotlin.compiler.execution.strategy=in-process and org.gradle.daemon=
- * false for the main Android project (doesn't fix the included build on its
- * own, but ensures consistent behaviour across the whole build).
+ * 3. Set gradle.properties entries for the main Android project (in-process,
+ *    no daemon) as additional safety.
  */
 
 const { withDangerousMod, withGradleProperties } = require('@expo/config-plugins')
 const fs   = require('fs')
 const path = require('path')
 
-// ── shared patch helper ───────────────────────────────────────────────────────
-function patchBuildGradle(projectRoot) {
+// ── 1. Downgrade Gradle wrapper to 8.13 ──────────────────────────────────────
+function patchGradleWrapper(projectRoot) {
+  const wrapperProps = path.join(
+    projectRoot, 'android', 'gradle', 'wrapper', 'gradle-wrapper.properties'
+  )
+
+  if (!fs.existsSync(wrapperProps)) {
+    console.warn('[withKotlinBuildFix] gradle-wrapper.properties not found at:', wrapperProps)
+    return
+  }
+
+  const original = fs.readFileSync(wrapperProps, 'utf8')
+  const gradleVersionMatch = original.match(/gradle-(\d+\.\d+(?:\.\d+)?)-/)
+  const currentVersion = gradleVersionMatch ? gradleVersionMatch[1] : 'unknown'
+
+  if (currentVersion === '8.13') {
+    console.log('[withKotlinBuildFix] gradle-wrapper.properties already at 8.13 — skipping')
+    return
+  }
+
+  const patched = original.replace(
+    /distributionUrl=.*gradle-.*\.zip/,
+    'distributionUrl=https\\://services.gradle.org/distributions/gradle-8.13-bin.zip'
+  )
+  fs.writeFileSync(wrapperProps, patched)
+  console.log(`[withKotlinBuildFix] Downgraded Gradle wrapper: ${currentVersion} → 8.13`)
+}
+
+// ── 2. Remove jvmToolchain(17) from settings-plugin ──────────────────────────
+function patchSettingsPlugin(projectRoot) {
   const target = path.join(
     projectRoot,
     'node_modules', '@react-native', 'gradle-plugin',
@@ -50,18 +72,16 @@ function patchBuildGradle(projectRoot) {
   )
 
   if (!fs.existsSync(target)) {
-    console.warn('[withKotlinBuildFix] build.gradle.kts not found at:', target)
+    console.warn('[withKotlinBuildFix] settings-plugin/build.gradle.kts not found at:', target)
     return
   }
 
   const original = fs.readFileSync(target, 'utf8')
-
   if (!original.includes('jvmToolchain')) {
-    console.log('[withKotlinBuildFix] build.gradle.kts already patched — skipping')
+    console.log('[withKotlinBuildFix] jvmToolchain already removed from build.gradle.kts — skipping')
     return
   }
 
-  // Remove `kotlin { jvmToolchain(N) }` — single-line block form used by RN 0.79
   const patched = original.replace(/\n[ \t]*kotlin\s*\{\s*jvmToolchain\(\d+\)\s*\}/g, '')
   fs.writeFileSync(target, patched)
   console.log('[withKotlinBuildFix] Removed jvmToolchain(17) from settings-plugin/build.gradle.kts')
@@ -92,16 +112,17 @@ function mergeJvmArgs(existing, ...toAdd) {
 
 // ── plugin export ─────────────────────────────────────────────────────────────
 module.exports = function withKotlinBuildFix(config) {
-  // Step 1 — patch the RN gradle plugin source during prebuild
+  // Step 1 — patch both files during prebuild (runs after android/ is generated)
   config = withDangerousMod(config, [
     'android',
     (config) => {
-      patchBuildGradle(config.modRequest.projectRoot)
+      patchGradleWrapper(config.modRequest.projectRoot)
+      patchSettingsPlugin(config.modRequest.projectRoot)
       return config
     },
   ])
 
-  // Step 2 — write gradle.properties entries for the main Android project
+  // Step 2 — gradle.properties safety entries for the main Android project
   config = withGradleProperties(config, (config) => {
     const props = config.modResults
 

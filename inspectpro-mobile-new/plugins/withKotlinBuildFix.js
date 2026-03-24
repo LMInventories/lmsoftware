@@ -31,7 +31,7 @@
  *    no daemon) as additional safety.
  */
 
-const { withDangerousMod, withGradleProperties, withAppBuildGradle } = require('@expo/config-plugins')
+const { withDangerousMod, withGradleProperties, withAppBuildGradle, withProjectBuildGradle } = require('@expo/config-plugins')
 const fs   = require('fs')
 const path = require('path')
 
@@ -110,7 +110,28 @@ function mergeJvmArgs(existing, ...toAdd) {
   return base
 }
 
-// ── 3. Remove hermesCommand from app/build.gradle ────────────────────────────
+// ── 3. Upgrade AGP from 8.8.2 → 8.9.1 in android/build.gradle ───────────────
+// androidx.core:core:1.17.0 (pulled in transitively by Expo SDK 55 packages)
+// requires AGP ≥ 8.9.1. The Expo prebuild template ships AGP 8.8.2.
+// AGP 8.9.1 requires Gradle ≥ 8.11.1 — our wrapper is 8.13, so this is safe.
+function withAgpUpgrade(config) {
+  return withProjectBuildGradle(config, (config) => {
+    const original = config.modResults.contents
+    const patched = original.replace(
+      /com\.android\.tools\.build:gradle:8\.8\.2/g,
+      'com.android.tools.build:gradle:8.9.1'
+    )
+    if (patched !== original) {
+      console.log('[withKotlinBuildFix] Upgraded AGP: 8.8.2 → 8.9.1 in android/build.gradle')
+    } else {
+      console.log('[withKotlinBuildFix] AGP already at 8.9.1 or higher — skipping upgrade')
+    }
+    config.modResults.contents = patched
+    return config
+  })
+}
+
+// ── 4. Remove hermesCommand from app/build.gradle ────────────────────────────
 // In RN 0.79 the hermes-engine npm package no longer exists as a standalone
 // package — Hermes is bundled inside com.facebook.react:hermes-android.
 // The generated app/build.gradle has:
@@ -149,7 +170,10 @@ module.exports = function withKotlinBuildFix(config) {
     },
   ])
 
-  // Step 2 — remove hermesCommand from app/build.gradle (runs via withAppBuildGradle)
+  // Step 2 — upgrade AGP 8.8.2 → 8.9.1 (androidx.core:core:1.17.0 requires AGP ≥ 8.9.1)
+  config = withAgpUpgrade(config)
+
+  // Step 3 — remove hermesCommand from app/build.gradle (runs via withAppBuildGradle)
   config = withHermesCommandFix(config)
 
   // Step 3 — gradle.properties safety entries for the main Android project

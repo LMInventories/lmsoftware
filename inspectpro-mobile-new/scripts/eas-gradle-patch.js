@@ -2,105 +2,131 @@
  * eas-gradle-patch.js
  *
  * Runs via the `eas-build-post-install` hook AFTER npm install but BEFORE
- * expo prebuild and the Gradle build. Writes Kotlin compiler settings into
- * two locations that are guaranteed to reach the @react-native/gradle-plugin
- * included build:
+ * expo prebuild and the Gradle build.
  *
- *   1. ~/.gradle/gradle.properties  (Gradle user-home — applies to ALL
- *      Gradle projects and included builds on the EAS worker)
+ * ROOT CAUSE
+ * ----------
+ * @react-native/gradle-plugin (RN 0.79) / settings-plugin/build.gradle.kts
+ * contains:
  *
- *   2. node_modules/@react-native/gradle-plugin/gradle.properties
- *      (the root of the failing included build itself)
+ *   kotlin { jvmToolchain(17) }
  *
- * WHY these two locations?
+ * In Kotlin Gradle Plugin 2.0, configuring jvmToolchain ALWAYS forces the
+ * Gradle Workers API for compilation, completely overriding
+ * kotlin.compiler.execution.strategy.  The worker then crashes with
+ * "Internal compiler error" on EAS workers.
  *
- *   The build fails at :gradle-plugin:settings-plugin:compileKotlin, which
- *   is inside the @react-native/gradle-plugin included build (composite build).
- *   Settings written to android/gradle.properties or via GRADLE_OPTS only
- *   affect the main Android project — they do NOT propagate as project
- *   properties to composite builds.
+ * FIX (Step 1 — the real fix)
+ * -----------------------------------------------
+ * Remove the jvmToolchain(17) line from settings-plugin/build.gradle.kts.
+ * This is safe because:
+ *   - The tasks.withType<KotlinCompile> block already explicitly sets
+ *     jvmTarget.set(JvmTarget.JVM_11), so output bytecode is unchanged.
+ *   - Kotlin falls back to the Gradle daemon JVM (JDK 17 on the EAS worker),
+ *     which matches the original intent.
+ *   - Without jvmToolchain, KGP compiles in-process inside the daemon JVM —
+ *     no worker subprocess, no crash.
  *
- *   Gradle user-home properties (~/.gradle/gradle.properties) ARE inherited
- *   by ALL projects including included builds.  The included build's own
- *   gradle.properties is also authoritative for that build.
- *
- * WHAT is being set?
- *
- *   kotlin.compiler.execution.strategy=in-process
- *     Forces the Kotlin Gradle Plugin to compile in the Gradle daemon JVM
- *     (IsolationMode.NONE in the Worker API) instead of spawning a worker
- *     subprocess.  The Internal compiler error in KGP 2.0.21 occurs because
- *     settings-plugin/build.gradle.kts uses `kotlin { jvmToolchain(17) }`,
- *     which in KGP 2.0 always triggers Gradle Workers.  Setting in-process
- *     overrides that behaviour.
- *
- *   org.gradle.daemon=false
- *     Disables the Gradle daemon — each EAS build is a fresh environment so
- *     there is no warm-up benefit, and disabling the daemon removes any risk
- *     of stale daemon state from a previous failed compilation.
+ * FIX (Step 2 — belt-and-suspenders)
+ * ------------------------------------
+ * Write kotlin.compiler.execution.strategy=in-process to:
+ *   - ~/.gradle/gradle.properties  (user-home, applies to all Gradle projects
+ *     including composite/included builds)
+ *   - node_modules/@react-native/gradle-plugin/gradle.properties
+ *     (the included build's own root, most authoritative for that build)
  */
 
 const fs   = require('fs')
 const path = require('path')
 const os   = require('os')
 
-const PROPS = [
+const PROPS_CONTENT = [
   'kotlin.compiler.execution.strategy=in-process',
   'org.gradle.daemon=false',
 ].join('\n') + '\n'
 
-// ── 1. Gradle user home ───────────────────────────────────────────────────────
-const gradleHome = path.join(os.homedir(), '.gradle')
+// ── helpers ───────────────────────────────────────────────────────────────────
+function mergeProps(existing, content) {
+  const newKeys = content.split('\n')
+    .filter(l => l.includes('='))
+    .map(l => l.split('=')[0].trim())
+
+  const kept = (existing || '').split('\n').filter(l => {
+    const key = l.split('=')[0].trim()
+    return !newKeys.includes(key)
+  })
+  return kept.join('\n').trimEnd() + '\n' + content
+}
+
+// ── 1. DIRECT PATCH: remove jvmToolchain(17) from build.gradle.kts ───────────
+const settingsPluginBuild = path.join(
+  __dirname, '..', 'node_modules', '@react-native', 'gradle-plugin',
+  'settings-plugin', 'build.gradle.kts'
+)
+
+try {
+  if (!fs.existsSync(settingsPluginBuild)) {
+    console.warn('[eas-gradle-patch] build.gradle.kts not found at', settingsPluginBuild)
+  } else {
+    let content = fs.readFileSync(settingsPluginBuild, 'utf8')
+
+    if (content.includes('jvmToolchain')) {
+      // Remove the entire `kotlin { jvmToolchain(N) }` block (single-line form)
+      const patched = content.replace(/\n\s*kotlin\s*\{\s*jvmToolchain\(\d+\)\s*\}/g, '')
+      fs.writeFileSync(settingsPluginBuild, patched)
+      console.log('[eas-gradle-patch] Patched settings-plugin/build.gradle.kts — removed jvmToolchain(17)')
+      console.log('[eas-gradle-patch] Removed line was: kotlin { jvmToolchain(17) }')
+    } else {
+      console.log('[eas-gradle-patch] build.gradle.kts already patched or jvmToolchain not found — skipping')
+    }
+  }
+} catch (e) {
+  console.error('[eas-gradle-patch] Failed to patch build.gradle.kts:', e.message)
+}
+
+// ── 2. Gradle user home gradle.properties ────────────────────────────────────
+const gradleHome  = path.join(os.homedir(), '.gradle')
 const gradleProps = path.join(gradleHome, 'gradle.properties')
 
 try {
   fs.mkdirSync(gradleHome, { recursive: true })
-
-  let existing = ''
-  if (fs.existsSync(gradleProps)) {
-    existing = fs.readFileSync(gradleProps, 'utf8')
-  }
-
-  // Merge: replace existing strategy/daemon lines, then append any new ones
-  const lines = existing.split('\n').filter(l =>
-    !l.startsWith('kotlin.compiler.execution.strategy') &&
-    !l.startsWith('org.gradle.daemon')
-  )
-  const merged = lines.join('\n').trimEnd() + '\n' + PROPS
-
-  fs.writeFileSync(gradleProps, merged)
+  const existing = fs.existsSync(gradleProps) ? fs.readFileSync(gradleProps, 'utf8') : ''
+  fs.writeFileSync(gradleProps, mergeProps(existing, PROPS_CONTENT))
   console.log('[eas-gradle-patch] Wrote', gradleProps)
-  console.log('[eas-gradle-patch] Contents:\n' + merged)
 } catch (e) {
   console.error('[eas-gradle-patch] Failed to write ~/.gradle/gradle.properties:', e.message)
-  // Non-fatal — continue to the second location
 }
 
-// ── 2. @react-native/gradle-plugin root gradle.properties ────────────────────
-const rnPluginRoot = path.join(
-  __dirname, '..', 'node_modules', '@react-native', 'gradle-plugin'
-)
+// ── 3. @react-native/gradle-plugin root gradle.properties ────────────────────
+const rnPluginRoot  = path.join(__dirname, '..', 'node_modules', '@react-native', 'gradle-plugin')
 const rnPluginProps = path.join(rnPluginRoot, 'gradle.properties')
 
 try {
   if (!fs.existsSync(rnPluginRoot)) {
     console.warn('[eas-gradle-patch] @react-native/gradle-plugin not found at', rnPluginRoot)
   } else {
-    let existing = ''
-    if (fs.existsSync(rnPluginProps)) {
-      existing = fs.readFileSync(rnPluginProps, 'utf8')
-    }
-
-    const lines = existing.split('\n').filter(l =>
-      !l.startsWith('kotlin.compiler.execution.strategy') &&
-      !l.startsWith('org.gradle.daemon')
-    )
-    const merged = lines.join('\n').trimEnd() + '\n' + PROPS
-
-    fs.writeFileSync(rnPluginProps, merged)
+    const existing = fs.existsSync(rnPluginProps) ? fs.readFileSync(rnPluginProps, 'utf8') : ''
+    fs.writeFileSync(rnPluginProps, mergeProps(existing, PROPS_CONTENT))
     console.log('[eas-gradle-patch] Wrote', rnPluginProps)
-    console.log('[eas-gradle-patch] Contents:\n' + merged)
   }
 } catch (e) {
   console.error('[eas-gradle-patch] Failed to write RN plugin gradle.properties:', e.message)
+}
+
+// ── Verification ──────────────────────────────────────────────────────────────
+console.log('\n[eas-gradle-patch] Verification:')
+
+try {
+  const patched = fs.readFileSync(settingsPluginBuild, 'utf8')
+  const hasToolchain = patched.includes('jvmToolchain')
+  console.log('  build.gradle.kts jvmToolchain present:', hasToolchain, hasToolchain ? '⚠️  NOT REMOVED' : '✓ removed')
+} catch (e) {
+  console.log('  build.gradle.kts: could not verify')
+}
+
+try {
+  const gp = fs.readFileSync(gradleProps, 'utf8')
+  console.log('  ~/.gradle/gradle.properties:\n' + gp.split('\n').map(l => '    ' + l).join('\n'))
+} catch (e) {
+  console.log('  ~/.gradle/gradle.properties: not found')
 }

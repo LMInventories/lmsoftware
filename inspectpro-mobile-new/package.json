@@ -5,7 +5,8 @@
   "scripts": {
     "start": "expo start",
     "android": "expo start --android",
-    "ios": "expo start --ios"
+    "ios": "expo start --ios",
+    "eas-build-post-install": "node scripts/eas-gradle-patch.js"
   },
   "dependencies": {
     "@react-navigation/bottom-tabs": "^6.6.1",

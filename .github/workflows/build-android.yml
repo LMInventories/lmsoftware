@@ -67,7 +67,13 @@ jobs:
       - name: Expo prebuild
         run: npx expo prebuild --platform android --clean
 
-      # ── 7. Build ───────────────────────────────────────────────────────────
+      # ── 7. Point Gradle at the SDK ─────────────────────────────────────────
+      # expo prebuild does not create local.properties on CI.
+      # Without sdk.dir, app/build.gradle throws "getAbsolutePath() on null".
+      - name: Write local.properties
+        run: echo "sdk.dir=$ANDROID_HOME" > android/local.properties
+
+      # ── 8. Build ───────────────────────────────────────────────────────────
       - name: Build debug APK
         run: |
           chmod +x android/gradlew

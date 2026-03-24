@@ -74,10 +74,14 @@ jobs:
         run: echo "sdk.dir=$ANDROID_HOME" > android/local.properties
 
       # ── 8. Build ───────────────────────────────────────────────────────────
+      # Print app/build.gradle so we can see exactly what's on the failing line
+      - name: Debug - print app/build.gradle
+        run: cat -n android/app/build.gradle
+
       - name: Build debug APK
         run: |
           chmod +x android/gradlew
-          cd android && ./gradlew assembleDebug --no-daemon
+          cd android && ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tail -100
 
       # ── 8. Upload artifact ─────────────────────────────────────────────────
       - name: Upload APK

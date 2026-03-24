@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    name: Release APK  # Changed from "Debug APK"
+    name: Debug APK
     runs-on: ubuntu-latest
 
     defaults:
@@ -76,15 +76,15 @@ jobs:
         run: echo "sdk.dir=$ANDROID_HOME" > android/local.properties
 
       # ── 9. Build APK ──────────────────────────────────────────────
-      - name: Build release APK  # Updated name and command
+      - name: Build debug APK
         run: |
           chmod +x android/gradlew
-          cd android && ./gradlew assembleRelease --no-daemon
+          cd android && ./gradlew assembleDebug --no-daemon
 
       # ── 10. Upload ────────────────────────────────────────────────
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: inspectpro-release-${{ github.run_number }}  # Updated name for clarity
-          path: inspectpro-mobile-new/android/app/build/outputs/apk/release/app-release.apk  # Updated path
+          name: inspectpro-debug-${{ github.run_number }}
+          path: inspectpro-mobile-new/android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 30

@@ -6,6 +6,8 @@
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
+    "prebuild": "expo prebuild",
+    "postprebuild": "node scripts/eas-gradle-patch.js",
     "postinstall": "node scripts/eas-gradle-patch.js",
     "eas-build-post-install": "node scripts/eas-gradle-patch.js"
   },

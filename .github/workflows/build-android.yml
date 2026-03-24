@@ -35,10 +35,13 @@ jobs:
           distribution: 'temurin'
 
       # ── 3. Android SDK ─────────────────────────────────────────────────────
-      - name: Install Android SDK components
+      # sdkmanager lives at $ANDROID_HOME/cmdline-tools/latest/bin — not in PATH by default.
+      # ubuntu-latest already ships with platforms;android-35 and build-tools;35.0.0,
+      # so we only need to accept licenses.
+      - name: Accept Android SDK licenses
         run: |
-          yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0"
 
       # ── 4. Gradle cache ────────────────────────────────────────────────────
       - name: Cache Gradle

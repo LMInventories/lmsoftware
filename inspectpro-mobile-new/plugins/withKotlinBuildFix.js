@@ -31,7 +31,7 @@
  *    no daemon) as additional safety.
  */
 
-const { withDangerousMod, withGradleProperties } = require('@expo/config-plugins')
+const { withDangerousMod, withGradleProperties, withAppBuildGradle } = require('@expo/config-plugins')
 const fs   = require('fs')
 const path = require('path')
 
@@ -110,6 +110,33 @@ function mergeJvmArgs(existing, ...toAdd) {
   return base
 }
 
+// ── 3. Remove hermesCommand from app/build.gradle ────────────────────────────
+// In RN 0.79 the hermes-engine npm package no longer exists as a standalone
+// package — Hermes is bundled inside com.facebook.react:hermes-android.
+// The generated app/build.gradle has:
+//   hermesCommand = new File(["node","--print","require.resolve('hermes-engine/...')"]
+//                   .execute(null, rootDir).text.trim()).getParentFile().getAbsolutePath() + "..."
+// When require.resolve fails (package not found), stdout is empty, getParentFile()
+// returns null, and getAbsolutePath() on null throws NPE at build configuration time.
+// For debug APKs JS is not pre-bundled so hermesCommand is never consumed anyway.
+function withHermesCommandFix(config) {
+  return withAppBuildGradle(config, (config) => {
+    const original = config.modResults.contents
+    // Comment out any hermesCommand line that uses node/require.resolve
+    const patched = original.replace(
+      /^(\s*hermesCommand\s*=\s*new File\(\["node"[^\n]+)\n/m,
+      '    // hermesCommand omitted: hermes-engine is bundled in RN 0.79, not a standalone npm pkg\n'
+    )
+    if (patched !== original) {
+      console.log('[withKotlinBuildFix] Commented out hermesCommand line in app/build.gradle')
+    } else {
+      console.log('[withKotlinBuildFix] hermesCommand line not found or already patched — skipping')
+    }
+    config.modResults.contents = patched
+    return config
+  })
+}
+
 // ── plugin export ─────────────────────────────────────────────────────────────
 module.exports = function withKotlinBuildFix(config) {
   // Step 1 — patch both files during prebuild (runs after android/ is generated)
@@ -122,7 +149,10 @@ module.exports = function withKotlinBuildFix(config) {
     },
   ])
 
-  // Step 2 — gradle.properties safety entries for the main Android project
+  // Step 2 — remove hermesCommand from app/build.gradle (runs via withAppBuildGradle)
+  config = withHermesCommandFix(config)
+
+  // Step 3 — gradle.properties safety entries for the main Android project
   config = withGradleProperties(config, (config) => {
     const props = config.modResults
 

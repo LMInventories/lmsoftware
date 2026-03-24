@@ -1,36 +1,73 @@
 /**
  * withKotlinBuildFix.js
  *
- * Expo config plugin that patches android/gradle.properties so that:
+ * Expo config plugin — runs during `expo prebuild` (always executed by EAS
+ * for managed-workflow builds before the Gradle build starts).
  *
- *   1. kotlin.compiler.execution.strategy=in-process
- *      Forces the Kotlin compiler to run inside the Gradle daemon JVM rather
- *      than spawning a separate worker JVM. Fixes the Internal compiler error
- *      on ':gradle-plugin:settings-plugin:compileKotlin' (React Native's
- *      Gradle settings plugin compiled with Kotlin 2.0 + KGP Worker API).
+ * ROOT CAUSE OF THE BUILD FAILURE
+ * ────────────────────────────────
+ * @react-native/gradle-plugin (RN 0.79) bundles a settings plugin whose
+ * build.gradle.kts contains:
  *
- *   2. org.gradle.jvmargs includes -Dkotlin.compiler.execution.strategy=in-process
- *      The JVM arg form is what actually reaches the Gradle daemon. The daemon
- *      hosts ALL tasks including composite/included build tasks (like the RN
- *      settings-plugin), so this ensures the property is visible to every
- *      Kotlin compilation that happens in the build.
+ *   kotlin { jvmToolchain(17) }
  *
- *   3. org.gradle.daemon=false
- *      Each EAS build starts from scratch, so the daemon offers no warm-up
- *      benefit. Disabling it avoids any stale daemon state.
+ * In Kotlin Gradle Plugin 2.0.21, specifying jvmToolchain ALWAYS forces the
+ * Gradle Workers API for Kotlin compilation and completely overrides the
+ * kotlin.compiler.execution.strategy property.  The worker spawns in a
+ * separate JVM context and crashes with "Internal compiler error".
  *
- * Why not GRADLE_OPTS in eas.json?
- *   GRADLE_OPTS sets JVM args on the Gradle CLIENT process (the one that reads
- *   args and starts the daemon). The actual compilation runs in the DAEMON
- *   (or in workers spawned from it), which is controlled by org.gradle.jvmargs
- *   in gradle.properties — not GRADLE_OPTS.
+ * Removing that single line makes KGP compile directly in the Gradle daemon
+ * JVM.  The explicit jvmTarget.set(JvmTarget.JVM_11) in the same file is
+ * untouched, so output bytecode compatibility is identical.
+ *
+ * DELIVERY: TWO INDEPENDENT PATHS
+ * ────────────────────────────────
+ * 1. withDangerousMod (this file) — runs during expo prebuild, which EAS
+ *    always executes for managed-workflow projects.
+ *
+ * 2. scripts/eas-gradle-patch.js via package.json "postinstall" — runs on
+ *    every `npm ci` / `npm install`, including the one EAS runs before
+ *    prebuild.  Belt-and-suspenders: if prebuild is cached or skipped, the
+ *    postinstall path still applies the patch.
+ *
+ * ADDITIONALLY: android/gradle.properties entries via withGradleProperties
+ * ────────────────────────────────────────────────────────────────────────
+ * Sets kotlin.compiler.execution.strategy=in-process and org.gradle.daemon=
+ * false for the main Android project (doesn't fix the included build on its
+ * own, but ensures consistent behaviour across the whole build).
  */
 
-const { withGradleProperties } = require('@expo/config-plugins')
+const { withDangerousMod, withGradleProperties } = require('@expo/config-plugins')
+const fs   = require('fs')
+const path = require('path')
 
-/**
- * Set or replace a property in the gradle.properties mod results array.
- */
+// ── shared patch helper ───────────────────────────────────────────────────────
+function patchBuildGradle(projectRoot) {
+  const target = path.join(
+    projectRoot,
+    'node_modules', '@react-native', 'gradle-plugin',
+    'settings-plugin', 'build.gradle.kts'
+  )
+
+  if (!fs.existsSync(target)) {
+    console.warn('[withKotlinBuildFix] build.gradle.kts not found at:', target)
+    return
+  }
+
+  const original = fs.readFileSync(target, 'utf8')
+
+  if (!original.includes('jvmToolchain')) {
+    console.log('[withKotlinBuildFix] build.gradle.kts already patched — skipping')
+    return
+  }
+
+  // Remove `kotlin { jvmToolchain(N) }` — single-line block form used by RN 0.79
+  const patched = original.replace(/\n[ \t]*kotlin\s*\{\s*jvmToolchain\(\d+\)\s*\}/g, '')
+  fs.writeFileSync(target, patched)
+  console.log('[withKotlinBuildFix] Removed jvmToolchain(17) from settings-plugin/build.gradle.kts')
+}
+
+// ── gradle.properties helpers ─────────────────────────────────────────────────
 function setProp(props, key, value) {
   const existing = props.find(p => p.type === 'property' && p.key === key)
   if (existing) {
@@ -40,18 +77,12 @@ function setProp(props, key, value) {
   }
 }
 
-/**
- * Merge new JVM args into an existing org.gradle.jvmargs string.
- * Avoids duplicating flags that are already present.
- */
 function mergeJvmArgs(existing, ...toAdd) {
   let base = existing || '-Xmx4096m -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8'
   for (const arg of toAdd) {
-    // Extract the -D key (e.g. -Dkotlin.compiler.execution.strategy)
-    const key = arg.match(/^-D([^=]+)/)?.[1]
-    if (key && base.includes(`-D${key}`)) {
-      // Replace existing value
-      base = base.replace(new RegExp(`-D${key}=[^\\s]*`), arg)
+    const keyMatch = arg.match(/^-D([^=]+)/)
+    if (keyMatch && base.includes(`-D${keyMatch[1]}`)) {
+      base = base.replace(new RegExp(`-D${keyMatch[1]}=[^\\s]*`), arg)
     } else if (!base.includes(arg)) {
       base = `${base} ${arg}`
     }
@@ -59,26 +90,33 @@ function mergeJvmArgs(existing, ...toAdd) {
   return base
 }
 
+// ── plugin export ─────────────────────────────────────────────────────────────
 module.exports = function withKotlinBuildFix(config) {
-  return withGradleProperties(config, (config) => {
+  // Step 1 — patch the RN gradle plugin source during prebuild
+  config = withDangerousMod(config, [
+    'android',
+    (config) => {
+      patchBuildGradle(config.modRequest.projectRoot)
+      return config
+    },
+  ])
+
+  // Step 2 — write gradle.properties entries for the main Android project
+  config = withGradleProperties(config, (config) => {
     const props = config.modResults
 
-    // 1. Direct Gradle property form — read by KGP during task configuration
     setProp(props, 'kotlin.compiler.execution.strategy', 'in-process')
+    setProp(props, 'org.gradle.daemon', 'false')
 
-    // 2. Daemon JVM args — these reach all tasks running inside the daemon,
-    //    including composite/included build tasks like RN's settings-plugin.
     const existing = props.find(p => p.type === 'property' && p.key === 'org.gradle.jvmargs')
-    const merged = mergeJvmArgs(
+    setProp(props, 'org.gradle.jvmargs', mergeJvmArgs(
       existing?.value,
       '-Dkotlin.compiler.execution.strategy=in-process',
       '-Dkotlin.daemon.enabled=false',
-    )
-    setProp(props, 'org.gradle.jvmargs', merged)
-
-    // 3. Disable daemon — EAS builds are stateless so no warm-up benefit
-    setProp(props, 'org.gradle.daemon', 'false')
+    ))
 
     return config
   })
+
+  return config
 }

@@ -59,9 +59,17 @@ jobs:
       - name: Expo prebuild
         run: npx expo prebuild --platform android --clean
 
-      # ✅ CRITICAL FIX — PATCH AFTER PREBUILD
+      # ✅ NEW — Force Gradle version (prevents AGP mismatch)
+      - name: Force Gradle wrapper version
+        run: |
+          cd android
+          ./gradlew wrapper --gradle-version 8.13
+
+      # ✅ Patch AFTER prebuild + wrapper fix
       - name: Apply Gradle patches
-        run: node scripts/eas-gradle-patch.js
+        run: |
+          node scripts/eas-gradle-patch.js
+          echo "Patch applied successfully"
 
       # ── 8. local.properties ───────────────────────────────────────
       - name: Write local.properties

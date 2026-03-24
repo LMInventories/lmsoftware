@@ -35,6 +35,32 @@ const { withDangerousMod, withGradleProperties, withAppBuildGradle, withProjectB
 const fs   = require('fs')
 const path = require('path')
 
+// ── 0. Upgrade AGP 8.8.2 → 8.9.1 in android/build.gradle ────────────────────
+// Called inside withDangerousMod so it runs AFTER all other mods complete.
+// (withProjectBuildGradle runs during the mod phase and can be overwritten by
+//  other plugins that run later in the same phase.)
+function patchProjectBuildGradle(projectRoot) {
+  const buildGradle = path.join(projectRoot, 'android', 'build.gradle')
+
+  if (!fs.existsSync(buildGradle)) {
+    console.warn('[withKotlinBuildFix] android/build.gradle not found — skipping AGP patch')
+    return
+  }
+
+  const original = fs.readFileSync(buildGradle, 'utf8')
+  const patched = original.replace(
+    /com\.android\.tools\.build:gradle:8\.8\.2/g,
+    'com.android.tools.build:gradle:8.9.1'
+  )
+
+  if (patched !== original) {
+    fs.writeFileSync(buildGradle, patched)
+    console.log('[withKotlinBuildFix] Upgraded AGP: 8.8.2 → 8.9.1 in android/build.gradle')
+  } else {
+    console.log('[withKotlinBuildFix] android/build.gradle AGP already ≥ 8.9.1 — skipping')
+  }
+}
+
 // ── 1. Downgrade Gradle wrapper to 8.13 ──────────────────────────────────────
 function patchGradleWrapper(projectRoot) {
   const wrapperProps = path.join(
@@ -160,12 +186,13 @@ function withHermesCommandFix(config) {
 
 // ── plugin export ─────────────────────────────────────────────────────────────
 module.exports = function withKotlinBuildFix(config) {
-  // Step 1 — patch both files during prebuild (runs after android/ is generated)
+  // Step 1 — patch files during prebuild (withDangerousMod runs AFTER all other mods)
   config = withDangerousMod(config, [
     'android',
     (config) => {
       patchGradleWrapper(config.modRequest.projectRoot)
       patchSettingsPlugin(config.modRequest.projectRoot)
+      patchProjectBuildGradle(config.modRequest.projectRoot)
       return config
     },
   ])

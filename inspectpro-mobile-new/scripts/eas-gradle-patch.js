@@ -113,6 +113,31 @@ try {
   console.error('[eas-gradle-patch] Failed to write RN plugin gradle.properties:', e.message)
 }
 
+// ── 4. Upgrade AGP 8.8.2 → 8.9.1 in android/build.gradle ────────────────────
+// androidx.core:core:1.17.0 (pulled in by Expo SDK 55 packages) requires AGP ≥ 8.9.1.
+// This only does anything when android/build.gradle exists (i.e. after expo prebuild).
+const androidBuildGradle = path.join(__dirname, '..', 'android', 'build.gradle')
+
+try {
+  if (!fs.existsSync(androidBuildGradle)) {
+    console.log('[eas-gradle-patch] android/build.gradle not found — AGP patch skipped (run after expo prebuild)')
+  } else {
+    const content = fs.readFileSync(androidBuildGradle, 'utf8')
+    if (content.includes('com.android.tools.build:gradle:8.8.2')) {
+      const patched = content.replace(
+        /com\.android\.tools\.build:gradle:8\.8\.2/g,
+        'com.android.tools.build:gradle:8.9.1'
+      )
+      fs.writeFileSync(androidBuildGradle, patched)
+      console.log('[eas-gradle-patch] Upgraded AGP: 8.8.2 → 8.9.1 in android/build.gradle ✓')
+    } else {
+      console.log('[eas-gradle-patch] android/build.gradle AGP already ≥ 8.9.1 — skipping')
+    }
+  }
+} catch (e) {
+  console.error('[eas-gradle-patch] Failed to patch android/build.gradle:', e.message)
+}
+
 // ── Verification ──────────────────────────────────────────────────────────────
 console.log('\n[eas-gradle-patch] Verification:')
 

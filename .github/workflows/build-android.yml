@@ -76,7 +76,12 @@ jobs:
       # ── 8. Build ───────────────────────────────────────────────────────────
       # Print app/build.gradle so we can see exactly what's on the failing line
       - name: Debug - print app/build.gradle
-        run: cat -n android/app/build.gradle
+        run: |
+          echo "=== FULL FILE (line 14 is the NPE line) ==="
+          cat -n android/app/build.gradle
+          echo ""
+          echo "=== LINES 8-20 ==="
+          sed -n '8,20p' android/app/build.gradle | nl -ba -v8
 
       - name: Build debug APK
         run: |

@@ -1,0 +1,85 @@
+name: Build Android APK
+
+# Triggers:
+#   - Every push to main/master (automatic)
+#   - "Run workflow" button in GitHub Actions tab (manual)
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Debug APK
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Source code ─────────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── 2. Runtimes ────────────────────────────────────────────────────────
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      # ── 3. Android SDK ─────────────────────────────────────────────────────
+      # ubuntu-latest ships with the Android SDK; we just need to install
+      # the specific platform and build-tools versions used by this project.
+      - name: Install Android SDK components
+        run: |
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      # ── 4. Caches ──────────────────────────────────────────────────────────
+      # Gradle downloads ~150 MB of Gradle 8.13 + dependencies on first run.
+      # Caching cuts subsequent builds from ~10 min to ~3 min.
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      # ── 5. JS dependencies ─────────────────────────────────────────────────
+      # npm ci also runs the `postinstall` script, which patches
+      # @react-native/gradle-plugin/settings-plugin/build.gradle.kts
+      # (removes jvmToolchain(17) — see scripts/eas-gradle-patch.js)
+      - name: Install dependencies
+        run: npm ci
+
+      # ── 6. Generate native Android project ─────────────────────────────────
+      # expo prebuild runs the withKotlinBuildFix config plugin which:
+      #   • Downgrades android/gradle/wrapper/gradle-wrapper.properties
+      #     from Gradle 9.0.0 → 8.13  (fixes KGP 2.0.21 / Kotlin 2.2.0
+      #     metadata incompatibility that caused "Internal compiler error")
+      #   • Writes kotlin.compiler.execution.strategy=in-process to
+      #     android/gradle.properties
+      - name: Expo prebuild
+        run: npx expo prebuild --platform android --clean
+
+      # ── 7. Build ───────────────────────────────────────────────────────────
+      - name: Build debug APK
+        run: |
+          chmod +x android/gradlew
+          cd android && ./gradlew assembleDebug --no-daemon
+
+      # ── 8. Upload artifact ─────────────────────────────────────────────────
+      # The APK is available for 30 days under Actions → this run → Artifacts
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: inspectpro-debug-${{ github.run_number }}
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30

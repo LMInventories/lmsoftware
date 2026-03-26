@@ -13,7 +13,7 @@
  * • Camera paused when screen loses focus (navigation push/pop).
  */
 
-import React, { useRef, useState, useCallback } from 'react'
+import React, { useRef, useState, useCallback, useEffect } from 'react'
 import {
   View,
   Text,
@@ -21,10 +21,13 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Alert,
+  Dimensions,
 } from 'react-native'
 import { Camera, useCameraDevice, useCameraPermission } from 'react-native-vision-camera'
 import * as MediaLibrary from 'expo-media-library'
-import * as FileSystem from 'expo-file-system'
+// expo-file-system/legacy preserves the makeDirectoryAsync / copyAsync API
+// (the top-level export deprecated them in favour of the new File/Directory classes)
+import * as FileSystem from 'expo-file-system/legacy'
 import {
   GestureHandlerRootView,
   GestureDetector,
@@ -42,6 +45,10 @@ import type { RootStackParamList } from '../../App'
 type CameraRouteProp = RouteProp<RootStackParamList, 'Camera'>
 type FlashMode = 'off' | 'on' | 'auto'
 type Facing    = 'back' | 'front'
+
+// 4:3 viewfinder dimensions — width is full screen, height is 4/3 of that
+const SCREEN_W      = Dimensions.get('window').width
+const PREVIEW_H     = Math.round(SCREEN_W * 4 / 3)
 
 export default function CameraScreen() {
   const navigation = useNavigation()
@@ -79,6 +86,16 @@ export default function CameraScreen() {
     setZoom(device.neutralZoom)
     setActiveZoomLabel('1×')
   }
+
+  // Debug: log actual device lens info so we can verify physicalDevices strings
+  useEffect(() => {
+    if (!device) return
+    console.log('[Camera] device.id:', device.id)
+    console.log('[Camera] device.physicalDevices:', JSON.stringify(device.physicalDevices))
+    console.log('[Camera] minZoom:', device.minZoom, '| neutralZoom:', device.neutralZoom, '| maxZoom:', device.maxZoom)
+    console.log('[Camera] hasUltraWide check → physicalDevices includes ultra-wide-angle-camera:', device.physicalDevices.includes('ultra-wide-angle-camera'))
+    console.log('[Camera] minZoom < neutralZoom * 0.9:', device.minZoom < device.neutralZoom * 0.9)
+  }, [device?.id])
 
   // ── Derived ────────────────────────────────────────────────────────────────
   // An ultra-wide lens is available when the device's minimum zoom is
@@ -214,31 +231,31 @@ export default function CameraScreen() {
     <GestureHandlerRootView style={styles.root}>
       <GestureDetector gesture={pinchGesture}>
         <View style={styles.root}>
-          {/* Full-screen camera preview */}
-          <Camera
-            ref={cameraRef}
-            style={StyleSheet.absoluteFill}
-            device={device}
-            isActive={isFocused}
-            photo={true}
-            zoom={zoom}
-          />
 
-          {/* ── Top bar: close + flash ── */}
-          <View style={styles.topBar}>
-            <TouchableOpacity style={styles.iconBtn} onPress={() => navigation.goBack()}>
-              <Text style={styles.iconText}>✕</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.iconBtn} onPress={cycleFlash}>
-              <Text style={styles.iconText}>{flashLabel}</Text>
-            </TouchableOpacity>
+          {/* ── 4:3 viewfinder ── */}
+          <View style={styles.viewfinder}>
+            <Camera
+              ref={cameraRef}
+              style={StyleSheet.absoluteFill}
+              device={device}
+              isActive={isFocused}
+              photo={true}
+              zoom={zoom}
+            />
+
+            {/* Top bar overlaid on the viewfinder */}
+            <View style={styles.topBar}>
+              <TouchableOpacity style={styles.iconBtn} onPress={() => navigation.goBack()}>
+                <Text style={styles.iconText}>✕</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.iconBtn} onPress={cycleFlash}>
+                <Text style={styles.iconText}>{flashLabel}</Text>
+              </TouchableOpacity>
+            </View>
           </View>
 
-          {/* Pushes controls to the bottom */}
-          <View style={{ flex: 1 }} />
-
-          {/* ── Bottom group: zoom strip + shutter row ── */}
-          <View style={styles.bottomGroup}>
+          {/* ── Controls below the viewfinder ── */}
+          <View style={styles.controlsArea}>
             {/* Zoom buttons — built from real device capabilities */}
             <View style={styles.zoomBar}>
               {zoomButtons.map(({ label, zoom: z }) => (
@@ -286,6 +303,7 @@ export default function CameraScreen() {
               <View style={styles.iconBtn} />
             </View>
           </View>
+
         </View>
       </GestureDetector>
     </GestureHandlerRootView>
@@ -340,6 +358,22 @@ const styles = StyleSheet.create({
     fontSize: 15,
   },
 
+  // 4:3 viewfinder box
+  viewfinder: {
+    width: SCREEN_W,
+    height: PREVIEW_H,
+    backgroundColor: '#000',
+    overflow: 'hidden',
+  },
+
+  // Controls area below the viewfinder
+  controlsArea: {
+    flex: 1,
+    backgroundColor: '#111',
+    justifyContent: 'center',
+    paddingBottom: 16,
+  },
+
   // Camera layout
   topBar: {
     flexDirection: 'row',
@@ -347,9 +381,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 52,
     paddingBottom: 12,
-  },
-  bottomGroup: {
-    paddingBottom: 48,
   },
   zoomBar: {
     flexDirection: 'row',

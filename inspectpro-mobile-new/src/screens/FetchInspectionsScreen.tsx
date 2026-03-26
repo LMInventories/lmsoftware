@@ -73,6 +73,17 @@ export default function FetchInspectionsScreen() {
     setFetching(true)
     const res: { id: number; address: string; success: boolean; error?: string }[] = []
 
+    // Fetch fixed sections once before the loop — they're global, not per-inspection.
+    // We embed a copy in every downloaded inspection so the app works fully offline.
+    let fixedSectionsData: any[] = []
+    try {
+      const fsRes = await api.getFixedSections()
+      fixedSectionsData = Array.isArray(fsRes.data) ? fsRes.data : []
+    } catch (fsErr) {
+      console.warn('[FetchInspections] Could not pre-fetch fixed sections:', fsErr)
+      // Non-fatal: app will attempt a live fetch when rooms are opened
+    }
+
     for (const id of Array.from(selected)) {
       const inspection = serverList.find(i => i.id === id)
       if (!inspection) continue
@@ -105,6 +116,13 @@ export default function FetchInspectionsScreen() {
             console.warn('[FetchInspections] Could not pre-fetch template:', tmplErr)
             // Non-fatal: app will attempt a live fetch when rooms are opened
           }
+        }
+
+        // Embed fixed sections so the app works fully offline.
+        // Fixed sections are global (not inspection-specific) but we embed a copy
+        // in each inspection record so they're available without a connection.
+        if (fixedSectionsData.length > 0) {
+          normalised.fixedSections = fixedSectionsData
         }
 
         await saveInspection(normalised)

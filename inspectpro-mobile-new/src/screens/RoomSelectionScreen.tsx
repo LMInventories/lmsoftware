@@ -81,8 +81,23 @@ export default function RoomSelectionScreen() {
         }
       }
 
-      const fixedRes = await api.getFixedSections().catch(() => ({ data: [] }))
-      const fixed = (fixedRes.data as any[])
+      // Use fixed sections embedded at download time (works fully offline).
+      // Fall back to a live API call only if not cached (e.g. older downloaded inspection).
+      const cachedFixedOk = Array.isArray(inspection?.fixedSections) &&
+                            inspection.fixedSections.length > 0
+      let rawFixed: any[] = []
+      if (cachedFixedOk) {
+        rawFixed = inspection.fixedSections
+      } else {
+        try {
+          const fsRes = await api.getFixedSections()
+          rawFixed = Array.isArray(fsRes.data) ? fsRes.data : []
+        } catch {
+          // No connection and no cache — fixed sections will be empty
+          console.warn('[RoomSelection] No cached fixed sections and no connection.')
+        }
+      }
+      const fixed = rawFixed
         .filter((s: any) => s.enabled !== false)
         .map((s: any, secIdx: number) => ({
           ...s,

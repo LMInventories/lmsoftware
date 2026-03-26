@@ -25,6 +25,7 @@ import {
   Animated,
 } from 'react-native'
 import { Camera, useCameraDevice, useCameraPermission } from 'react-native-vision-camera'
+import type { CameraDevice } from 'react-native-vision-camera'
 import * as MediaLibrary from 'expo-media-library'
 // expo-file-system/legacy preserves the makeDirectoryAsync / copyAsync API
 // (the top-level export deprecated them in favour of the new File/Directory classes)
@@ -63,35 +64,52 @@ export default function CameraScreen() {
   const [facing, setFacing]     = useState<Facing>('back')
   const [lensMode, setLensMode] = useState<'main' | 'ultraWide'>('main')
 
-  const backDevice  = useCameraDevice('back')
+  // Camera.getAvailableCameraDevices() is a synchronous static call in VisionCamera v4
+  // that returns ALL physical camera devices — unlike useCameraDevice('back') which
+  // only returns one "best" fused camera and may omit the ultra-wide entirely.
+  const [allDevices, setAllDevices] = useState<CameraDevice[]>(() => {
+    try { return Camera.getAvailableCameraDevices() } catch { return [] }
+  })
   const frontDevice = useCameraDevice('front')
 
-  // Fuzzy-match the ultra-wide physical device string — different OEMs use
-  // different names ('ultra-wide-angle-camera', 'ultrawide', 'wide', etc.).
-  // We scan physicalDevices for any string containing 'ultra' or 'wide' and
-  // pass that exact ID back to useCameraDevice. If no match, passes undefined
-  // (hook still called — React rules are satisfied; just gets null back).
-  const ultraWidePhysicalId = backDevice?.physicalDevices?.find(
-    (p: string) => p.toLowerCase().includes('ultra') || p.toLowerCase().includes('wide')
-  )
-  const ultraWideDevice = useCameraDevice(
-    'back',
-    ultraWidePhysicalId ? { physicalDevices: [ultraWidePhysicalId] } : undefined
+  // Re-fetch device list when camera permission is granted (devices may change)
+  useEffect(() => {
+    try { setAllDevices(Camera.getAvailableCameraDevices()) } catch {}
+  }, [hasPermission])
+
+  // From all devices, find back-facing cameras and pick best main + ultra-wide.
+  const backDevices: CameraDevice[] = allDevices.filter((d: CameraDevice) => d.position === 'back')
+
+  // Main back camera: prefer the device whose physicalDevices includes
+  // 'wide-angle-camera' (but NOT ultra-wide-angle-camera alone), or fall back
+  // to the first back-facing device.
+  const backDevice: CameraDevice | undefined =
+    backDevices.find((d: CameraDevice) =>
+      d.physicalDevices?.includes('wide-angle-camera') &&
+      !(d.physicalDevices ?? []).every((p: string) => p === 'ultra-wide-angle-camera')
+    ) ?? backDevices[0]
+
+  // Ultra-wide device: find a back-facing device that explicitly includes
+  // 'ultra-wide-angle-camera' in its physical devices, OR find one where
+  // physicalDevices contains only ultra-wide (some OEMs expose it standalone).
+  // Also check for OEM variants ('ultrawide', 'ultra_wide', etc.) via fuzzy match.
+  const ultraWideDevice: CameraDevice | undefined = backDevices.find((d: CameraDevice) =>
+    (d.physicalDevices ?? []).some(
+      (p: string) => p === 'ultra-wide-angle-camera' || p.toLowerCase().includes('ultra')
+    )
   )
 
-  // Dual detection strategy — covers two different OEM architectures:
-  //   hasSeparateUltraWide: the OS exposes the wide lens as its own camera ID.
-  //     Fix: physically swap to that device when 0.6× is pressed.
-  //   hasZoomBasedUltraWide: fused multi-lens camera where wide is reachable
-  //     by setting zoom below neutralZoom on the same device.
-  //     Fix: stay on backDevice and set zoom = minZoom.
+  // Dual detection strategy:
+  //   hasSeparateUltraWide: a distinct camera device for the ultra-wide lens.
+  //   hasZoomBasedUltraWide: fused camera where minZoom < neutralZoom allows
+  //     reaching the wide angle by zooming out below 1×.
   const hasSeparateUltraWide =
     !!ultraWideDevice && !!backDevice && ultraWideDevice.id !== backDevice.id
   const hasZoomBasedUltraWide =
     !!backDevice && backDevice.minZoom < backDevice.neutralZoom
   const hasUltraWide = hasSeparateUltraWide || hasZoomBasedUltraWide
 
-  const device = facing === 'front'
+  const device: CameraDevice | undefined = facing === 'front'
     ? frontDevice
     : lensMode === 'ultraWide' && hasSeparateUltraWide
       ? ultraWideDevice
@@ -125,24 +143,25 @@ export default function CameraScreen() {
   }
 
   // Update zoom to device neutral when active device changes (lens switch / flip).
-  const lastDeviceId = useRef<string | undefined>()
+  const lastDeviceId = useRef<string | undefined>(undefined)
   if (device && device.id !== lastDeviceId.current) {
     lastDeviceId.current = device.id
     setZoom(device.neutralZoom)
     setActiveZoomLabel(lensMode === 'ultraWide' ? '0.6×' : '1×')
   }
 
-  // Debug: comprehensive log of both detection paths
+  // Debug: log ALL back cameras so we can see what the device exposes
   useEffect(() => {
     console.log('--- CAMERA DEBUG ---')
-    console.log('[Camera] backDevice.id:', backDevice?.id)
-    console.log('[Camera] physicalDevices:', JSON.stringify(backDevice?.physicalDevices))
-    console.log('[Camera] ultraWidePhysicalId (fuzzy match):', ultraWidePhysicalId)
+    console.log('[Camera] total devices:', allDevices.length)
+    backDevices.forEach((d, i) => {
+      console.log(`[Camera] back[${i}] id=${d.id} physDev=${JSON.stringify(d.physicalDevices)} min=${d.minZoom} neu=${d.neutralZoom} max=${d.maxZoom}`)
+    })
+    console.log('[Camera] selected backDevice.id:', backDevice?.id)
     console.log('[Camera] ultraWideDevice.id:', ultraWideDevice?.id)
     console.log('[Camera] hasSeparateUltraWide:', hasSeparateUltraWide)
     console.log('[Camera] hasZoomBasedUltraWide:', hasZoomBasedUltraWide)
-    console.log('[Camera] minZoom:', backDevice?.minZoom, '| neutralZoom:', backDevice?.neutralZoom, '| maxZoom:', backDevice?.maxZoom)
-  }, [backDevice?.id, ultraWideDevice?.id])
+  }, [allDevices.length, backDevice?.id, ultraWideDevice?.id])
 
   // ── Lens / zoom buttons ────────────────────────────────────────────────────
   interface LensButton { label: string; zoom: number; lens: 'main' | 'ultraWide' }
@@ -319,16 +338,15 @@ export default function CameraScreen() {
             {/* ── TEMP DEBUG OVERLAY — remove once ultra-wide is confirmed working ── */}
             <View style={styles.debugBox}>
               <Text style={styles.debugText}>
-                physDev: {JSON.stringify(backDevice?.physicalDevices ?? [])}
+                allDev:{allDevices.length}  back:{backDevices.length}  UW:{ultraWideDevice?.id?.slice(-4) ?? 'none'}
               </Text>
+              {backDevices.map((d, i) => (
+                <Text key={d.id} style={styles.debugText}>
+                  [{i}] {JSON.stringify(d.physicalDevices)} {d.minZoom.toFixed(1)}-{d.maxZoom.toFixed(0)}x
+                </Text>
+              ))}
               <Text style={styles.debugText}>
-                fuzzyId: {ultraWidePhysicalId ?? 'none'}
-              </Text>
-              <Text style={styles.debugText}>
-                sepUW: {String(hasSeparateUltraWide)}  zoomUW: {String(hasZoomBasedUltraWide)}
-              </Text>
-              <Text style={styles.debugText}>
-                min:{backDevice?.minZoom?.toFixed(2) ?? '?'}  neu:{backDevice?.neutralZoom?.toFixed(2) ?? '?'}  max:{backDevice?.maxZoom?.toFixed(2) ?? '?'}
+                sepUW:{String(hasSeparateUltraWide)} zoomUW:{String(hasZoomBasedUltraWide)}
               </Text>
             </View>
 

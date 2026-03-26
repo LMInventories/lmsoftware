@@ -316,6 +316,22 @@ export default function CameraScreen() {
 
           {/* ── Controls below the viewfinder ── */}
           <View style={styles.controlsArea}>
+            {/* ── TEMP DEBUG OVERLAY — remove once ultra-wide is confirmed working ── */}
+            <View style={styles.debugBox}>
+              <Text style={styles.debugText}>
+                physDev: {JSON.stringify(backDevice?.physicalDevices ?? [])}
+              </Text>
+              <Text style={styles.debugText}>
+                fuzzyId: {ultraWidePhysicalId ?? 'none'}
+              </Text>
+              <Text style={styles.debugText}>
+                sepUW: {String(hasSeparateUltraWide)}  zoomUW: {String(hasZoomBasedUltraWide)}
+              </Text>
+              <Text style={styles.debugText}>
+                min:{backDevice?.minZoom?.toFixed(2) ?? '?'}  neu:{backDevice?.neutralZoom?.toFixed(2) ?? '?'}  max:{backDevice?.maxZoom?.toFixed(2) ?? '?'}
+              </Text>
+            </View>
+
             {/* Zoom / lens buttons — switching to 0.6× physically swaps to ultra-wide device */}
             <View style={styles.zoomBar}>
               {zoomButtons.map(({ label, zoom: z, lens }) => (
@@ -433,6 +449,23 @@ const styles = StyleSheet.create({
     backgroundColor: '#111',
     justifyContent: 'center',
     paddingBottom: 16,
+  },
+
+  // Temporary debug overlay
+  debugBox: {
+    backgroundColor: 'rgba(0,0,0,0.75)',
+    padding: 6,
+    marginHorizontal: 8,
+    marginBottom: 6,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#ff0',
+  },
+  debugText: {
+    color: '#ff0',
+    fontSize: 10,
+    fontFamily: 'monospace',
+    lineHeight: 15,
   },
 
   // Camera layout

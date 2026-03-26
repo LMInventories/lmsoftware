@@ -31,6 +31,7 @@ export type RootStackParamList = {
     sectionType: 'room' | 'fixed'
     templateSectionId?: number
     fixedSectionData?: string  // JSON stringified fixed section for 'fixed' type
+    sectionIndex?: number      // 1-based position of this section in the template (for photo labels)
   }
   ItemGallery: {
     inspectionId: number
@@ -38,6 +39,7 @@ export type RootStackParamList = {
     sectionName:  string   // current room's display name
     itemKey:      string
     itemName:     string
+    itemPosition?: string  // e.g. "2.4" — section.item for display label
   }
   Camera: { inspectionId: number }
   Sync: undefined

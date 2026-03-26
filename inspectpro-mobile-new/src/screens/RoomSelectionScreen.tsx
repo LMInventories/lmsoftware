@@ -64,10 +64,21 @@ export default function RoomSelectionScreen() {
     setLoadingTemplate(true)
     try {
       const inspection = await getLocalInspection(inspectionId)
-      const [fixedRes, tmplRes] = await Promise.all([
-        api.getFixedSections(),
-        inspection?.template_id ? api.getTemplate(inspection.template_id) : Promise.resolve(null),
-      ])
+
+      // Use the template embedded at download time (works offline).
+      // Fall back to a live API call only when the cached template is absent
+      // (e.g. inspection was downloaded before this feature was added).
+      let tmplData: any = inspection?.template ?? null
+      if (!tmplData && inspection?.template_id) {
+        try {
+          const tmplRes = await api.getTemplate(inspection.template_id)
+          tmplData = tmplRes.data
+        } catch {
+          Alert.alert('No connection', 'Could not load template. Please connect to the internet to load this inspection for the first time.')
+        }
+      }
+
+      const fixedRes = await api.getFixedSections().catch(() => ({ data: [] }))
       const fixed = (fixedRes.data as any[])
         .filter((s: any) => s.enabled !== false)
         .map((s: any, secIdx: number) => ({
@@ -77,9 +88,10 @@ export default function RoomSelectionScreen() {
           secIdx,
         }))
       setFixedSections(fixed)
-      if (tmplRes) {
+
+      if (tmplData) {
         setTemplateSections(
-          (tmplRes.data.sections ?? []).filter((s: any) => s.section_type === 'room')
+          (tmplData.sections ?? []).filter((s: any) => s.section_type === 'room')
         )
       }
     } catch {
@@ -197,10 +209,11 @@ export default function RoomSelectionScreen() {
     setTargetRoomId(key); setTargetName(name); setRenameModal(true)
   }
 
-  function navigateToRoom(key: string, name: string, templateSectionId?: number) {
+  function navigateToRoom(key: string, name: string, templateSectionId?: number, sectionIndex?: number) {
     navigation.navigate('RoomInspection', {
       inspectionId, sectionKey: key, sectionName: name,
       sectionType: 'room', templateSectionId,
+      sectionIndex,
     })
   }
 
@@ -379,13 +392,15 @@ export default function RoomSelectionScreen() {
           )}
 
           {/* Template rooms */}
-          {templateSections.map((section: any) => {
+          {templateSections.map((section: any, sectionIdx: number) => {
             const key = String(section.id)
             const displayName = roomNames[key] || section.name
+            // sectionIndex is 1-based for display labels (1.1, 2.3, …)
+            const sectionIndex = sectionIdx + 1
             return (
               <SwipeableRow key={key} actions={roomActions(key, displayName)}>
                 <TouchableOpacity style={[styles.row, styles.rowMb]}
-                  onPress={() => navigateToRoom(key, displayName, section.id)}>
+                  onPress={() => navigateToRoom(key, displayName, section.id, sectionIndex)}>
                   <View style={styles.rowContent}>
                     <Text style={styles.rowName}>{displayName}</Text>
                   </View>

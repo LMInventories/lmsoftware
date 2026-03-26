@@ -7,7 +7,7 @@ import {
   ActivityIndicator,
   Platform,
 } from 'react-native'
-import { CameraView } from 'expo-camera'
+import { CameraView, useCameraPermissions } from 'expo-camera'
 import type { CameraType, FlashMode } from 'expo-camera'
 import * as FileSystem from 'expo-file-system'
 import { GestureDetector, Gesture, GestureHandlerRootView } from 'react-native-gesture-handler'
@@ -31,6 +31,8 @@ export default function CameraScreen() {
   const navigation = useNavigation()
   const route = useRoute<CameraRouteProp>()
   const { inspectionId } = route.params
+
+  const [permission, requestPermission] = useCameraPermissions()
 
   const cameraRef = useRef<React.ComponentRef<typeof CameraView>>(null)
 
@@ -135,6 +137,29 @@ export default function CameraScreen() {
 
   const flashIcon = flash === 'off' ? '⚡️✕' : flash === 'on' ? '⚡️' : '⚡️A'
 
+  // ── Permission gate ───────────────────────────────────────────────────────
+  // permission is null while the module loads; show nothing (avoid flash)
+  if (!permission) {
+    return <View style={styles.root} />
+  }
+
+  if (!permission.granted) {
+    return (
+      <View style={[styles.root, styles.permBox]}>
+        <Text style={styles.permTitle}>Camera access needed</Text>
+        <Text style={styles.permSub}>
+          InspectPro needs camera access to photograph inspection items.
+        </Text>
+        <TouchableOpacity style={styles.permBtn} onPress={requestPermission}>
+          <Text style={styles.permBtnText}>Grant Permission</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.permCancel} onPress={() => navigation.goBack()}>
+          <Text style={styles.permCancelText}>Cancel</Text>
+        </TouchableOpacity>
+      </View>
+    )
+  }
+
   return (
     <GestureHandlerRootView style={styles.root}>
       <GestureDetector gesture={pinchGesture}>
@@ -204,6 +229,45 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: '#000',
+  },
+  permBox: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 32,
+  },
+  permTitle: {
+    color: '#fff',
+    fontSize: 20,
+    fontWeight: '700',
+    marginBottom: 12,
+    textAlign: 'center',
+  },
+  permSub: {
+    color: '#aaa',
+    fontSize: 15,
+    textAlign: 'center',
+    lineHeight: 22,
+    marginBottom: 32,
+  },
+  permBtn: {
+    backgroundColor: '#1e3a8a',
+    paddingHorizontal: 28,
+    paddingVertical: 14,
+    borderRadius: 12,
+    marginBottom: 16,
+  },
+  permBtnText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  permCancel: {
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+  },
+  permCancelText: {
+    color: '#888',
+    fontSize: 15,
   },
   camera: {
     flex: 1,

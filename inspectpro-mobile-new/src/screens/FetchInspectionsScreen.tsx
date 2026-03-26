@@ -83,7 +83,7 @@ export default function FetchInspectionsScreen() {
         // Detail has nested property/client/inspector/typist objects;
         // the list endpoint has flat fields. We need both.
         const d = detail.data
-        const normalised = {
+        const normalised: any = {
           ...d,
           property_address:  d.property?.address   ?? inspection.property_address ?? 'Unknown address',
           client_name:       d.client?.name         ?? inspection.client_name      ?? '',
@@ -92,6 +92,20 @@ export default function FetchInspectionsScreen() {
           typist_name:       d.typist?.name         ?? inspection.typist_name      ?? '',
           typist_is_ai:      d.typist_is_ai         ?? d.typist?.is_ai              ?? false,
         }
+
+        // Pre-fetch and embed the template so the app works fully offline.
+        // RoomSelectionScreen and RoomInspectionScreen read `inspection.template`
+        // and only fall back to a live API call when this field is absent.
+        if (d.template_id && !normalised.template) {
+          try {
+            const tmplRes = await api.getTemplate(d.template_id)
+            normalised.template = tmplRes.data
+          } catch (tmplErr) {
+            console.warn('[FetchInspections] Could not pre-fetch template:', tmplErr)
+            // Non-fatal: app will attempt a live fetch when rooms are opened
+          }
+        }
+
         await saveInspection(normalised)
         res.push({ id, address: normalised.property_address, success: true })
       } catch (err: any) {

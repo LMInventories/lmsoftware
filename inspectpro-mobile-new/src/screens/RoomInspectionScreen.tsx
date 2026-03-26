@@ -51,7 +51,7 @@ export default function RoomInspectionScreen() {
   const navigation = useNavigation<Nav>()
   const route      = useRoute<Route>()
   const insets     = useSafeAreaInsets()
-  const { inspectionId, sectionKey, sectionName, sectionType, templateSectionId, fixedSectionData } = route.params
+  const { inspectionId, sectionKey, sectionName, sectionType, templateSectionId, fixedSectionData, sectionIndex } = route.params
   const { activeInspection, loadInspection, setReportData } = useInspectionStore()
   const { user } = useAuthStore()
 
@@ -608,6 +608,12 @@ export default function RoomInspectionScreen() {
   function renderPhotos(item: any) {
     const photos: string[] = getReportData()[sectionKey]?.[String(item.id)]?._photos || []
     const count = photos.length
+    // Build "1.3"-style position label — sectionIndex comes from nav params (1-based),
+    // itemIndex is 1-based position of this item within the current section's items list.
+    const itemIndexInList = items.findIndex((it: any) => String(it.id) === String(item.id))
+    const itemIndex = itemIndexInList >= 0 ? itemIndexInList + 1 : undefined
+    const itemPosition = sectionIndex && itemIndex ? `${sectionIndex}.${itemIndex}` : undefined
+
     return (
       <View style={styles.photoBlock}>
         {/* Top row: label + icon buttons */}
@@ -630,7 +636,8 @@ export default function RoomInspectionScreen() {
             {photos.map((uri: string, idx: number) => (
               <TouchableOpacity key={idx}
                 onPress={() => navigation.navigate('ItemGallery', {
-                  inspectionId, sectionKey, sectionName, itemKey: String(item.id), itemName: item.label || item.name,
+                  inspectionId, sectionKey, sectionName, itemKey: String(item.id),
+                  itemName: item.label || item.name, itemPosition,
                 })}
                 onLongPress={() => Alert.alert('Remove photo?', '', [
                   { text: 'Cancel', style: 'cancel' },

@@ -12,6 +12,7 @@ import * as FileSystem from 'expo-file-system'
 
 import type { RootStackParamList } from '../../App'
 import { useInspectionStore } from '../stores/inspectionStore'
+import { getLocalInspection } from '../services/database'
 import { setCameraTarget, processPendingPhotos } from '../services/cameraStore'
 import Header from '../components/Header'
 import { colors, font, radius, spacing } from '../utils/theme'
@@ -38,7 +39,7 @@ export default function ItemGalleryScreen() {
   const navigation = useNavigation<Nav>()
   const route      = useRoute<Route>()
   const insets     = useSafeAreaInsets()
-  const { inspectionId, sectionKey, sectionName, itemKey, itemName } = route.params
+  const { inspectionId, sectionKey, sectionName, itemKey, itemName, itemPosition } = route.params
   const { activeInspection, setReportData } = useInspectionStore()
 
   // Lightbox
@@ -161,8 +162,16 @@ export default function ItemGalleryScreen() {
         Alert.alert('No template', 'This inspection has no template assigned.')
         setShowReassign(false); return
       }
-      const tmplRes = await api.getTemplate(activeInspection.template_id)
-      const sections: any[] = tmplRes.data.sections || []
+      // Use cached template (embedded at download time) — fallback to live API
+      let tmplData: any = null
+      const localInsp = await getLocalInspection(inspectionId)
+      if (localInsp?.template) {
+        tmplData = localInsp.template
+      } else {
+        const tmplRes = await api.getTemplate(activeInspection.template_id)
+        tmplData = tmplRes.data
+      }
+      const sections: any[] = tmplData.sections || []
       // Find only this room's section and its items
       const thisSection = sections.find((s: any) => String(s.id) === sectionKey)
       const items: ItemOption[] = (thisSection?.items || []).map((it: any) => ({
@@ -206,8 +215,16 @@ export default function ItemGalleryScreen() {
       if (!activeInspection?.template_id) {
         Alert.alert('No template', 'This inspection has no template assigned.'); return
       }
-      const tmplRes = await api.getTemplate(activeInspection.template_id)
-      const sections: any[] = tmplRes.data.sections || []
+      // Use cached template; AI reassign does need network for the classify call itself
+      let tmplData: any = null
+      const localInsp2 = await getLocalInspection(inspectionId)
+      if (localInsp2?.template) {
+        tmplData = localInsp2.template
+      } else {
+        const tmplRes = await api.getTemplate(activeInspection.template_id)
+        tmplData = tmplRes.data
+      }
+      const sections: any[] = tmplData.sections || []
       // Constrain to current room only — photos should only move within the same room
       const thisSection = sections.find((s: any) => String(s.id) === sectionKey)
       const roomContextStr = thisSection
@@ -311,8 +328,8 @@ export default function ItemGalleryScreen() {
   return (
     <View style={[styles.screen, { paddingTop: insets.top }]}>
       <Header
-        title={itemName}
-        subtitle={selecting ? `${selected.size} selected` : `${photos.length} photo${photos.length !== 1 ? 's' : ''}`}
+        title={itemPosition ? `${itemPosition} — ${itemName}` : itemName}
+        subtitle={selecting ? `${selected.size} selected` : `${photos.length} photo${photos.length !== 1 ? 's' : ''} · ${sectionName}`}
         onBack={selecting ? exitSelect : () => navigation.goBack()}
         right={!selecting
           ? <TouchableOpacity style={styles.addBtn} onPress={handleAddMore}>

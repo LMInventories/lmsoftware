@@ -330,6 +330,7 @@ export default function CameraScreen() {
               isActive={isFocused}
               photo={true}
               zoom={zoom}
+              photoQualityBalance="speed"
             />
 
             {/* White flash overlay — briefly visible after each capture */}

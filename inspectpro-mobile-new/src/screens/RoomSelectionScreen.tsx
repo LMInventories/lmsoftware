@@ -1,7 +1,7 @@
-import React, { useEffect, useState, useCallback } from 'react'
+import React, { useEffect, useState, useCallback, useRef } from 'react'
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  Alert, TextInput, Modal, ActivityIndicator, FlatList,
+  Alert, TextInput, Modal, ActivityIndicator, FlatList, Animated,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native'
@@ -12,6 +12,7 @@ import { useInspectionStore } from '../stores/inspectionStore'
 import { getLocalInspection } from '../services/database'
 import { api } from '../services/api'
 import Header from '../components/Header'
+import { GestureDetector, Gesture, GestureHandlerRootView } from 'react-native-gesture-handler'
 import SwipeableRow from '../components/SwipeableRow'
 import { colors, font, radius, spacing } from '../utils/theme'
 
@@ -279,33 +280,83 @@ export default function RoomSelectionScreen() {
     })
   }
 
-  async function moveRoom(key: string, direction: 'up' | 'down') {
+  // ── Drag-to-reorder state ──────────────────────────────────────────────────
+  // ROW_H: approximate row height (paddingVertical 13×2 + text ~20 + marginBottom 4)
+  const ROW_H = 54
+
+  // dragFrom / dragTo tracked in refs (not state) so gesture callbacks always
+  // see the latest values without stale closures.
+  const dragFromRef = useRef<number | null>(null)
+  const dragToRef   = useRef<number | null>(null)
+  // dragFrom/To as state drives the "gap" visual (items shifting to make room).
+  const [dragFrom, setDragFrom] = useState<number | null>(null)
+  const [dragTo,   setDragTo]   = useState<number | null>(null)
+  // Single Animated.Value drives the dragged row's y position.
+  const dragYAnim = useRef(new Animated.Value(0)).current
+
+  async function commitReorderByIndex(from: number, to: number) {
     const ordered = buildOrderedRooms()
-    const currentOrder = ordered.map(r => r.key)
-    const idx = currentOrder.indexOf(key)
-    if (idx === -1) return
-    if (direction === 'up'   && idx === 0)                    return
-    if (direction === 'down' && idx === currentOrder.length - 1) return
-    const swapIdx = direction === 'up' ? idx - 1 : idx + 1
-    const newOrder = [...currentOrder];
-    [newOrder[idx], newOrder[swapIdx]] = [newOrder[swapIdx], newOrder[idx]]
+    const keys = ordered.map(r => r.key)
+    const [moved] = keys.splice(from, 1)
+    keys.splice(to, 0, moved)
     const fresh = await getLocalInspection(inspectionId)
     const freshRd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
-    freshRd['_roomOrder'] = newOrder
+    freshRd['_roomOrder'] = keys
     await setReportData(inspectionId, freshRd)
     await loadInspection(inspectionId)
   }
 
-  function handleLongPress(key: string, name: string) {
-    const ordered = buildOrderedRooms()
-    const idx = ordered.findIndex(r => r.key === key)
-    const canUp   = idx > 0
-    const canDown = idx < ordered.length - 1
-    Alert.alert(`Reorder: ${name}`, 'Move this room in the list', [
-      ...(canUp   ? [{ text: '⬆  Move Up',   onPress: () => moveRoom(key, 'up')   }] : []),
-      ...(canDown ? [{ text: '⬇  Move Down', onPress: () => moveRoom(key, 'down') }] : []),
-      { text: 'Cancel', style: 'cancel' as const },
-    ])
+  function makeDragGesture(idx: number) {
+    return Gesture.Pan()
+      .runOnJS(true)
+      .minDistance(4)
+      .onStart(() => {
+        dragYAnim.setValue(0)
+        dragFromRef.current = idx
+        dragToRef.current   = idx
+        setDragFrom(idx)
+        setDragTo(idx)
+      })
+      .onUpdate((e) => {
+        dragYAnim.setValue(e.translationY)
+        const rooms = buildOrderedRooms()
+        const newTo = Math.max(0, Math.min(rooms.length - 1, Math.round(idx + e.translationY / ROW_H)))
+        if (newTo !== dragToRef.current) {
+          dragToRef.current = newTo
+          setDragTo(newTo)
+        }
+      })
+      .onEnd(() => {
+        const from = dragFromRef.current
+        const to   = dragToRef.current
+        dragYAnim.setValue(0)
+        dragFromRef.current = null
+        dragToRef.current   = null
+        setDragFrom(null)
+        setDragTo(null)
+        if (from !== null && to !== null && from !== to) {
+          commitReorderByIndex(from, to)
+        }
+      })
+      .onFinalize(() => {
+        dragYAnim.setValue(0)
+        dragFromRef.current = null
+        dragToRef.current   = null
+        setDragFrom(null)
+        setDragTo(null)
+      })
+  }
+
+  // Returns how far a non-dragged item should shift (in px) to show the gap.
+  function getShift(idx: number, from: number, to: number): number {
+    if (from < to) {
+      // Dragging down: items between from+1..to shift up
+      if (idx > from && idx <= to) return -ROW_H
+    } else if (from > to) {
+      // Dragging up: items between to..from-1 shift down
+      if (idx >= to && idx < from) return ROW_H
+    }
+    return 0
   }
 
   // ── Add Room Modal content ─────────────────────────────────────────────────
@@ -429,7 +480,7 @@ export default function RoomSelectionScreen() {
   }
 
   return (
-    <View style={[styles.screen, { paddingTop: insets.top }]}>
+    <GestureHandlerRootView style={[styles.screen, { paddingTop: insets.top }]}>
       <Header title="Select Area" subtitle={activeInspection?.property_address} onBack={() => navigation.goBack()} />
 
       {loadingTemplate ? (
@@ -467,25 +518,52 @@ export default function RoomSelectionScreen() {
           )}
 
           {(templateSections.length > 0 || customRooms.length > 0) && (
-            <Text style={styles.swipeHint}>Swipe for options · Long press to reorder</Text>
+            <Text style={styles.swipeHint}>Swipe for options · Drag  ≡  to reorder</Text>
           )}
 
-          {/* All rooms — template + custom — in user-defined order */}
-          {buildOrderedRooms().map((room) => (
-            <SwipeableRow key={room.key} actions={roomActions(room.key, room.name)}>
-              <TouchableOpacity
-                style={[styles.row, styles.rowMb]}
-                onPress={() => navigateToRoom(room.key, room.name, room.templateSectionId, room.sectionIndex)}
-                onLongPress={() => handleLongPress(room.key, room.name)}
-                delayLongPress={400}
+          {/* All rooms — template + custom — in user-defined order.
+              Each row wraps in an Animated.View so the dragged item follows
+              the finger (dragYAnim) while others shift to show the drop gap. */}
+          {buildOrderedRooms().map((room, idx) => {
+            const isDragging = dragFrom === idx
+            const shift      = (dragFrom !== null && dragTo !== null && !isDragging)
+              ? getShift(idx, dragFrom, dragTo)
+              : 0
+
+            return (
+              <Animated.View
+                key={room.key}
+                style={[
+                  styles.rowMb,
+                  isDragging
+                    ? { transform: [{ translateY: dragYAnim }], zIndex: 20, elevation: 8 }
+                    : shift !== 0
+                      ? { transform: [{ translateY: shift }] }
+                      : {},
+                ]}
               >
-                <View style={styles.rowContent}>
-                  <Text style={styles.rowName}>{room.name}</Text>
-                </View>
-                <Text style={styles.chevron}>›</Text>
-              </TouchableOpacity>
-            </SwipeableRow>
-          ))}
+                <SwipeableRow
+                  actions={roomActions(room.key, room.name)}
+                  disabled={dragFrom !== null}
+                >
+                  <View style={[styles.row, isDragging && styles.rowDragging]}>
+                    <TouchableOpacity
+                      style={styles.rowContent}
+                      onPress={() => dragFrom === null && navigateToRoom(room.key, room.name, room.templateSectionId, room.sectionIndex)}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={styles.rowName}>{room.name}</Text>
+                    </TouchableOpacity>
+                    <GestureDetector gesture={makeDragGesture(idx)}>
+                      <View style={styles.dragHandle} hitSlop={{ top: 10, bottom: 10, left: 10, right: 4 }}>
+                        <Text style={styles.dragHandleIcon}>≡</Text>
+                      </View>
+                    </GestureDetector>
+                  </View>
+                </SwipeableRow>
+              </Animated.View>
+            )
+          })}
 
           <TouchableOpacity style={styles.syncBtn} onPress={() => navigation.navigate('Sync')}>
             <Text style={styles.syncBtnText}>⇅ Sync Inspection</Text>
@@ -517,7 +595,7 @@ export default function RoomSelectionScreen() {
           </View>
         </View>
       </Modal>
-    </View>
+    </GestureHandlerRootView>
   )
 }
 
@@ -572,9 +650,12 @@ const styles = StyleSheet.create({
   noTemplateText: { fontSize: font.sm, color: colors.warning, lineHeight: 18 },
   rowMb: { marginBottom: 4 },
   row: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surface, borderRadius: radius.md, paddingHorizontal: spacing.md, paddingVertical: 13, borderWidth: 1, borderColor: colors.border },
+  rowDragging: { backgroundColor: '#f0f7ff', borderColor: colors.primary, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 8 },
   rowContent: { flex: 1 },
   rowName: { fontSize: font.md, fontWeight: '600', color: colors.text, flex: 1 },
   chevron: { fontSize: font.xl, color: colors.textLight, marginLeft: spacing.sm },
+  dragHandle: { paddingHorizontal: 10, paddingVertical: 6, alignItems: 'center', justifyContent: 'center' },
+  dragHandleIcon: { fontSize: 20, color: colors.textLight, letterSpacing: 1 },
   syncBtn: { marginTop: spacing.xl, backgroundColor: colors.accent, borderRadius: radius.md, padding: 14, alignItems: 'center' },
   syncBtnText: { color: '#fff', fontSize: font.md, fontWeight: '700' },
 })

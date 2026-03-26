@@ -27,7 +27,9 @@
         "android.permission.RECORD_AUDIO",
         "android.permission.MODIFY_AUDIO_SETTINGS",
         "android.permission.READ_EXTERNAL_STORAGE",
-        "android.permission.WRITE_EXTERNAL_STORAGE"
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO"
       ]
     },
     "web": {
@@ -49,9 +51,10 @@
       ],
       "expo-secure-store",
       [
-        "expo-camera",
+        "react-native-vision-camera",
         {
-          "cameraPermission": "InspectPro needs camera access to photograph inspection items."
+          "cameraPermissionText": "InspectPro needs camera access to photograph inspection items.",
+          "enableMicrophonePermission": false
         }
       ],
       [

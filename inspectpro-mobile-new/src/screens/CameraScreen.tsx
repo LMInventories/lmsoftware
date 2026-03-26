@@ -1,3 +1,18 @@
+/**
+ * CameraScreen — powered by react-native-vision-camera v4
+ *
+ * Key behaviours
+ * ──────────────
+ * • Proper lens detection: shows a wide/ultra-wide button only when the
+ *   device physically supports it (minZoom < neutralZoom), not a guess.
+ * • Photos saved to BOTH device gallery (expo-media-library) AND
+ *   app-private documentDirectory for the in-app gallery.
+ * • Shutter sound disabled (enableShutterSound: false).
+ * • Pinch-to-zoom via GestureHandler (no Reanimated required).
+ * • Front/back flip supported with separate device lookup.
+ * • Camera paused when screen loses focus (navigation push/pop).
+ */
+
 import React, { useRef, useState, useCallback } from 'react'
 import {
   View,
@@ -7,116 +22,188 @@ import {
   ActivityIndicator,
   Alert,
 } from 'react-native'
-import { CameraView, useCameraPermissions } from 'expo-camera'
-import type { CameraType, FlashMode } from 'expo-camera'
+import { Camera, useCameraDevice, useCameraPermission } from 'react-native-vision-camera'
+import * as MediaLibrary from 'expo-media-library'
 import * as FileSystem from 'expo-file-system'
-import { GestureDetector, Gesture, GestureHandlerRootView } from 'react-native-gesture-handler'
-import { useNavigation, useRoute, RouteProp } from '@react-navigation/native'
+import {
+  GestureHandlerRootView,
+  GestureDetector,
+  Gesture,
+} from 'react-native-gesture-handler'
+import {
+  useNavigation,
+  useRoute,
+  useIsFocused,
+  RouteProp,
+} from '@react-navigation/native'
 import { triggerCapture } from '../services/cameraStore'
 import type { RootStackParamList } from '../../App'
 
 type CameraRouteProp = RouteProp<RootStackParamList, 'Camera'>
-
-// Zoom levels as fractions of expo-camera's 0–1 range.
-// 0.6× ultrawide removed: Android lens names don't match 'ultra-wide' reliably.
-const ZOOM_BUTTONS = [
-  { label: '1×', zoom: 0    },
-  { label: '2×', zoom: 0.15 }, // approx 2× on most sensors
-  { label: '5×', zoom: 0.45 }, // approx 5× on most sensors
-] as const
+type FlashMode = 'off' | 'on' | 'auto'
+type Facing    = 'back' | 'front'
 
 export default function CameraScreen() {
   const navigation = useNavigation()
-  const route = useRoute<CameraRouteProp>()
+  const route      = useRoute<CameraRouteProp>()
   const { inspectionId } = route.params
 
-  const [permission, requestPermission] = useCameraPermissions()
+  // ── VisionCamera permission ────────────────────────────────────────────────
+  const { hasPermission, requestPermission } = useCameraPermission()
 
-  const cameraRef = useRef<React.ComponentRef<typeof CameraView>>(null)
+  // ── Device selection ───────────────────────────────────────────────────────
+  // useCameraDevice returns the BEST device for that position —
+  // on multi-lens phones this is the triple/dual camera, giving access to
+  // ultra-wide, main, and telephoto via the zoom range.
+  const [facing, setFacing] = useState<Facing>('back')
+  const backDevice  = useCameraDevice('back')
+  const frontDevice = useCameraDevice('front')
+  const device = facing === 'back' ? backDevice : frontDevice
 
-  const [facing, setFacing] = useState<CameraType>('back')
-  const [flash, setFlash]   = useState<FlashMode>('off')
-  const [zoom, setZoom]     = useState(0)
-  const [activeZoomLabel, setActiveZoomLabel] = useState<string>('1×')
-  const [isCapturing, setIsCapturing]         = useState(false)
-  const [cameraReady, setCameraReady]         = useState(false)
+  // Camera pauses automatically when screen is not focused
+  const isFocused = useIsFocused()
 
-  // Pinch-to-zoom tracking
-  const baseZoom = useRef(0)
+  // ── State ──────────────────────────────────────────────────────────────────
+  const cameraRef        = useRef<Camera>(null)
+  const [flash, setFlash]               = useState<FlashMode>('off')
+  const [zoom, setZoom]                 = useState(1)           // overridden once device loads
+  const [activeZoomLabel, setActiveZoomLabel] = useState('1×')
+  const [isCapturing, setIsCapturing]   = useState(false)
 
-  const onCameraReady = useCallback(() => {
-    setCameraReady(true)
-  }, [])
+  // Update zoom to device neutral when device changes (back ↔ front flip,
+  // or first device load). Use a ref to avoid re-running on every render.
+  const lastDeviceId = useRef<string | undefined>()
+  if (device && device.id !== lastDeviceId.current) {
+    lastDeviceId.current = device.id
+    // setState during render is valid in React when guarded like this
+    setZoom(device.neutralZoom)
+    setActiveZoomLabel('1×')
+  }
 
-  const handleZoomButton = useCallback((label: string, zoomVal: number) => {
-    setZoom(zoomVal)
-    setActiveZoomLabel(label)
-  }, [])
+  // ── Derived ────────────────────────────────────────────────────────────────
+  // An ultra-wide lens is available when the device's minimum zoom is
+  // meaningfully less than its neutral (1×) zoom.
+  const hasUltraWide =
+    !!device &&
+    device.physicalDevices.includes('ultra-wide-angle-camera') &&
+    device.minZoom < device.neutralZoom * 0.9
 
-  // Pinch gesture
+  // Build zoom button list from the device's actual capabilities.
+  function buildZoomButtons(): { label: string; zoom: number }[] {
+    if (!device) return [{ label: '1×', zoom: 1 }]
+    const neutral = device.neutralZoom
+    const max     = device.maxZoom
+    const buttons: { label: string; zoom: number }[] = []
+    if (hasUltraWide) {
+      buttons.push({ label: '0.6×', zoom: device.minZoom })
+    }
+    buttons.push({ label: '1×', zoom: neutral })
+    const z2 = neutral * 2
+    if (z2 <= max) buttons.push({ label: '2×', zoom: z2 })
+    const z5 = neutral * 5
+    if (z5 <= max) buttons.push({ label: '5×', zoom: z5 })
+    return buttons
+  }
+  const zoomButtons = buildZoomButtons()
+
+  // ── Pinch gesture (JS thread, no Reanimated needed) ───────────────────────
+  const baseZoom = useRef(1)
   const pinchGesture = Gesture.Pinch()
-    .onStart(() => { baseZoom.current = zoom })
+    .onStart(() => {
+      baseZoom.current = zoom
+    })
     .onUpdate((e) => {
-      const next = Math.min(1, Math.max(0, baseZoom.current + (e.scale - 1) * 0.3))
+      if (!device) return
+      const next = Math.min(
+        device.maxZoom,
+        Math.max(device.minZoom, baseZoom.current * e.scale)
+      )
       setZoom(next)
-      setActiveZoomLabel('')  // deselect preset during manual pinch
+      setActiveZoomLabel('') // deselect preset button during manual pinch
     })
     .runOnJS(true)
 
+  // ── Capture ────────────────────────────────────────────────────────────────
   const handleCapture = useCallback(async () => {
-    if (!cameraRef.current || isCapturing || !cameraReady) return
+    if (!cameraRef.current || isCapturing || !device) return
     setIsCapturing(true)
     try {
-      // skipProcessing is intentionally omitted.
-      // On Android with New Architecture, skipProcessing:true returns a temp
-      // content:// URI that expo-file-system cannot copy — photos silently vanish.
-      const photo = await cameraRef.current.takePictureAsync({ quality: 0.85 })
+      const photo = await cameraRef.current.takePhoto({
+        flash,
+        enableShutterSound: false, // silences system shutter (where OS allows it)
+      })
 
-      if (!photo?.uri) throw new Error('Camera returned no file URI.')
+      // VisionCamera returns an absolute file path without file:// on Android.
+      const srcUri = photo.path.startsWith('file://')
+        ? photo.path
+        : `file://${photo.path}`
 
-      const dir = `${FileSystem.documentDirectory}photos/${inspectionId}/`
+      // 1. Save to device gallery so the inspector can find photos easily.
+      //    Request permission inline; if denied we still save to app storage.
+      const mlPerm = await MediaLibrary.requestPermissionsAsync()
+      if (mlPerm.status === 'granted') {
+        await MediaLibrary.saveToLibraryAsync(srcUri)
+      }
+
+      // 2. Copy to app-private storage — this path is what report_data references.
+      //    documentDirectory persists through app updates (not uninstalls).
+      const dir  = `${FileSystem.documentDirectory}photos/${inspectionId}/`
       await FileSystem.makeDirectoryAsync(dir, { intermediates: true })
       const dest = `${dir}${Date.now()}.jpg`
-      await FileSystem.copyAsync({ from: photo.uri, to: dest })
+      await FileSystem.copyAsync({ from: srcUri, to: dest })
 
+      // 3. Hand off the final path to whichever screen opened the camera.
       triggerCapture(dest)
       navigation.goBack()
     } catch (err: any) {
       console.error('[CameraScreen] capture error', err)
-      Alert.alert('Photo failed', err?.message ?? 'Could not save the photo. Please try again.')
+      Alert.alert(
+        'Photo failed',
+        err?.message ?? 'Could not save the photo. Please try again.'
+      )
       setIsCapturing(false)
     }
-  }, [isCapturing, cameraReady, inspectionId, navigation])
+  }, [isCapturing, device, flash, inspectionId, navigation])
 
+  // ── Controls ───────────────────────────────────────────────────────────────
   const toggleFacing = useCallback(() => {
     setFacing(f => f === 'back' ? 'front' : 'back')
   }, [])
 
-  const toggleFlash = useCallback(() => {
-    setFlash(f => {
-      if (f === 'off') return 'on'
-      if (f === 'on')  return 'auto'
-      return 'off'
-    })
+  const cycleFlash = useCallback(() => {
+    setFlash(f => f === 'off' ? 'on' : f === 'on' ? 'auto' : 'off')
   }, [])
 
   const flashLabel = flash === 'off' ? '⚡✕' : flash === 'on' ? '⚡' : '⚡A'
 
   // ── Permission gate ────────────────────────────────────────────────────────
-  if (!permission) return <View style={styles.root} />
-
-  if (!permission.granted) {
+  if (!hasPermission) {
     return (
-      <View style={[styles.root, styles.permBox]}>
-        <Text style={styles.permTitle}>Camera access needed</Text>
-        <Text style={styles.permSub}>
+      <View style={[styles.root, styles.centreBox]}>
+        <Text style={styles.centreTitle}>Camera access needed</Text>
+        <Text style={styles.centreSub}>
           InspectPro needs camera access to photograph inspection items.
         </Text>
         <TouchableOpacity style={styles.permBtn} onPress={requestPermission}>
           <Text style={styles.permBtnText}>Grant Permission</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.permCancel} onPress={() => navigation.goBack()}>
-          <Text style={styles.permCancelText}>Cancel</Text>
+        <TouchableOpacity style={styles.cancelBtn} onPress={() => navigation.goBack()}>
+          <Text style={styles.cancelBtnText}>Cancel</Text>
+        </TouchableOpacity>
+      </View>
+    )
+  }
+
+  // ── No device available ────────────────────────────────────────────────────
+  if (!device) {
+    return (
+      <View style={[styles.root, styles.centreBox]}>
+        <Text style={styles.centreTitle}>Camera unavailable</Text>
+        <Text style={styles.centreSub}>
+          Could not initialise the camera on this device.
+        </Text>
+        <TouchableOpacity style={styles.cancelBtn} onPress={() => navigation.goBack()}>
+          <Text style={styles.cancelBtnText}>Go back</Text>
         </TouchableOpacity>
       </View>
     )
@@ -126,56 +213,68 @@ export default function CameraScreen() {
   return (
     <GestureHandlerRootView style={styles.root}>
       <GestureDetector gesture={pinchGesture}>
-        <CameraView
-          ref={cameraRef}
-          style={styles.camera}
-          facing={facing}
-          flash={flash}
-          zoom={zoom}
-          onCameraReady={onCameraReady}
-        >
+        <View style={styles.root}>
+          {/* Full-screen camera preview */}
+          <Camera
+            ref={cameraRef}
+            style={StyleSheet.absoluteFill}
+            device={device}
+            isActive={isFocused}
+            photo={true}
+            zoom={zoom}
+          />
+
           {/* ── Top bar: close + flash ── */}
           <View style={styles.topBar}>
             <TouchableOpacity style={styles.iconBtn} onPress={() => navigation.goBack()}>
               <Text style={styles.iconText}>✕</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.iconBtn} onPress={toggleFlash}>
+            <TouchableOpacity style={styles.iconBtn} onPress={cycleFlash}>
               <Text style={styles.iconText}>{flashLabel}</Text>
             </TouchableOpacity>
           </View>
 
-          {/* ── Spacer pushes controls to the bottom ── */}
+          {/* Pushes controls to the bottom */}
           <View style={{ flex: 1 }} />
 
-          {/* ── Bottom group: zoom row + shutter row ── */}
+          {/* ── Bottom group: zoom strip + shutter row ── */}
           <View style={styles.bottomGroup}>
-            {/* Zoom buttons */}
+            {/* Zoom buttons — built from real device capabilities */}
             <View style={styles.zoomBar}>
-              {ZOOM_BUTTONS.map(({ label, zoom: z }) => (
+              {zoomButtons.map(({ label, zoom: z }) => (
                 <TouchableOpacity
                   key={label}
-                  style={[styles.zoomBtn, activeZoomLabel === label && styles.zoomBtnActive]}
-                  onPress={() => handleZoomButton(label, z)}
+                  style={[
+                    styles.zoomBtn,
+                    activeZoomLabel === label && styles.zoomBtnActive,
+                  ]}
+                  onPress={() => {
+                    setZoom(z)
+                    setActiveZoomLabel(label)
+                  }}
                 >
-                  <Text style={[styles.zoomText, activeZoomLabel === label && styles.zoomTextActive]}>
+                  <Text
+                    style={[
+                      styles.zoomText,
+                      activeZoomLabel === label && styles.zoomTextActive,
+                    ]}
+                  >
                     {label}
                   </Text>
                 </TouchableOpacity>
               ))}
             </View>
 
-            {/* Shutter row */}
+            {/* Shutter row: flip · shutter · spacer */}
             <View style={styles.shutterRow}>
-              {/* Flip camera */}
               <TouchableOpacity style={styles.iconBtn} onPress={toggleFacing}>
                 <Text style={styles.iconText}>🔄</Text>
               </TouchableOpacity>
 
-              {/* Shutter */}
               <TouchableOpacity
                 style={[styles.shutter, isCapturing && styles.shutterDisabled]}
                 onPress={handleCapture}
-                disabled={isCapturing || !cameraReady}
+                disabled={isCapturing}
               >
                 {isCapturing
                   ? <ActivityIndicator color="#1e3a8a" />
@@ -183,36 +282,37 @@ export default function CameraScreen() {
                 }
               </TouchableOpacity>
 
-              {/* Spacer balances layout */}
+              {/* Spacer keeps shutter centred */}
               <View style={styles.iconBtn} />
             </View>
           </View>
-        </CameraView>
+        </View>
       </GestureDetector>
     </GestureHandlerRootView>
   )
 }
 
+// ── Styles ─────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: '#000',
   },
 
-  // Permission screen
-  permBox: {
+  // Centred info screens (permission / no device)
+  centreBox: {
     alignItems: 'center',
     justifyContent: 'center',
     padding: 32,
   },
-  permTitle: {
+  centreTitle: {
     color: '#fff',
     fontSize: 20,
     fontWeight: '700',
     marginBottom: 12,
     textAlign: 'center',
   },
-  permSub: {
+  centreSub: {
     color: '#aaa',
     fontSize: 15,
     textAlign: 'center',
@@ -231,22 +331,16 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
   },
-  permCancel: {
+  cancelBtn: {
     paddingHorizontal: 20,
     paddingVertical: 10,
   },
-  permCancelText: {
+  cancelBtnText: {
     color: '#888',
     fontSize: 15,
   },
 
   // Camera layout
-  camera: {
-    flex: 1,
-    // Do NOT use justifyContent:'space-between' with 3+ children —
-    // it puts the middle child in screen centre. Use flex:1 spacer instead.
-    flexDirection: 'column',
-  },
   topBar: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -254,8 +348,6 @@ const styles = StyleSheet.create({
     paddingTop: 52,
     paddingBottom: 12,
   },
-
-  // Bottom group keeps zoom + shutter together at the bottom
   bottomGroup: {
     paddingBottom: 48,
   },

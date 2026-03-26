@@ -205,6 +205,7 @@ export default function RoomSelectionScreen() {
           delete rd[key]
           if (rd['_roomNames']) delete rd['_roomNames'][key]
           if (rd['_customRooms']) rd['_customRooms'] = rd['_customRooms'].filter((r: any) => r.key !== key)
+          if (rd['_roomOrder'])  rd['_roomOrder']  = rd['_roomOrder'].filter((k: string) => k !== key)
           await setReportData(inspectionId, rd)
           await loadInspection(inspectionId)
         },
@@ -246,6 +247,66 @@ export default function RoomSelectionScreen() {
   const rd = getReportData()
   const customRooms: { key: string; name: string }[] = rd['_customRooms'] || []
   const roomNames: Record<string, string> = rd['_roomNames'] || {}
+
+  // ── Room ordering ──────────────────────────────────────────────────────────
+  // Build a unified ordered list of all rooms (template + custom) so they can
+  // be reordered freely across both groups. _roomOrder in report_data stores
+  // an array of room keys; rooms not yet in it appear at the end in default order.
+  interface RoomEntry {
+    key: string
+    name: string
+    templateSectionId?: number
+    sectionIndex?: number
+  }
+
+  function buildOrderedRooms(): RoomEntry[] {
+    const all: RoomEntry[] = [
+      ...templateSections.map((s: any, i: number) => ({
+        key: String(s.id),
+        name: roomNames[String(s.id)] || s.name,
+        templateSectionId: s.id,
+        sectionIndex: i + 1,
+      })),
+      ...customRooms.map(r => ({ key: r.key, name: r.name })),
+    ]
+    const order: string[] = rd['_roomOrder'] || []
+    if (!order.length) return all
+    const orderMap = new Map(order.map((k: string, i: number) => [k, i]))
+    return [...all].sort((a, b) => {
+      const ai = orderMap.has(a.key) ? orderMap.get(a.key)! : Infinity
+      const bi = orderMap.has(b.key) ? orderMap.get(b.key)! : Infinity
+      return ai - bi
+    })
+  }
+
+  async function moveRoom(key: string, direction: 'up' | 'down') {
+    const ordered = buildOrderedRooms()
+    const currentOrder = ordered.map(r => r.key)
+    const idx = currentOrder.indexOf(key)
+    if (idx === -1) return
+    if (direction === 'up'   && idx === 0)                    return
+    if (direction === 'down' && idx === currentOrder.length - 1) return
+    const swapIdx = direction === 'up' ? idx - 1 : idx + 1
+    const newOrder = [...currentOrder];
+    [newOrder[idx], newOrder[swapIdx]] = [newOrder[swapIdx], newOrder[idx]]
+    const fresh = await getLocalInspection(inspectionId)
+    const freshRd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+    freshRd['_roomOrder'] = newOrder
+    await setReportData(inspectionId, freshRd)
+    await loadInspection(inspectionId)
+  }
+
+  function handleLongPress(key: string, name: string) {
+    const ordered = buildOrderedRooms()
+    const idx = ordered.findIndex(r => r.key === key)
+    const canUp   = idx > 0
+    const canDown = idx < ordered.length - 1
+    Alert.alert(`Reorder: ${name}`, 'Move this room in the list', [
+      ...(canUp   ? [{ text: '⬆  Move Up',   onPress: () => moveRoom(key, 'up')   }] : []),
+      ...(canDown ? [{ text: '⬇  Move Down', onPress: () => moveRoom(key, 'down') }] : []),
+      { text: 'Cancel', style: 'cancel' as const },
+    ])
+  }
 
   // ── Add Room Modal content ─────────────────────────────────────────────────
   function renderAddModal() {
@@ -406,35 +467,20 @@ export default function RoomSelectionScreen() {
           )}
 
           {(templateSections.length > 0 || customRooms.length > 0) && (
-            <Text style={styles.swipeHint}>Swipe left or right for options</Text>
+            <Text style={styles.swipeHint}>Swipe for options · Long press to reorder</Text>
           )}
 
-          {/* Template rooms */}
-          {templateSections.map((section: any, sectionIdx: number) => {
-            const key = String(section.id)
-            const displayName = roomNames[key] || section.name
-            // sectionIndex is 1-based for display labels (1.1, 2.3, …)
-            const sectionIndex = sectionIdx + 1
-            return (
-              <SwipeableRow key={key} actions={roomActions(key, displayName)}>
-                <TouchableOpacity style={[styles.row, styles.rowMb]}
-                  onPress={() => navigateToRoom(key, displayName, section.id, sectionIndex)}>
-                  <View style={styles.rowContent}>
-                    <Text style={styles.rowName}>{displayName}</Text>
-                  </View>
-                  <Text style={styles.chevron}>›</Text>
-                </TouchableOpacity>
-              </SwipeableRow>
-            )
-          })}
-
-          {/* Custom rooms */}
-          {customRooms.map(({ key, name }) => (
-            <SwipeableRow key={key} actions={roomActions(key, name)}>
-              <TouchableOpacity style={[styles.row, styles.rowMb]}
-                onPress={() => navigateToRoom(key, name)}>
+          {/* All rooms — template + custom — in user-defined order */}
+          {buildOrderedRooms().map((room) => (
+            <SwipeableRow key={room.key} actions={roomActions(room.key, room.name)}>
+              <TouchableOpacity
+                style={[styles.row, styles.rowMb]}
+                onPress={() => navigateToRoom(room.key, room.name, room.templateSectionId, room.sectionIndex)}
+                onLongPress={() => handleLongPress(room.key, room.name)}
+                delayLongPress={400}
+              >
                 <View style={styles.rowContent}>
-                  <Text style={styles.rowName}>{name}</Text>
+                  <Text style={styles.rowName}>{room.name}</Text>
                 </View>
                 <Text style={styles.chevron}>›</Text>
               </TouchableOpacity>

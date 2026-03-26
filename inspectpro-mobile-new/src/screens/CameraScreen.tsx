@@ -133,6 +133,19 @@ export default function CameraScreen() {
     })
   }, [])
 
+  // Pre-create the photo directory at mount so we never pay that I/O cost
+  // during capture. Stored in a ref so handleCapture can read it synchronously.
+  const photoDirRef = useRef<string>('')
+  useEffect(() => {
+    const dir = `${FileSystem.documentDirectory}photos/${inspectionId}/`
+    photoDirRef.current = dir
+    FileSystem.makeDirectoryAsync(dir, { intermediates: true }).catch(() => {})
+  }, [inspectionId])
+
+  // Ref-based capture guard — avoids a state re-render between shots which
+  // was adding visible latency. isCapturing state is kept only for the UI.
+  const capturingRef = useRef(false)
+
   // Flash-white overlay shown briefly after each shot as capture feedback
   const captureFlash = useRef(new Animated.Value(0)).current
   function triggerFlash() {
@@ -211,12 +224,17 @@ export default function CameraScreen() {
 
   // ── Capture ────────────────────────────────────────────────────────────────
   const handleCapture = useCallback(async () => {
-    if (!cameraRef.current || isCapturing || !device) return
-    setIsCapturing(true)
+    // Use capturingRef as the hard gate — no state update, no re-render stall.
+    if (!cameraRef.current || capturingRef.current || !device || !photoDirRef.current) return
+    capturingRef.current = true
+    setIsCapturing(true)   // UI only: dims shutter button
     try {
       const photo = await cameraRef.current.takePhoto({
         flash,
         enableShutterSound: false,
+        // skipMetadata skips EXIF processing on Android — measurably faster
+        // on lower-end devices. Disable if GPS-tagged photos are ever needed.
+        skipMetadata: true,
       })
 
       // VisionCamera returns an absolute path without file:// on Android.
@@ -224,21 +242,18 @@ export default function CameraScreen() {
         ? photo.path
         : `file://${photo.path}`
 
-      // 1. Copy to app-private storage FIRST (fast, same-filesystem copy).
-      //    This path is what report_data stores and galleries read from.
-      const dir  = `${FileSystem.documentDirectory}photos/${inspectionId}/`
-      await FileSystem.makeDirectoryAsync(dir, { intermediates: true })
-      const dest = `${dir}${Date.now()}.jpg`
+      // 1. Copy to app-private storage (directory was pre-created at mount).
+      const dest = `${photoDirRef.current}${Date.now()}.jpg`
       await FileSystem.copyAsync({ from: srcUri, to: dest })
 
-      // 2. Hand off path to the calling screen immediately.
+      // 2. Hand off to calling screen. Release gate BEFORE gallery save so the
+      //    next shot can be triggered immediately without waiting for MediaLibrary.
       triggerCapture(dest)
-
-      // 3. Show capture feedback and re-arm (camera stays open).
       triggerFlash()
+      capturingRef.current = false
       setIsCapturing(false)
 
-      // 4. Save to device gallery in the background — don't block the next shot.
+      // 3. Save to device gallery async — never blocks the capture pipeline.
       if (mlPermGranted.current) {
         MediaLibrary.saveToLibraryAsync(srcUri).catch(e =>
           console.warn('[CameraScreen] gallery save failed:', e)
@@ -250,9 +265,10 @@ export default function CameraScreen() {
         'Photo failed',
         err?.message ?? 'Could not save the photo. Please try again.'
       )
+      capturingRef.current = false
       setIsCapturing(false)
     }
-  }, [isCapturing, device, flash, inspectionId])
+  }, [device, flash])
 
   // ── Controls ───────────────────────────────────────────────────────────────
   const toggleFacing = useCallback(() => {

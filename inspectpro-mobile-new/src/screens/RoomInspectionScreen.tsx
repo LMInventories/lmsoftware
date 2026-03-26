@@ -138,9 +138,20 @@ export default function RoomInspectionScreen() {
 
       if (sectionType === 'fixed' && fixedSectionData) {
         const section = JSON.parse(fixedSectionData)
-        setSectionType_(section.type || 'condition_summary')
-        const mapped = (section.items || []).map((item: any, i: number) => adaptItem(item, section.type, i, section.secIdx))
-        setItems(mapped)
+        const type = section.type || 'condition_summary'
+        setSectionType_(type)
+        const templateItems = (section.items || []).map((item: any, i: number) => adaptItem(item, type, i, section.secIdx))
+
+        // Restore any extra items added / copied during a previous visit.
+        // Fixed sections write _extra entries the same way room sections do,
+        // but the original load never read them back — so they vanished on
+        // navigate-away. We now merge them in here with the correct field
+        // shape for the section type.
+        const savedRd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+        const extras: any[] = (savedRd[sectionKey]?._extra || []).map((e: any) =>
+          adaptExtraItem(e._eid, e.name || '', type)
+        )
+        setItems([...templateItems, ...extras])
       } else if (sectionType === 'room') {
         setSectionType_('room')
         let templateItems: any[] = []
@@ -216,6 +227,27 @@ export default function RoomInspectionScreen() {
       case 'condition_summary':
       default:
         return { id, name: item.name || '', type, hasConditionText: true, hasPhotos: true }
+    }
+  }
+
+  // Produces the correct item shape for a user-added extra item in a fixed
+  // section. Mirrors adaptItem() but uses a caller-supplied id and name.
+  function adaptExtraItem(id: string, name: string, type: string) {
+    switch (type) {
+      case 'meter_readings':
+        return { id, name, type, hasReading: true, hasLocationSerial: true, hasPhotos: true, custom: true }
+      case 'cleaning_summary':
+        return { id, name, type, hasCleanliness: true, hasCleanlinessNotes: true, hasPhotos: true, custom: true }
+      case 'fire_door_safety':
+        return { id, name, question: name, type, hasAnswer: true, hasNotes: true, hasPhotos: true, custom: true }
+      case 'smoke_alarms':
+      case 'health_safety':
+        return { id, name, question: name, type, hasAnswer: true, hasNotes: true, hasPhotos: true, custom: true }
+      case 'keys':
+        return { id, name, type, hasDescription: true, hasPhotos: true, custom: true }
+      case 'condition_summary':
+      default:
+        return { id, name, type, hasConditionText: true, hasPhotos: true, custom: true }
     }
   }
 
@@ -538,7 +570,7 @@ export default function RoomInspectionScreen() {
     const key = `extra_${Date.now()}`
     const newItem = sectionType_ === 'room'
       ? { id: key, label: newItemName.trim(), hasDescription: true, hasCondition: true, hasPhotos: true, custom: true }
-      : { id: key, name: newItemName.trim(), type: sectionType_, hasConditionText: true, hasPhotos: true, custom: true }
+      : adaptExtraItem(key, newItemName.trim(), sectionType_)
     // Read fresh to avoid overwriting concurrent writes
     const fresh = await getLocalInspection(inspectionId)
     const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
@@ -579,9 +611,13 @@ export default function RoomInspectionScreen() {
     rd[sectionKey][newId] = JSON.parse(JSON.stringify(existing))
     if (!rd[sectionKey]['_extra']) rd[sectionKey]['_extra'] = []
     const label = item.label || item.name || ''
-    rd[sectionKey]['_extra'].push({ _eid: newId, name: `${label} (Copy)` })
+    const copyName = `${label} (Copy)`
+    rd[sectionKey]['_extra'].push({ _eid: newId, name: copyName })
     await setReportData(inspectionId, rd)
-    const newItem = { ...item, id: newId, label: `${label} (Copy)`, custom: true }
+    // Build the new item with correct field shape for the section type
+    const newItem = sectionType_ === 'room'
+      ? { ...item, id: newId, label: copyName, custom: true }
+      : adaptExtraItem(newId, copyName, sectionType_)
     setItems(prev => [...prev, newItem])
   }
 

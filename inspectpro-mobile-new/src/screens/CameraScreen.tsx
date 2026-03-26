@@ -60,32 +60,42 @@ export default function CameraScreen() {
   const { hasPermission, requestPermission } = useCameraPermission()
 
   // ── Device selection ───────────────────────────────────────────────────────
-  // We maintain three separate device handles:
-  //   backDevice     — the default back camera (main / multi-lens fused)
-  //   ultraWideDevice — explicitly requests the ultra-wide physical lens
-  //   frontDevice    — front-facing camera
-  //
-  // On Android, some OEMs expose ultra-wide as a completely separate camera ID
-  // rather than a zoom level on the fused device. Explicitly requesting it via
-  // physicalDevices is the only reliable way to get it on those phones.
-  const [facing, setFacing]   = useState<Facing>('back')
+  const [facing, setFacing]     = useState<Facing>('back')
   const [lensMode, setLensMode] = useState<'main' | 'ultraWide'>('main')
 
-  const backDevice       = useCameraDevice('back')
-  const ultraWideDevice  = useCameraDevice('back', {
-    physicalDevices: ['ultra-wide-angle-camera'],
-  })
-  const frontDevice      = useCameraDevice('front')
+  const backDevice  = useCameraDevice('back')
+  const frontDevice = useCameraDevice('front')
 
-  // Ultra-wide is only considered available when VisionCamera resolves it to a
-  // DIFFERENT device ID than the main back camera (i.e. it's a separate device).
-  const hasUltraWide = !!ultraWideDevice &&
-                       !!backDevice &&
-                       ultraWideDevice.id !== backDevice.id
+  // Fuzzy-match the ultra-wide physical device string — different OEMs use
+  // different names ('ultra-wide-angle-camera', 'ultrawide', 'wide', etc.).
+  // We scan physicalDevices for any string containing 'ultra' or 'wide' and
+  // pass that exact ID back to useCameraDevice. If no match, passes undefined
+  // (hook still called — React rules are satisfied; just gets null back).
+  const ultraWidePhysicalId = backDevice?.physicalDevices?.find(
+    (p: string) => p.toLowerCase().includes('ultra') || p.toLowerCase().includes('wide')
+  )
+  const ultraWideDevice = useCameraDevice(
+    'back',
+    ultraWidePhysicalId ? { physicalDevices: [ultraWidePhysicalId] } : undefined
+  )
+
+  // Dual detection strategy — covers two different OEM architectures:
+  //   hasSeparateUltraWide: the OS exposes the wide lens as its own camera ID.
+  //     Fix: physically swap to that device when 0.6× is pressed.
+  //   hasZoomBasedUltraWide: fused multi-lens camera where wide is reachable
+  //     by setting zoom below neutralZoom on the same device.
+  //     Fix: stay on backDevice and set zoom = minZoom.
+  const hasSeparateUltraWide =
+    !!ultraWideDevice && !!backDevice && ultraWideDevice.id !== backDevice.id
+  const hasZoomBasedUltraWide =
+    !!backDevice && backDevice.minZoom < backDevice.neutralZoom
+  const hasUltraWide = hasSeparateUltraWide || hasZoomBasedUltraWide
 
   const device = facing === 'front'
     ? frontDevice
-    : (lensMode === 'ultraWide' && hasUltraWide ? ultraWideDevice : backDevice)
+    : lensMode === 'ultraWide' && hasSeparateUltraWide
+      ? ultraWideDevice
+      : backDevice
 
   // Camera pauses automatically when screen is not focused
   const isFocused = useIsFocused()
@@ -122,34 +132,39 @@ export default function CameraScreen() {
     setActiveZoomLabel(lensMode === 'ultraWide' ? '0.6×' : '1×')
   }
 
-  // Debug: log device info for both back and ultra-wide to compare
+  // Debug: comprehensive log of both detection paths
   useEffect(() => {
+    console.log('--- CAMERA DEBUG ---')
     console.log('[Camera] backDevice.id:', backDevice?.id)
-    console.log('[Camera] backDevice.physicalDevices:', JSON.stringify(backDevice?.physicalDevices))
+    console.log('[Camera] physicalDevices:', JSON.stringify(backDevice?.physicalDevices))
+    console.log('[Camera] ultraWidePhysicalId (fuzzy match):', ultraWidePhysicalId)
     console.log('[Camera] ultraWideDevice.id:', ultraWideDevice?.id)
-    console.log('[Camera] ultraWideDevice.physicalDevices:', JSON.stringify(ultraWideDevice?.physicalDevices))
-    console.log('[Camera] hasUltraWide (separate device IDs):', hasUltraWide)
+    console.log('[Camera] hasSeparateUltraWide:', hasSeparateUltraWide)
+    console.log('[Camera] hasZoomBasedUltraWide:', hasZoomBasedUltraWide)
+    console.log('[Camera] minZoom:', backDevice?.minZoom, '| neutralZoom:', backDevice?.neutralZoom, '| maxZoom:', backDevice?.maxZoom)
   }, [backDevice?.id, ultraWideDevice?.id])
 
   // ── Lens / zoom buttons ────────────────────────────────────────────────────
-  // Build buttons from the main back camera's zoom range plus an explicit
-  // ultra-wide button when a separate wide device was resolved.
-  interface LensButton {
-    label: string
-    zoom: number
-    lens: 'main' | 'ultraWide'
-  }
+  interface LensButton { label: string; zoom: number; lens: 'main' | 'ultraWide' }
 
   function buildZoomButtons(): LensButton[] {
-    const ref = backDevice   // base buttons always from the main device
-    if (!ref) return [{ label: '1×', zoom: 1, lens: 'main' }]
-    const neutral = ref.neutralZoom
-    const max     = ref.maxZoom
+    if (!backDevice) return [{ label: '1×', zoom: 1, lens: 'main' }]
+    const neutral = backDevice.neutralZoom
+    const max     = backDevice.maxZoom
     const buttons: LensButton[] = []
 
     if (hasUltraWide) {
-      // Ultra-wide runs at its own neutral zoom (1× for that sensor)
-      buttons.push({ label: '0.6×', zoom: ultraWideDevice!.neutralZoom, lens: 'ultraWide' })
+      buttons.push({
+        label: '0.6×',
+        // Separate device: use its own neutral zoom (1× for that sensor)
+        // Zoom-based: use the fused camera's minZoom
+        zoom: hasSeparateUltraWide
+          ? (ultraWideDevice?.neutralZoom ?? backDevice.minZoom)
+          : backDevice.minZoom,
+        // Only physically switch device if it's separate; otherwise stay on
+        // backDevice and just adjust the zoom value
+        lens: hasSeparateUltraWide ? 'ultraWide' : 'main',
+      })
     }
     buttons.push({ label: '1×', zoom: neutral, lens: 'main' })
     if (neutral * 2 <= max) buttons.push({ label: '2×', zoom: neutral * 2, lens: 'main' })

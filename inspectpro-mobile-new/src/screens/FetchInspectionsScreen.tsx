@@ -7,12 +7,68 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation, useFocusEffect } from '@react-navigation/native'
 import type { StackNavigationProp } from '@react-navigation/stack'
 
+import * as FileSystem from 'expo-file-system/legacy'
+
 import type { RootStackParamList } from '../../App'
 import { api } from '../services/api'
 import { saveInspection, getLocalInspections } from '../services/database'
 import { colors, font, radius, spacing, TYPE_LABELS, STATUS_COLORS } from '../utils/theme'
 import Header from '../components/Header'
 import StatusBadge from '../components/StatusBadge'
+
+/**
+ * When the server returns report_data with photos as base64 data URIs, write each
+ * one to a local file and replace the data URI with a file:// path.
+ * This prevents massive inline strings in SQLite and ensures Image components
+ * can render photos reliably.
+ *
+ * Works for any itemKey including '_overview' (the room overview key).
+ */
+async function extractBase64PhotosToFiles(inspectionId: number, rd: any): Promise<any> {
+  const dir = `${FileSystem.documentDirectory}photos/${inspectionId}/`
+  let dirReady = false
+
+  const ensureDir = async () => {
+    if (!dirReady) {
+      await FileSystem.makeDirectoryAsync(dir, { intermediates: true })
+      dirReady = true
+    }
+  }
+
+  for (const sectionKey of Object.keys(rd)) {
+    const section = rd[sectionKey]
+    if (!section || typeof section !== 'object' || Array.isArray(section)) continue
+
+    for (const itemKey of Object.keys(section)) {
+      const item = section[itemKey]
+      if (!item || typeof item !== 'object' || Array.isArray(item)) continue
+      if (!Array.isArray(item._photos)) continue
+
+      const hasBase64 = item._photos.some((u: string) => typeof u === 'string' && u.startsWith('data:'))
+      if (!hasBase64) continue
+
+      await ensureDir()
+      item._photos = await Promise.all(
+        item._photos.map(async (uri: string) => {
+          if (!uri.startsWith('data:image')) return uri
+          try {
+            const b64 = uri.split(',')[1]
+            // Unique filename — timestamp + short random suffix avoids collisions
+            const dest = `${dir}${Date.now()}_${Math.random().toString(36).slice(2, 7)}.jpg`
+            await FileSystem.writeAsStringAsync(dest, b64, {
+              encoding: FileSystem.EncodingType.Base64,
+            })
+            return dest
+          } catch (e) {
+            console.warn('[FetchInspections] could not extract photo to file:', e)
+            return uri  // keep data URI as fallback — better than losing the photo
+          }
+        })
+      )
+    }
+  }
+  return rd
+}
 
 type Nav = StackNavigationProp<RootStackParamList, 'FetchInspections'>
 
@@ -123,6 +179,26 @@ export default function FetchInspectionsScreen() {
         // in each inspection record so they're available without a connection.
         if (fixedSectionsData.length > 0) {
           normalised.fixedSections = fixedSectionsData
+        }
+
+        // Normalise report_data from the server response:
+        //  - Server may return it as a parsed object or as a JSON string — handle both.
+        //  - Extract any base64 data URIs to local files so Image renders them reliably
+        //    and SQLite doesn't store huge inline strings.
+        if (normalised.report_data) {
+          try {
+            const rdObj = typeof normalised.report_data === 'string'
+              ? JSON.parse(normalised.report_data)
+              : normalised.report_data
+            const extracted = await extractBase64PhotosToFiles(id, rdObj)
+            normalised.report_data = JSON.stringify(extracted)
+          } catch (e) {
+            console.warn('[FetchInspections] report_data processing failed:', e)
+            // Ensure it's stored as a string at minimum
+            if (typeof normalised.report_data !== 'string') {
+              normalised.report_data = JSON.stringify(normalised.report_data)
+            }
+          }
         }
 
         await saveInspection(normalised)

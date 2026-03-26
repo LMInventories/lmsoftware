@@ -60,13 +60,32 @@ export default function CameraScreen() {
   const { hasPermission, requestPermission } = useCameraPermission()
 
   // ── Device selection ───────────────────────────────────────────────────────
-  // useCameraDevice returns the BEST device for that position —
-  // on multi-lens phones this is the triple/dual camera, giving access to
-  // ultra-wide, main, and telephoto via the zoom range.
-  const [facing, setFacing] = useState<Facing>('back')
-  const backDevice  = useCameraDevice('back')
-  const frontDevice = useCameraDevice('front')
-  const device = facing === 'back' ? backDevice : frontDevice
+  // We maintain three separate device handles:
+  //   backDevice     — the default back camera (main / multi-lens fused)
+  //   ultraWideDevice — explicitly requests the ultra-wide physical lens
+  //   frontDevice    — front-facing camera
+  //
+  // On Android, some OEMs expose ultra-wide as a completely separate camera ID
+  // rather than a zoom level on the fused device. Explicitly requesting it via
+  // physicalDevices is the only reliable way to get it on those phones.
+  const [facing, setFacing]   = useState<Facing>('back')
+  const [lensMode, setLensMode] = useState<'main' | 'ultraWide'>('main')
+
+  const backDevice       = useCameraDevice('back')
+  const ultraWideDevice  = useCameraDevice('back', {
+    physicalDevices: ['ultra-wide-angle-camera'],
+  })
+  const frontDevice      = useCameraDevice('front')
+
+  // Ultra-wide is only considered available when VisionCamera resolves it to a
+  // DIFFERENT device ID than the main back camera (i.e. it's a separate device).
+  const hasUltraWide = !!ultraWideDevice &&
+                       !!backDevice &&
+                       ultraWideDevice.id !== backDevice.id
+
+  const device = facing === 'front'
+    ? frontDevice
+    : (lensMode === 'ultraWide' && hasUltraWide ? ultraWideDevice : backDevice)
 
   // Camera pauses automatically when screen is not focused
   const isFocused = useIsFocused()
@@ -95,48 +114,46 @@ export default function CameraScreen() {
     ]).start()
   }
 
-  // Update zoom to device neutral when device changes (back ↔ front flip,
-  // or first device load). Use a ref to avoid re-running on every render.
+  // Update zoom to device neutral when active device changes (lens switch / flip).
   const lastDeviceId = useRef<string | undefined>()
   if (device && device.id !== lastDeviceId.current) {
     lastDeviceId.current = device.id
-    // setState during render is valid in React when guarded like this
     setZoom(device.neutralZoom)
-    setActiveZoomLabel('1×')
+    setActiveZoomLabel(lensMode === 'ultraWide' ? '0.6×' : '1×')
   }
 
-  // Debug: log actual device lens info so we can verify physicalDevices strings
+  // Debug: log device info for both back and ultra-wide to compare
   useEffect(() => {
-    if (!device) return
-    console.log('[Camera] device.id:', device.id)
-    console.log('[Camera] device.physicalDevices:', JSON.stringify(device.physicalDevices))
-    console.log('[Camera] minZoom:', device.minZoom, '| neutralZoom:', device.neutralZoom, '| maxZoom:', device.maxZoom)
-    console.log('[Camera] hasUltraWide check → physicalDevices includes ultra-wide-angle-camera:', device.physicalDevices.includes('ultra-wide-angle-camera'))
-    console.log('[Camera] minZoom < neutralZoom * 0.9:', device.minZoom < device.neutralZoom * 0.9)
-  }, [device?.id])
+    console.log('[Camera] backDevice.id:', backDevice?.id)
+    console.log('[Camera] backDevice.physicalDevices:', JSON.stringify(backDevice?.physicalDevices))
+    console.log('[Camera] ultraWideDevice.id:', ultraWideDevice?.id)
+    console.log('[Camera] ultraWideDevice.physicalDevices:', JSON.stringify(ultraWideDevice?.physicalDevices))
+    console.log('[Camera] hasUltraWide (separate device IDs):', hasUltraWide)
+  }, [backDevice?.id, ultraWideDevice?.id])
 
-  // ── Derived ────────────────────────────────────────────────────────────────
-  // An ultra-wide lens is available when the device's minimum zoom is
-  // meaningfully less than its neutral (1×) zoom.
-  const hasUltraWide =
-    !!device &&
-    device.physicalDevices.includes('ultra-wide-angle-camera') &&
-    device.minZoom < device.neutralZoom * 0.9
+  // ── Lens / zoom buttons ────────────────────────────────────────────────────
+  // Build buttons from the main back camera's zoom range plus an explicit
+  // ultra-wide button when a separate wide device was resolved.
+  interface LensButton {
+    label: string
+    zoom: number
+    lens: 'main' | 'ultraWide'
+  }
 
-  // Build zoom button list from the device's actual capabilities.
-  function buildZoomButtons(): { label: string; zoom: number }[] {
-    if (!device) return [{ label: '1×', zoom: 1 }]
-    const neutral = device.neutralZoom
-    const max     = device.maxZoom
-    const buttons: { label: string; zoom: number }[] = []
+  function buildZoomButtons(): LensButton[] {
+    const ref = backDevice   // base buttons always from the main device
+    if (!ref) return [{ label: '1×', zoom: 1, lens: 'main' }]
+    const neutral = ref.neutralZoom
+    const max     = ref.maxZoom
+    const buttons: LensButton[] = []
+
     if (hasUltraWide) {
-      buttons.push({ label: '0.6×', zoom: device.minZoom })
+      // Ultra-wide runs at its own neutral zoom (1× for that sensor)
+      buttons.push({ label: '0.6×', zoom: ultraWideDevice!.neutralZoom, lens: 'ultraWide' })
     }
-    buttons.push({ label: '1×', zoom: neutral })
-    const z2 = neutral * 2
-    if (z2 <= max) buttons.push({ label: '2×', zoom: z2 })
-    const z5 = neutral * 5
-    if (z5 <= max) buttons.push({ label: '5×', zoom: z5 })
+    buttons.push({ label: '1×', zoom: neutral, lens: 'main' })
+    if (neutral * 2 <= max) buttons.push({ label: '2×', zoom: neutral * 2, lens: 'main' })
+    if (neutral * 5 <= max) buttons.push({ label: '5×', zoom: neutral * 5, lens: 'main' })
     return buttons
   }
   const zoomButtons = buildZoomButtons()
@@ -206,6 +223,7 @@ export default function CameraScreen() {
   // ── Controls ───────────────────────────────────────────────────────────────
   const toggleFacing = useCallback(() => {
     setFacing(f => f === 'back' ? 'front' : 'back')
+    setLensMode('main')  // always start on main lens when flipping
   }, [])
 
   const cycleFlash = useCallback(() => {
@@ -283,9 +301,9 @@ export default function CameraScreen() {
 
           {/* ── Controls below the viewfinder ── */}
           <View style={styles.controlsArea}>
-            {/* Zoom buttons — built from real device capabilities */}
+            {/* Zoom / lens buttons — switching to 0.6× physically swaps to ultra-wide device */}
             <View style={styles.zoomBar}>
-              {zoomButtons.map(({ label, zoom: z }) => (
+              {zoomButtons.map(({ label, zoom: z, lens }) => (
                 <TouchableOpacity
                   key={label}
                   style={[
@@ -293,6 +311,7 @@ export default function CameraScreen() {
                     activeZoomLabel === label && styles.zoomBtnActive,
                   ]}
                   onPress={() => {
+                    setLensMode(lens)
                     setZoom(z)
                     setActiveZoomLabel(label)
                   }}

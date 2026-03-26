@@ -12,7 +12,7 @@ import { useInspectionStore } from '../stores/inspectionStore'
 import { useAuthStore } from '../stores/authStore'
 import { markSynced, deleteLocalInspection, getLocalInspection, getAudioRecordings } from '../services/database'
 import { api } from '../services/api'
-import * as FileSystem from 'expo-file-system'
+import * as FileSystem from 'expo-file-system/legacy'
 import Header from '../components/Header'
 import StatusBadge from '../components/StatusBadge'
 import { colors, font, radius, spacing, TYPE_LABELS } from '../utils/theme'
@@ -56,15 +56,12 @@ export default function SyncScreen() {
       const section = rd[sectionKey]
       if (!section || typeof section !== 'object') continue
 
-      // Section-level overview photos
-      if (Array.isArray(section._overviewPhotos)) {
-        section._overviewPhotos = await encodePhotoArray(section._overviewPhotos)
-      }
-
-      // Item-level photos
+      // Walk all item keys — this covers template items, fixed section items,
+      // AND '_overview' (the room overview key, stored as _overview._photos).
+      // The old flat '_overviewPhotos' key is no longer used.
       for (const itemKey of Object.keys(section)) {
         const item = section[itemKey]
-        if (!item || typeof item !== 'object') continue
+        if (!item || typeof item !== 'object' || Array.isArray(item)) continue
         if (Array.isArray(item._photos)) {
           item._photos = await encodePhotoArray(item._photos)
         }

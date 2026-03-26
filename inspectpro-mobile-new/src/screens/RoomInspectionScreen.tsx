@@ -311,14 +311,34 @@ export default function RoomInspectionScreen() {
   async function handlePickOverviewPhoto() {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
     if (status !== 'granted') { Alert.alert('Permission required', 'Photo library permission is needed.'); return }
-    const result = await ImagePicker.launchImageLibraryAsync({ quality: 0.8, mediaTypes: ImagePicker.MediaTypeOptions.Images })
-    if (result.canceled || !result.assets[0]?.uri) return
-    const src = result.assets[0].uri
+    const result = await ImagePicker.launchImageLibraryAsync({
+      quality: 0.8,
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsMultipleSelection: true,
+    })
+    if (result.canceled || !result.assets?.length) return
+
     const dir = `${FileSystem.documentDirectory}photos/${inspectionId}/`
     await FileSystem.makeDirectoryAsync(dir, { intermediates: true })
-    const dest = `${dir}${Date.now()}.jpg`
-    await FileSystem.copyAsync({ from: src, to: dest })
-    addOverviewPhotoUri(dest)
+
+    // Copy all selected files, then append in one write
+    const newPaths: string[] = []
+    for (const asset of result.assets) {
+      const dest = `${dir}${Date.now()}_${Math.random().toString(36).slice(2, 7)}.jpg`
+      await FileSystem.copyAsync({ from: asset.uri, to: dest })
+      newPaths.push(dest)
+    }
+    if (!newPaths.length) return
+
+    const fresh = await getLocalInspection(inspectionId)
+    const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+    if (!rd[sectionKey]) rd[sectionKey] = {}
+    if (!rd[sectionKey]['_overview']) rd[sectionKey]['_overview'] = {}
+    rd[sectionKey]['_overview']._photos = [
+      ...(rd[sectionKey]['_overview']._photos || []),
+      ...newPaths,
+    ]
+    await setReportData(inspectionId, rd)
   }
 
   function handleTakePhoto(itemId: string) {
@@ -333,14 +353,32 @@ export default function RoomInspectionScreen() {
   async function handlePickPhoto(itemId: string) {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
     if (status !== 'granted') { Alert.alert('Permission required', 'Photo library access is needed.'); return }
-    const result = await ImagePicker.launchImageLibraryAsync({ quality: 0.75, mediaTypes: ImagePicker.MediaTypeOptions.Images })
-    if (result.canceled || !result.assets[0]?.uri) return
-    const src = result.assets[0].uri
+    const result = await ImagePicker.launchImageLibraryAsync({
+      quality: 0.75,
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsMultipleSelection: true,
+    })
+    if (result.canceled || !result.assets?.length) return
+
     const dir = `${FileSystem.documentDirectory}photos/${inspectionId}/`
     await FileSystem.makeDirectoryAsync(dir, { intermediates: true })
-    const dest = `${dir}${Date.now()}.jpg`
-    await FileSystem.copyAsync({ from: src, to: dest })
-    addPhotoUri(itemId, dest)
+
+    // Copy all selected files, then append in one write
+    const newPaths: string[] = []
+    for (const asset of result.assets) {
+      const dest = `${dir}${Date.now()}_${Math.random().toString(36).slice(2, 7)}.jpg`
+      await FileSystem.copyAsync({ from: asset.uri, to: dest })
+      newPaths.push(dest)
+    }
+    if (!newPaths.length) return
+
+    const fresh = await getLocalInspection(inspectionId)
+    const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+    if (!rd[sectionKey]) rd[sectionKey] = {}
+    if (!rd[sectionKey][String(itemId)]) rd[sectionKey][String(itemId)] = {}
+    const existing: string[] = rd[sectionKey][String(itemId)]._photos || []
+    rd[sectionKey][String(itemId)]._photos = [...existing, ...newPaths]
+    await setReportData(inspectionId, rd)
   }
 
   // ── AI Transcription ──────────────────────────────────────────────────────

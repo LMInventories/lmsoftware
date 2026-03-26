@@ -22,6 +22,7 @@ import {
   ActivityIndicator,
   Alert,
   Dimensions,
+  Animated,
 } from 'react-native'
 import { Camera, useCameraDevice, useCameraPermission } from 'react-native-vision-camera'
 import * as MediaLibrary from 'expo-media-library'
@@ -76,6 +77,23 @@ export default function CameraScreen() {
   const [zoom, setZoom]                 = useState(1)           // overridden once device loads
   const [activeZoomLabel, setActiveZoomLabel] = useState('1×')
   const [isCapturing, setIsCapturing]   = useState(false)
+
+  // Pre-request MediaLibrary permission once at mount (not on every shot)
+  const mlPermGranted = useRef(false)
+  useEffect(() => {
+    MediaLibrary.requestPermissionsAsync().then(p => {
+      mlPermGranted.current = p.status === 'granted'
+    })
+  }, [])
+
+  // Flash-white overlay shown briefly after each shot as capture feedback
+  const captureFlash = useRef(new Animated.Value(0)).current
+  function triggerFlash() {
+    Animated.sequence([
+      Animated.timing(captureFlash, { toValue: 1, duration: 60,  useNativeDriver: true }),
+      Animated.timing(captureFlash, { toValue: 0, duration: 200, useNativeDriver: true }),
+    ]).start()
+  }
 
   // Update zoom to device neutral when device changes (back ↔ front flip,
   // or first device load). Use a ref to avoid re-running on every render.
@@ -147,31 +165,34 @@ export default function CameraScreen() {
     try {
       const photo = await cameraRef.current.takePhoto({
         flash,
-        enableShutterSound: false, // silences system shutter (where OS allows it)
+        enableShutterSound: false,
       })
 
-      // VisionCamera returns an absolute file path without file:// on Android.
+      // VisionCamera returns an absolute path without file:// on Android.
       const srcUri = photo.path.startsWith('file://')
         ? photo.path
         : `file://${photo.path}`
 
-      // 1. Save to device gallery so the inspector can find photos easily.
-      //    Request permission inline; if denied we still save to app storage.
-      const mlPerm = await MediaLibrary.requestPermissionsAsync()
-      if (mlPerm.status === 'granted') {
-        await MediaLibrary.saveToLibraryAsync(srcUri)
-      }
-
-      // 2. Copy to app-private storage — this path is what report_data references.
-      //    documentDirectory persists through app updates (not uninstalls).
+      // 1. Copy to app-private storage FIRST (fast, same-filesystem copy).
+      //    This path is what report_data stores and galleries read from.
       const dir  = `${FileSystem.documentDirectory}photos/${inspectionId}/`
       await FileSystem.makeDirectoryAsync(dir, { intermediates: true })
       const dest = `${dir}${Date.now()}.jpg`
       await FileSystem.copyAsync({ from: srcUri, to: dest })
 
-      // 3. Hand off the final path to whichever screen opened the camera.
+      // 2. Hand off path to the calling screen immediately.
       triggerCapture(dest)
-      navigation.goBack()
+
+      // 3. Show capture feedback and re-arm (camera stays open).
+      triggerFlash()
+      setIsCapturing(false)
+
+      // 4. Save to device gallery in the background — don't block the next shot.
+      if (mlPermGranted.current) {
+        MediaLibrary.saveToLibraryAsync(srcUri).catch(e =>
+          console.warn('[CameraScreen] gallery save failed:', e)
+        )
+      }
     } catch (err: any) {
       console.error('[CameraScreen] capture error', err)
       Alert.alert(
@@ -180,7 +201,7 @@ export default function CameraScreen() {
       )
       setIsCapturing(false)
     }
-  }, [isCapturing, device, flash, inspectionId, navigation])
+  }, [isCapturing, device, flash, inspectionId])
 
   // ── Controls ───────────────────────────────────────────────────────────────
   const toggleFacing = useCallback(() => {
@@ -241,6 +262,12 @@ export default function CameraScreen() {
               isActive={isFocused}
               photo={true}
               zoom={zoom}
+            />
+
+            {/* White flash overlay — briefly visible after each capture */}
+            <Animated.View
+              pointerEvents="none"
+              style={[StyleSheet.absoluteFill, { backgroundColor: '#fff', opacity: captureFlash }]}
             />
 
             {/* Top bar overlaid on the viewfinder */}

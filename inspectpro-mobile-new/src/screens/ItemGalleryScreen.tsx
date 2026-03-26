@@ -8,7 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native'
 import type { StackNavigationProp, RouteProp } from '@react-navigation/stack'
 import * as ImageManipulator from 'expo-image-manipulator'
-import * as FileSystem from 'expo-file-system'
+import * as FileSystem from 'expo-file-system/legacy'
 
 import type { RootStackParamList } from '../../App'
 import { useInspectionStore } from '../stores/inspectionStore'
@@ -444,7 +444,7 @@ export default function ItemGalleryScreen() {
               <Text style={[mStyles.label, { marginTop: spacing.md }]}>Item</Text>
               <TouchableOpacity
                 style={[mStyles.picker, itemPickerOpen && mStyles.pickerOpen]}
-                onPress={() => { setItemPickerOpen(v => !v); setRoomPickerOpen(false) }}
+                onPress={() => setItemPickerOpen(v => !v)}
               >
                 <Text style={mStyles.pickerVal}>{targetItem?.name || 'Select item…'}</Text>
                 <Text style={mStyles.chevron}>{itemPickerOpen ? '▲' : '▼'}</Text>

@@ -8,7 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native'
 import type { StackNavigationProp, RouteProp } from '@react-navigation/stack'
 import * as ImagePicker from 'expo-image-picker'
-import * as FileSystem from 'expo-file-system'
+import * as FileSystem from 'expo-file-system/legacy'
 
 import type { RootStackParamList } from '../../App'
 import { useInspectionStore } from '../stores/inspectionStore'
@@ -242,13 +242,16 @@ export default function RoomInspectionScreen() {
   }
 
   async function addPhotoUri(itemId: string, fileUri: string) {
-    const fresh = getLocalInspection(inspectionId)
+    // MUST await — getLocalInspection is async; without await fresh is a Promise,
+    // fresh?.report_data is undefined, and every capture overwrites the array with
+    // a single item instead of accumulating.
+    const fresh = await getLocalInspection(inspectionId)
     const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
     if (!rd[sectionKey]) rd[sectionKey] = {}
     if (!rd[sectionKey][String(itemId)]) rd[sectionKey][String(itemId)] = {}
     const existing: string[] = rd[sectionKey][String(itemId)]._photos || []
     rd[sectionKey][String(itemId)]._photos = [...existing, fileUri]
-    setReportData(inspectionId, rd)
+    await setReportData(inspectionId, rd)
   }
 
   async function removePhoto(itemId: string, idx: number) {
@@ -263,31 +266,36 @@ export default function RoomInspectionScreen() {
   }
 
   // ── Room overview photos ──────────────────────────────────────────────────
+  // Stored as rd[sectionKey]['_overview']._photos so that ItemGalleryScreen can
+  // open them with itemKey='_overview' — giving clerks full reassign/rotate/delete.
   function getOverviewPhotos(): string[] {
     try {
       const rd = JSON.parse(activeInspection?.report_data || '{}')
-      return rd[sectionKey]?._overviewPhotos || []
+      return rd[sectionKey]?.['_overview']?._photos || []
     } catch { return [] }
   }
 
   async function addOverviewPhotoUri(fileUri: string) {
-    const fresh = getLocalInspection(inspectionId)
+    // MUST await — same missing-await bug as addPhotoUri (fresh is a Promise otherwise)
+    const fresh = await getLocalInspection(inspectionId)
     const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
     if (!rd[sectionKey]) rd[sectionKey] = {}
-    rd[sectionKey]._overviewPhotos = [
-      ...(rd[sectionKey]._overviewPhotos || []),
+    if (!rd[sectionKey]['_overview']) rd[sectionKey]['_overview'] = {}
+    rd[sectionKey]['_overview']._photos = [
+      ...(rd[sectionKey]['_overview']._photos || []),
       fileUri,
     ]
-    setReportData(inspectionId, rd)
+    await setReportData(inspectionId, rd)
   }
 
   async function removeOverviewPhoto(idx: number) {
     const fresh = await getLocalInspection(inspectionId)
     const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
     if (!rd[sectionKey]) rd[sectionKey] = {}
-    const photos: string[] = rd[sectionKey]._overviewPhotos || []
+    if (!rd[sectionKey]['_overview']) rd[sectionKey]['_overview'] = {}
+    const photos: string[] = rd[sectionKey]['_overview']._photos || []
     photos.splice(idx, 1)
-    rd[sectionKey]._overviewPhotos = [...photos]
+    rd[sectionKey]['_overview']._photos = [...photos]
     await setReportData(inspectionId, rd)
   }
 
@@ -1014,6 +1022,13 @@ export default function RoomInspectionScreen() {
                       {ovPhotos.map((uri: string, idx: number) => (
                         <TouchableOpacity
                           key={idx}
+                          onPress={() => navigation.navigate('ItemGallery', {
+                            inspectionId,
+                            sectionKey,
+                            sectionName,
+                            itemKey: '_overview',
+                            itemName: 'Room Overview',
+                          })}
                           onLongPress={() => Alert.alert('Remove overview photo?', '', [
                             { text: 'Cancel', style: 'cancel' },
                             { text: 'Remove', style: 'destructive', onPress: () => removeOverviewPhoto(idx) },

@@ -26,11 +26,16 @@ export function setCameraTarget(handler: CameraHandler): void {
  * Called by CameraScreen once the photo file has been saved to documentDirectory.
  * Invokes the registered handler immediately if present, otherwise parks the URI
  * so the originating screen can collect it via processPendingPhotos().
+ *
+ * The handler is intentionally NOT cleared after each call — the camera stays open
+ * for multiple shots and every triggerCapture call must reach the same handler.
+ * The handler is only cleared when clearCameraTarget() is explicitly called
+ * (e.g. on screen unmount or when the user exits the camera).
  */
 export function triggerCapture(fileUri: string): void {
   if (_handler) {
     _handler(fileUri)
-    _handler = null
+    // Do NOT clear _handler here — camera may take more photos before closing
     _pendingUri = null
   } else {
     // Handler was cleared (e.g. component unmounted) — park for later collection

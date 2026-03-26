@@ -66,9 +66,12 @@ export default function RoomSelectionScreen() {
       const inspection = await getLocalInspection(inspectionId)
 
       // Use the template embedded at download time (works offline).
-      // Fall back to a live API call only when the cached template is absent
-      // (e.g. inspection was downloaded before this feature was added).
-      let tmplData: any = inspection?.template ?? null
+      // Guard against partial template objects (e.g. {id, name} without sections)
+      // that the inspection detail API may have included before we overwrite with
+      // the full template in FetchInspectionsScreen.
+      const cachedHasSections = Array.isArray(inspection?.template?.sections) &&
+                                inspection.template.sections.length > 0
+      let tmplData: any = cachedHasSections ? inspection.template : null
       if (!tmplData && inspection?.template_id) {
         try {
           const tmplRes = await api.getTemplate(inspection.template_id)

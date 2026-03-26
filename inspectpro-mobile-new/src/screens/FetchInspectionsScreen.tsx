@@ -93,10 +93,11 @@ export default function FetchInspectionsScreen() {
           typist_is_ai:      d.typist_is_ai         ?? d.typist?.is_ai              ?? false,
         }
 
-        // Pre-fetch and embed the template so the app works fully offline.
-        // RoomSelectionScreen and RoomInspectionScreen read `inspection.template`
-        // and only fall back to a live API call when this field is absent.
-        if (d.template_id && !normalised.template) {
+        // Always fetch the full template and overwrite whatever the inspection
+        // detail API returned. The detail endpoint may include a partial template
+        // object (e.g. {id, name} without sections), which is truthy but useless.
+        // We need the full object with sections[].items[] for rooms to work offline.
+        if (d.template_id) {
           try {
             const tmplRes = await api.getTemplate(d.template_id)
             normalised.template = tmplRes.data

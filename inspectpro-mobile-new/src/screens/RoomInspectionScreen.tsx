@@ -146,10 +146,12 @@ export default function RoomInspectionScreen() {
         let templateItems: any[] = []
 
         if (templateSectionId && fresh?.template_id) {
-          // Prefer the template embedded in the locally saved inspection (offline-safe).
-          // This is populated at download time by the backend. Falls back to a live API
-          // call only if the cached data pre-dates the template embedding feature.
-          let templateData: any = fresh?.template ?? null
+          // Use the template embedded at download time (offline-safe).
+          // Must check for sections[], not just template presence — the inspection
+          // detail API may have returned a partial template object without sections.
+          const cachedOk = Array.isArray(fresh?.template?.sections) &&
+                           fresh.template.sections.length > 0
+          let templateData: any = cachedOk ? fresh.template : null
           if (!templateData) {
             try {
               const tmplRes = await api.getTemplate(fresh.template_id)

@@ -5,7 +5,7 @@
 set -e
 
 echo "==> Running database migrations and seed check..."
-python3 -c "import run" || { echo "ERROR: run.py failed — see above for details"; exit 1; }
+python -c "import run" || { echo "ERROR: run.py failed — see above for details"; exit 1; }
 
 echo "==> Migrations complete. Starting Gunicorn on port ${PORT:-8000}..."
 exec gunicorn app:app \

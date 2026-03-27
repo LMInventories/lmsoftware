@@ -1,0 +1,10 @@
+# Tell Railway/nixpacks to use `npm install` instead of `npm ci`
+# so that a freshly added dependency (serve) doesn't cause a lock-file mismatch.
+[phases.install]
+cmds = ["npm install"]
+
+[phases.build]
+cmds = ["npm run build"]
+
+[start]
+cmd = "npm start"

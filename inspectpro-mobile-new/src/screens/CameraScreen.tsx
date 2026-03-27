@@ -9,6 +9,9 @@
  *   app-private documentDirectory for the in-app gallery.
  * • Shutter sound disabled (enableShutterSound: false).
  * • Pinch-to-zoom via GestureHandler (no Reanimated required).
+ * • Tap-to-focus: tap anywhere on the viewfinder to pre-lock AF.
+ * • Focus mode toggle (AF / 🔒): lock focus at a point for fast rapid-fire
+ *   shooting — no AF re-run before each capture.
  * • Front/back flip supported with separate device lookup.
  * • Camera paused when screen loses focus (navigation push/pop).
  */
@@ -48,12 +51,13 @@ import type { RootStackParamList } from '../../App'
 
 type CameraRouteProp = RouteProp<RootStackParamList, 'Camera'>
 type CameraNavProp   = StackNavigationProp<RootStackParamList, 'Camera'>
-type FlashMode = 'off' | 'on' | 'auto'
-type Facing    = 'back' | 'front'
+type FlashMode  = 'off' | 'on' | 'auto'
+type Facing     = 'back' | 'front'
+type FocusMode  = 'auto' | 'locked'
 
 // 4:3 viewfinder dimensions — width is full screen, height is 4/3 of that
-const SCREEN_W      = Dimensions.get('window').width
-const PREVIEW_H     = Math.round(SCREEN_W * 4 / 3)
+const SCREEN_W  = Dimensions.get('window').width
+const PREVIEW_H = Math.round(SCREEN_W * 4 / 3)
 
 export default function CameraScreen() {
   const navigation = useNavigation<CameraNavProp>()
@@ -122,13 +126,24 @@ export default function CameraScreen() {
   const isFocused = useIsFocused()
 
   // ── State ──────────────────────────────────────────────────────────────────
-  const cameraRef        = useRef<Camera>(null)
-  const [flash, setFlash]               = useState<FlashMode>('off')
-  const [zoom, setZoom]                 = useState(1)           // overridden once device loads
+  const cameraRef = useRef<Camera>(null)
+  const [flash, setFlash]                     = useState<FlashMode>('off')
+  const [zoom, setZoom]                       = useState(1)
   const [activeZoomLabel, setActiveZoomLabel] = useState('1×')
-  const [isCapturing, setIsCapturing]   = useState(false)
+  const [isCapturing, setIsCapturing]         = useState(false)
   // Last captured photo — shown as thumbnail next to shutter button
-  const [lastPhotoUri, setLastPhotoUri]   = useState<string | null>(null)
+  const [lastPhotoUri, setLastPhotoUri]       = useState<string | null>(null)
+
+  // ── Focus state ────────────────────────────────────────────────────────────
+  // focusMode 'auto'   — camera uses continuous AF (default); tap gives a
+  //                      brief one-shot focus hint then the reticule fades.
+  // focusMode 'locked' — focus is pre-locked at the last tap point; the
+  //                      reticule stays visible. Captures are faster because
+  //                      the camera does NOT re-run AF before each shot.
+  const [focusMode, setFocusMode]   = useState<FocusMode>('auto')
+  const [focusPoint, setFocusPoint] = useState<{ x: number; y: number } | null>(null)
+  const focusAnim    = useRef(new Animated.Value(0)).current
+  const focusTimer   = useRef<Animated.CompositeAnimation | null>(null)
 
   // Pre-request MediaLibrary permission once at mount (not on every shot)
   const mlPermGranted = useRef(false)
@@ -181,6 +196,45 @@ export default function CameraScreen() {
     console.log('[Camera] hasZoomBasedUltraWide:', hasZoomBasedUltraWide)
   }, [allDevices.length, backDevice?.id, ultraWideDevice?.id])
 
+  // ── Focus ──────────────────────────────────────────────────────────────────
+  // Calls camera.focus() to pre-lock AF at a point, then shows the reticule.
+  // persistent=true keeps the reticule visible (locked mode); false fades it.
+  function handleFocus(x: number, y: number, persistent: boolean) {
+    // Fire-and-forget — some devices don't support manual focus, silently ignore
+    cameraRef.current?.focus({ x, y }).catch(() => {})
+
+    // Cancel any running fade-out
+    focusTimer.current?.stop()
+    setFocusPoint({ x, y })
+    focusAnim.setValue(1)
+
+    if (!persistent) {
+      // Auto mode: show reticule briefly then fade it out
+      focusTimer.current = Animated.sequence([
+        Animated.delay(1200),
+        Animated.timing(focusAnim, { toValue: 0, duration: 400, useNativeDriver: true }),
+      ])
+      focusTimer.current.start(({ finished }) => {
+        if (finished) setFocusPoint(null)
+      })
+    }
+    // Locked mode: reticule stays at full opacity (no timer)
+  }
+
+  const cycleFocusMode = useCallback(() => {
+    if (focusMode === 'auto') {
+      // Switch to locked — pre-lock focus at the centre of the viewfinder
+      setFocusMode('locked')
+      handleFocus(SCREEN_W / 2, PREVIEW_H / 2, true)
+    } else {
+      // Switch back to auto — clear the lock indicator
+      setFocusMode('auto')
+      focusTimer.current?.stop()
+      focusAnim.setValue(0)
+      setFocusPoint(null)
+    }
+  }, [focusMode])
+
   // ── Lens / zoom buttons ────────────────────────────────────────────────────
   interface LensButton { label: string; zoom: number; lens: 'main' | 'ultraWide' }
 
@@ -226,6 +280,15 @@ export default function CameraScreen() {
       setActiveZoomLabel('') // deselect preset button during manual pinch
     })
     .runOnJS(true)
+
+  // ── Tap-to-focus gesture ───────────────────────────────────────────────────
+  // Sits on the viewfinder only. In 'locked' mode the focus stays put;
+  // in 'auto' mode it gives a brief one-shot pre-focus then fades.
+  const tapGesture = Gesture.Tap()
+    .runOnJS(true)
+    .onEnd((e) => {
+      handleFocus(e.x, e.y, focusMode === 'locked')
+    })
 
   // ── Capture ────────────────────────────────────────────────────────────────
   const handleCapture = useCallback(async () => {
@@ -280,13 +343,18 @@ export default function CameraScreen() {
   const toggleFacing = useCallback(() => {
     setFacing(f => f === 'back' ? 'front' : 'back')
     setLensMode('main')  // always start on main lens when flipping
+    // Clear any focus lock when flipping cameras
+    setFocusMode('auto')
+    focusAnim.setValue(0)
+    setFocusPoint(null)
   }, [])
 
   const cycleFlash = useCallback(() => {
     setFlash(f => f === 'off' ? 'on' : f === 'on' ? 'auto' : 'off')
   }, [])
 
-  const flashLabel = flash === 'off' ? '⚡✕' : flash === 'on' ? '⚡' : '⚡A'
+  const flashLabel   = flash === 'off' ? '⚡✕' : flash === 'on' ? '⚡' : '⚡A'
+  const focusLocked  = focusMode === 'locked'
 
   // ── Permission gate ────────────────────────────────────────────────────────
   if (!hasPermission) {
@@ -324,37 +392,67 @@ export default function CameraScreen() {
   // ── Camera UI ──────────────────────────────────────────────────────────────
   return (
     <GestureHandlerRootView style={styles.root}>
+      {/* Outer gesture detector: pinch-to-zoom across the whole screen */}
       <GestureDetector gesture={pinchGesture}>
         <View style={styles.root}>
 
-          {/* ── 4:3 viewfinder ── */}
-          <View style={styles.viewfinder}>
-            <Camera
-              ref={cameraRef}
-              style={StyleSheet.absoluteFill}
-              device={device}
-              isActive={isFocused}
-              photo={true}
-              zoom={zoom}
-              photoQualityBalance="speed"
-            />
+          {/* ── 4:3 viewfinder — tap anywhere to focus ── */}
+          <GestureDetector gesture={tapGesture}>
+            <View style={styles.viewfinder}>
+              <Camera
+                ref={cameraRef}
+                style={StyleSheet.absoluteFill}
+                device={device}
+                isActive={isFocused}
+                photo={true}
+                zoom={zoom}
+                photoQualityBalance="speed"
+              />
 
-            {/* White flash overlay — briefly visible after each capture */}
-            <Animated.View
-              pointerEvents="none"
-              style={[StyleSheet.absoluteFill, { backgroundColor: '#fff', opacity: captureFlash }]}
-            />
+              {/* White flash overlay — briefly visible after each capture */}
+              <Animated.View
+                pointerEvents="none"
+                style={[StyleSheet.absoluteFill, { backgroundColor: '#fff', opacity: captureFlash }]}
+              />
 
-            {/* Top bar overlaid on the viewfinder */}
-            <View style={styles.topBar}>
-              <TouchableOpacity style={styles.iconBtn} onPress={() => navigation.goBack()}>
-                <Text style={styles.iconText}>✕</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.iconBtn} onPress={cycleFlash}>
-                <Text style={styles.iconText}>{flashLabel}</Text>
-              </TouchableOpacity>
+              {/* Focus reticule — appears at tap point, fades in auto / stays in locked */}
+              {focusPoint && (
+                <Animated.View
+                  pointerEvents="none"
+                  style={[
+                    styles.focusReticule,
+                    focusLocked && styles.focusReticuleLocked,
+                    {
+                      left: focusPoint.x - 30,
+                      top:  focusPoint.y - 30,
+                      opacity: focusLocked ? 0.9 : focusAnim,
+                    },
+                  ]}
+                />
+              )}
+
+              {/* Top bar overlaid on the viewfinder */}
+              <View style={styles.topBar}>
+                <TouchableOpacity style={styles.iconBtn} onPress={() => navigation.goBack()}>
+                  <Text style={styles.iconText}>✕</Text>
+                </TouchableOpacity>
+
+                {/* Focus mode toggle: AF (auto) ↔ 🔒 (locked) */}
+                <TouchableOpacity
+                  style={[styles.iconBtn, focusLocked && styles.iconBtnActive]}
+                  onPress={cycleFocusMode}
+                >
+                  <Text style={[styles.iconText, focusLocked && styles.iconTextActive]}>
+                    {focusLocked ? '🔒' : 'AF'}
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity style={styles.iconBtn} onPress={cycleFlash}>
+                  <Text style={styles.iconText}>{flashLabel}</Text>
+                </TouchableOpacity>
+              </View>
             </View>
-          </View>
+          </GestureDetector>
 
           {/* ── Controls below the viewfinder ── */}
           <View style={styles.controlsArea}>
@@ -577,9 +675,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  // Active state for the AF/lock toggle button (yellow when locked)
+  iconBtnActive: {
+    backgroundColor: 'rgba(255,220,0,0.9)',
+  },
   iconText: {
     color: '#fff',
     fontSize: 18,
+  },
+  iconTextActive: {
+    color: '#000',
   },
   shutter: {
     width: 72,
@@ -623,4 +728,18 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.07)',
   },
 
+  // Focus reticule — yellow square that appears at tap point
+  focusReticule: {
+    position: 'absolute',
+    width: 60,
+    height: 60,
+    borderWidth: 1.5,
+    borderColor: '#ffdc00',
+    borderRadius: 3,
+  },
+  // Locked variant: slightly thicker border to indicate persistent lock
+  focusReticuleLocked: {
+    borderWidth: 2.5,
+    borderColor: '#ffdc00',
+  },
 })

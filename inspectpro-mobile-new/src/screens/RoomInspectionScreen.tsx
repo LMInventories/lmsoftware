@@ -77,6 +77,8 @@ export default function RoomInspectionScreen() {
   const [typistMode_, setTypistMode_]           = useState<'ai_instant' | 'ai_room' | 'human' | null>(null)
   const [hasAiTypist, setHasAiTypist]           = useState(false)   // true only for ai_instant
   const [aiProcessingItem, setAiProcessingItem] = useState<string | null>(null)
+  // URI of the recording currently being transcribed per item — drives widget pulse + row highlight
+  const [transcribingUris, setTranscribingUris] = useState<Record<string, string | null>>({})
   const [aiError, setAiError]                   = useState('')
 
   // Cleanliness dropdown state
@@ -112,25 +114,31 @@ export default function RoomInspectionScreen() {
 
       // Determine typist mode
       if (fresh) {
-        const role = user?.role
-        const typistMode = user?.typist_mode   // clerk's own typist_mode setting
-        const typistName = (fresh.typist_name || fresh.typist?.name || '').toLowerCase()
-        const typistIsAi = fresh.typist_is_ai === true ||
-                           fresh.typist?.is_ai === true ||
-                           typistName === 'ai typist' ||
-                           typistName.startsWith('ai ')
+        // Priority order for resolving which recording/transcription UI to show:
+        //   1. Clerk's own typist_mode (set in their user profile) — most direct signal
+        //   2. The inspection's assigned typist's typist_mode (e.g. AI typist account)
+        //   3. Legacy: inspection's typist_is_ai boolean → treat as ai_instant
 
-        // Debug — remove once confirmed working
-        console.log('[TypistMode] role:', role, 'typistMode:', typistMode,
-                    'typistName:', typistName, 'typistIsAi:', typistIsAi,
-                    'typist_id:', fresh.typist_id)
+        const clerkMode   = user?.typist_mode   // clerk's own preference (now returned by /me)
+        const typistMode  = (fresh as any).typist_mode        // inspection typist's mode (new field)
+        const typistName  = (fresh.typist_name || (fresh as any).typist?.name || '').toLowerCase()
+        const typistIsAi  = (fresh as any).typist_is_ai === true ||
+                            (fresh as any).typist?.is_ai === true ||
+                            typistName === 'ai typist' ||
+                            typistName.startsWith('ai ')
 
-        // Resolve the active mode for this inspection.
-        // typistIsAi (legacy: typist record flagged is_ai) → treat as ai_instant.
+        console.log('[TypistMode] clerkMode:', clerkMode, 'typistMode:', typistMode,
+                    'typistIsAi:', typistIsAi, 'typistName:', typistName)
+
+        // Resolution: clerk preference wins; inspection typist mode is fallback
         let resolved: 'ai_instant' | 'ai_room' | 'human' | null = null
-        if (typistMode === 'ai_instant' || typistIsAi) resolved = 'ai_instant'
-        else if (typistMode === 'ai_room')             resolved = 'ai_room'
-        else if (typistMode === 'human')               resolved = 'human'
+        const effectiveMode = clerkMode || typistMode  // clerk wins, typist is fallback
+
+        if      (effectiveMode === 'ai_instant' || typistIsAi) resolved = 'ai_instant'
+        else if (effectiveMode === 'ai_room')                  resolved = 'ai_room'
+        else if (effectiveMode === 'human')                    resolved = 'human'
+
+        console.log('[TypistMode] resolved:', resolved)
 
         setTypistMode_(resolved)
         setHasAiTypist(resolved === 'ai_instant')  // per-item mic only in ai_instant
@@ -429,6 +437,7 @@ export default function RoomInspectionScreen() {
     durationMs: number
   ) {
     setAiProcessingItem(itemId)
+    setTranscribingUris(prev => ({ ...prev, [itemId]: uri }))
     setAiError('')
     try {
       // Read file as base64
@@ -483,6 +492,7 @@ export default function RoomInspectionScreen() {
       Alert.alert('AI Error', msg)
     } finally {
       setAiProcessingItem(null)
+      setTranscribingUris(prev => ({ ...prev, [itemId]: null }))
     }
   }
 
@@ -538,6 +548,7 @@ export default function RoomInspectionScreen() {
 
     // Transcribe and fill this sub-item's description + condition
     setAiProcessingItem(sid)
+    setTranscribingUris(prev => ({ ...prev, [sid]: uri }))
     setAiError('')
     try {
       const { readAsStringAsync, EncodingType } = await import('expo-file-system') as any
@@ -570,6 +581,7 @@ export default function RoomInspectionScreen() {
       setAiError(msg)
     } finally {
       setAiProcessingItem(null)
+      setTranscribingUris(prev => ({ ...prev, [sid]: null }))
     }
   }
 
@@ -749,23 +761,17 @@ export default function RoomInspectionScreen() {
     // All other modes use the room dictation recorder at the bottom
     if (!hasAiTypist) return null
 
-    const isProcessing = aiProcessingItem === item.id
-
     // AI instant mode: per-item recorder widget
+    // AudioRecorderWidget handles all transcribing state visually via transcribingUri prop
     return (
       <View style={styles.voiceBlock}>
-        {isProcessing && (
-          <View style={styles.aiProcessingBadge}>
-            <ActivityIndicator size="small" color={colors.accent} />
-            <Text style={styles.aiProcessingText}>AI transcribing…</Text>
-          </View>
-        )}
         <AudioRecorderWidget
           recordings={recordings[item.id] || []}
           onRecordingComplete={async (uri, dur) => handleRecordingComplete(item, uri, dur)}
           onDeleteRecording={async (uri) => {
             setRecordings(prev => ({ ...prev, [item.id]: (prev[item.id] || []).filter((r: any) => r.file_uri !== uri) }))
           }}
+          transcribingUri={transcribingUris[item.id] ?? null}
           compact
         />
       </View>

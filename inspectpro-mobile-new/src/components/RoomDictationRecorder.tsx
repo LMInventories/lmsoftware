@@ -21,7 +21,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import {
   View, Text, TouchableOpacity, StyleSheet,
-  ActivityIndicator, Alert,
+  ActivityIndicator, Alert, Animated,
 } from 'react-native'
 import {
   useAudioRecorder as useExpoAudioRecorder,
@@ -82,6 +82,26 @@ export default function RoomDictationRecorder({
 
   const timerRef     = useRef<ReturnType<typeof setInterval> | null>(null)
   const startTimeRef = useRef<number>(0)
+
+  // Pulse animation — runs while mode === 'transcribing'
+  const pulseAnim = useRef(new Animated.Value(1)).current
+  const pulseLoop = useRef<Animated.CompositeAnimation | null>(null)
+
+  useEffect(() => {
+    if (mode === 'transcribing') {
+      pulseLoop.current = Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseAnim, { toValue: 1.15, duration: 650, useNativeDriver: true }),
+          Animated.timing(pulseAnim, { toValue: 1.00, duration: 650, useNativeDriver: true }),
+        ])
+      )
+      pulseLoop.current.start()
+    } else {
+      pulseLoop.current?.stop()
+      pulseAnim.setValue(1)
+    }
+    return () => { pulseLoop.current?.stop() }
+  }, [mode])
 
   useEffect(() => () => { timerRef.current && clearInterval(timerRef.current) }, [])
 
@@ -281,27 +301,28 @@ export default function RoomDictationRecorder({
       <View style={bar.row}>
         {/* Left: Record / Pause button */}
         <View style={bar.leftSection}>
-          {isTranscribing ? (
-            <View style={[bar.recBtn, bar.recBtnSaving]}>
-              <ActivityIndicator color={FG} />
-            </View>
-          ) : isRecording ? (
-            <TouchableOpacity style={[bar.recBtn, bar.recBtnLive]} onPress={handlePause}>
-              {/* Pause icon: two bars */}
-              <View style={bar.pauseIcon}>
-                <View style={bar.pauseBar} />
-                <View style={bar.pauseBar} />
+          <Animated.View style={{ transform: [{ scale: isTranscribing ? pulseAnim : 1 }] }}>
+            {isTranscribing ? (
+              <View style={[bar.recBtn, bar.recBtnTranscribing]}>
+                <ActivityIndicator color={FG} />
               </View>
-            </TouchableOpacity>
-          ) : (
-            <TouchableOpacity
-              style={[bar.recBtn, isTranscribing && bar.disabled]}
-              onPress={handleRecord}
-              disabled={isTranscribing}
-            >
-              <View style={bar.recDot} />
-            </TouchableOpacity>
-          )}
+            ) : isRecording ? (
+              <TouchableOpacity style={[bar.recBtn, bar.recBtnLive]} onPress={handlePause}>
+                {/* Pause icon: two bars */}
+                <View style={bar.pauseIcon}>
+                  <View style={bar.pauseBar} />
+                  <View style={bar.pauseBar} />
+                </View>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                style={bar.recBtn}
+                onPress={handleRecord}
+              >
+                <View style={bar.recDot} />
+              </TouchableOpacity>
+            )}
+          </Animated.View>
           <Text style={bar.recLabel}>
             {isTranscribing
               ? 'Processing…'
@@ -435,8 +456,8 @@ const bar = StyleSheet.create({
     shadowRadius: 8,
     elevation: 6,
   },
-  recBtnLive:   { backgroundColor: '#f87171' },
-  recBtnSaving: { backgroundColor: '#6b7280' },
+  recBtnLive:         { backgroundColor: '#f87171' },
+  recBtnTranscribing: { backgroundColor: '#6366f1' },   // indigo — matches AudioRecorderWidget
   recDot:  { width: 20, height: 20, borderRadius: 10, backgroundColor: FG },
   pauseIcon: { flexDirection: 'row', gap: 4 },
   pauseBar:  { width: 4, height: 18, borderRadius: 2, backgroundColor: FG },

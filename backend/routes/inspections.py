@@ -73,13 +73,15 @@ def inspection_detail(inspection):
 
     if inspection.typist:
         result['typist'] = {
-            'id':    inspection.typist.id,
-            'name':  inspection.typist.name,
-            'email': inspection.typist.email,
-            'phone': inspection.typist.phone,
-            'is_ai': inspection.typist.is_ai,
+            'id':          inspection.typist.id,
+            'name':        inspection.typist.name,
+            'email':       inspection.typist.email,
+            'phone':       inspection.typist.phone,
+            'is_ai':       inspection.typist.is_ai,
+            'typist_mode': inspection.typist.typist_mode,  # 'ai_instant'|'ai_room'|'human'|null
         }
-    result['typist_is_ai'] = inspection.typist.is_ai if inspection.typist else False
+    result['typist_is_ai']   = inspection.typist.is_ai        if inspection.typist else False
+    result['typist_mode']    = inspection.typist.typist_mode   if inspection.typist else None
 
     if inspection.template:
         result['template_name'] = inspection.template.name

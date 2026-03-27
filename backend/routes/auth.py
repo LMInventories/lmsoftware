@@ -28,10 +28,14 @@ def login():
     return jsonify({
         'token': access_token,
         'user': {
-            'id': user.id,
-            'name': user.name,
-            'email': user.email,
-            'role': user.role
+            'id':          user.id,
+            'name':        user.name,
+            'email':       user.email,
+            'role':        user.role,
+            'color':       user.color,
+            'is_ai':       user.is_ai,
+            'typist_mode': user.typist_mode,   # 'ai_instant' | 'ai_room' | 'human' | null
+            'client_id':   user.client_id,
         }
     })
 
@@ -46,8 +50,12 @@ def get_current_user():
         return jsonify({'error': 'User not found'}), 404
     
     return jsonify({
-        'id': user.id,
-        'name': user.name,
-        'email': user.email,
-        'role': user.role
+        'id':          user.id,
+        'name':        user.name,
+        'email':       user.email,
+        'role':        user.role,
+        'color':       user.color,
+        'is_ai':       user.is_ai,
+        'typist_mode': user.typist_mode,
+        'client_id':   user.client_id,
     })

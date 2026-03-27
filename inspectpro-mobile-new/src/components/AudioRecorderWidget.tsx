@@ -1,5 +1,8 @@
-import React, { useState } from 'react'
-import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native'
+import React, { useState, useRef, useEffect } from 'react'
+import {
+  View, Text, TouchableOpacity, StyleSheet,
+  ActivityIndicator, Animated,
+} from 'react-native'
 import { useAudioRecorder } from '../hooks/useAudioRecorder'
 import { colors, font, radius, spacing } from '../utils/theme'
 
@@ -8,6 +11,7 @@ interface Props {
   onRecordingComplete: (uri: string, durationMs: number) => Promise<void>
   onDeleteRecording: (uri: string, id?: number) => Promise<void>
   onTranscriptionChange?: (uri: string, text: string) => void
+  /** URI of the recording currently being transcribed — drives the pulsing state */
   transcribingUri?: string | null
   compact?: boolean
 }
@@ -20,8 +24,29 @@ export default function AudioRecorderWidget({
   compact,
 }: Props) {
   const { isRecording, startRecording, stopRecording, playRecording, stopPlayback, formatDuration } = useAudioRecorder()
-  const [saving, setSaving] = useState(false)
+  const [saving, setSaving]       = useState(false)
   const [playingUri, setPlayingUri] = useState<string | null>(null)
+
+  // Pulse animation — runs while any recording is being transcribed
+  const pulseAnim = useRef(new Animated.Value(1)).current
+  const pulseLoop = useRef<Animated.CompositeAnimation | null>(null)
+  const isTranscribing = !!transcribingUri
+
+  useEffect(() => {
+    if (isTranscribing) {
+      pulseLoop.current = Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseAnim, { toValue: 1.12, duration: 600, useNativeDriver: true }),
+          Animated.timing(pulseAnim, { toValue: 1.00, duration: 600, useNativeDriver: true }),
+        ])
+      )
+      pulseLoop.current.start()
+    } else {
+      pulseLoop.current?.stop()
+      pulseAnim.setValue(1)
+    }
+    return () => { pulseLoop.current?.stop() }
+  }, [isTranscribing])
 
   async function handleToggleRecord() {
     if (isRecording) {
@@ -45,32 +70,50 @@ export default function AudioRecorderWidget({
     }
   }
 
+  // Derive button visual state:
+  //   recording    → red / active
+  //   transcribing → accent / pulsing
+  //   saving       → spinner
+  //   idle         → primary / normal
+  const btnStyle = isRecording
+    ? styles.recordBtnRecording
+    : isTranscribing
+    ? styles.recordBtnTranscribing
+    : null
+
   return (
     <View style={styles.container}>
-      {/* Full-width Record / Stop button */}
-      <TouchableOpacity
-        style={[styles.recordBtn, isRecording && styles.recordBtnActive]}
-        onPress={handleToggleRecord}
-        disabled={saving}
-        activeOpacity={0.8}
-      >
-        {saving ? (
-          <ActivityIndicator color="#fff" size="small" />
-        ) : isRecording ? (
-          <View style={styles.recordBtnInner}>
-            <View style={styles.stopSquare} />
-            <Text style={styles.recordBtnText}>Stop</Text>
-            <View style={styles.recordingDot} />
-          </View>
-        ) : (
-          <View style={styles.recordBtnInner}>
-            <View style={styles.micCircle}>
-              <Text style={styles.micEmoji}>🎙</Text>
+      {/* Full-width Record / Stop / Transcribing button */}
+      <Animated.View style={{ transform: [{ scale: isTranscribing ? pulseAnim : 1 }] }}>
+        <TouchableOpacity
+          style={[styles.recordBtn, btnStyle]}
+          onPress={handleToggleRecord}
+          disabled={saving || isTranscribing}
+          activeOpacity={0.8}
+        >
+          {saving ? (
+            <ActivityIndicator color="#fff" size="small" />
+          ) : isTranscribing ? (
+            <View style={styles.recordBtnInner}>
+              <ActivityIndicator color="#fff" size="small" />
+              <Text style={styles.recordBtnText}>Transcribing…</Text>
             </View>
-            <Text style={styles.recordBtnText}>Record</Text>
-          </View>
-        )}
-      </TouchableOpacity>
+          ) : isRecording ? (
+            <View style={styles.recordBtnInner}>
+              <View style={styles.stopSquare} />
+              <Text style={styles.recordBtnText}>Stop</Text>
+              <View style={styles.recordingDot} />
+            </View>
+          ) : (
+            <View style={styles.recordBtnInner}>
+              <View style={styles.micCircle}>
+                <Text style={styles.micEmoji}>🎙</Text>
+              </View>
+              <Text style={styles.recordBtnText}>Record</Text>
+            </View>
+          )}
+        </TouchableOpacity>
+      </Animated.View>
 
       {/* Recordings list */}
       {recordings.length > 0 && (
@@ -92,7 +135,7 @@ export default function AudioRecorderWidget({
                 ) : transcribingUri === rec.uri ? (
                   <View style={styles.transcribingRow}>
                     <ActivityIndicator size="small" color={colors.accent} />
-                    <Text style={styles.transcribingText}>Transcribing…</Text>
+                    <Text style={styles.transcribingText}>AI filling fields…</Text>
                   </View>
                 ) : (
                   <Text style={styles.recLabel}>
@@ -104,6 +147,7 @@ export default function AudioRecorderWidget({
               <TouchableOpacity
                 style={styles.deleteBtn}
                 onPress={() => onDeleteRecording(rec.uri, rec.id)}
+                disabled={transcribingUri === rec.uri}
               >
                 <Text style={styles.deleteBtnText}>✕</Text>
               </TouchableOpacity>
@@ -127,7 +171,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  recordBtnActive: { backgroundColor: colors.danger },
+  recordBtnRecording: {
+    backgroundColor: colors.danger,
+  },
+  recordBtnTranscribing: {
+    backgroundColor: colors.accent,   // distinct colour for transcribing state
+  },
   recordBtnInner: {
     flexDirection: 'row',
     alignItems: 'center',

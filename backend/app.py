@@ -27,13 +27,21 @@ def create_app():
     app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=24)
 
     # ── CORS ──────────────────────────────────────────────────────────────────
+    # Base origins always allowed (localhost for dev, custom domain for prod)
     allowed_origins = [
         'http://localhost:5173',
         'http://localhost:3000',
         'http://localhost:8081',
         'https://app.lminventories.co.uk',
-        'https://lmsoftware-tau.vercel.app',
     ]
+    # CORS_ORIGINS env var: comma-separated extra origins (set to your Railway
+    # frontend URL in the Railway dashboard, e.g. https://xxx.up.railway.app)
+    extra_origins = os.environ.get('CORS_ORIGINS', '')
+    for origin in extra_origins.split(','):
+        origin = origin.strip()
+        if origin:
+            allowed_origins.append(origin)
+
     CORS(app, resources={
         r'/api/*': {
             'origins': allowed_origins,
@@ -42,6 +50,11 @@ def create_app():
             'supports_credentials': True,
         }
     })
+
+    # ── Health check (used by Railway, load balancers, uptime monitors) ───────
+    @app.route('/health')
+    def health():
+        return {'status': 'ok'}, 200
 
     db.init_app(app)
     JWTManager(app)

@@ -1,7 +1,9 @@
 import axios from 'axios'
 import * as SecureStore from 'expo-secure-store'
 
-const BASE_URL = 'https://lmsoftware.onrender.com'
+// Set EXPO_PUBLIC_API_URL in your .env or EAS secrets to override.
+// e.g. EXPO_PUBLIC_API_URL=https://inspectpro-backend.up.railway.app
+const BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'https://lmsoftware.onrender.com'
 
 const http = axios.create({
   baseURL: BASE_URL,

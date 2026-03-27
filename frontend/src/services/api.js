@@ -1,15 +1,15 @@
 import axios from 'axios'
 
 // ── BASE URL RESOLUTION ───────────────────────────────────────────────────────
+// Set VITE_API_URL in Railway frontend service env vars to point at the backend.
+// e.g. VITE_API_URL=https://inspectpro-backend.up.railway.app
 const BACKEND_LAN_IP = '192.168.50.2'
-const RENDER_URL     = 'https://lmsoftware.onrender.com'
 
 function getBaseURL() {
   if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL
   try {
     if (window.Capacitor?.isNativePlatform?.()) return `http://${BACKEND_LAN_IP}:5000`
   } catch (_) {}
-  if (typeof window !== 'undefined' && !window.location.hostname.includes('localhost')) return RENDER_URL
   return ''
 }
 

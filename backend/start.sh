@@ -5,7 +5,7 @@
 set -e
 
 echo "==> Running database migrations and seed check..."
-python -c "import run"
+python3 -c "import run"
 
 echo "==> Starting Gunicorn on port ${PORT:-8000}..."
 exec gunicorn app:app \

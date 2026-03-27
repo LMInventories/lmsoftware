@@ -43,11 +43,15 @@ The product was previously branded "LM Inventories". Rebranding to InspectPro is
 - **Framework:** React Native with Expo SDK 55
 - **React Native version:** 0.83.2
 - **React version:** 19.2.0
-- **Navigation:** React Navigation v7 (Stack)
+- **New Architecture:** enabled (`newArchEnabled: true` in gradle.properties)
+- **Navigation:** React Navigation v7 (Stack) — `@react-navigation/stack ^6.4.1`
 - **State:** Zustand v5 (global store), SQLite via `expo-sqlite` v15 (local persistence)
-- **Audio:** `expo-audio` v55
-- **Camera:** `expo-camera` v55 + `expo-media-library` v55
-- **HTTP:** Axios
+- **Audio:** `expo-audio ~55.0.9`
+- **Camera:** `react-native-vision-camera ^4.0.0` + `expo-media-library ~55.0.10`
+- **File system:** `expo-file-system ~55.0.11` — **always import as `expo-file-system/legacy`** to get `makeDirectoryAsync`/`copyAsync` API
+- **Image:** `expo-image-picker ~55.0.13`, `expo-image-manipulator ~55.0.11`
+- **Gestures:** `react-native-gesture-handler ~2.30.0`
+- **HTTP:** Axios `^1.7.7`
 - **Build:** EAS Build (managed workflow)
 - **Dev testing:** Expo Go (SDK 55)
 - **Project path:** `C:\Projects\lmsoftware\inspectpro-mobile-new`
@@ -134,6 +138,13 @@ Report content is stored as a JSON blob (`report_data`) on the Inspection model:
 System-wide sections present in every inspection regardless of template:
 `keys`, `meter_readings`, `condition_summary`, `cleaning_summary`, `fire_door_safety`, `health_safety`, `smoke_alarms`
 
+Each fixed section type produces a different item field shape (see `adaptExtraItem()` in `RoomInspectionScreen.tsx`):
+- `keys` → `{ hasDescription: true, hasPhotos: true }`
+- `meter_readings` → `{ hasReading: true, hasLocationSerial: true, hasPhotos: true }`
+- `cleaning_summary` → `{ hasCleanliness: true, hasCleanlinessNotes: true, hasPhotos: true }`
+- `fire_door_safety`, `smoke_alarms`, `health_safety` → `{ hasAnswer: true, hasNotes: true, hasPhotos: true }`
+- `condition_summary` (default) → `{ hasConditionText: true, hasPhotos: true }`
+
 ---
 
 ## 5. Architecture Patterns
@@ -159,8 +170,11 @@ System-wide sections present in every inspection regardless of template:
   - `inspectionStore` — active inspection, `report_data`, `setReportData()`
 - **Local persistence:** SQLite via `expo-sqlite` v15 synchronous API (`openDatabaseSync`, `db.runSync`, `db.getAllSync`, `db.getFirstSync`)
 - **Audio:** `expo-audio` v55 — `useAudioRecorder(preset)` hook, `record()` is synchronous (not async), `recorder.uri` is populated after `await recorder.stop()` resolves
-- **Camera:** `expo-camera` v55 `CameraView` + `expo-media-library` v55. Photos saved to "InspectPro" gallery album AND to `documentDirectory`. Base64 read after copy.
-- **Camera communication pattern:** `cameraStore.ts` module — `setCameraTarget(handler)` before navigating, `processPendingPhotos()` in `useFocusEffect` on return
+- **Camera:** `react-native-vision-camera v4` (NOT expo-camera). `Camera.getAvailableCameraDevices()` is a synchronous static call that returns ALL physical cameras. `useCameraDevice('back')` only returns one fused device and must NOT be used for ultra-wide detection.
+- **Camera communication pattern:** `cameraStore.ts` — `setCameraTarget(handler)` before navigating to CameraScreen, `processPendingPhotos()` in `useFocusEffect` on return
+- **Photo storage:** Photos saved to device gallery via `expo-media-library` AND copied to `FileSystem.documentDirectory` for in-app use. Always use `expo-file-system/legacy` import.
+- **Room ordering:** `report_data._roomOrder` — persisted array of room keys representing the user-defined display order. `RoomSelectionScreen` reads this via `buildOrderedRooms()`.
+- **Fixed section extras:** User-added items in fixed sections are stored in `report_data[sectionKey]._extra` as `{ _eid, name }`. The `adaptExtraItem()` helper in `RoomInspectionScreen` produces the correct field shape per section type.
 
 ---
 
@@ -185,32 +199,75 @@ System-wide sections present in every inspection regardless of template:
 | `src/services/api.js` | Axios instance, all API calls |
 | `src/views/InspectionsView.vue` | Inspection list with custom multi-select dropdowns, calendar view |
 | `src/views/EditReportView.vue` | Main report editing UI — loads `report_data`, sends audio to AI |
-| `src/views/TemplateEditorView.vue` | Template section/item editor with drag reorder and preset save/overwrite/delete |
-| `src/views/TemplatesSettings.vue` | Template list |
+| `src/views/settings/TemplateEditorView.vue` | Template section/item editor with drag reorder and preset save/overwrite/delete |
+| `src/views/settings/TemplatesView.vue` | Template list |
 | `src/views/UsersView.vue` | User management with typist tier radio picker |
 | `src/components/settings/TemplatePreviewModal.vue` | Template preview |
 
 ### Mobile
 | File | Purpose |
 |---|---|
-| `App.tsx` | Navigation stack, `RootStackParamList` type |
+| `App.tsx` | Navigation stack, `RootStackParamList` type definitions |
 | `src/services/api.ts` | Axios instance, all API calls including transcription |
 | `src/services/database.ts` | SQLite v15 synchronous API wrapper |
-| `src/services/cameraStore.ts` | Module-level store for camera→screen photo handoff |
-| `src/stores/authStore.ts` | Zustand auth store |
+| `src/services/cameraStore.ts` | Module-level store for camera→screen photo handoff (`setCameraTarget` / `triggerCapture`) |
+| `src/stores/authStore.ts` | Zustand auth store (JWT token, user object) |
 | `src/stores/inspectionStore.ts` | Zustand inspection/report_data store |
-| `src/screens/RoomInspectionScreen.tsx` | Per-item recording, AI transcription, photos, sub-items |
-| `src/screens/RoomSelectionScreen.tsx` | Room list with reorder, rename, add from preset |
-| `src/screens/CameraScreen.tsx` | Full-screen camera with gallery save |
-| `src/screens/ItemGalleryScreen.tsx` | Photo gallery with lightbox, rotate, delete, AI reassign |
-| `src/screens/SyncScreen.tsx` | Inspection sync back to server |
-| `src/components/HumanTypistRecorder.tsx` | Persistent audio bar for human typist mode |
+| `src/screens/LoginScreen.tsx` | Login form |
+| `src/screens/FetchInspectionsScreen.tsx` | Download inspections from server |
+| `src/screens/InspectionListScreen.tsx` | List downloaded inspections |
+| `src/screens/PropertyOverviewScreen.tsx` | Inspection overview before entering rooms |
+| `src/screens/RoomSelectionScreen.tsx` | Room list — swipe for options, drag `≡` handle to reorder, supports `_roomOrder` persistence |
+| `src/screens/RoomInspectionScreen.tsx` | Per-room inspection — recording, AI transcription, photos, sub-items, fixed section extras (`adaptExtraItem`) |
+| `src/screens/CameraScreen.tsx` | Full-screen camera (VisionCamera v4) — ultra-wide detection, capture thumbnail, navigates to ItemGallery on thumb tap |
+| `src/screens/ItemGalleryScreen.tsx` | Photo gallery — lightbox, rotate, delete, AI reassign |
+| `src/screens/SyncScreen.tsx` | Sync inspection back to server |
 | `src/components/AudioRecorderWidget.tsx` | Per-item audio recorder for AI typist mode |
-| `src/hooks/useAudioRecorder.ts` | expo-audio wrapper hook |
+| `src/components/HumanTypistRecorder.tsx` | Persistent audio bar for human typist mode |
+| `src/components/RoomDictationRecorder.tsx` | Full-room dictation recorder |
+| `src/components/Header.tsx` | Shared screen header component |
+| `src/components/LocalBadge.tsx` | Badge indicating locally-saved (unsynced) data |
+| `src/components/StatusBadge.tsx` | Inspection status badge |
+| `src/components/SwipeableRow.tsx` | Swipeable list row (react-native-gesture-handler) |
+| `src/hooks/useAudioRecorder.ts` | expo-audio v55 wrapper hook |
+| `src/utils/theme.ts` | Shared colour/spacing constants |
 
 ---
 
-## 7. API Endpoint Reference
+## 7. Navigation (RootStackParamList)
+
+Defined in `App.tsx`. Full current shape:
+
+```typescript
+type RootStackParamList = {
+  Login:            undefined
+  InspectionList:   undefined
+  FetchInspections: undefined
+  PropertyOverview: { inspectionId: number }
+  RoomSelection:    { inspectionId: number }
+  RoomInspection:   { inspectionId: number; sectionKey: string; sectionName: string }
+  Camera: {
+    inspectionId: number
+    sectionKey?:  string   // gallery context — which section's gallery to open on thumb tap
+    sectionName?: string
+    itemKey?:     string
+    itemName?:    string
+  }
+  ItemGallery: {
+    inspectionId:  number
+    sectionKey:    string
+    sectionName:   string
+    itemKey:       string
+    itemName:      string
+    itemPosition?: string  // e.g. "2.4" for display label
+  }
+  Sync: { inspectionId: number }
+}
+```
+
+---
+
+## 8. API Endpoint Reference
 
 ### Auth
 - `POST /api/auth/login`
@@ -246,17 +303,28 @@ System-wide sections present in every inspection regardless of template:
 
 ---
 
-## 8. Inspection Workflow (Mobile)
+## 9. Inspection Workflow (Mobile)
 
 ```
 Login → Fetch Inspections → Select → Download
-  → RoomSelection → RoomInspection (per room)
-    → Take photos (CameraScreen)
+  → PropertyOverview → RoomSelection → RoomInspection (per room)
+    → Take photos (CameraScreen → thumbnail → ItemGallery)
     → Record audio (AudioRecorderWidget or HumanTypistRecorder)
     → AI transcription fires automatically (AI typist mode)
   → SyncScreen → POST /api/inspections/<id>/sync
     → Status: active → processing (human typist) or review (AI instant typist)
 ```
+
+**Camera photo flow:**
+1. `RoomInspectionScreen` calls `setCameraTarget(handler)` then `navigation.navigate('Camera', { inspectionId, sectionKey, sectionName, itemKey, itemName })`
+2. `CameraScreen` captures photo → copies to `documentDirectory` → calls `triggerCapture(dest)` → sets `lastPhotoUri`
+3. On return to `RoomInspectionScreen`, `useFocusEffect` calls `processPendingPhotos()` which fires the handler
+4. Thumbnail in `CameraScreen` taps through to `ItemGallery` for rotate/delete (only when `sectionKey` is present in route params)
+
+**Room reorder flow:**
+- `RoomSelectionScreen` renders a drag handle (`≡`) per row using `react-native-gesture-handler` `Gesture.Pan().runOnJS(true)`
+- On drag end, `commitReorderByIndex(from, to)` splices the key array and saves to `report_data._roomOrder`
+- `buildOrderedRooms()` reads `_roomOrder` to produce the sorted room list
 
 **AI typist detection (mobile):**
 ```typescript
@@ -269,7 +337,7 @@ const aiMode = typistIsAi || typistMode === 'ai_instant' || typistMode === 'ai_p
 
 ---
 
-## 9. Naming Conventions
+## 10. Naming Conventions
 
 ### Backend (Python)
 - Snake_case everywhere: `inspection_id`, `report_data`, `typist_is_ai`
@@ -294,7 +362,7 @@ const aiMode = typistIsAi || typistMode === 'ai_instant' || typistMode === 'ai_p
 
 ---
 
-## 10. Known Gotchas & Hard-Won Lessons
+## 11. Known Gotchas & Hard-Won Lessons
 
 ### Backend
 - `DATABASE_URL` must be explicitly set on Render — without it, app silently uses ephemeral SQLite and all data is lost on redeploy
@@ -309,6 +377,11 @@ const aiMode = typistIsAi || typistMode === 'ai_instant' || typistMode === 'ai_p
 
 ### Mobile
 - **Never pass functions as React Navigation params** — use `cameraStore.ts` or similar module-level store instead
+- **expo-file-system must be imported as `expo-file-system/legacy`** — the top-level export deprecated `makeDirectoryAsync`/`copyAsync` in favour of new File/Directory classes. Always use the legacy path.
+- **VisionCamera v4 camera enumeration:** `useCameraDevice('back')` only returns one fused "best" device and will NOT expose the ultra-wide separately. Use `Camera.getAvailableCameraDevices()` (synchronous static call) to get ALL physical cameras, then filter by `position === 'back'` and find ultra-wide by checking `physicalDevices` for `'ultra-wide-angle-camera'` or a string containing `'ultra'`. Do NOT match on `'wide'` alone — it falsely matches `'wide-angle-camera'` (the main lens).
+- **VisionCamera v4 hooks:** `useCameraDevices()` does NOT exist. Use `Camera.getAvailableCameraDevices()` instead.
+- **Capture performance:** Use `photoQualityBalance="speed"` on the `<Camera>` component, `skipMetadata: true` in `takePhoto()`, pre-create the photo directory at mount (not at capture time), and use a `useRef` capture gate instead of `useState` to avoid re-render stall between shots.
+- **Gesture.Pan in New Architecture:** Must call `.runOnJS(true)` on Pan gestures — JS-thread execution is required for state updates in RN New Architecture.
 - `expo-sqlite` v15 is fully synchronous: `openDatabaseSync`, `db.runSync`, `db.getAllSync` — no callbacks or Promises
 - `expo-audio` v55: `recorder.record()` is `void` (not async) — do not `await` it. `recorder.uri` is populated *after* `await recorder.stop()` resolves, not before
 - Audio URI may take up to 1 second after `stop()` before being available — poll with 100ms intervals if needed
@@ -320,34 +393,44 @@ const aiMode = typistIsAi || typistMode === 'ai_instant' || typistMode === 'ai_p
 
 ---
 
-## 11. Current State (March 2026)
+## 12. Current State (March 2026)
 
 ### Working
 - Web app: full inspection management, template editor, PDF export, email notifications
-- Mobile: login, fetch/download inspections, room navigation, photos (via CameraScreen with gallery save), room reorder/rename, sync back to server, AI photo reassignment (parallel), item gallery
-- AI typist: banner detection working; transcription wiring in progress
-- Human typist: audio recording bar (`HumanTypistRecorder`) with per-clip playback and sync
+- Mobile login, fetch/download inspections, room navigation
+- Room drag-to-reorder using gesture handles (`≡`), persisted via `_roomOrder`
+- Camera (VisionCamera v4): ultra-wide / 0.6× button, pinch-to-zoom, flash, front/back flip
+- Capture thumbnail shown next to shutter button; tapping opens ItemGallery for the last-captured item
+- Photos saved to device gallery + `documentDirectory`; capture flash reduced to a subtle quick blink
+- Fixed section "add item" and "copy item" — extras persist across navigation via `_extra` + `adaptExtraItem()`
+- Gallery context passed from `RoomInspectionScreen` → `CameraScreen` → `ItemGallery` (sectionKey, sectionName, itemKey, itemName)
+- Item gallery with lightbox, rotate, delete, AI photo reassignment (parallel)
+- Sync back to server
+- Human typist audio bar (`HumanTypistRecorder`) with per-clip playback
+- AI typist banner detection
 
 ### In Progress / Known Issues
-- **AI typist transcription:** Banner shows correctly but `onRecordingComplete` callback from `AudioRecorderWidget` may not be receiving a valid URI from `stopRecording()`. Debug logging added — check adb logcat for `[AI Typist]` and `[useAudioRecorder]` prefixes
-- **Camera 0.6× ultrawide:** `zoom: 0` on `CameraView` does not reliably switch to the ultrawide lens — device-dependent behaviour. True lens switching requires `getAvailableLensesAsync` (not yet implemented)
+- **AI typist transcription:** Banner shows correctly but `onRecordingComplete` callback from `AudioRecorderWidget` may not be receiving a valid URI from `stopRecording()`. Debug logging added — check adb logcat for `[AI Typist]` and `[useAudioRecorder]` prefixes.
+- **Camera debug overlay:** A debug overlay (yellow text showing device counts, physicalDevices, UW flags) is still present in `CameraScreen.tsx` controls area. Remove once ultra-wide is confirmed stable across target devices.
+- **Ultra-wide on all devices:** Ultra-wide detection confirmed working on the primary test device. Not yet validated on other device models.
 
 ### Pending / Next Tasks
-- AI typist: confirm URI is reaching `transcribeItem` and API call is succeeding (adb logcat test needed)
+- Remove camera debug overlay from `CameraScreen.tsx` once ultra-wide confirmed stable
+- Debug AI typist transcription: confirm URI is reaching `transcribeItem` and API call succeeds (adb logcat test needed)
 - Client portal frontend (backend email trigger exists, frontend login not yet built)
 - Railway migration from Render (backend only; keep Vercel for frontend)
 - EAS Update integration for JS-only patches without full rebuild
-- Page load performance on Edit Report (Render cold start; may resolve on Railway)
+- Get ultra-wide working on a wider range of Android devices
 
 ---
 
-## 12. File Structure
+## 13. File Structure
 
-> `node_modules`, `.git`, and `__pycache__` omitted. The `android/` folder under `frontend/` is a legacy Capacitor wrapper and is not actively used.
-> ⚠️ `CameraScreen.tsx` and `src/services/cameraStore.ts` are referenced in sections 5 and 6 but are **not present** in the current file system — they may have been deleted or not yet recreated.
+> `node_modules`, `.git`, `__pycache__`, and `android/` (legacy Capacitor wrapper, not active) omitted.
 
 ```
 lmsoftware/
+├── PROJECT_CONTEXT.md                    ← ⬅ you are here
 ├── package-lock.json
 ├── backend/
 │   ├── app.py                            ← app factory, blueprint registration
@@ -397,13 +480,10 @@ lmsoftware/
 │   ├── vite.config.js
 │   ├── jsconfig.json
 │   ├── vercel.json
-│   ├── capacitor.config.json
-│   ├── capacitor.config.ts
 │   ├── package.json
 │   ├── public/
 │   │   ├── favicon.ico
 │   │   └── ip-logo.png
-│   ├── android/                          ← legacy Capacitor Android wrapper (not active)
 │   └── src/
 │       ├── App.vue
 │       ├── AppSidebar.vue
@@ -439,36 +519,35 @@ lmsoftware/
 │       ├── stores/
 │       │   ├── auth.js
 │       │   └── counter.js
-│       ├── views/
-│       │   ├── ChangePasswordView.vue
-│       │   ├── ClientsView.vue
-│       │   ├── DashboardView.vue
-│       │   ├── InspectionDetailView.vue
-│       │   ├── InspectionReportView.vue
-│       │   ├── InspectionsView.vue       ← inspection list, calendar view
-│       │   ├── LoginView.vue
-│       │   ├── PropertiesView.vue
-│       │   ├── PropertyDetailView.vue
-│       │   ├── ResetPasswordView.vue
-│       │   ├── SettingsView.vue
-│       │   ├── UsersView.vue
-│       │   └── settings/
-│       │       ├── FixedSectionsSettings.vue
-│       │       ├── TemplateEditorView.vue    ← drag reorder, preset save/overwrite/delete
-│       │       └── TemplatesView.vue
-│       └── views-mobile/                 ← legacy Capacitor mobile views (superseded by inspectpro-mobile-new)
-│           ├── MobileHome.vue
-│           ├── MobileLogin.vue
-│           ├── MobilePropertyView.vue
-│           ├── MobileReportEditor.vue
-│           └── MobileSectionTab.vue
+│       └── views/
+│           ├── ChangePasswordView.vue
+│           ├── ClientsView.vue
+│           ├── DashboardView.vue
+│           ├── InspectionDetailView.vue
+│           ├── InspectionReportView.vue
+│           ├── InspectionsView.vue       ← inspection list, calendar view
+│           ├── LoginView.vue
+│           ├── PropertiesView.vue
+│           ├── PropertyDetailView.vue
+│           ├── ResetPasswordView.vue
+│           ├── SettingsView.vue
+│           ├── UsersView.vue
+│           └── settings/
+│               ├── FixedSectionsSettings.vue
+│               ├── TemplateEditorView.vue    ← drag reorder, preset save/overwrite/delete
+│               └── TemplatesView.vue
 └── inspectpro-mobile-new/                ← React Native / Expo mobile app (active)
     ├── App.tsx                           ← navigation stack, RootStackParamList
     ├── app.json
+    ├── eas.json
     ├── index.js
     ├── index.ts
     ├── tsconfig.json
     ├── package.json
+    ├── plugins/
+    │   └── withKotlinBuildFix.js         ← EAS build plugin for Kotlin compatibility
+    ├── scripts/
+    │   └── eas-gradle-patch.js           ← post-install Gradle patch for EAS
     ├── assets/
     │   ├── icon.png
     │   ├── splash.png
@@ -481,35 +560,38 @@ lmsoftware/
     └── src/
         ├── components/
         │   ├── AudioRecorderWidget.tsx   ← per-item recorder for AI typist mode
-        │   ├── Header.tsx
+        │   ├── Header.tsx                ← shared screen header
         │   ├── HumanTypistRecorder.tsx   ← persistent audio bar for human typist mode
-        │   ├── LocalBadge.tsx
-        │   ├── StatusBadge.tsx
-        │   └── SwipeableRow.tsx
+        │   ├── LocalBadge.tsx            ← unsynced-data indicator badge
+        │   ├── RoomDictationRecorder.tsx ← full-room dictation recorder
+        │   ├── StatusBadge.tsx           ← inspection status badge
+        │   └── SwipeableRow.tsx          ← swipeable list row (gesture-handler)
         ├── hooks/
         │   └── useAudioRecorder.ts       ← expo-audio v55 wrapper
         ├── screens/
+        │   ├── CameraScreen.tsx          ← VisionCamera v4; ultra-wide, thumbnail→ItemGallery
         │   ├── FetchInspectionsScreen.tsx
         │   ├── InspectionListScreen.tsx
         │   ├── ItemGalleryScreen.tsx     ← photo gallery, lightbox, rotate, delete, AI reassign
         │   ├── LoginScreen.tsx
         │   ├── PropertyOverviewScreen.tsx
-        │   ├── RoomInspectionScreen.tsx  ← per-item recording, AI transcription, photos, sub-items
-        │   ├── RoomSelectionScreen.tsx   ← room list with reorder, rename, add from preset
+        │   ├── RoomInspectionScreen.tsx  ← per-item recording, photos, fixed section extras
+        │   ├── RoomSelectionScreen.tsx   ← room list, drag-to-reorder, swipe options
         │   └── SyncScreen.tsx            ← sync inspection back to server
         ├── services/
         │   ├── api.ts                    ← Axios instance, all API calls incl. transcription
-        │   └── database.ts               ← SQLite v15 synchronous API wrapper
+        │   ├── cameraStore.ts            ← module-level store: setCameraTarget / triggerCapture
+        │   └── database.ts              ← SQLite v15 synchronous API wrapper
         ├── stores/
         │   ├── authStore.ts              ← Zustand: JWT token, user object
         │   └── inspectionStore.ts        ← Zustand: active inspection, report_data
         └── utils/
-            └── theme.ts
+            └── theme.ts                  ← shared colours and spacing constants
 ```
 
 ---
 
-## 13. Environment Setup
+## 14. Environment Setup
 
 ### Running Locally
 

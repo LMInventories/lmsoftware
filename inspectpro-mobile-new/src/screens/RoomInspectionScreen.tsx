@@ -337,7 +337,11 @@ export default function RoomInspectionScreen() {
       cameraTargetRef.current = null
       addOverviewPhotoUri(uri)
     })
-    navigation.navigate('Camera', { inspectionId })
+    navigation.navigate('Camera', {
+      inspectionId,
+      sectionKey, sectionName,
+      itemKey: '_overview', itemName: 'Room Overview',
+    })
   }
 
   async function handlePickOverviewPhoto() {
@@ -373,13 +377,17 @@ export default function RoomInspectionScreen() {
     await setReportData(inspectionId, rd)
   }
 
-  function handleTakePhoto(itemId: string) {
+  function handleTakePhoto(itemId: string, itemName: string) {
     cameraTargetRef.current = { type: 'item', itemId }
     setCameraTarget((uri) => {
       cameraTargetRef.current = null
       addPhotoUri(itemId, uri)
     })
-    navigation.navigate('Camera', { inspectionId })
+    navigation.navigate('Camera', {
+      inspectionId,
+      sectionKey, sectionName,
+      itemKey: itemId, itemName,
+    })
   }
 
   async function handlePickPhoto(itemId: string) {
@@ -706,7 +714,7 @@ export default function RoomInspectionScreen() {
             Photos{count > 0 ? ` (${count})` : ''}
           </Text>
           <View style={styles.photoIconBtns}>
-            <TouchableOpacity style={styles.photoIconBtn} onPress={() => handleTakePhoto(item.id)}>
+            <TouchableOpacity style={styles.photoIconBtn} onPress={() => handleTakePhoto(item.id, item.label || item.name || '')}>
               <Text style={styles.photoIconEmoji}>📷</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.photoIconBtn} onPress={() => handlePickPhoto(item.id)}>

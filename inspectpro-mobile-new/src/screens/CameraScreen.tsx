@@ -24,7 +24,6 @@ import {
   Dimensions,
   Animated,
   Image,
-  Modal,
 } from 'react-native'
 import { Camera, useCameraDevice, useCameraPermission } from 'react-native-vision-camera'
 import type { CameraDevice } from 'react-native-vision-camera'
@@ -43,10 +42,12 @@ import {
   useIsFocused,
   RouteProp,
 } from '@react-navigation/native'
+import type { StackNavigationProp } from '@react-navigation/stack'
 import { triggerCapture } from '../services/cameraStore'
 import type { RootStackParamList } from '../../App'
 
 type CameraRouteProp = RouteProp<RootStackParamList, 'Camera'>
+type CameraNavProp   = StackNavigationProp<RootStackParamList, 'Camera'>
 type FlashMode = 'off' | 'on' | 'auto'
 type Facing    = 'back' | 'front'
 
@@ -55,7 +56,7 @@ const SCREEN_W      = Dimensions.get('window').width
 const PREVIEW_H     = Math.round(SCREEN_W * 4 / 3)
 
 export default function CameraScreen() {
-  const navigation = useNavigation()
+  const navigation = useNavigation<CameraNavProp>()
   const route      = useRoute<CameraRouteProp>()
   const { inspectionId } = route.params
 
@@ -128,7 +129,6 @@ export default function CameraScreen() {
   const [isCapturing, setIsCapturing]   = useState(false)
   // Last captured photo — shown as thumbnail next to shutter button
   const [lastPhotoUri, setLastPhotoUri]   = useState<string | null>(null)
-  const [photoPreviewOpen, setPhotoPreviewOpen] = useState(false)
 
   // Pre-request MediaLibrary permission once at mount (not on every shot)
   const mlPermGranted = useRef(false)
@@ -417,11 +417,20 @@ export default function CameraScreen() {
                 }
               </TouchableOpacity>
 
-              {/* Last-photo thumbnail — tap to view full screen */}
+              {/* Last-photo thumbnail — tap to open ItemGallery for rotate/delete */}
               <TouchableOpacity
                 style={styles.thumbBtn}
-                onPress={() => lastPhotoUri && setPhotoPreviewOpen(true)}
-                activeOpacity={lastPhotoUri ? 0.75 : 1}
+                onPress={() => {
+                  if (!lastPhotoUri || !route.params.sectionKey) return
+                  navigation.navigate('ItemGallery', {
+                    inspectionId,
+                    sectionKey:  route.params.sectionKey,
+                    sectionName: route.params.sectionName ?? '',
+                    itemKey:     route.params.itemKey    ?? '',
+                    itemName:    route.params.itemName   ?? '',
+                  })
+                }}
+                activeOpacity={lastPhotoUri && route.params.sectionKey ? 0.75 : 1}
               >
                 {lastPhotoUri ? (
                   <Image source={{ uri: lastPhotoUri }} style={styles.thumbImg} />
@@ -434,23 +443,6 @@ export default function CameraScreen() {
 
         </View>
       </GestureDetector>
-
-      {/* Full-screen preview of last photo */}
-      <Modal visible={photoPreviewOpen} transparent animationType="fade" onRequestClose={() => setPhotoPreviewOpen(false)}>
-        <View style={styles.previewOverlay}>
-          <TouchableOpacity style={StyleSheet.absoluteFill} onPress={() => setPhotoPreviewOpen(false)} activeOpacity={1} />
-          {lastPhotoUri && (
-            <Image
-              source={{ uri: lastPhotoUri }}
-              style={styles.previewImg}
-              resizeMode="contain"
-            />
-          )}
-          <TouchableOpacity style={styles.previewClose} onPress={() => setPhotoPreviewOpen(false)}>
-            <Text style={styles.previewCloseText}>✕</Text>
-          </TouchableOpacity>
-        </View>
-      </Modal>
 
     </GestureHandlerRootView>
   )
@@ -631,31 +623,4 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.07)',
   },
 
-  // Full-screen photo preview modal
-  previewOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.92)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  previewImg: {
-    width: SCREEN_W,
-    height: SCREEN_W * 4 / 3,
-  },
-  previewClose: {
-    position: 'absolute',
-    top: 52,
-    right: 20,
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  previewCloseText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '700',
-  },
 })

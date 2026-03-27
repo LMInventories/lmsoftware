@@ -41,7 +41,14 @@ export type RootStackParamList = {
     itemName:     string
     itemPosition?: string  // e.g. "2.4" — section.item for display label
   }
-  Camera: { inspectionId: number }
+  Camera: {
+    inspectionId: number
+    // Gallery context — passed so the thumbnail can link straight to ItemGallery
+    sectionKey?:  string
+    sectionName?: string
+    itemKey?:     string
+    itemName?:    string
+  }
   Sync: undefined
 }
 

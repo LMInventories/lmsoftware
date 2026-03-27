@@ -23,6 +23,8 @@ import {
   Alert,
   Dimensions,
   Animated,
+  Image,
+  Modal,
 } from 'react-native'
 import { Camera, useCameraDevice, useCameraPermission } from 'react-native-vision-camera'
 import type { CameraDevice } from 'react-native-vision-camera'
@@ -124,6 +126,9 @@ export default function CameraScreen() {
   const [zoom, setZoom]                 = useState(1)           // overridden once device loads
   const [activeZoomLabel, setActiveZoomLabel] = useState('1×')
   const [isCapturing, setIsCapturing]   = useState(false)
+  // Last captured photo — shown as thumbnail next to shutter button
+  const [lastPhotoUri, setLastPhotoUri]   = useState<string | null>(null)
+  const [photoPreviewOpen, setPhotoPreviewOpen] = useState(false)
 
   // Pre-request MediaLibrary permission once at mount (not on every shot)
   const mlPermGranted = useRef(false)
@@ -146,12 +151,12 @@ export default function CameraScreen() {
   // was adding visible latency. isCapturing state is kept only for the UI.
   const capturingRef = useRef(false)
 
-  // Flash-white overlay shown briefly after each shot as capture feedback
+  // Subtle flash blink on capture — quick enough to not slow down rapid shooting
   const captureFlash = useRef(new Animated.Value(0)).current
   function triggerFlash() {
     Animated.sequence([
-      Animated.timing(captureFlash, { toValue: 1, duration: 60,  useNativeDriver: true }),
-      Animated.timing(captureFlash, { toValue: 0, duration: 200, useNativeDriver: true }),
+      Animated.timing(captureFlash, { toValue: 0.35, duration: 20,  useNativeDriver: true }),
+      Animated.timing(captureFlash, { toValue: 0,    duration: 80,  useNativeDriver: true }),
     ]).start()
   }
 
@@ -250,6 +255,7 @@ export default function CameraScreen() {
       //    next shot can be triggered immediately without waiting for MediaLibrary.
       triggerCapture(dest)
       triggerFlash()
+      setLastPhotoUri(dest)
       capturingRef.current = false
       setIsCapturing(false)
 
@@ -394,7 +400,7 @@ export default function CameraScreen() {
               ))}
             </View>
 
-            {/* Shutter row: flip · shutter · spacer */}
+            {/* Shutter row: flip · shutter · last-photo thumbnail */}
             <View style={styles.shutterRow}>
               <TouchableOpacity style={styles.iconBtn} onPress={toggleFacing}>
                 <Text style={styles.iconText}>🔄</Text>
@@ -411,13 +417,41 @@ export default function CameraScreen() {
                 }
               </TouchableOpacity>
 
-              {/* Spacer keeps shutter centred */}
-              <View style={styles.iconBtn} />
+              {/* Last-photo thumbnail — tap to view full screen */}
+              <TouchableOpacity
+                style={styles.thumbBtn}
+                onPress={() => lastPhotoUri && setPhotoPreviewOpen(true)}
+                activeOpacity={lastPhotoUri ? 0.75 : 1}
+              >
+                {lastPhotoUri ? (
+                  <Image source={{ uri: lastPhotoUri }} style={styles.thumbImg} />
+                ) : (
+                  <View style={styles.thumbEmpty} />
+                )}
+              </TouchableOpacity>
             </View>
           </View>
 
         </View>
       </GestureDetector>
+
+      {/* Full-screen preview of last photo */}
+      <Modal visible={photoPreviewOpen} transparent animationType="fade" onRequestClose={() => setPhotoPreviewOpen(false)}>
+        <View style={styles.previewOverlay}>
+          <TouchableOpacity style={StyleSheet.absoluteFill} onPress={() => setPhotoPreviewOpen(false)} activeOpacity={1} />
+          {lastPhotoUri && (
+            <Image
+              source={{ uri: lastPhotoUri }}
+              style={styles.previewImg}
+              resizeMode="contain"
+            />
+          )}
+          <TouchableOpacity style={styles.previewClose} onPress={() => setPhotoPreviewOpen(false)}>
+            <Text style={styles.previewCloseText}>✕</Text>
+          </TouchableOpacity>
+        </View>
+      </Modal>
+
     </GestureHandlerRootView>
   )
 }
@@ -575,5 +609,53 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     borderWidth: 2,
     borderColor: '#ddd',
+  },
+
+  // Last-photo thumbnail (replaces blank spacer to the right of shutter)
+  thumbBtn: {
+    width: 52,
+    height: 52,
+    borderRadius: 8,
+    overflow: 'hidden',
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.4)',
+    backgroundColor: 'rgba(255,255,255,0.1)',
+  },
+  thumbImg: {
+    width: '100%',
+    height: '100%',
+  },
+  thumbEmpty: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: 'rgba(255,255,255,0.07)',
+  },
+
+  // Full-screen photo preview modal
+  previewOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.92)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  previewImg: {
+    width: SCREEN_W,
+    height: SCREEN_W * 4 / 3,
+  },
+  previewClose: {
+    position: 'absolute',
+    top: 52,
+    right: 20,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  previewCloseText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
   },
 })

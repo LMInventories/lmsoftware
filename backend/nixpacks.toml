@@ -1,10 +1,7 @@
 # Force nixpacks to treat this as a Python project.
-# Without this, the stray package.json in this directory causes nixpacks
-# to detect Node.js and skip Python/gunicorn entirely.
+# Without this, any stray package.json causes nixpacks to detect Node.js instead.
+# We only override the start command — nixpacks handles venv creation and pip install itself.
 providers = ["python"]
-
-[phases.install]
-cmds = ["python3 -m pip install -r requirements.txt"]
 
 [start]
 cmd = "gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 120 --access-logfile - --error-logfile -"

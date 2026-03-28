@@ -5,6 +5,7 @@ from models import db
 from datetime import timedelta
 import os
 
+
 def create_app():
     app = Flask(__name__)
     basedir = os.path.abspath(os.path.dirname(__file__))
@@ -74,7 +75,7 @@ def create_app():
     from routes.pdf_import      import pdf_import_bp
     from routes.section_presets import section_presets_bp
     from routes.address_lookup  import address_lookup_bp
-    from routes.email_notifications  import email_bp  # ← email notifications
+    from routes.email_notifications  import email_bp
 
     app.register_blueprint(auth_bp,            url_prefix='/api/auth')
     app.register_blueprint(auth_reset_bp,      url_prefix='/api/auth')
@@ -90,7 +91,7 @@ def create_app():
     app.register_blueprint(pdf_import_bp,      url_prefix='/api/ai')
     app.register_blueprint(section_presets_bp, url_prefix='/api/section-presets')
     app.register_blueprint(address_lookup_bp,  url_prefix='/api/address')
-    app.register_blueprint(email_bp,           url_prefix='/api/email')  # ← email notifications
+    app.register_blueprint(email_bp,           url_prefix='/api/email')
 
     # Optional blueprints — register only if the file exists
     _optional = [
@@ -105,13 +106,132 @@ def create_app():
         except (ImportError, AttributeError):
             pass
 
+    # ── DB setup: tables + column migrations + seed ───────────────────────────
+    # Runs every boot — all operations are safe/idempotent on an existing DB.
     with app.app_context():
-        db.create_all()
+        _setup_database()
 
     return app
 
 
-# ── Scheduler (runs outside create_app so it starts once, not per request) ───
+def _setup_database():
+    """Create tables, run column migrations, and seed a fresh database."""
+    from models import User, Client, Property
+    from sqlalchemy import text
+
+    db.create_all()
+
+    # ── Column migrations (safe to run on every boot) ────────────────────────
+    def _is_sqlite():
+        return 'sqlite' in str(db.engine.url)
+
+    def column_exists(table, column):
+        if _is_sqlite():
+            rows = db.session.execute(text(f"PRAGMA table_info({table})")).fetchall()
+            return any(row[1] == column for row in rows)
+        else:
+            row = db.session.execute(text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name=:t AND column_name=:c"
+            ), {'t': table, 'c': column}).fetchone()
+            return row is not None
+
+    # users.is_ai — added when AI Typist feature was introduced
+    if not column_exists('users', 'is_ai'):
+        print("Migrating: adding users.is_ai column...")
+        default = "0" if _is_sqlite() else "FALSE"
+        db.session.execute(
+            text(f"ALTER TABLE users ADD COLUMN is_ai BOOLEAN NOT NULL DEFAULT {default}")
+        )
+        db.session.commit()
+        print("✅ users.is_ai added.")
+
+    # users.typist_mode — 'ai_instant' | 'ai_room' | 'human' | null
+    if not column_exists('users', 'typist_mode'):
+        print("Migrating: adding users.typist_mode column...")
+        db.session.execute(
+            text("ALTER TABLE users ADD COLUMN typist_mode VARCHAR(20)")
+        )
+        db.session.commit()
+        print("✅ users.typist_mode added.")
+
+    # ── Seed (only on a completely empty database) ───────────────────────────
+    if User.query.count() == 0:
+        print("Fresh database — seeding demo data...")
+
+        admin = User(name='Admin', email='admin@example.com', role='admin', color='#6366f1')
+        admin.set_password('admin123')
+
+        manager = User(name='Manager', email='manager@example.com', role='manager', color='#8b5cf6')
+        manager.set_password('manager123')
+
+        clerk = User(name='Robyn Lee', email='clerk@example.com', role='clerk', color='#10b981')
+        clerk.set_password('clerk123')
+
+        typist = User(name='Sarah Typist', email='typist@example.com', role='typist', color='#f59e0b')
+        typist.set_password('typist123')
+
+        ai_typist = User(
+            name='AI Typist',
+            email='ai.typist@system.local',
+            role='typist',
+            color='#6366f1',
+            is_ai=True,
+        )
+        ai_typist.set_password('system-' + os.urandom(16).hex())
+
+        db.session.add_all([admin, manager, clerk, typist, ai_typist])
+        db.session.flush()
+
+        client = Client(
+            name='Yellands Estates',
+            email='info@yellands.co.uk',
+            phone='020 1234 5678',
+            company='Yellands Estates',
+            primary_color='#1E3A8A',
+            report_disclaimer=(
+                'This report has been prepared with reasonable care and skill. '
+                'The contents of this report are confidential to the instructing parties. '
+                'All measurements are approximate.'
+            )
+        )
+        db.session.add(client)
+        db.session.flush()
+
+        prop = Property(
+            client_id=client.id,
+            address='15 Cam Green, South Ockendon, RM15 5QN',
+            property_type='residential',
+            bedrooms=2,
+            bathrooms=1,
+            furnished=False,
+            parking=True,
+            garden=True,
+        )
+        db.session.add(prop)
+        db.session.commit()
+        print("✅ Database seeded.")
+
+    else:
+        # Existing DB — ensure AI Typist system account exists
+        if not User.query.filter_by(email='ai.typist@system.local').first():
+            print("Adding AI Typist system account...")
+            ai_typist = User(
+                name='AI Typist',
+                email='ai.typist@system.local',
+                role='typist',
+                color='#6366f1',
+                is_ai=True,
+            )
+            ai_typist.set_password('system-' + os.urandom(16).hex())
+            db.session.add(ai_typist)
+            db.session.commit()
+            print("✅ AI Typist account created.")
+        else:
+            print("Database ready.")
+
+
+# ── Scheduler (runs outside create_app so it starts once, not per worker) ────
 app = create_app()
 
 from routes.email_notifications import schedule_clerk_summaries  # noqa

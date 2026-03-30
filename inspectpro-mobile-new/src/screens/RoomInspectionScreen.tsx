@@ -494,8 +494,9 @@ export default function RoomInspectionScreen() {
 
   // ── Room dictation callback ────────────────────────────────────────────────
   // Called by RoomDictationRecorder when AI returns filled fields.
+  // Room dictation callback (room sections)
   // filled = { itemId: { description?: string; condition?: string } }
-  function handleRoomTranscribed(filled: Record<string, { description?: string; condition?: string }>) {
+  function handleRoomTranscribed(filled: Record<string, Record<string, string>>) {
     const rd = getReportData()
     if (!rd[sectionKey]) rd[sectionKey] = {}
     let changed = false
@@ -511,6 +512,32 @@ export default function RoomInspectionScreen() {
       setReportData(inspectionId, rd)
       const count = Object.keys(filled).length
       Alert.alert('✨ Room filled', `AI filled ${count} item${count !== 1 ? 's' : ''} in ${sectionName}.`)
+    } else {
+      Alert.alert('Already filled', 'All fields mentioned were already filled. Existing content was preserved.')
+    }
+  }
+
+  // Fixed section dictation callback — field names vary by section type
+  function handleFixedRoomTranscribed(filled: Record<string, Record<string, string>>) {
+    const rd = getReportData()
+    if (!rd[sectionKey]) rd[sectionKey] = {}
+    let changed = false
+
+    for (const [itemId, fields] of Object.entries(filled)) {
+      if (!rd[sectionKey][itemId]) rd[sectionKey][itemId] = {}
+      const row = rd[sectionKey][itemId]
+      for (const [fieldKey, value] of Object.entries(fields)) {
+        if (value && !row[fieldKey]) {
+          row[fieldKey] = value
+          changed = true
+        }
+      }
+    }
+
+    if (changed) {
+      setReportData(inspectionId, rd)
+      const count = Object.keys(filled).length
+      Alert.alert('✨ Section filled', `AI filled ${count} item${count !== 1 ? 's' : ''} in ${sectionName}.`)
     } else {
       Alert.alert('Already filled', 'All fields mentioned were already filled. Existing content was preserved.')
     }
@@ -1145,11 +1172,13 @@ export default function RoomInspectionScreen() {
         )}
 
         {/* Room dictation recorder — fixed at bottom for ai_room and human modes */}
+        {/* Room dictation recorder — room sections */}
         {sectionType_ === 'room' && (typistMode_ === 'ai_room' || typistMode_ === 'human') && (
           <RoomDictationRecorder
             inspectionId={inspectionId}
             sectionKey={sectionKey}
             sectionName={sectionName}
+            sectionType="room"
             items={items.map((it: any): RoomDictationItem => ({
               id:             it.id,
               name:           it.label || it.name || '',
@@ -1157,6 +1186,22 @@ export default function RoomInspectionScreen() {
               hasDescription: it.hasDescription !== false,
             }))}
             onTranscribed={handleRoomTranscribed}
+            showAiButton={typistMode_ === 'ai_room'}
+          />
+        )}
+
+        {/* Room dictation recorder — fixed sections (all types) */}
+        {sectionType_ !== 'room' && (typistMode_ === 'ai_room' || typistMode_ === 'human') && (
+          <RoomDictationRecorder
+            inspectionId={inspectionId}
+            sectionKey={sectionKey}
+            sectionName={sectionName}
+            sectionType={sectionType_}
+            items={items.map((it: any): RoomDictationItem => ({
+              id:   it.id,
+              name: it.name || it.label || it.question || '',
+            }))}
+            onTranscribed={handleFixedRoomTranscribed}
             showAiButton={typistMode_ === 'ai_room'}
           />
         )}

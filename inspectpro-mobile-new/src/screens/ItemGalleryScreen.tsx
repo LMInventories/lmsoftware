@@ -227,9 +227,15 @@ export default function ItemGalleryScreen() {
       const sections: any[] = tmplData.sections || []
       // Constrain to current room only — photos should only move within the same room
       const thisSection = sections.find((s: any) => String(s.id) === sectionKey)
+      // Include any filled-in description text so AI has both item names and textual context
       const roomContextStr = thisSection
         ? `Room: "${thisSection.name}" (key: ${sectionKey})\n` +
-          (thisSection.items || []).map((it: any) => `  - "${it.name}" (key: ${it.id})`).join('\n')
+          (thisSection.items || []).map((it: any) => {
+            const itemRd = rd[sectionKey]?.[String(it.id)]
+            const desc = itemRd?.description ? ` — described as: "${itemRd.description}"` : ''
+            const cond = itemRd?.condition ? ` — condition: "${itemRd.condition}"` : ''
+            return `  - "${it.name}" (key: ${it.id})${desc}${cond}`
+          }).join('\n')
         : ''
 
       const selectedPhotos = getPhotos().filter(u => selected.has(u))

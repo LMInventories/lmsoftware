@@ -11,7 +11,7 @@ import * as ImagePicker from 'expo-image-picker'
 
 import type { RootStackParamList } from '../../App'
 import { useInspectionStore } from '../stores/inspectionStore'
-import { updateLocalStatus } from '../services/database'
+import { updateLocalStatus, markFinalised, unmarkFinalised } from '../services/database'
 import { api } from '../services/api'
 import Header from '../components/Header'
 import { colors, font, radius, spacing, TYPE_LABELS } from '../utils/theme'
@@ -26,6 +26,7 @@ export default function PropertyOverviewScreen() {
   const { inspectionId } = route.params
   const { activeInspection, loadInspection, updateItemInReport } = useInspectionStore()
   const [starting, setStarting] = useState(false)
+  const [finalising, setFinalising] = useState(false)
 
   useEffect(() => { loadInspection(inspectionId) }, [inspectionId])
 
@@ -107,6 +108,53 @@ export default function PropertyOverviewScreen() {
   // overview_photo comes from property data downloaded at fetch time
   const overviewPhoto = inspection.property?.overview_photo || reportData._overview?.items?.photo?.uri || null
   const isActive = inspection.local_status === 'active' || inspection.status === 'active'
+  const isFinalised: boolean = !!(inspection as any).is_finalised
+
+  async function handleFinalise() {
+    if (isFinalised) {
+      Alert.alert(
+        'Undo Finalise',
+        'This inspection is marked as finalised. Do you want to undo this so it syncs back to Active?',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Undo Finalise',
+            style: 'destructive',
+            onPress: async () => {
+              setFinalising(true)
+              try {
+                unmarkFinalised(inspectionId)
+                await loadInspection(inspectionId)
+              } finally {
+                setFinalising(false)
+              }
+            },
+          },
+        ]
+      )
+    } else {
+      Alert.alert(
+        'Finalise Inspection',
+        'Mark this inspection as complete on device. When synced, it will be sent for typist/review processing instead of staying Active.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Finalise',
+            onPress: async () => {
+              setFinalising(true)
+              try {
+                markFinalised(inspectionId)
+                await loadInspection(inspectionId)
+                Alert.alert('Finalised ✓', 'Inspection marked as finalised. It will be sent for processing on your next sync.')
+              } finally {
+                setFinalising(false)
+              }
+            },
+          },
+        ]
+      )
+    }
+  }
 
   return (
     <View style={[styles.screen, { paddingTop: insets.top }]}>
@@ -155,12 +203,38 @@ export default function PropertyOverviewScreen() {
         {/* CTA — immediately below address */}
         <View style={styles.ctaWrap}>
           {isActive ? (
-            <TouchableOpacity
-              style={styles.btnPrimary}
-              onPress={() => navigation.navigate('RoomSelection', { inspectionId })}
-            >
-              <Text style={styles.btnPrimaryText}>Continue Inspection →</Text>
-            </TouchableOpacity>
+            <>
+              <TouchableOpacity
+                style={styles.btnPrimary}
+                onPress={() => navigation.navigate('RoomSelection', { inspectionId })}
+              >
+                <Text style={styles.btnPrimaryText}>Continue Inspection →</Text>
+              </TouchableOpacity>
+
+              {isFinalised ? (
+                <TouchableOpacity
+                  style={[styles.btnSecondary, styles.btnFinalised]}
+                  onPress={handleFinalise}
+                  disabled={finalising}
+                >
+                  {finalising
+                    ? <ActivityIndicator color={colors.success} size="small" />
+                    : <Text style={styles.btnFinalisedText}>✓ Finalised — tap to undo</Text>
+                  }
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity
+                  style={styles.btnSecondary}
+                  onPress={handleFinalise}
+                  disabled={finalising}
+                >
+                  {finalising
+                    ? <ActivityIndicator color={colors.primary} size="small" />
+                    : <Text style={styles.btnSecondaryText}>Finalise Inspection</Text>
+                  }
+                </TouchableOpacity>
+              )}
+            </>
           ) : (
             <TouchableOpacity style={styles.btnPrimary} onPress={handleStartInspection} disabled={starting}>
               {starting
@@ -282,4 +356,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   btnPrimaryText: { color: '#fff', fontSize: font.lg, fontWeight: '700' },
+  btnSecondary: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: 13,
+    alignItems: 'center',
+    marginTop: spacing.xs,
+    borderWidth: 1.5,
+    borderColor: colors.primary,
+  },
+  btnSecondaryText: { color: colors.primary, fontSize: font.md, fontWeight: '600' },
+  btnFinalised: {
+    borderColor: colors.success,
+    backgroundColor: colors.successLight,
+  },
+  btnFinalisedText: { color: colors.success, fontSize: font.md, fontWeight: '600' },
 })

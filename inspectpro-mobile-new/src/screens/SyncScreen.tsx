@@ -178,10 +178,14 @@ export default function SyncScreen() {
                          typistMode === 'ai_instant' ||
                          typistMode === 'ai_room'
 
+        const isFinalised = !!(fresh as any)?.is_finalised
+
         if (role === 'clerk' && currentStatus === 'active') {
-          // AI typist: fields already filled → Review
-          // Human typist: needs typing → Processing
-          payload.status = isAiMode ? 'review' : 'processing'
+          if (isFinalised) {
+            // Finalised on device: move to processing (human typist) or review (AI typist)
+            payload.status = isAiMode ? 'review' : 'processing'
+          }
+          // Not finalised: no status change — inspection stays Active on server
         } else if (role === 'typist' && currentStatus === 'processing') {
           // Typist finished → Review
           payload.status = 'review'
@@ -220,10 +224,23 @@ export default function SyncScreen() {
   function syncNote() {
     const typistMode = user?.typist_mode
     const isAiMode = typistMode === 'ai_instant' || typistMode === 'ai_room'
-    if (user?.role === 'clerk' && isAiMode)
-      return 'AI has filled report fields on-device. Syncing will upload and move to Review.'
-    if (user?.role === 'clerk')
-      return 'Syncing will upload your report and audio, and move the inspection to Processing for the typist.'
+    const selectedList = syncable.filter(i => selected.has(i.id))
+    const anyFinalised = selectedList.some(i => (i as any).is_finalised)
+    const allFinalised = selectedList.length > 0 && selectedList.every(i => (i as any).is_finalised)
+
+    if (user?.role === 'clerk') {
+      if (allFinalised) {
+        return isAiMode
+          ? 'All selected inspections are finalised. Syncing will upload and move to Review.'
+          : 'All selected inspections are finalised. Syncing will upload and move to Processing for the typist.'
+      }
+      if (anyFinalised) {
+        return isAiMode
+          ? 'Finalised inspections will move to Review. Unfinalised inspections will stay Active.'
+          : 'Finalised inspections will move to Processing. Unfinalised inspections will stay Active.'
+      }
+      return 'None of the selected inspections are finalised. Syncing will upload data but leave them Active.'
+    }
     if (user?.role === 'typist')
       return 'Syncing will upload your report and move the inspection to Review.'
     return 'Syncing will upload report data to the server.'
@@ -267,7 +284,14 @@ export default function SyncScreen() {
                   <View style={styles.cardContent}>
                     <Text style={styles.cardAddress} numberOfLines={2}>{inspection.property_address}</Text>
                     <Text style={styles.cardMeta}>{TYPE_LABELS[inspection.inspection_type] ?? inspection.inspection_type} · {formatDate(inspection.conduct_date)}</Text>
-                    <StatusBadge status={inspection.status} small />
+                    <View style={styles.badgeRow}>
+                      <StatusBadge status={inspection.status} small />
+                      {(inspection as any).is_finalised && (
+                        <View style={styles.finalisedBadge}>
+                          <Text style={styles.finalisedBadgeText}>✓ Finalised</Text>
+                        </View>
+                      )}
+                    </View>
                   </View>
                 </TouchableOpacity>
               )
@@ -379,6 +403,9 @@ const styles = StyleSheet.create({
   checkboxChecked: { backgroundColor: colors.primary, borderColor: colors.primary },
   checkboxMark: { color: '#fff', fontSize: 14, fontWeight: '800' },
   cardContent: { flex: 1, gap: 2 },
+  badgeRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, flexWrap: 'wrap', marginTop: 2 },
+  finalisedBadge: { backgroundColor: colors.successLight, borderRadius: radius.sm, paddingHorizontal: 6, paddingVertical: 2 },
+  finalisedBadgeText: { fontSize: font.xs, color: colors.success, fontWeight: '700' },
   cardAddress: { fontSize: font.md, fontWeight: '700', color: colors.text, lineHeight: 20 },
   cardAddressDone: { color: colors.textMid },
   cardMeta: { fontSize: font.xs, color: colors.textLight },

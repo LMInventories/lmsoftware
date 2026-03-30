@@ -60,8 +60,9 @@ interface Props {
   inspectionId: number
   sectionKey: string
   sectionName: string
+  sectionType?: string   // 'room' (default) or fixed section type
   items: RoomDictationItem[]
-  onTranscribed: (filled: Record<string, { description?: string; condition?: string }>) => void
+  onTranscribed: (filled: Record<string, Record<string, string>>) => void
   showAiButton?: boolean
 }
 
@@ -75,6 +76,7 @@ export default function RoomDictationRecorder({
   inspectionId,
   sectionKey,
   sectionName,
+  sectionType = 'room',
   items,
   onTranscribed,
   showAiButton = true,
@@ -288,6 +290,7 @@ export default function RoomDictationRecorder({
         clips:       clipPayloads,
         sectionName,
         sectionKey,
+        sectionType,
         items: items.map(it => ({
           id:             it.id,
           name:           it.name,

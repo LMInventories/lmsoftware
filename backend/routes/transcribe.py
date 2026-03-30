@@ -443,9 +443,11 @@ def classify_photo():
 
     client = anthropic.Anthropic(api_key=os.environ.get('ANTHROPIC_API_KEY'))
 
-    prompt = f"""You are a property inspection assistant. Look at this photo carefully and identify which room and item it belongs to from the list below.
+    prompt = f"""You are a property inspection assistant. Look at this photo carefully and identify which item in the room it belongs to.
 
 {room_context}
+
+Each item above may include a "described as" note (what the inspector has already written about it) and/or a "condition" note. Use these text descriptions alongside your visual analysis — if an item's description matches what you see in the photo, that is a strong signal.
 
 Common property inspection items and what they look like:
 - Door Fittings / Door & Frame: door handles, hinges, door frames, locks, letterboxes, door furniture
@@ -466,7 +468,8 @@ Respond ONLY with a raw JSON object — no markdown, no backticks, no explanatio
 Rules:
 - confidence is a number from 0.0 to 1.0
 - Give confidence above 0.8 only when you are certain of both the room AND the item
-- If you can identify the item type but are unsure which room, give 0.5-0.7
+- If an item's existing description closely matches what you see visually, increase your confidence accordingly
+- If you can identify the item type but are unsure which one in the list, give 0.5-0.7
 - sectionKey and itemKey must be copied exactly from the provided context list
 - Match to the single closest item in the list"""
 
@@ -604,6 +607,27 @@ RULES:
 6. Use British English spelling for any connecting words.
 7. If only one piece of information is given for an item, put it in description.
 
+MULTI-COMPONENT FORMATTING — critical for description and condition fields:
+- If the description contains multiple distinct physical components, put EACH on its own line using \n
+- A "component" is a distinct element — different material, surface type, or fitting
+- ALWAYS use \n line breaks between components, NEVER commas
+  Example: "white painted door, white painted frame" → "White painted door\nWhite painted frame"
+  Example: "part white ceramic tile, part grey fitted carpet" → "Part white ceramic tile\nPart grey fitted carpet"
+  Example: "dark wood curtain rail, two green fabric floor length curtains" → "Dark wood curtain rail\n2 x green fabric floor length curtains"
+- The same rule applies to condition if multiple condition points are made:
+  Example: "in good order, light indentations to tiles" → "In good order\nLight indentations to tiles"
+- Convert spoken numbers to numerals: "two" → "2", "three" → "3"
+- Format quantities as "N x item": "two green curtains" → "2 x green curtains"
+- Capitalise the first word of each line
+- Do NOT use bullet points or dashes — just \n line breaks
+
+SPLITTING description vs condition:
+- Condition signal phrases: "in good order", "in fair order", "in poor order", "good order",
+  "fair order", "poor order", "as new", "as inventory", "in good condition"
+- Everything said AFTER a condition phrase is also condition
+- Functional observations ("appear complete", "tested", "appears working") are always condition
+- If no condition is mentioned, default condition to "In good order"
+
 Return ONLY valid JSON — no markdown, no extra text:
 {{
   "<itemId>": {{
@@ -624,6 +648,117 @@ Return ONLY valid JSON — no markdown, no extra text:
         return json.loads(raw)
     except json.JSONDecodeError:
         print(f'[_claude_fill_room] JSON parse error: {raw[:200]}')
+        return {}
+
+
+def _claude_fill_fixed_section(transcript: str, section_name: str, section_type: str, items: list) -> dict:
+    """
+    Fill a fixed section's items from a continuous dictation transcript.
+    Like _claude_fill_room but returns section-type-specific field names.
+
+    items: [{ 'id': str, 'name': str }]
+
+    Return shapes per section type:
+      condition_summary        → { "condition": "..." }
+      cleaning_summary         → { "cleanlinessNotes": "..." }
+      fire_door_safety /
+        health_safety /
+        smoke_alarms           → { "notes": "...", "answer": "Yes"|"No"|"" }
+      keys                     → { "description": "..." }
+      meter_readings            → { "locationSerial": "...", "reading": "..." }
+    """
+    client = anthropic.Anthropic(api_key=os.environ.get('ANTHROPIC_API_KEY'))
+
+    items_list = '\n'.join(
+        f'  - ID: "{item["id"]}", Name: "{item["name"]}"'
+        for item in items
+    )
+
+    if section_type == 'condition_summary':
+        field_schema = '{"condition": "one or more lines of condition text"}'
+        field_instructions = (
+            'Extract the condition observations into "condition". '
+            'If multiple points are made, put each on its own line using \\n. '
+            'Use the EXACT words the clerk spoke.'
+        )
+    elif section_type == 'cleaning_summary':
+        field_schema = '{"cleanlinessNotes": "one or more lines of notes"}'
+        field_instructions = (
+            'Extract the cleanliness observations into "cleanlinessNotes". '
+            'If multiple points are made, put each on its own line using \\n. '
+            'Use the EXACT words the clerk spoke.'
+        )
+    elif section_type in ('fire_door_safety', 'health_safety', 'smoke_alarms'):
+        field_schema = '{"notes": "one or more lines of notes", "answer": "Yes or No or empty string"}'
+        field_instructions = (
+            'Extract observations into "notes". '
+            'If the clerk gives a yes/no answer (e.g. "yes", "no", "working", "not working"), '
+            'put "Yes" or "No" in "answer"; otherwise leave it as an empty string. '
+            'If multiple note points, put each on its own line using \\n. '
+            'Use the EXACT words the clerk spoke.'
+        )
+    elif section_type == 'keys':
+        field_schema = '{"description": "one or more lines listing keys"}'
+        field_instructions = (
+            'Extract key descriptions into "description". '
+            'Format each key type as "N x [key type]" on its own line using \\n. '
+            'Convert spoken numbers to numerals ("two" → "2"). '
+            'Use the EXACT words the clerk spoke.'
+        )
+    elif section_type == 'meter_readings':
+        field_schema = '{"locationSerial": "Located to [location]\\nSerial Number: [number]", "reading": "meter reading value"}'
+        field_instructions = (
+            'Extract meter location and serial number into "locationSerial" '
+            '(format: "Located to [location]\\nSerial Number: [number]"). '
+            'Extract the reading value only into "reading". '
+            'Use the EXACT words the clerk spoke.'
+        )
+    else:
+        field_schema = '{"notes": "..."}'
+        field_instructions = 'Extract all observations into "notes". Use the EXACT words the clerk spoke.'
+
+    prompt = f"""You are processing a UK property inventory inspection dictation for a fixed section.
+
+The clerk spoke each item name aloud followed by their observations.
+Item names act as CHAPTER HEADINGS — everything said after an item name belongs to that item, until the next item name is spoken.
+
+Section: {section_name}
+Section type: {section_type}
+
+Items to fill (use the ID as the JSON key, match by Name):
+{items_list}
+
+Transcript:
+"{transcript}"
+
+RULES:
+1. Match each passage to the closest item name. The clerk may abbreviate — use fuzzy matching.
+2. {field_instructions}
+3. CRITICAL: Use the EXACT words the clerk spoke. Do not rephrase or substitute synonyms.
+   - "good order" → "Good order" (NOT "Good condition")
+   - "fair wear and tear" → "Fair wear and tear"
+4. Clean up only: filler words (um, uh, er), obvious repetition, false starts.
+5. Only fill items that are mentioned. Omit unmentioned items entirely from the output.
+6. Use British English spelling for any connecting words.
+7. Capitalise the first word of each line.
+
+Return ONLY valid JSON — no markdown, no extra text:
+{{
+  "<itemId>": {field_schema}
+}}"""
+
+    message = client.messages.create(
+        model='claude-haiku-4-5',
+        max_tokens=3000,
+        messages=[{'role': 'user', 'content': prompt}]
+    )
+
+    raw = message.content[0].text.strip()
+    raw = raw.replace('```json', '').replace('```', '').strip()
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        print(f'[_claude_fill_fixed_section] JSON parse error: {raw[:200]}')
         return {}
 
 
@@ -662,6 +797,7 @@ def transcribe_room():
 
     clips        = data.get('clips', [])
     section_name = data.get('sectionName', 'Room')
+    section_type = data.get('sectionType', 'room')   # 'room' | fixed-section types
     items        = data.get('items', [])
 
     if not clips:
@@ -694,7 +830,10 @@ def transcribe_room():
         return jsonify({'error': 'No speech detected in recording'}), 422
 
     try:
-        filled = _claude_fill_room(full_transcript, section_name, items)
+        if section_type == 'room':
+            filled = _claude_fill_room(full_transcript, section_name, items)
+        else:
+            filled = _claude_fill_fixed_section(full_transcript, section_name, section_type, items)
     except Exception as e:
         print(f'[transcribe/room] claude error: {e}')
         return jsonify({'error': f'AI fill error: {str(e)}'}), 500

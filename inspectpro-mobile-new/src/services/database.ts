@@ -35,6 +35,7 @@ export function initDatabase(): void {
   try { db.runSync("ALTER TABLE audio_recordings ADD COLUMN section_name TEXT NOT NULL DEFAULT ''") } catch {}
   try { db.runSync('ALTER TABLE audio_recordings ADD COLUMN item_name TEXT') } catch {}
   try { db.runSync("ALTER TABLE audio_recordings ADD COLUMN label TEXT NOT NULL DEFAULT ''") } catch {}
+  try { db.runSync('ALTER TABLE inspections ADD COLUMN is_finalised INTEGER NOT NULL DEFAULT 0') } catch {}
 }
 
 export function saveInspection(inspection: any): void {
@@ -57,23 +58,24 @@ export function saveInspection(inspection: any): void {
 }
 
 export function getLocalInspections(): any[] {
-  const rows = db.getAllSync<{ data: string; report_data: string | null; local_status: string; synced: number }>(
-    'SELECT data, report_data, local_status, synced FROM inspections ORDER BY downloaded_at DESC'
+  const rows = db.getAllSync<{ data: string; report_data: string | null; local_status: string; synced: number; is_finalised: number }>(
+    'SELECT data, report_data, local_status, synced, is_finalised FROM inspections ORDER BY downloaded_at DESC'
   )
   return rows.map(r => ({
     ...JSON.parse(r.data),
     report_data: r.report_data,
     local_status: r.local_status,
     synced: r.synced === 1,
+    is_finalised: r.is_finalised === 1,
   }))
 }
 
 export function getLocalInspection(id: number): any | null {
-  const r = db.getFirstSync<{ data: string; report_data: string | null; local_status: string; synced: number }>(
-    'SELECT data, report_data, local_status, synced FROM inspections WHERE id = ?', [id]
+  const r = db.getFirstSync<{ data: string; report_data: string | null; local_status: string; synced: number; is_finalised: number }>(
+    'SELECT data, report_data, local_status, synced, is_finalised FROM inspections WHERE id = ?', [id]
   )
   if (!r) return null
-  return { ...JSON.parse(r.data), report_data: r.report_data, local_status: r.local_status, synced: r.synced === 1 }
+  return { ...JSON.parse(r.data), report_data: r.report_data, local_status: r.local_status, synced: r.synced === 1, is_finalised: r.is_finalised === 1 }
 }
 
 export function updateReportData(inspectionId: number, reportData: string): void {
@@ -93,6 +95,20 @@ export function updateLocalStatus(inspectionId: number, localStatus: string): vo
 export function markSynced(inspectionId: number): void {
   db.runSync(
     'UPDATE inspections SET synced = 1, updated_at = ? WHERE id = ?',
+    [new Date().toISOString(), inspectionId]
+  )
+}
+
+export function markFinalised(inspectionId: number): void {
+  db.runSync(
+    'UPDATE inspections SET is_finalised = 1, synced = 0, updated_at = ? WHERE id = ?',
+    [new Date().toISOString(), inspectionId]
+  )
+}
+
+export function unmarkFinalised(inspectionId: number): void {
+  db.runSync(
+    'UPDATE inspections SET is_finalised = 0, synced = 0, updated_at = ? WHERE id = ?',
     [new Date().toISOString(), inspectionId]
   )
 }

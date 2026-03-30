@@ -77,11 +77,12 @@ export const api = {
   transcribeItem: (data: any) =>
     httpAi.post('/api/transcribe/item', data),
 
-  // AI transcription — per-room dictation (replaces ai_processing server-side flow)
+  // AI transcription — per-room or per-fixed-section dictation
   transcribeRoom: (data: {
     clips: Array<{ audio: string; mimeType: string }>
     sectionName: string
     sectionKey: string
+    sectionType?: string   // 'room' (default) or fixed section type
     items: Array<{ id: string; name: string; hasCondition?: boolean; hasDescription?: boolean }>
   }) =>
     httpAi.post('/api/transcribe/room', data),

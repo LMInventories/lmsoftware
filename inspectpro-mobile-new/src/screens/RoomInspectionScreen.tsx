@@ -440,9 +440,8 @@ export default function RoomInspectionScreen() {
     setTranscribingUris(prev => ({ ...prev, [itemId]: uri }))
     setAiError('')
     try {
-      // Read file as base64
-      const { readAsStringAsync, EncodingType } = await import('expo-file-system') as any
-      const audioB64 = await readAsStringAsync(uri, { encoding: EncodingType.Base64 })
+      // Read file as base64 — use the statically imported FileSystem (expo-file-system/legacy)
+      const audioB64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 })
 
       const response = await api.transcribeItem({
         audio:       audioB64,
@@ -551,8 +550,7 @@ export default function RoomInspectionScreen() {
     setTranscribingUris(prev => ({ ...prev, [sid]: uri }))
     setAiError('')
     try {
-      const { readAsStringAsync, EncodingType } = await import('expo-file-system') as any
-      const audioB64 = await readAsStringAsync(uri, { encoding: EncodingType.Base64 })
+      const audioB64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 })
       const response = await api.transcribeItem({
         audio:       audioB64,
         mimeType:    'audio/m4a',

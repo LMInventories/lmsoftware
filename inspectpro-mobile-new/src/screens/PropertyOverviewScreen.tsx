@@ -11,7 +11,7 @@ import * as ImagePicker from 'expo-image-picker'
 
 import type { RootStackParamList } from '../../App'
 import { useInspectionStore } from '../stores/inspectionStore'
-import { updateLocalStatus, markFinalised, unmarkFinalised } from '../services/database'
+import { updateLocalStatus, updateInspectionServerStatus, markFinalised, unmarkFinalised } from '../services/database'
 import { api } from '../services/api'
 import Header from '../components/Header'
 import { colors, font, radius, spacing, TYPE_LABELS } from '../utils/theme'
@@ -70,12 +70,15 @@ export default function PropertyOverviewScreen() {
             setStarting(true)
             try {
               await api.updateInspection(inspectionId, { status: 'active' })
-              await updateLocalStatus(inspectionId, 'active')
+              // Patch the data blob so inspection.status reads correctly everywhere
+              // (blob is otherwise frozen at the value from download time)
+              updateInspectionServerStatus(inspectionId, 'active')
+              updateLocalStatus(inspectionId, 'active')
               await loadInspection(inspectionId)
               navigation.replace('RoomSelection', { inspectionId })
             } catch {
-              // If offline, still allow starting locally
-              await updateLocalStatus(inspectionId, 'active')
+              // Offline — allow starting locally; server will be updated on next sync
+              updateLocalStatus(inspectionId, 'active')
               await loadInspection(inspectionId)
               navigation.replace('RoomSelection', { inspectionId })
             } finally {

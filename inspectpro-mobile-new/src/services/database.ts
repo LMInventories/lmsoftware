@@ -92,6 +92,27 @@ export function updateLocalStatus(inspectionId: number, localStatus: string): vo
   )
 }
 
+/**
+ * Patch the server-side status field inside the stored JSON data blob AND the
+ * status column.  Call this after a successful api.updateInspection() so that
+ * inspection.status stays accurate on device (otherwise the blob is frozen at
+ * the value it had when the inspection was first downloaded).
+ */
+export function updateInspectionServerStatus(inspectionId: number, status: string): void {
+  const r = db.getFirstSync<{ data: string }>(
+    'SELECT data FROM inspections WHERE id = ?', [inspectionId]
+  )
+  if (!r) return
+  try {
+    const data = JSON.parse(r.data)
+    data.status = status
+    db.runSync(
+      'UPDATE inspections SET status = ?, data = ?, updated_at = ? WHERE id = ?',
+      [status, JSON.stringify(data), new Date().toISOString(), inspectionId]
+    )
+  } catch {}
+}
+
 export function markSynced(inspectionId: number): void {
   db.runSync(
     'UPDATE inspections SET synced = 1, updated_at = ? WHERE id = ?',

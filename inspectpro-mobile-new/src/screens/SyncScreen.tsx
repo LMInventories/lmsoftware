@@ -168,13 +168,15 @@ export default function SyncScreen() {
         // Admin/manager: no auto-transition
         const role = user?.role
         const typistMode = user?.typist_mode
-        // local_status is set to 'active' when the clerk taps "Start Inspection".
-        // inspection.status comes from the data blob saved at download time and is
-        // never updated locally, so it can still read 'assigned' even after the
-        // inspection has been started.  Use local_status for the clerk check so
-        // By Room / human-typist inspections are treated correctly.
-        const localStatus  = fresh?.local_status  || inspection.local_status
-        const serverStatus = fresh?.status        || inspection.status
+        // fresh.status is now reliable: updateInspectionServerStatus() patches the
+        // data blob when Start Inspection is tapped, so it no longer freezes at the
+        // value from download time.
+        // local_status === 'active' is kept as a secondary check to cover the
+        // offline-start edge case where the server couldn't be reached and the blob
+        // was therefore not updated.
+        const freshStatus = fresh?.status || inspection.status
+        const localStatus = fresh?.local_status || inspection.local_status
+        const isActive    = freshStatus === 'active' || localStatus === 'active'
         const typistName = (fresh?.typist_name || fresh?.typist?.name || '').toLowerCase()
         const typistIsAi = fresh?.typist_is_ai === true ||
                            fresh?.typist?.is_ai === true ||
@@ -186,15 +188,14 @@ export default function SyncScreen() {
 
         const isFinalised = !!(fresh as any)?.is_finalised
 
-        if (role === 'clerk' && localStatus === 'active') {
+        if (role === 'clerk' && isActive) {
           if (isFinalised) {
             // Finalised on device: move to processing (human typist) or review (AI typist)
             payload.status = isAiMode ? 'review' : 'processing'
           }
-          // Not finalised: no status change — inspection stays Active on server
-        } else if (role === 'typist' && serverStatus === 'processing') {
-          // Typist finished → Review (server status 'processing' is reliable here
-          // since typists download inspections that are already in Processing state)
+          // Not finalised: upload report data but leave inspection Active on server
+        } else if (role === 'typist' && freshStatus === 'processing') {
+          // Typist finished typing → Review
           payload.status = 'review'
         }
         // Admins/managers: no auto-transition

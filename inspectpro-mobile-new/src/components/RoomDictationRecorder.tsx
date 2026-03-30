@@ -144,6 +144,8 @@ export default function RoomDictationRecorder({
         return
       }
       await AudioModule.setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true })
+      // prepareToRecordAsync must be called before every record() call.
+      await recorder.prepareToRecordAsync()
       recorder.record()
       setMode('recording')
       startTimer()
@@ -159,15 +161,14 @@ export default function RoomDictationRecorder({
     stopTimer()
     try {
       const durationMs = Date.now() - startTimeRef.current
+      // stop() is async — awaiting it ensures the file is written before we read uri.
       await recorder.stop()
 
-      // Poll for URI — Android audio subsystem can take 1–3 s to flush the file.
-      // 60 × 100 ms = 6 s maximum wait before giving up.
-      let uri: string | null = null
-      for (let i = 0; i < 60; i++) {
+      // URI should be available immediately; short safety poll covers edge cases.
+      let uri: string | null = recorder.uri ?? null
+      for (let i = 0; i < 10 && !uri; i++) {
+        await new Promise(r => setTimeout(r, 50))
         uri = recorder.uri ?? null
-        if (uri) break
-        await new Promise(r => setTimeout(r, 100))
       }
 
       await AudioModule.setAudioModeAsync({ allowsRecording: false })

@@ -38,6 +38,9 @@ export function useAudioRecorder() {
         playsInSilentMode: true,
       })
 
+      // prepareToRecordAsync must be called before every record() call —
+      // the hook creates the recorder but does not auto-prepare it.
+      await recorder.prepareToRecordAsync()
       recorder.record()
       startTimeRef.current = Date.now()
       setIsRecording(true)
@@ -53,22 +56,24 @@ export function useAudioRecorder() {
     if (!isRecording) return null
     try {
       const durationMs = Date.now() - startTimeRef.current
+
+      // stop() is async — awaiting it ensures the native layer has finished
+      // writing the file before we read recorder.uri.
       await recorder.stop()
 
-      // Poll for URI — Android audio subsystem can take 1–3 s to flush the file.
-      // 60 × 100 ms = 6 s maximum wait before giving up.
-      let uri: string | null = null
-      for (let i = 0; i < 60; i++) {
+      // URI should be available immediately after stop() resolves.
+      // Short safety poll (10 × 50 ms = 500 ms) covers any edge-case native lag.
+      let uri: string | null = recorder.uri ?? null
+      for (let i = 0; i < 10 && !uri; i++) {
+        await new Promise(r => setTimeout(r, 50))
         uri = recorder.uri ?? null
-        if (uri) break
-        await new Promise(r => setTimeout(r, 100))
       }
 
       setIsRecording(false)
       await AudioModule.setAudioModeAsync({ allowsRecording: false })
 
       if (!uri) {
-        console.warn('[useAudioRecorder] URI never populated after stop — recording lost')
+        console.warn('[useAudioRecorder] URI not available after stop — recording lost')
         return null
       }
       return { uri, durationMs }

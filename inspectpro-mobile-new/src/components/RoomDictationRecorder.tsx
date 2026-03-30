@@ -37,7 +37,7 @@ import {
   RecordingPresets,
   createAudioPlayer,
 } from 'expo-audio'
-import * as FileSystem from 'expo-file-system'
+import * as FileSystem from 'expo-file-system/legacy'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import SwipeableRow from './SwipeableRow'
 import { saveAudioRecording } from '../services/database'

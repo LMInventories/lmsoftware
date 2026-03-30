@@ -480,9 +480,6 @@ export default function RoomInspectionScreen() {
 
       if (changed) {
         await setReportData(inspectionId, rd)
-        Alert.alert('✨ AI filled', `Fields updated for: ${itemLabel}`)
-      } else if (result.transcript) {
-        Alert.alert('Transcribed', `No new fields to fill for: ${itemLabel}`)
       }
     } catch (err: any) {
       console.error('transcribeItem error', err)
@@ -571,7 +568,6 @@ export default function RoomInspectionScreen() {
         if (result.condition   && !sub.condition)   { sub.condition   = result.condition;   changed = true }
         if (changed) {
           await setReportData(inspectionId, rd)
-          Alert.alert('✨ AI filled', `Sub-item updated: ${subLabel}`)
         }
       }
     } catch (err: any) {

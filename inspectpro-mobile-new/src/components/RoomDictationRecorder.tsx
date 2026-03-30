@@ -278,7 +278,7 @@ export default function RoomDictationRecorder({
       const clipPayloads = await Promise.all(
         clips.map(async (clip) => {
           const b64 = await FileSystem.readAsStringAsync(clip.uri, {
-            encoding: FileSystem.EncodingType.Base64,
+            encoding: 'base64',
           })
           return { audio: b64, mimeType: 'audio/m4a' }
         })

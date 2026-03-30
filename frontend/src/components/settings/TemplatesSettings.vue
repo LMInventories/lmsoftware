@@ -81,12 +81,7 @@ function closePreview() {
 async function copyTemplate(template) {
   if (!confirm(`Create a copy of "${template.name}"?`)) return
   try {
-    const res = await api.createTemplate({
-      name:            `${template.name} (Copy)`,
-      inspection_type: template.inspection_type,
-      content:         template.content || '{}',
-      is_default:      false,
-    })
+    const res = await api.copyTemplate(template.id)
     await fetchTemplates()
     router.push(`/settings/templates/${res.data.id}`)
   } catch (e) {

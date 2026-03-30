@@ -55,18 +55,22 @@ export function useAudioRecorder() {
       const durationMs = Date.now() - startTimeRef.current
       await recorder.stop()
 
-      // Poll for URI — may take a brief moment to flush on Android
+      // Poll for URI — Android audio subsystem can take 1–3 s to flush the file.
+      // 60 × 100 ms = 6 s maximum wait before giving up.
       let uri: string | null = null
-      for (let i = 0; i < 10; i++) {
+      for (let i = 0; i < 60; i++) {
         uri = recorder.uri ?? null
         if (uri) break
-        await new Promise(r => setTimeout(r, 20))
+        await new Promise(r => setTimeout(r, 100))
       }
 
       setIsRecording(false)
       await AudioModule.setAudioModeAsync({ allowsRecording: false })
 
-      if (!uri) return null
+      if (!uri) {
+        console.warn('[useAudioRecorder] URI never populated after stop — recording lost')
+        return null
+      }
       return { uri, durationMs }
     } catch (err) {
       console.error('stopRecording error', err)

@@ -29,6 +29,7 @@ import {
   ActivityIndicator, Alert, Animated,
   Modal, ScrollView, Pressable,
 } from 'react-native'
+import { MaterialCommunityIcons } from '@expo/vector-icons'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import {
   useAudioRecorder as useExpoAudioRecorder,
@@ -160,17 +161,19 @@ export default function RoomDictationRecorder({
       const durationMs = Date.now() - startTimeRef.current
       await recorder.stop()
 
+      // Poll for URI — Android audio subsystem can take 1–3 s to flush the file.
+      // 60 × 100 ms = 6 s maximum wait before giving up.
       let uri: string | null = null
-      for (let i = 0; i < 15; i++) {
+      for (let i = 0; i < 60; i++) {
         uri = recorder.uri ?? null
         if (uri) break
-        await new Promise(r => setTimeout(r, 20))
+        await new Promise(r => setTimeout(r, 100))
       }
 
       await AudioModule.setAudioModeAsync({ allowsRecording: false })
-      await new Promise(r => setTimeout(r, 300))
 
       if (!uri) {
+        console.warn('[RoomDictation] URI never populated after stop')
         Alert.alert('Error', 'Could not save clip. Please try again.')
         setMode('paused')
         return
@@ -352,7 +355,11 @@ export default function RoomDictationRecorder({
           disabled={!hasClips || isTranscribing}
           activeOpacity={0.7}
         >
-          <Text style={bar.clipsIcon}>🎵</Text>
+          <MaterialCommunityIcons
+            name="waveform"
+            size={22}
+            color={hasClips ? '#a5b4fc' : 'rgba(255,255,255,0.2)'}
+          />
           <Text style={[bar.clipsCount, !hasClips && bar.clipsDimmed]}>
             {clips.length}
           </Text>
@@ -523,7 +530,6 @@ const bar = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.1)',
     backgroundColor: 'transparent',
   },
-  clipsIcon:  { fontSize: 18 },
   clipsCount: { fontSize: font.lg, fontWeight: '800', color: FG, lineHeight: 22 },
   clipsLabel: { fontSize: 9, color: 'rgba(255,255,255,0.6)', fontWeight: '600', textTransform: 'uppercase' },
   clipsDimmed:{ color: 'rgba(255,255,255,0.25)' },

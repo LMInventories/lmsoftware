@@ -100,6 +100,7 @@ const api = {
   getTemplates()            { return http.get('/api/templates') },
   getTemplate(id)           { return http.get(`/api/templates/${id}`) },
   createTemplate(data)      { return http.post('/api/templates', data) },
+  copyTemplate(id)          { return http.post(`/api/templates/${id}/copy`) },
   updateTemplate(id, data)  { return http.put(`/api/templates/${id}`, data) },
   deleteTemplate(id)        { return http.delete(`/api/templates/${id}`) },
   reorderSection(id, dir)   { return http.post(`/api/templates/sections/${id}/reorder`, { direction: dir }) },

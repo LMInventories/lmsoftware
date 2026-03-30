@@ -9,6 +9,7 @@ templates_bp = Blueprint('templates', __name__)
 # ── CORS preflight ────────────────────────────────────────────────────────────
 @templates_bp.route('', methods=['OPTIONS'])
 @templates_bp.route('/<int:template_id>', methods=['OPTIONS'])
+@templates_bp.route('/<int:template_id>/copy', methods=['OPTIONS'])
 @templates_bp.route('/<int:template_id>/sections', methods=['OPTIONS'])
 @templates_bp.route('/sections/<int:section_id>', methods=['OPTIONS'])
 @templates_bp.route('/sections/<int:section_id>/items', methods=['OPTIONS'])
@@ -94,6 +95,47 @@ def delete_template(template_id):
     db.session.delete(template)
     db.session.commit()
     return '', 204
+
+
+@templates_bp.route('/<int:template_id>/copy', methods=['POST'])
+@jwt_required()
+def copy_template(template_id):
+    """Deep-copy a template including all its sections and items."""
+    source = Template.query.get_or_404(template_id)
+
+    new_template = Template(
+        name=f"{source.name} (Copy)",
+        inspection_type=source.inspection_type,
+        content=source.content or '{}',
+        is_default=False,
+    )
+    db.session.add(new_template)
+    db.session.flush()  # get new_template.id before inserting children
+
+    for section in sorted(source.sections, key=lambda s: (s.order_index, s.id)):
+        new_section = Section(
+            template_id=new_template.id,
+            name=section.name,
+            section_type=section.section_type,
+            order_index=section.order_index,
+            is_required=False,
+        )
+        db.session.add(new_section)
+        db.session.flush()  # get new_section.id before inserting items
+
+        for item in sorted(section.items, key=lambda i: (i.order_index, i.id)):
+            new_item = Item(
+                section_id=new_section.id,
+                name=item.name,
+                description=item.description,
+                requires_photo=item.requires_photo,
+                requires_condition=item.requires_condition,
+                order_index=item.order_index,
+            )
+            db.session.add(new_item)
+
+    db.session.commit()
+    return jsonify(new_template.to_dict()), 201
 
 
 # ══════════════════════════════════════════════════════════════════════════════

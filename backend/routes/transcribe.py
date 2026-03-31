@@ -607,19 +607,11 @@ RULES:
 6. Use British English spelling for any connecting words.
 7. If only one piece of information is given for an item, put it in description.
 
-MULTI-COMPONENT FORMATTING — critical for description and condition fields:
-- If the description contains multiple distinct physical components, put EACH on its own line using \n
-- A "component" is a distinct element — different material, surface type, or fitting
-- ALWAYS use \n line breaks between components, NEVER commas
-  Example: "white painted door, white painted frame" → "White painted door\nWhite painted frame"
-  Example: "part white ceramic tile, part grey fitted carpet" → "Part white ceramic tile\nPart grey fitted carpet"
-  Example: "dark wood curtain rail, two green fabric floor length curtains" → "Dark wood curtain rail\n2 x green fabric floor length curtains"
-- The same rule applies to condition if multiple condition points are made:
-  Example: "in good order, light indentations to tiles" → "In good order\nLight indentations to tiles"
+FORMATTING NUMBERS AND QUANTITIES:
 - Convert spoken numbers to numerals: "two" → "2", "three" → "3"
 - Format quantities as "N x item": "two green curtains" → "2 x green curtains"
 - Capitalise the first word of each line
-- Do NOT use bullet points or dashes — just \n line breaks
+- Do NOT use bullet points or dashes
 
 SPLITTING description vs condition:
 - Condition signal phrases: "in good order", "in fair order", "in poor order", "good order",
@@ -628,24 +620,58 @@ SPLITTING description vs condition:
 - Functional observations ("appear complete", "tested", "appears working") are always condition
 - If no condition is mentioned, default condition to "In good order"
 
-SUB-ITEMS — when one chapter heading contains multiple distinct elements:
-A SUB-ITEM exists when, within a single item's chapter, the clerk describes TWO OR MORE
-clearly distinct physical elements where EACH has its own full description AND its own
-condition phrase. This typically happens for items like "Curtains and Blinds" or "Doors and Windows"
-where multiple separate fittings are grouped under one template item.
+SUB-ITEMS vs MULTI-COMPONENT — READ THIS CAREFULLY:
 
-How to recognise a sub-item boundary:
-- After completing description + condition for the first element, the clerk transitions to
-  describing a second element that gets its own condition phrase
-- Example: "White wood venetian blinds, white pull cords ... cracked slat to bottom right ...
-  Chrome curtain rail, two grey floor length curtains ... in good order"
-  → main item: venetian blinds (description + condition)
-  → sub-item: curtain rail + curtains (description + "In good order")
-- If the clerk just lists multiple components of the SAME element (e.g. "door with chrome handle
-  and hinges") keep them together in the main item using \n — do NOT create a sub-item
+DECISION RULE: Ask yourself — does each physical element have its OWN condition phrase?
+  YES → it is a SUB-ITEM (create a _subs entry)
+  NO  → it is multi-component (use \n within description, share one condition)
 
-Return sub-items as a "_subs" array under the parent item ID. Each sub has "description" and "condition".
-Only create _subs when genuinely warranted — do NOT create them for simple multi-component descriptions.
+MULTI-COMPONENT with \n (elements share ONE condition):
+  Use \n when the clerk lists several parts of the SAME fitting, all covered by one condition.
+  - "white painted door, white painted frame, chrome lever handle ... in good order"
+    → description: "White painted door\nWhite painted frame\nChrome lever handle"
+    → condition: "In good order"
+  - "part white ceramic tile, part grey fitted carpet ... in good order"
+    → description: "Part white ceramic tile\nPart grey fitted carpet"
+    → condition: "In good order"
+  - "dark wood curtain rail, two green curtains ... in good order"
+    → description: "Dark wood curtain rail\n2 x green fabric floor-length curtains"
+    → condition: "In good order"
+  Rule: ONE condition statement at the end covers everything → \n, no sub-item.
+
+SUB-ITEMS (each element has its OWN condition, stated before moving on):
+  A sub-item boundary occurs when: the clerk gives a condition for element 1, then
+  CONTINUES describing a NEW, physically separate element with its OWN condition.
+
+  Example — Curtains & Blinds:
+    "White wood venetian blinds, white pull cords, white wooden acorns ...
+     cracked slat to bottom right side [← CONDITION 1, element 1 ends here]
+     Chrome curtain rail, two grey floor-length curtains ... in good order [← CONDITION 2]"
+    → main item: description="White wood venetian blinds\nWhite pull cords\nWhite wooden acorns"
+                 condition="Cracked slat to bottom right side"
+    → _subs[0]:  description="Chrome curtain rail\n2 x grey floor-length curtains"
+                 condition="In good order"
+
+  Example — Door & Frame (two distinct physical objects, each with own condition):
+    "White painted solid door, chrome lever handle ... good order [← CONDITION 1]
+     White painted timber frame, chrome hinges ... light scuffing to base [← CONDITION 2]"
+    → main item: description="White painted solid door\nChrome lever handle"
+                 condition="Good order"
+    → _subs[0]:  description="White painted timber frame\nChrome hinges"
+                 condition="Light scuffing to base"
+
+  Example — SAME door described together (no separate conditions) → NOT a sub-item:
+    "White painted solid door, white painted frame, chrome lever handle ... in good order"
+    → description: "White painted solid door\nWhite painted frame\nChrome lever handle"
+    → condition: "In good order"
+    (Everything shares one condition → \n only, no sub-item)
+
+  CRITICAL: If the clerk says a condition phrase then immediately starts describing
+  something new, that new thing is ALWAYS a sub-item — do not merge it into the
+  main item's description.
+
+Return sub-items as a "_subs" array. Each sub has "description" and "condition".
+Only create _subs when the clerk clearly gives each element its own condition phrase.
 
 Return ONLY valid JSON — no markdown, no extra text.
 Items without sub-items use the flat shape. Items WITH sub-items include the "_subs" array:

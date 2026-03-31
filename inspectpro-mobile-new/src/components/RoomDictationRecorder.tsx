@@ -92,6 +92,9 @@ export default function RoomDictationRecorder({
   // Playback modal
   const [modalVisible, setModalVisible] = useState(false)
   const [playingUri, setPlayingUri]     = useState<string | null>(null)
+
+  // Help modal
+  const [helpVisible, setHelpVisible] = useState(false)
   const playerRef = useRef<ReturnType<typeof createAudioPlayer> | null>(null)
 
   const timerRef     = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -404,21 +407,25 @@ export default function RoomDictationRecorder({
           </Text>
         </View>
 
-        {/* RIGHT: AI Transcribe button (or spacer if human mode) */}
-        {showAiButton ? (
-          <TouchableOpacity
-            style={[bar.aiBtn, (!hasClips || isRecording || isTranscribing) && bar.disabled]}
-            onPress={handleTranscribe}
-            disabled={!hasClips || isRecording || isTranscribing}
-            activeOpacity={0.7}
-          >
-            <Text style={bar.aiBtnIcon}>✨</Text>
-            <Text style={bar.aiBtnLabel}>Transcribe</Text>
+        {/* RIGHT: AI Transcribe button (or spacer if human mode) + ? help */}
+        <View style={{ alignItems: 'center', gap: 6 }}>
+          {showAiButton ? (
+            <TouchableOpacity
+              style={[bar.aiBtn, (!hasClips || isRecording || isTranscribing) && bar.disabled]}
+              onPress={handleTranscribe}
+              disabled={!hasClips || isRecording || isTranscribing}
+              activeOpacity={0.7}
+            >
+              <Text style={bar.aiBtnIcon}>✨</Text>
+              <Text style={bar.aiBtnLabel}>Transcribe</Text>
+            </TouchableOpacity>
+          ) : (
+            <View style={bar.aiBtn} />
+          )}
+          <TouchableOpacity style={bar.helpBtn} onPress={() => setHelpVisible(true)}>
+            <Text style={bar.helpBtnText}>?</Text>
           </TouchableOpacity>
-        ) : (
-          // Spacer to keep layout balanced in human mode
-          <View style={bar.aiBtn} />
-        )}
+        </View>
 
       </View>
 
@@ -492,6 +499,59 @@ export default function RoomDictationRecorder({
             </Pressable>
           </Pressable>
         </GestureHandlerRootView>
+      </Modal>
+
+      {/* ── Dictation help modal ──────────────────────────────────── */}
+      <Modal visible={helpVisible} transparent animationType="fade" onRequestClose={() => setHelpVisible(false)}>
+        <Pressable style={helpModal.overlay} onPress={() => setHelpVisible(false)}>
+          <Pressable style={helpModal.sheet} onPress={e => e.stopPropagation()}>
+            <View style={helpModal.header}>
+              <Text style={helpModal.title}>Dictation Guide</Text>
+              <TouchableOpacity onPress={() => setHelpVisible(false)} style={helpModal.closeBtn}>
+                <Text style={helpModal.closeBtnText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={helpModal.body} showsVerticalScrollIndicator={false}>
+
+              <HelpSection heading="Starting a chapter">
+                <HelpRow cmd="Door and Frame" note="Say the item name to begin — everything that follows fills that item" />
+                <HelpRow cmd="Ceiling" note="Abbreviations work too — 'Ceiling' matches 'Ceiling & Coving'" />
+              </HelpSection>
+
+              <HelpSection heading="Filling description & condition">
+                <HelpRow cmd="White painted door … in good order" note="First part = description, condition phrase closes the item" />
+                <HelpRow cmd="Light scuffing to base" note="A defect after a condition phrase adds to condition" />
+                <HelpRow cmd="White emulsion" note="No condition mentioned → AI defaults to 'In good order'" />
+              </HelpSection>
+
+              <HelpSection heading="Multiple components (same condition)">
+                <HelpRow cmd="White door, white frame, chrome handle … in good order" note="All components share one condition → listed on separate lines, no sub-item" />
+                <HelpRow cmd="Part carpet, part tile … worn to threshold" note="Mixed surfaces with one condition → same rule" />
+              </HelpSection>
+
+              <HelpSection heading="Sub-items (each element has its own condition)">
+                <HelpRow cmd="White venetian blinds … cracked slat [pause] Chrome curtain rail, grey curtains … in good order" note="State a condition after element 1, then describe element 2 — AI creates a sub-item automatically" />
+                <HelpRow cmd="UPVC door, chrome lock … in good order [pause] Painted frame, chrome hinges … light scuffing" note="Door and frame with different conditions → two sub-items" />
+              </HelpSection>
+
+              <HelpSection heading="Skipping or deleting an item">
+                <HelpRow cmd="Built-in Storage … None seen" note="Marks the item as not present — AI writes 'None seen'" />
+                <HelpRow cmd="Smoke Alarm … Not applicable" note="Any not-applicable phrase skips the item" />
+              </HelpSection>
+
+              <HelpSection heading="Returning to a previous item">
+                <HelpRow cmd="Return to Door and Frame … add to condition … chipped to mid level" note="Say the item name again — AI appends rather than overwrites if the field already has content" />
+              </HelpSection>
+
+              <HelpSection heading="Tips">
+                <HelpRow cmd="Pause between clips" note="You can record in multiple short clips — they're joined before transcription" />
+                <HelpRow cmd="Speak numbers as words" note="'Two white curtains' → AI writes '2 x white curtains'" />
+                <HelpRow cmd="British English" note="Spellings like 'colour', 'grey', 'metre' are preserved" />
+              </HelpSection>
+
+            </ScrollView>
+          </Pressable>
+        </Pressable>
       </Modal>
 
     </View>
@@ -579,6 +639,15 @@ const bar = StyleSheet.create({
   aiBtnIcon:  { fontSize: 20 },
   aiBtnLabel: { fontSize: 9, color: 'rgba(255,255,255,0.7)', fontWeight: '700', textTransform: 'uppercase' },
   disabled:   { opacity: 0.3 },
+
+  // ? help button
+  helpBtn: {
+    width: 24, height: 24, borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  helpBtnText: { fontSize: 12, color: 'rgba(255,255,255,0.5)', fontWeight: '700', lineHeight: 16 },
 
   // Status + clear
   status: {
@@ -669,4 +738,61 @@ const modal = StyleSheet.create({
   clipInfo: { flex: 1 },
   clipName: { fontSize: font.sm, fontWeight: '600', color: '#fff' },
   clipDuration: { fontSize: font.xs, color: 'rgba(255,255,255,0.45)', marginTop: 2 },
+})
+
+// ── Help modal styles & sub-components ────────────────────────────────────────
+function HelpSection({ heading, children }: { heading: string; children: React.ReactNode }) {
+  return (
+    <View style={{ marginBottom: 16 }}>
+      <Text style={{ fontSize: 11, fontWeight: '800', color: '#6366f1', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 8 }}>{heading}</Text>
+      {children}
+    </View>
+  )
+}
+
+function HelpRow({ cmd, note }: { cmd: string; note: string }) {
+  return (
+    <View style={{ marginBottom: 8, paddingLeft: 8 }}>
+      <Text style={{ fontSize: 13, fontWeight: '600', color: '#e2e8f0', fontStyle: 'italic', marginBottom: 2 }}>"{cmd}"</Text>
+      <Text style={{ fontSize: 12, color: 'rgba(255,255,255,0.45)', lineHeight: 17 }}>{note}</Text>
+    </View>
+  )
+}
+
+const helpModal = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.65)',
+    justifyContent: 'flex-end',
+  },
+  sheet: {
+    backgroundColor: '#0f172a',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: '80%',
+    borderTopWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.08)',
+  },
+  title: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#e2e8f0',
+  },
+  closeBtn: {
+    width: 28, height: 28, borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  closeBtnText: { fontSize: 13, color: 'rgba(255,255,255,0.5)', fontWeight: '700' },
+  body: {
+    padding: 16,
+  },
 })

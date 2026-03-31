@@ -65,7 +65,9 @@ export default function RoomInspectionScreen() {
   const [renameItemId, setRenameItemId]       = useState('')
   const [renameItemName, setRenameItemName]   = useState('')
 
-  // Sub-item state — tracks which items have been expanded to show sub-items
+  // Sub-item quantity modal — opened when clerk taps the ⊕ swipe action
+  const [subQtyModal, setSubQtyModal] = useState<{ itemId: string; label: string; count: number } | null>(null)
+
   // Sub-items stored in report_data[sectionKey][itemId]._subs matching web app format
 
   // AI typist state
@@ -708,13 +710,19 @@ export default function RoomInspectionScreen() {
   }
 
   async function addSubItem(itemId: string) {
+    await addSubItems(itemId, 1)
+  }
+
+  async function addSubItems(itemId: string, count: number) {
     const fresh = await getLocalInspection(inspectionId)
     const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
     if (!rd[sectionKey]) rd[sectionKey] = {}
     if (!rd[sectionKey][String(itemId)]) rd[sectionKey][String(itemId)] = {}
     if (!rd[sectionKey][String(itemId)]._subs) rd[sectionKey][String(itemId)]._subs = []
-    const sid = `sub_${Date.now()}`
-    rd[sectionKey][String(itemId)]._subs.push({ _sid: sid, description: '', condition: '' })
+    for (let i = 0; i < count; i++) {
+      const sid = `sub_${Date.now()}_${i}`
+      rd[sectionKey][String(itemId)]._subs.push({ _sid: sid, description: '', condition: '' })
+    }
     await setReportData(inspectionId, rd)
   }
 
@@ -843,9 +851,10 @@ export default function RoomInspectionScreen() {
         onPress: () => deleteItemConfirmed(item.id, label),
       },
     ]
-    // Add sub-item action for room items (hasDescription = room items)
+    // Add sub-item action for room items — opens quantity picker
+    const itemLabel = item.label || item.name || 'Item'
     const itemActions = (item.hasDescription && sectionType_ === 'room')
-      ? [{ icon: '⊕', label: 'Sub-item', bg: '#f0fdf4', onPress: () => addSubItem(item.id) }, ...baseActions]
+      ? [{ icon: '⊕', label: 'Sub-item', bg: '#f0fdf4', onPress: () => setSubQtyModal({ itemId: item.id, label: itemLabel, count: 1 }) }, ...baseActions]
       : baseActions
 
     return (
@@ -1262,6 +1271,52 @@ export default function RoomInspectionScreen() {
           </View>
         </Modal>
 
+        {/* Sub-item quantity modal */}
+        <Modal visible={!!subQtyModal} transparent animationType="fade">
+          <View style={mStyles.overlay}>
+            <View style={[mStyles.box, { width: '75%' }]}>
+              <Text style={mStyles.title}>Add Sub-items</Text>
+              <Text style={{ fontSize: 13, color: colors.textMid, marginBottom: 16 }}>
+                {subQtyModal?.label}
+              </Text>
+              {/* +/- stepper */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 20, marginBottom: 20 }}>
+                <TouchableOpacity
+                  onPress={() => subQtyModal && subQtyModal.count > 1 && setSubQtyModal({ ...subQtyModal, count: subQtyModal.count - 1 })}
+                  style={subQtyStyles.stepBtn}
+                >
+                  <Text style={subQtyStyles.stepBtnText}>−</Text>
+                </TouchableOpacity>
+                <Text style={subQtyStyles.countText}>{subQtyModal?.count ?? 1}</Text>
+                <TouchableOpacity
+                  onPress={() => subQtyModal && subQtyModal.count < 10 && setSubQtyModal({ ...subQtyModal, count: subQtyModal.count + 1 })}
+                  style={subQtyStyles.stepBtn}
+                >
+                  <Text style={subQtyStyles.stepBtnText}>+</Text>
+                </TouchableOpacity>
+              </View>
+              <View style={mStyles.actions}>
+                <TouchableOpacity style={mStyles.cancel} onPress={() => setSubQtyModal(null)}>
+                  <Text style={mStyles.cancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={mStyles.confirm}
+                  onPress={async () => {
+                    if (subQtyModal) {
+                      await addSubItems(subQtyModal.itemId, subQtyModal.count)
+                      setSubQtyModal(null)
+                    }
+                  }}
+                >
+                  <Text style={mStyles.confirmText}>
+                    Add {subQtyModal?.count === 1 ? '1 Sub-item' : `${subQtyModal?.count} Sub-items`}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+
         {/* Rename item modal */}
         <Modal visible={renameItemModal} transparent animationType="fade">
           <View style={mStyles.overlay}><View style={mStyles.box}>
@@ -1304,6 +1359,11 @@ const optStyles = StyleSheet.create({
   btnActive: { backgroundColor: colors.primaryLight, borderColor: colors.primary },
   text: { fontSize: font.sm, color: colors.textMid, fontWeight: '500' },
   textActive: { color: colors.primary, fontWeight: '700' },
+})
+const subQtyStyles = StyleSheet.create({
+  stepBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.primaryLight, alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderColor: colors.primary },
+  stepBtnText: { fontSize: 24, fontWeight: '700', color: colors.primary, lineHeight: 28 },
+  countText: { fontSize: 32, fontWeight: '800', color: colors.text, minWidth: 40, textAlign: 'center' },
 })
 const mStyles = StyleSheet.create({
   overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center' },

@@ -256,12 +256,15 @@ def update_inspection(inspection_id):
     user = get_current_user()
     inspection = Inspection.query.get_or_404(inspection_id)
     data = request.json
-    # Clerks can only update their own inspections in active or review stage
+    # Clerks can update their own inspections when assigned, active, or in review.
+    # 'assigned' must be included so the mobile app can activate the inspection
+    # (Assigned → Active) and so offline-started inspections can sync directly
+    # to the finalised state (Assigned → Review / Processing) in one call.
     if user.role == 'clerk':
         if inspection.inspector_id != user.id:
             return jsonify({'error': 'Forbidden'}), 403
-        if inspection.status not in ('active', 'review'):
-            return jsonify({'error': 'Clerks can only edit reports in active or review stage'}), 403
+        if inspection.status not in ('assigned', 'active', 'review'):
+            return jsonify({'error': 'Clerks can only edit reports in assigned, active or review stage'}), 403
     # Typists can only update report_data and move to review on their own processing inspections
     if user.role == 'typist':
         if inspection.typist_id != user.id or inspection.status != 'processing':

@@ -772,6 +772,8 @@ const helpModal = StyleSheet.create({
     maxHeight: '80%',
     borderTopWidth: 1,
     borderColor: 'rgba(255,255,255,0.1)',
+    flex: 0,
+    flexShrink: 1,
   },
   header: {
     flexDirection: 'row',
@@ -793,6 +795,7 @@ const helpModal = StyleSheet.create({
   },
   closeBtnText: { fontSize: 13, color: 'rgba(255,255,255,0.5)', fontWeight: '700' },
   body: {
+    flex: 1,
     padding: 16,
   },
 })

@@ -718,58 +718,55 @@ SPLITTING description vs condition:
 - Functional observations ("appear complete", "tested", "appears working") are always condition
 - If no condition is mentioned, default condition to "In good order"
 
-SUB-ITEMS vs MULTI-COMPONENT — READ THIS CAREFULLY:
+HOW TO PARSE EACH ITEM — follow this algorithm exactly:
 
-DECISION RULE: Ask yourself — does each physical element have its OWN condition phrase?
-  YES → it is a SUB-ITEM (create a _subs entry)
-  NO  → it is multi-component (use \n within description, share one condition)
+STEP 1: When the clerk says an item name (chapter heading), everything that follows is for that item.
+STEP 2: Collect description words until you hit a CONDITION SIGNAL phrase.
+STEP 3: The condition signal (and anything immediately after it describing state) = CONDITION for the current element.
+STEP 4: If MORE TEXT follows that condition signal (before the next item name is spoken), it is ALWAYS a NEW sub-item.
+         → Go back to STEP 2 for the new sub-item.
+STEP 5: Repeat for as many sub-items as appear.
 
-MULTI-COMPONENT with \n (elements share ONE condition):
-  Use \n when the clerk lists several parts of the SAME fitting, all covered by one condition.
-  - "white painted door, white painted frame, chrome lever handle ... in good order"
-    → description: "White painted door\nWhite painted frame\nChrome lever handle"
-    → condition: "In good order"
-  - "part white ceramic tile, part grey fitted carpet ... in good order"
-    → description: "Part white ceramic tile\nPart grey fitted carpet"
-    → condition: "In good order"
-  - "dark wood curtain rail, two green curtains ... in good order"
-    → description: "Dark wood curtain rail\n2 x green fabric floor-length curtains"
-    → condition: "In good order"
-  Rule: ONE condition statement at the end covers everything → \n, no sub-item.
+The first element = the main item fields ("description" + "condition").
+Each subsequent element = a "_subs" entry with its own "description" and "condition".
 
-SUB-ITEMS (each element has its OWN condition, stated before moving on):
-  A sub-item boundary occurs when: the clerk gives a condition for element 1, then
-  CONTINUES describing a NEW, physically separate element with its OWN condition.
+CONDITION SIGNAL PHRASES — these close the current element:
+  State phrases:  "in good order", "in fair order", "in poor order", "good order", "fair order",
+                  "poor order", "as new", "as inventory", "in good condition", "in fair condition",
+                  "in poor condition", "in clean condition"
+  Defect phrases: "light scuffing", "chipped", "cracked", "stained", "marked", "damaged",
+                  "worn", "faded", "scratched", "some wear", "fair wear and tear",
+                  "scuff to", "chip to", "crack to", "stain to", "mark to"
 
-  Example — Curtains & Blinds:
-    "White wood venetian blinds, white pull cords, white wooden acorns ...
-     cracked slat to bottom right side [← CONDITION 1, element 1 ends here]
-     Chrome curtain rail, two grey floor-length curtains ... in good order [← CONDITION 2]"
-    → main item: description="White wood venetian blinds\nWhite pull cords\nWhite wooden acorns"
-                 condition="Cracked slat to bottom right side"
-    → _subs[0]:  description="Chrome curtain rail\n2 x grey floor-length curtains"
-                 condition="In good order"
+THE GOLDEN RULE: A condition signal phrase ENDS the current element.
+  Any description text that follows before the next chapter heading ALWAYS starts a new sub-item.
+  NEVER merge post-condition text back into the main item's description.
 
-  Example — Door & Frame (two distinct physical objects, each with own condition):
-    "White painted solid door, chrome lever handle ... good order [← CONDITION 1]
-     White painted timber frame, chrome hinges ... light scuffing to base [← CONDITION 2]"
-    → main item: description="White painted solid door\nChrome lever handle"
-                 condition="Good order"
-    → _subs[0]:  description="White painted timber frame\nChrome hinges"
-                 condition="Light scuffing to base"
+MULTI-COMPONENT (no sub-item): When the clerk lists several parts of the SAME thing and
+  gives ONE condition phrase at the end covering everything:
+  "White painted door, white painted frame, chrome lever handle … in good order"
+  → description: "White painted door\nWhite painted frame\nChrome lever handle"
+    condition:   "In good order"
+  This is NOT a sub-item — everything shares one condition phrase.
 
-  Example — SAME door described together (no separate conditions) → NOT a sub-item:
-    "White painted solid door, white painted frame, chrome lever handle ... in good order"
-    → description: "White painted solid door\nWhite painted frame\nChrome lever handle"
-    → condition: "In good order"
-    (Everything shares one condition → \n only, no sub-item)
+EXAMPLE — 2 elements → main + 1 sub-item:
+  "Door and frame. White UPVC door, chrome lever handle … in good order.
+   White painted timber frame, chrome hinges … light scuffing to base."
+  → main:   description="White UPVC door\nChrome lever handle"  condition="In good order"
+  → sub[0]: description="White painted timber frame\nChrome hinges"  condition="Light scuffing to base"
 
-  CRITICAL: If the clerk says a condition phrase then immediately starts describing
-  something new, that new thing is ALWAYS a sub-item — do not merge it into the
-  main item's description.
+EXAMPLE — 3 elements → main + 2 sub-items:
+  "Window and frame. White UPVC frame, chrome handle … in good order.
+   White net curtain … in good order.
+   White roller blind … one slat cracked."
+  → main:   description="White UPVC frame\nChrome handle"  condition="In good order"
+  → sub[0]: description="White net curtain"                condition="In good order"
+  → sub[1]: description="White roller blind"               condition="One slat cracked"
 
-Return sub-items as a "_subs" array. Each sub has "description" and "condition".
-Only create _subs when the clerk clearly gives each element its own condition phrase.
+EXAMPLE — all components share one condition → NOT a sub-item:
+  "Ceiling. White emulsion, coving to perimeter … in good order."
+  → description="White emulsion\nCoving to perimeter"  condition="In good order"
+  (No further text after the condition → no sub-item needed.)
 
 Return ONLY valid JSON — no markdown, no extra text.
 Items without sub-items use the flat shape. Items WITH sub-items include the "_subs" array:

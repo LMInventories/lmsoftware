@@ -137,8 +137,9 @@ async function load() {
       if (inspection.value.report_data) {
         try {
           reportData.value = JSON.parse(inspection.value.report_data)
-          _capturedRecordings.value = reportData.value._recordings || null
-          delete reportData.value._recordings  // stored separately, restored by _restoreRecordings()
+          const _loadedRecs = reportData.value._recordings || []
+          delete reportData.value._recordings
+          _initRecordings(_loadedRecs)
           // Restore imported source data if previously imported from PDF
           if (reportData.value._importedSource && Object.keys(sourceReportData.value).length === 0) {
             const src = reportData.value._importedSource
@@ -164,8 +165,9 @@ async function load() {
       if (inspection.value.report_data) {
         try {
           reportData.value = JSON.parse(inspection.value.report_data)
-          _capturedRecordings.value = reportData.value._recordings || null
-          delete reportData.value._recordings  // stored separately, restored by _restoreRecordings()
+          const _loadedRecs = reportData.value._recordings || []
+          delete reportData.value._recordings
+          _initRecordings(_loadedRecs)
         } catch { reportData.value = {} }
       }
     }
@@ -198,45 +200,27 @@ async function load() {
     loading.value = false
     await nextTick()
     if (allSections.value[0]) activeId.value = allSections.value[0].id
-    checkAiTypist()
-    checkAiKeys()
-    _restoreRecordings()
   }
 }
 
-// Restore recordings saved in reportData._recordings back into the recordings ref.
-// Base64 audio is converted back to Blob objects so playback works normally.
-function _restoreRecordings() {
-  // _importedRooms is already in reportData — rooms computed reads it reactively, no extra restore needed
-  // Use _capturedRecordings if available (set before _recordings was deleted on load)
-  const saved = _capturedRecordings.value ?? reportData.value._recordings
-  _capturedRecordings.value = null  // clear after use
+// Initialise recordings lazily — base64 is NOT decoded here.
+// Blobs are created on-demand in loadRecording() when a clip is first played.
+function _initRecordings(saved) {
   if (!Array.isArray(saved) || !saved.length) return
-  recordings.value = saved
-    .filter(r => r.audioB64)
-    .map(r => {
-      const byteString = atob(r.audioB64)
-      const ab = new ArrayBuffer(byteString.length)
-      const ia = new Uint8Array(ab)
-      for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i)
-      const blob = new Blob([ab], { type: r.mimeType || 'audio/webm' })
-      const url  = URL.createObjectURL(blob)
-      return {
-        id:         r.id,
-        blob,
-        url,
-        _savedB64:  r.audioB64,  // cache so re-save doesn't re-encode
-        mimeType:   r.mimeType,
-        duration:   r.duration,
-        // Always a Date object — createdAt from mobile arrives as ISO string
-        createdAt:  r.createdAt instanceof Date ? r.createdAt : new Date(r.createdAt),
-        label:      r.label || '',
-        itemKey:    r.itemKey || null,
-        transcript: r.transcript || null,
-        gptResult:  r.gptResult  || null,
-      }
-    })
-  if (recordings.value.length) loadRecording(recordings.value[0], false)
+  _rawRecordingsList.value = saved.filter(r => r.audioB64)
+  recordings.value = _rawRecordingsList.value.map(r => ({
+    id:         r.id,
+    _rawB64:    r.audioB64,   // decoded lazily on first play
+    mimeType:   r.mimeType,
+    duration:   r.duration,
+    createdAt:  r.createdAt instanceof Date ? r.createdAt : new Date(r.createdAt),
+    label:      r.label || '',
+    itemKey:    r.itemKey || null,
+    transcript: r.transcript || null,
+    gptResult:  r.gptResult  || null,
+    url:        null,         // populated on first play
+    blob:       null,
+  }))
 }
 
 // Source Check In data (read-only reference for Check Out)
@@ -1477,29 +1461,11 @@ async function savePhoto() {
 async function save(feedback = true) {
   saving.value = true
   try {
-    // Serialise recordings as base64 into reportData._recordings so they
-    // survive page navigation. Blobs are in-memory only — must be converted.
-    const serialisedRecs = await Promise.all(
-      recordings.value.map(async (rec) => {
-        let audioB64 = rec._savedB64 || null
-        if (!audioB64 && rec.blob) {
-          audioB64 = await _blobToBase64(rec.blob)
-          rec._savedB64 = audioB64  // cache to avoid re-encoding on next save
-        }
-        return {
-          id:         rec.id,
-          audioB64,
-          mimeType:   rec.mimeType,
-          duration:   rec.duration,
-          createdAt:  rec.createdAt,
-          label:      rec.label,
-          itemKey:    rec.itemKey,
-          transcript: rec.transcript,
-          gptResult:  rec.gptResult,
-        }
-      })
-    )
-    const dataToSave = { ...reportData.value, _recordings: serialisedRecs }
+    // Recordings are read-only in the web app (they come from mobile via sync).
+    // Preserve the original raw base64 list so they survive saves.
+    const dataToSave = _rawRecordingsList.value.length
+      ? { ...reportData.value, _recordings: _rawRecordingsList.value }
+      : reportData.value
     await api.updateInspection(inspection.value.id, { report_data: JSON.stringify(dataToSave) })
     unsaved.value = false
     lastSaved.value = new Date()
@@ -1542,76 +1508,20 @@ function sectionStarted(sectionId) {
 }
 const startedCount = computed(() => allSections.value.filter(s => sectionStarted(s.id)).length)
 // ═══════════════════════════════════════════════════════════════════════
-// AUDIO MODULE
-// Recording shape: { id, blob, url, duration, createdAt, label,
-//   itemKey, transcript, gptResult }
-// itemKey = "sectionId:rowId" — null for general recordings.
-// transcript / gptResult are null until Whisper/GPT integrated.
+// AUDIO MODULE — playback only (recordings come from mobile app via sync)
 // ═══════════════════════════════════════════════════════════════════════
 
 // ── State ─────────────────────────────────────────────────────────────
 const audioModule = ref({
-  expanded: true,
-  mode:     'idle', // 'idle' | 'recording' | 'playing' | 'paused'
+  expanded: false,
+  mode:     'idle', // 'idle' | 'playing' | 'paused'
 })
 
-// Active recorder — shared for both general + per-item recording
-const activeRecorder    = ref(null)
-const recordingChunks   = ref([])
-const recordingSeconds  = ref(0)
-let   recordingTimer    = null
+const recordings         = ref([])  // lazy: url/blob populated on first play
+const _rawRecordingsList = ref([])  // original base64 array — preserved on save
+const activeRec          = ref(null)
 
-// itemRecordingKey = "sectionId:rowId" while recording an item; null for general/idle
-const itemRecordingKey  = ref(null)
-
-// All recordings — shape: { id, blob, url, duration, createdAt, label, itemKey, transcript, gptResult }
-const recordings = ref([])
-const activeRec  = ref(null)
-
-// ── AI Transcription state ────────────────────────────────────────────
-const aiProcessing     = ref(false)       // true while full-report AI call is in-flight
-const aiItemProcessing = ref(new Set())   // set of "sectionId:rowId" keys currently processing
-const aiError          = ref('')
-const hasAiTypist      = ref(false)       // true if this inspection is assigned to AI typist
-const hasHumanTypist       = ref(false)       // true if assigned to a human typist (no recording in UI)
-const _capturedRecordings  = ref(null)  // holds _recordings before delete, for restore
-const aiKeysAvailable  = ref(false)       // true if API keys are configured on the backend
-
-function checkAiTypist() {
-  if (!inspection.value) return
-  // typist info is nested under inspection.value.typist.name (not typist_name)
-  hasAiTypist.value = inspection.value.typist_is_ai === true ||
-                      inspection.value.typist?.name === 'AI Typist' ||
-                      inspection.value.typist_name === 'AI Typist'
-  // Human typist: a typist is assigned and it's not AI
-  hasHumanTypist.value = !hasAiTypist.value && !!(
-    inspection.value.typist_id ||
-    inspection.value.typist?.id ||
-    inspection.value.typist_name
-  )
-}
-
-async function checkAiKeys() {
-  try {
-    const res = await api.checkAiStatus()
-    console.log('[AI] status:', res.data)
-    // Only Anthropic key is required for item transcription (Claude fills fields)
-    // OpenAI/Whisper is also needed for audio — require both for full AI typist
-    aiKeysAvailable.value = !!(res.data.anthropic_key_set && res.data.openai_key_set)
-    if (!aiKeysAvailable.value) {
-      console.warn('[AI] keys missing — anthropic:', res.data.anthropic_key_set, 'openai:', res.data.openai_key_set)
-    }
-  } catch (e) {
-    console.warn('[AI] checkAiKeys failed:', e.message)
-    aiKeysAvailable.value = false
-  }
-}
-
-function isItemAiProcessing(sid, rid) {
-  return aiItemProcessing.value.has(`${sid}:${String(rid)}`)
-}
-
-// Playback
+// Playback controls
 const audioEl       = ref(null)
 const playbackTime  = ref(0)
 const playbackSpeed = ref(1)
@@ -1625,145 +1535,36 @@ function fmtTime(secs) {
   const s = Math.floor(secs || 0)
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 }
-function itemRecKey(sid, rid) { return `${sid}:${String(rid)}` }
-function isItemRecording(sid, rid) { return itemRecordingKey.value === itemRecKey(sid, rid) }
+
 function getItemRecordings(sid, rid) {
-  const k = itemRecKey(sid, rid)
+  const k = `${sid}:${String(rid)}`
   return recordings.value.filter(r => r.itemKey === k)
-}
-
-// ── Core record/stop ──────────────────────────────────────────────────
-async function _startRecording(label, itemKey = null) {
-  // Stop any in-progress recording first — guard against null
-  if (activeRecorder.value && activeRecorder.value.state !== 'inactive') {
-    activeRecorder.value.stop()
-    await new Promise(r => setTimeout(r, 120))
-  }
-
-  let stream = null
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-  } catch (err) {
-    toast.error('Microphone access denied — please allow mic in browser settings')
-    console.error('getUserMedia failed:', err)
-    return
-  }
-
-  try {
-    const mr = new MediaRecorder(stream)
-    activeRecorder.value   = mr
-    recordingChunks.value  = []
-    recordingSeconds.value = 0
-    itemRecordingKey.value = itemKey
-    audioModule.value.mode = 'recording'
-
-    mr.ondataavailable = e => { if (e.data.size > 0) recordingChunks.value.push(e.data) }
-
-    mr.onstop = () => {
-      stream.getTracks().forEach(t => t.stop())
-      if (recordingChunks.value.length === 0) {
-        itemRecordingKey.value = null
-        return
-      }
-      const blob = new Blob(recordingChunks.value, { type: mr.mimeType || 'audio/webm' })
-      const url  = URL.createObjectURL(blob)
-      const existing = itemKey ? recordings.value.filter(r => r.itemKey === itemKey).length : 0
-      const rec = {
-        id:         Date.now(),
-        blob, url,
-        mimeType:   mr.mimeType,
-        duration:   recordingSeconds.value,
-        createdAt:  new Date(),
-        label:      existing > 0 ? `${label} (${existing + 1})` : label,
-        itemKey,
-        transcript: null,
-        gptResult:  null,
-      }
-      recordings.value.push(rec)
-      loadRecording(rec, false)
-      audioModule.value.mode = 'idle'
-      itemRecordingKey.value = null
-
-      // ── AI: per-item auto-transcribe ──────────────────────────────────
-      // If this was a per-item recording and AI typist is assigned,
-      // immediately send to Whisper + Claude
-      if (itemKey && (hasAiTypist.value || aiKeysAvailable.value)) {
-        const parts     = itemKey.split(':')
-        const sid       = parts[0]
-        const rid       = parts.slice(1).join(':')
-        const baseLabel = rec.label.replace(/ \(\d+\)$/, '')
-        const dashIdx   = baseLabel.indexOf(' — ')
-        const roomLabel = dashIdx !== -1 ? baseLabel.slice(0, dashIdx) : ''
-        const itemLabel = dashIdx !== -1 ? baseLabel.slice(dashIdx + 3) : baseLabel
-
-        // Detect section type from the template so Claude knows which fields to fill
-        const secObj    = allSections.value.find(s => String(s.id) === String(sid))
-        const secType   = secObj?.type || 'room'
-
-        _transcribeItem(rec, sid, rid, itemLabel, roomLabel, secType)
-      }
-    }
-
-    mr.onerror = (e) => {
-      console.error('MediaRecorder error:', e)
-      toast.error('Recording error — please try again')
-      stream.getTracks().forEach(t => t.stop())
-      audioModule.value.mode = 'idle'
-      itemRecordingKey.value = null
-    }
-
-    mr.start(250)
-    clearInterval(recordingTimer)
-    recordingTimer = setInterval(() => recordingSeconds.value++, 1000)
-  } catch (err) {
-    console.error('MediaRecorder setup failed:', err)
-    toast.error('Could not start recording — please try again')
-    stream?.getTracks().forEach(t => t.stop())
-    audioModule.value.mode = 'idle'
-    itemRecordingKey.value = null
-  }
-}
-
-function _stopRecording() {
-  clearInterval(recordingTimer)
-  recordingTimer = null
-  if (activeRecorder.value && activeRecorder.value.state !== 'inactive') {
-    activeRecorder.value.stop()
-  }
-  audioModule.value.mode = 'idle'
-  itemRecordingKey.value = null
-}
-
-// General record button (footer bar)
-function toggleGeneralRecording() {
-  if (audioModule.value.mode === 'recording') {
-    _stopRecording()
-  } else {
-    const n = recordings.value.filter(r => !r.itemKey).length
-    _startRecording(n === 0 ? 'General Recording' : `General Recording ${n + 1}`, null)
-  }
-}
-
-// Per-item mic button — called from every item type
-async function toggleItemRecording(sid, rid, label) {
-  const key = itemRecKey(sid, rid)
-  if (itemRecordingKey.value === key) {
-    _stopRecording()
-  } else {
-    await _startRecording(label, key)
-  }
 }
 
 // ── Playback ──────────────────────────────────────────────────────────
 function loadRecording(rec, autoPlay = false) {
-  activeRec.value    = rec
-  playbackTime.value = 0
+  // Lazy decode: convert base64 → Blob only on first play
+  if (!rec.url && rec._rawB64) {
+    try {
+      const byteStr = atob(rec._rawB64)
+      const ab = new ArrayBuffer(byteStr.length)
+      const ia = new Uint8Array(ab)
+      for (let i = 0; i < byteStr.length; i++) ia[i] = byteStr.charCodeAt(i)
+      rec.blob = new Blob([ab], { type: rec.mimeType || 'audio/webm' })
+      rec.url  = URL.createObjectURL(rec.blob)
+    } catch (e) {
+      console.error('[Audio] Failed to decode recording:', e)
+      return
+    }
+  }
+  activeRec.value     = rec
+  playbackTime.value  = 0
   audioDuration.value = rec.duration
   if (!autoPlay) audioModule.value.mode = 'idle'
   nextTick(() => {
     if (!audioEl.value) return
-    audioEl.value.src         = rec.url
-    audioEl.value.playbackRate = playbackSpeed.value
+    audioEl.value.src              = rec.url
+    audioEl.value.playbackRate     = playbackSpeed.value
     audioEl.value.ontimeupdate     = () => { playbackTime.value = audioEl.value.currentTime }
     audioEl.value.onloadedmetadata = () => { audioDuration.value = audioEl.value.duration }
     audioEl.value.onended = () => {
@@ -1798,210 +1599,10 @@ function setSpeed(s) {
 }
 
 function deleteRecording(rec) {
-  URL.revokeObjectURL(rec.url)
-  recordings.value = recordings.value.filter(r => r.id !== rec.id)
+  if (rec.url) URL.revokeObjectURL(rec.url)
+  recordings.value         = recordings.value.filter(r => r.id !== rec.id)
+  _rawRecordingsList.value = _rawRecordingsList.value.filter(r => r.id !== rec.id)
   if (activeRec.value?.id === rec.id) { activeRec.value = null; audioModule.value.mode = 'idle' }
-}
-
-// ── AI Transcription ─────────────────────────────────────────────────
-// Convert a blob to base64
-function _blobToBase64(blob) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload  = () => resolve(reader.result.split(',')[1])
-    reader.onerror = reject
-    reader.readAsDataURL(blob)
-  })
-}
-
-// Per-item transcription — called immediately when a short clip stops
-async function _transcribeItem(rec, sectionId, rowId, itemLabel, roomName, sectionType = 'room') {
-  const key = `${sectionId}:${rowId}`
-  const s   = new Set(aiItemProcessing.value)
-  s.add(key)
-  aiItemProcessing.value = s
-  aiError.value = ''
-
-  try {
-    const audioB64 = await _blobToBase64(rec.blob)
-
-    const response = await api.transcribeItem({
-      audio:       audioB64,
-      mimeType:    rec.mimeType || 'audio/webm',
-      itemLabel,
-      roomName,
-      sectionId,
-      rowId,
-      sectionType,
-    })
-
-    const result = response.data
-    console.log('[AI transcribe] response:', result)
-    console.log('[AI transcribe] targeting sid:', sectionId, 'rid:', String(rowId))
-    console.log('[AI transcribe] reportData keys:', Object.keys(reportData.value))
-
-    // Store transcript on the recording object for reference
-    rec.transcript = result.transcript
-    rec.gptResult  = { description: result.description, condition: result.condition }
-
-    // Fill report fields — only fill if currently empty to preserve manual entry
-    // Always use String() for rowId — keys in reportData are always strings
-    const sid = String(sectionId)
-    const rid = String(rowId)
-
-    // Ensure the nested path exists
-    if (!reportData.value[sid]) reportData.value[sid] = {}
-    if (!reportData.value[sid][rid]) reportData.value[sid][rid] = {}
-
-    let changed = false
-    const row = reportData.value[sid][rid]
-    const st  = result.sectionType || sectionType
-
-    // ── Edit mode helpers ─────────────────────────────────────────────────
-    // editMode:  'normal' | 'overwrite' | 'append'
-    // editField: 'description' | 'condition' | null
-    const editMode  = result.editMode  || 'normal'
-    const editField = result.editField || null
-
-    function shouldWrite(field, value) {
-      if (!value) return false
-      if (editMode === 'normal')    return !row[field]           // only if empty
-      if (editMode === 'overwrite') return editField === field   // overwrite target field
-      if (editMode === 'append')    return editField === field   // append to target field
-      return false
-    }
-    function writeField(field, value) {
-      if (editMode === 'append' && row[field]) {
-        row[field] = row[field].trimEnd() + '\n' + value
-      } else {
-        row[field] = value
-      }
-      changed = true
-    }
-
-    // ── Map returned fields to the correct reportData fields ───────────
-    if (st === 'meter_readings') {
-      if (result.locationSerial && !row.locationSerial) { row.locationSerial = result.locationSerial; changed = true }
-      if (result.reading        && !row.reading)        { row.reading        = result.reading;        changed = true }
-    } else if (st === 'keys') {
-      if (shouldWrite('description', result.description)) writeField('description', result.description)
-    } else if (st === 'condition_summary') {
-      if (shouldWrite('condition', result.condition)) writeField('condition', result.condition)
-    } else if (st === 'cleaning_summary') {
-      const cn = result.cleanlinessNotes || result.notes
-      if (cn && !row.cleanlinessNotes) { row.cleanlinessNotes = cn; changed = true }
-    } else if (st === 'fire_door_safety' || st === 'health_safety' || st === 'smoke_alarms') {
-      if (result.notes && !row.notes) { row.notes = result.notes; changed = true }
-    } else {
-      // Default room item — description + condition
-      if (shouldWrite('description', result.description)) writeField('description', result.description)
-      if (shouldWrite('condition',   result.condition))   writeField('condition',   result.condition)
-    }
-
-    console.log('[AI transcribe] changed:', changed, 'data now:', reportData.value[sid][rid])
-
-    if (changed) {
-      unsaved.value = true
-      await save(false)
-      if (editMode === 'overwrite') {
-        toast.success(`✏️ Amended: ${itemLabel}`)
-      } else if (editMode === 'append') {
-        toast.success(`➕ Added to: ${itemLabel}`)
-      } else {
-        toast.success(`✨ AI filled: ${itemLabel}`)
-      }
-    } else if (result.transcript) {
-      toast.info(`✨ Transcribed: ${itemLabel} (no changes made)`)
-    }
-
-  } catch (err) {
-    console.error('[AI transcribe item]', err)
-    aiError.value = `AI transcription failed: ${err.message}`
-    toast.error(`AI transcription failed — ${err.message}`)
-  } finally {
-    const s2 = new Set(aiItemProcessing.value)
-    s2.delete(key)
-    aiItemProcessing.value = s2
-  }
-}
-
-// Full inspection transcription — for continuous general recordings
-async function transcribeFullInspection() {
-  const generalRecs = recordings.value.filter(r => !r.itemKey)
-  if (!generalRecs.length) {
-    toast.warning('No continuous recording found to transcribe')
-    return
-  }
-
-  aiProcessing.value = true
-  aiError.value = ''
-  toast.success('🎙 Processing audio — this may take a minute…')
-
-  try {
-    const rec      = generalRecs[generalRecs.length - 1]
-    const audioB64 = await _blobToBase64(rec.blob)
-    const templateStructure = _buildTemplateStructureForAI()
-
-    const response = await api.transcribeFull({
-      audio:    audioB64,
-      mimeType: rec.mimeType || 'audio/webm',
-      template: templateStructure,
-    })
-
-    const result  = response.data
-    rec.transcript = result.transcript
-
-    // Merge filled data — only overwrite empty fields
-    let filledCount = 0
-    for (const [sid, rows] of Object.entries(result.filled || {})) {
-      if (!reportData.value[sid]) reportData.value[sid] = {}
-      for (const [rid, fields] of Object.entries(rows)) {
-        if (!reportData.value[sid][rid]) reportData.value[sid][rid] = {}
-        if (fields.description && !reportData.value[sid][rid].description) {
-          reportData.value[sid][rid].description = fields.description
-          filledCount++
-        }
-        if (fields.condition && !reportData.value[sid][rid].condition) {
-          reportData.value[sid][rid].condition = fields.condition
-          filledCount++
-        }
-      }
-    }
-
-    unsaved.value = true
-    await save(false)
-    toast.success(`✨ AI filled ${filledCount} fields from transcript`)
-
-  } catch (err) {
-    console.error('[AI transcribe full]', err)
-    aiError.value = `Full transcription failed: ${err.message}`
-    toast.error(`Transcription failed — ${err.message}`)
-  } finally {
-    aiProcessing.value = false
-  }
-}
-
-// Build simplified template structure for Claude to map against
-function _buildTemplateStructureForAI() {
-  const structure = {}
-  for (const sec of fixedSections.value) {
-    structure[sec.id] = { name: sec.name, type: sec.type, rows: {} }
-    for (const row of (sec.rows || [])) {
-      if (!isHidden(sec.id, row.id)) {
-        structure[sec.id].rows[String(row.id)] = { name: row.name || row.question || '' }
-      }
-    }
-  }
-  for (const room of rooms.value) {
-    structure[room.id] = { name: room.name, type: 'room', rows: {} }
-    for (const item of getOrderedRoomItems(room)) {
-      const iid = item._type === 'extra' ? item._eid : String(item.id)
-      if (!isItemHidden(room.id, item.id || item._eid)) {
-        structure[room.id].rows[iid] = { name: item.label || 'Item' }
-      }
-    }
-  }
-  return structure
 }
 
 // ── Grouped recordings for dropdown ──────────────────────────────────
@@ -2018,24 +1619,16 @@ const groupedRecordings = computed(() => {
 
 function groupDisplayLabel(group) {
   if (group.key === '__general__') return 'General'
-  // Use the base label of the first recording (strip trailing " (N)")
   const base = group.items[0]?.label || ''
   return base.replace(/ \(\d+\)$/, '')
 }
 
-// Close dropdown on outside click
 function onRecMenuOutside() { showRecMenu.value = false }
 
-// Clean up
+// Release decoded Blob URLs when navigating away
 onBeforeUnmount(() => {
-  recordings.value.forEach(r => URL.revokeObjectURL(r.url))
-  clearInterval(recordingTimer)
-  if (activeRecorder.value && activeRecorder.value.state !== 'inactive') {
-    activeRecorder.value.stop()
-  }
+  recordings.value.forEach(r => { if (r.url) URL.revokeObjectURL(r.url) })
 })
-
-
 
 // ── Move to Review (typist only) ───────────────────────────────────────────
 async function moveToReview() {
@@ -2053,7 +1646,7 @@ async function moveToReview() {
 <template>
   <div v-if="loading" class="loading-screen"><div class="ring"></div><p>Loading report…</p></div>
 
-  <div v-else-if="inspection" class="shell" :class="{ 'hide-mic-btns': hasHumanTypist }">
+  <div v-else-if="inspection" class="shell">
 
     <header class="topbar">
       <div class="topbar-l">
@@ -2315,7 +1908,7 @@ async function moveToReview() {
                       <td class="td-drag"><span class="drag-handle" title="Drag to reorder">⠿</span></td>
                       <td class="td-name"><span class="sec-ref-badge">{{ fixedRowRef(sec, row.id) }}</span>{{ row.name }}</td>
                       <td><textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" placeholder="Describe condition…" :value="get(sec.id,row.id,'condition')" @input="set(sec.id,row.id,'condition',$event.target.value)"></textarea></td>
-                      <td class="td-btn-group"><div class="item-btn-col"><button class="cam-btn" :class="{ 'cam-has': getPhotos(sec.id,row.id).length }" @click="togglePanel(sec.id,row.id)" :title="getPhotos(sec.id,row.id).length + ' photo(s)'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,row.id).length" class="cam-count">{{ getPhotos(sec.id,row.id).length }}</span></button><button class="cam-btn mic-btn" :class="{ 'cam-has mic-active': isItemRecording(sec.id,row.id), 'mic-has': !isItemRecording(sec.id,row.id) && getItemRecordings(sec.id,row.id).length }" @click="toggleItemRecording(sec.id,row.id,fixedItemLabel(sec,row.id,row.name))" title="Record audio for this item"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span v-if="getItemRecordings(sec.id,row.id).length" class="cam-count mic-count">{{ getItemRecordings(sec.id,row.id).length }}</span></button><button v-if="canDelete" class="del-btn" @click="hideRow(sec.id,row.id)">×</button></div></td>
+                      <td class="td-btn-group"><div class="item-btn-col"><button class="cam-btn" :class="{ 'cam-has': getPhotos(sec.id,row.id).length }" @click="togglePanel(sec.id,row.id)" :title="getPhotos(sec.id,row.id).length + ' photo(s)'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,row.id).length" class="cam-count">{{ getPhotos(sec.id,row.id).length }}</span></button><button v-if="canDelete" class="del-btn" @click="hideRow(sec.id,row.id)">×</button></div></td>
                     </tr>
                     <tr v-if="isPanelOpen(sec.id,row.id)" class="photo-panel-row">
                       <td colspan="6" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,row.id)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,row.id,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,row.id,pi)">×</button></div><button v-if="getPhotos(sec.id,row.id).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(sec.id,row.id,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,row.id,e.target.files)" /></label></div></td>
@@ -2326,7 +1919,7 @@ async function moveToReview() {
                       <td class="td-drag"><span class="drag-handle">⠿</span></td>
                       <td class="td-extra-name"><span class="sec-ref-badge sec-ref-extra">{{ fixedRowRef(sec, ex._eid) }}</span><input class="fld-input" type="text" :disabled="!canEdit" placeholder="Item name…" :value="ex.name" @input="setExtraField(sec.id,ex._eid,'name',$event.target.value)" /></td>
                       <td><textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" placeholder="Describe condition…" :value="ex.condition" @input="setExtraField(sec.id,ex._eid,'condition',$event.target.value)"></textarea></td>
-                      <td class="td-btn-group"><div class="item-btn-col"><button class="cam-btn" :class="{ 'cam-has': getPhotos(sec.id,ex._eid).length }" @click="togglePanel(sec.id,ex._eid)" :title="getPhotos(sec.id,ex._eid).length + ' photo(s)'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,ex._eid).length" class="cam-count">{{ getPhotos(sec.id,ex._eid).length }}</span></button><button class="cam-btn mic-btn" :class="{ 'mic-active': isItemRecording(sec.id,ex._eid), 'mic-has': !isItemRecording(sec.id,ex._eid) && getItemRecordings(sec.id,ex._eid).length, 'mic-ai': isItemAiProcessing(sec.id,ex._eid) }" @click.stop="toggleItemRecording(sec.id,ex._eid,fixedItemLabel(sec,ex._eid,(ex.name||'Item')))" title="Record"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span v-if="getItemRecordings(sec.id,ex._eid).length && !isItemRecording(sec.id,ex._eid)" class="cam-count mic-count">{{ getItemRecordings(sec.id,ex._eid).length }}</span></button><button v-if="canDelete" class="del-btn" @click="removeExtraRow(sec.id,ex._eid)">×</button></div></td>
+                      <td class="td-btn-group"><div class="item-btn-col"><button class="cam-btn" :class="{ 'cam-has': getPhotos(sec.id,ex._eid).length }" @click="togglePanel(sec.id,ex._eid)" :title="getPhotos(sec.id,ex._eid).length + ' photo(s)'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,ex._eid).length" class="cam-count">{{ getPhotos(sec.id,ex._eid).length }}</span></button><button v-if="canDelete" class="del-btn" @click="removeExtraRow(sec.id,ex._eid)">×</button></div></td>
                     </tr>
                     <tr v-if="isPanelOpen(sec.id,ex._eid)" class="photo-panel-row">
                       <td colspan="5" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,ex._eid)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,ex._eid,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,ex._eid,pi)">×</button></div><button v-if="getPhotos(sec.id,ex._eid).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(sec.id,ex._eid,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,ex._eid,e.target.files)" /></label></div></td>
@@ -2348,7 +1941,7 @@ async function moveToReview() {
                       <td class="td-name"><span class="sec-ref-badge">{{ fixedRowRef(sec, row.id) }}</span>{{ row.name }}</td>
                       <td><select class="fld-input" :value="get(sec.id,row.id,'cleanliness')" @change="set(sec.id,row.id,'cleanliness',$event.target.value)"><option value="">Select…</option><option v-for="o in cleanlinessOpts" :key="o" :value="o">{{ o }}</option></select></td>
                       <td><textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" placeholder="Additional notes…" :value="get(sec.id,row.id,'cleanlinessNotes')" @input="set(sec.id,row.id,'cleanlinessNotes',$event.target.value)"></textarea></td>
-                      <td class="td-btn-group"><div class="item-btn-col"><button class="cam-btn" :class="{ 'cam-has': getPhotos(sec.id,row.id).length }" @click="togglePanel(sec.id,row.id)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,row.id).length" class="cam-count">{{ getPhotos(sec.id,row.id).length }}</span></button><button class="cam-btn mic-btn" :class="{ 'mic-active': isItemRecording(sec.id,row.id), 'mic-has': !isItemRecording(sec.id,row.id) && getItemRecordings(sec.id,row.id).length, 'mic-ai': isItemAiProcessing(sec.id,row.id) }" @click.stop="toggleItemRecording(sec.id,row.id,fixedItemLabel(sec,row.id,row.name))" title="Record"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span v-if="getItemRecordings(sec.id,row.id).length && !isItemRecording(sec.id,row.id)" class="cam-count mic-count">{{ getItemRecordings(sec.id,row.id).length }}</span></button><button v-if="canDelete" class="del-btn" @click="hideRow(sec.id,row.id)">×</button></div></td>
+                      <td class="td-btn-group"><div class="item-btn-col"><button class="cam-btn" :class="{ 'cam-has': getPhotos(sec.id,row.id).length }" @click="togglePanel(sec.id,row.id)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,row.id).length" class="cam-count">{{ getPhotos(sec.id,row.id).length }}</span></button><button v-if="canDelete" class="del-btn" @click="hideRow(sec.id,row.id)">×</button></div></td>
                     </tr>
                     <tr v-if="isPanelOpen(sec.id,row.id)" class="photo-panel-row"><td colspan="6" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,row.id)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,row.id,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,row.id,pi)">×</button></div><button v-if="getPhotos(sec.id,row.id).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(sec.id,row.id,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,row.id,e.target.files)" /></label></div></td></tr>
                   </template>
@@ -2358,7 +1951,7 @@ async function moveToReview() {
                       <td class="td-extra-name"><span class="sec-ref-badge sec-ref-extra">{{ fixedRowRef(sec, ex._eid) }}</span><input class="fld-input" type="text" :disabled="!canEdit" placeholder="Area name…" :value="ex.name" @input="setExtraField(sec.id,ex._eid,'name',$event.target.value)" /></td>
                       <td><select class="fld-input" :value="ex.cleanliness" @change="setExtraField(sec.id,ex._eid,'cleanliness',$event.target.value)"><option value="">Select…</option><option v-for="o in cleanlinessOpts" :key="o" :value="o">{{ o }}</option></select></td>
                       <td><textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" placeholder="Notes…" :value="ex.cleanlinessNotes" @input="setExtraField(sec.id,ex._eid,'cleanlinessNotes',$event.target.value)"></textarea></td>
-                      <td class="td-btn-group"><div class="item-btn-col"><button class="cam-btn" :class="{ 'cam-has': getPhotos(sec.id,ex._eid).length }" @click="togglePanel(sec.id,ex._eid)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,ex._eid).length" class="cam-count">{{ getPhotos(sec.id,ex._eid).length }}</span></button><button class="cam-btn mic-btn" :class="{ 'mic-active': isItemRecording(sec.id,ex._eid), 'mic-has': !isItemRecording(sec.id,ex._eid) && getItemRecordings(sec.id,ex._eid).length, 'mic-ai': isItemAiProcessing(sec.id,ex._eid) }" @click.stop="toggleItemRecording(sec.id,ex._eid,fixedItemLabel(sec,ex._eid,(ex.name||'Item')))" title="Record"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span v-if="getItemRecordings(sec.id,ex._eid).length && !isItemRecording(sec.id,ex._eid)" class="cam-count mic-count">{{ getItemRecordings(sec.id,ex._eid).length }}</span></button><button v-if="canDelete" class="del-btn" @click="removeExtraRow(sec.id,ex._eid)">×</button></div></td>
+                      <td class="td-btn-group"><div class="item-btn-col"><button class="cam-btn" :class="{ 'cam-has': getPhotos(sec.id,ex._eid).length }" @click="togglePanel(sec.id,ex._eid)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,ex._eid).length" class="cam-count">{{ getPhotos(sec.id,ex._eid).length }}</span></button><button v-if="canDelete" class="del-btn" @click="removeExtraRow(sec.id,ex._eid)">×</button></div></td>
                     </tr>
                     <tr v-if="isPanelOpen(sec.id,ex._eid)" class="photo-panel-row"><td colspan="6" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,ex._eid)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,ex._eid,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,ex._eid,pi)">×</button></div><button v-if="getPhotos(sec.id,ex._eid).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(sec.id,ex._eid,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,ex._eid,e.target.files)" /></label></div></td></tr>
                   </template>
@@ -2377,7 +1970,7 @@ async function moveToReview() {
                       <td class="td-drag"><span class="drag-handle">⠿</span></td>
                       <td class="td-name"><span class="sec-ref-badge">{{ fixedRowRef(sec, row.id) }}</span>{{ row.name }}</td>
                       <td><textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" placeholder="e.g. 2 × Yale keys" :value="get(sec.id,row.id,'description')" @input="set(sec.id,row.id,'description',$event.target.value)"></textarea></td>
-                      <td class="td-btn-group"><div class="item-btn-col"><button class="cam-btn" :class="{ 'cam-has': getPhotos(sec.id,row.id).length }" @click="togglePanel(sec.id,row.id)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,row.id).length" class="cam-count">{{ getPhotos(sec.id,row.id).length }}</span></button><button class="cam-btn mic-btn" :class="{ 'mic-active': isItemRecording(sec.id,row.id), 'mic-has': !isItemRecording(sec.id,row.id) && getItemRecordings(sec.id,row.id).length, 'mic-ai': isItemAiProcessing(sec.id,row.id) }" @click.stop="toggleItemRecording(sec.id,row.id,fixedItemLabel(sec,row.id,row.name))" title="Record"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span v-if="getItemRecordings(sec.id,row.id).length && !isItemRecording(sec.id,row.id)" class="cam-count mic-count">{{ getItemRecordings(sec.id,row.id).length }}</span></button><button v-if="canDelete" class="del-btn" @click="hideRow(sec.id,row.id)">×</button></div></td>
+                      <td class="td-btn-group"><div class="item-btn-col"><button class="cam-btn" :class="{ 'cam-has': getPhotos(sec.id,row.id).length }" @click="togglePanel(sec.id,row.id)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,row.id).length" class="cam-count">{{ getPhotos(sec.id,row.id).length }}</span></button><button v-if="canDelete" class="del-btn" @click="hideRow(sec.id,row.id)">×</button></div></td>
                     </tr>
                     <tr v-if="isPanelOpen(sec.id,row.id)" class="photo-panel-row"><td colspan="5" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,row.id)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,row.id,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,row.id,pi)">×</button></div><button v-if="getPhotos(sec.id,row.id).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(sec.id,row.id,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,row.id,e.target.files)" /></label></div></td></tr>
                   </template>
@@ -2386,7 +1979,7 @@ async function moveToReview() {
                       <td class="td-drag"><span class="drag-handle">⠿</span></td>
                       <td class="td-extra-name"><span class="sec-ref-badge sec-ref-extra">{{ fixedRowRef(sec, ex._eid) }}</span><input class="fld-input" type="text" :disabled="!canEdit" placeholder="Key name…" :value="ex.name" @input="setExtraField(sec.id,ex._eid,'name',$event.target.value)" /></td>
                       <td><textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" placeholder="Description…" :value="ex.description" @input="setExtraField(sec.id,ex._eid,'description',$event.target.value)"></textarea></td>
-                      <td class="td-btn-group"><div class="item-btn-col"><button class="cam-btn" :class="{ 'cam-has': getPhotos(sec.id,ex._eid).length }" @click="togglePanel(sec.id,ex._eid)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,ex._eid).length" class="cam-count">{{ getPhotos(sec.id,ex._eid).length }}</span></button><button class="cam-btn mic-btn" :class="{ 'mic-active': isItemRecording(sec.id,ex._eid), 'mic-has': !isItemRecording(sec.id,ex._eid) && getItemRecordings(sec.id,ex._eid).length, 'mic-ai': isItemAiProcessing(sec.id,ex._eid) }" @click.stop="toggleItemRecording(sec.id,ex._eid,fixedItemLabel(sec,ex._eid,(ex.name||'Item')))" title="Record"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span v-if="getItemRecordings(sec.id,ex._eid).length && !isItemRecording(sec.id,ex._eid)" class="cam-count mic-count">{{ getItemRecordings(sec.id,ex._eid).length }}</span></button><button v-if="canDelete" class="del-btn" @click="removeExtraRow(sec.id,ex._eid)">×</button></div></td>
+                      <td class="td-btn-group"><div class="item-btn-col"><button class="cam-btn" :class="{ 'cam-has': getPhotos(sec.id,ex._eid).length }" @click="togglePanel(sec.id,ex._eid)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,ex._eid).length" class="cam-count">{{ getPhotos(sec.id,ex._eid).length }}</span></button><button v-if="canDelete" class="del-btn" @click="removeExtraRow(sec.id,ex._eid)">×</button></div></td>
                     </tr>
                     <tr v-if="isPanelOpen(sec.id,ex._eid)" class="photo-panel-row"><td colspan="5" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,ex._eid)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,ex._eid,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,ex._eid,pi)">×</button></div><button v-if="getPhotos(sec.id,ex._eid).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(sec.id,ex._eid,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,ex._eid,e.target.files)" /></label></div></td></tr>
                   </template>
@@ -2413,7 +2006,7 @@ async function moveToReview() {
                     </div>
                     <div class="item-btn-col">
                       <button class="cam-btn cam-btn-item" :class="{ 'cam-has': getPhotos(sec.id,row.id).length }" @click="togglePanel(sec.id,row.id)" title="Photos"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,row.id).length" class="cam-count">{{ getPhotos(sec.id,row.id).length }}</span></button>
-                      <button class="cam-btn mic-btn" :class="{ 'mic-active': isItemRecording(sec.id,row.id), 'mic-has': !isItemRecording(sec.id,row.id) && getItemRecordings(sec.id,row.id).length, 'mic-ai': isItemAiProcessing(sec.id,row.id) }" @click.stop="toggleItemRecording(sec.id,row.id,fixedItemLabel(sec,row.id,row.question))" title="Record"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span v-if="getItemRecordings(sec.id,row.id).length && !isItemRecording(sec.id,row.id)" class="cam-count mic-count">{{ getItemRecordings(sec.id,row.id).length }}</span></button>
+                      
                       <button v-if="canDelete" class="del-item-icon-btn" @click="hideRow(sec.id,row.id)">×</button>
                     </div>
                   </div>
@@ -2427,7 +2020,7 @@ async function moveToReview() {
                     <span class="sec-ref-badge sec-ref-extra">{{ fixedRowRef(sec, ex._eid) }}</span>
                     <input class="fld-input" type="text" :disabled="!canEdit" placeholder="Question…" :value="ex.question" @input="setExtraField(sec.id,ex._eid,'question',$event.target.value)" />
                     <button class="cam-btn" :class="{ 'cam-has': getPhotos(sec.id,ex._eid).length }" @click="togglePanel(sec.id,ex._eid)" title="Photos"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,ex._eid).length" class="cam-count">{{ getPhotos(sec.id,ex._eid).length }}</span></button>
-                    <button class="cam-btn mic-btn" :class="{ 'mic-active': isItemRecording(sec.id,ex._eid), 'mic-has': !isItemRecording(sec.id,ex._eid) && getItemRecordings(sec.id,ex._eid).length, 'mic-ai': isItemAiProcessing(sec.id,ex._eid) }" @click.stop="toggleItemRecording(sec.id,ex._eid,fixedItemLabel(sec,ex._eid,(ex.question||'Item')))" title="Record"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span v-if="getItemRecordings(sec.id,ex._eid).length && !isItemRecording(sec.id,ex._eid)" class="cam-count mic-count">{{ getItemRecordings(sec.id,ex._eid).length }}</span></button>
+                    
                     <button v-if="canDelete" class="del-btn" @click="removeExtraRow(sec.id,ex._eid)">×</button>
                   </div>
                   <div class="qa-controls">
@@ -2455,7 +2048,7 @@ async function moveToReview() {
                       <td>{{ row.question }}</td>
                       <td><select class="fld-input" :value="get(sec.id,row.id,'answer')" @change="set(sec.id,row.id,'answer',$event.target.value)"><option value="">Select…</option><option>Yes</option><option>No</option><option>N/A</option></select></td>
                       <td><textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" placeholder="Notes…" :value="get(sec.id,row.id,'notes')" @input="set(sec.id,row.id,'notes',$event.target.value)"></textarea></td>
-                      <td class="td-btn-group"><div class="item-btn-col"><button class="cam-btn" :class="{ 'cam-has': getPhotos(sec.id,row.id).length }" @click="togglePanel(sec.id,row.id)" title="Photos"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,row.id).length" class="cam-count">{{ getPhotos(sec.id,row.id).length }}</span></button><button class="cam-btn mic-btn" :class="{ 'mic-active': isItemRecording(sec.id,row.id), 'mic-has': !isItemRecording(sec.id,row.id) && getItemRecordings(sec.id,row.id).length, 'mic-ai': isItemAiProcessing(sec.id,row.id) }" @click.stop="toggleItemRecording(sec.id,row.id,fixedItemLabel(sec,row.id,row.name))" title="Record"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span v-if="getItemRecordings(sec.id,row.id).length && !isItemRecording(sec.id,row.id)" class="cam-count mic-count">{{ getItemRecordings(sec.id,row.id).length }}</span></button><button v-if="canDelete" class="del-btn" @click="hideRow(sec.id,row.id)">×</button></div></td>
+                      <td class="td-btn-group"><div class="item-btn-col"><button class="cam-btn" :class="{ 'cam-has': getPhotos(sec.id,row.id).length }" @click="togglePanel(sec.id,row.id)" title="Photos"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,row.id).length" class="cam-count">{{ getPhotos(sec.id,row.id).length }}</span></button><button v-if="canDelete" class="del-btn" @click="hideRow(sec.id,row.id)">×</button></div></td>
                     </tr>
                     <tr v-if="isPanelOpen(sec.id,row.id)" class="photo-panel-row"><td colspan="7" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,row.id)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,row.id,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,row.id,pi)">×</button></div><button v-if="getPhotos(sec.id,row.id).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(sec.id,row.id,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,row.id,e.target.files)" /></label></div></td></tr>
                   </template>
@@ -2466,7 +2059,7 @@ async function moveToReview() {
                       <td><input class="fld-input" type="text" :disabled="!canEdit" placeholder="Check…" :value="ex.question" @input="setExtraField(sec.id,ex._eid,'question',$event.target.value)" /></td>
                       <td><select class="fld-input" :value="ex.answer" @change="setExtraField(sec.id,ex._eid,'answer',$event.target.value)"><option value="">Select…</option><option>Yes</option><option>No</option><option>N/A</option></select></td>
                       <td><textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" placeholder="Notes…" :value="ex.notes" @input="setExtraField(sec.id,ex._eid,'notes',$event.target.value)"></textarea></td>
-                      <td class="td-btn-group"><div class="item-btn-col"><button class="cam-btn" :class="{ 'cam-has': getPhotos(sec.id,ex._eid).length }" @click="togglePanel(sec.id,ex._eid)" title="Photos"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,ex._eid).length" class="cam-count">{{ getPhotos(sec.id,ex._eid).length }}</span></button><button class="cam-btn mic-btn" :class="{ 'mic-active': isItemRecording(sec.id,ex._eid), 'mic-has': !isItemRecording(sec.id,ex._eid) && getItemRecordings(sec.id,ex._eid).length, 'mic-ai': isItemAiProcessing(sec.id,ex._eid) }" @click.stop="toggleItemRecording(sec.id,ex._eid,fixedItemLabel(sec,ex._eid,(ex.name||'Item')))" title="Record"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span v-if="getItemRecordings(sec.id,ex._eid).length && !isItemRecording(sec.id,ex._eid)" class="cam-count mic-count">{{ getItemRecordings(sec.id,ex._eid).length }}</span></button><button v-if="canDelete" class="del-btn" @click="removeExtraRow(sec.id,ex._eid)">×</button></div></td>
+                      <td class="td-btn-group"><div class="item-btn-col"><button class="cam-btn" :class="{ 'cam-has': getPhotos(sec.id,ex._eid).length }" @click="togglePanel(sec.id,ex._eid)" title="Photos"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,ex._eid).length" class="cam-count">{{ getPhotos(sec.id,ex._eid).length }}</span></button><button v-if="canDelete" class="del-btn" @click="removeExtraRow(sec.id,ex._eid)">×</button></div></td>
                     </tr>
                     <tr v-if="isPanelOpen(sec.id,ex._eid)" class="photo-panel-row"><td colspan="7" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,ex._eid)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,ex._eid,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,ex._eid,pi)">×</button></div><button v-if="getPhotos(sec.id,ex._eid).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(sec.id,ex._eid,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,ex._eid,e.target.files)" /></label></div></td></tr>
                   </template>
@@ -2486,7 +2079,7 @@ async function moveToReview() {
                       <td class="td-name"><span class="sec-ref-badge">{{ fixedRowRef(sec, row.id) }}</span>{{ row.name }}</td>
                       <td><textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" placeholder="e.g. Located to understairs cupboard&#10;Serial Number: 123456" :value="get(sec.id,row.id,'locationSerial')" @input="set(sec.id,row.id,'locationSerial',$event.target.value)"></textarea></td>
                       <td><textarea v-auto-resize class="fld-textarea fld-mono" placeholder="e.g. 12345.6" :value="get(sec.id,row.id,'reading')" @input="set(sec.id,row.id,'reading',$event.target.value)"></textarea></td>
-                      <td class="td-btn-group"><div class="item-btn-col"><button class="cam-btn" :class="{ 'cam-has': getPhotos(sec.id,row.id).length }" @click="togglePanel(sec.id,row.id)" title="Photos"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,row.id).length" class="cam-count">{{ getPhotos(sec.id,row.id).length }}</span></button><button class="cam-btn mic-btn" :class="{ 'mic-active': isItemRecording(sec.id,row.id), 'mic-has': !isItemRecording(sec.id,row.id) && getItemRecordings(sec.id,row.id).length, 'mic-ai': isItemAiProcessing(sec.id,row.id) }" @click.stop="toggleItemRecording(sec.id,row.id,fixedItemLabel(sec,row.id,row.name))" title="Record"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span v-if="getItemRecordings(sec.id,row.id).length && !isItemRecording(sec.id,row.id)" class="cam-count mic-count">{{ getItemRecordings(sec.id,row.id).length }}</span></button><button v-if="canDelete" class="del-btn" @click="hideRow(sec.id,row.id)">×</button></div></td>
+                      <td class="td-btn-group"><div class="item-btn-col"><button class="cam-btn" :class="{ 'cam-has': getPhotos(sec.id,row.id).length }" @click="togglePanel(sec.id,row.id)" title="Photos"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,row.id).length" class="cam-count">{{ getPhotos(sec.id,row.id).length }}</span></button><button v-if="canDelete" class="del-btn" @click="hideRow(sec.id,row.id)">×</button></div></td>
                     </tr>
                     <tr v-if="isPanelOpen(sec.id,row.id)" class="photo-panel-row"><td colspan="6" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,row.id)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,row.id,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,row.id,pi)">×</button></div><button v-if="getPhotos(sec.id,row.id).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(sec.id,row.id,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,row.id,e.target.files)" /></label></div></td></tr>
                   </template>
@@ -2496,7 +2089,7 @@ async function moveToReview() {
                       <td class="td-extra-name"><span class="sec-ref-badge sec-ref-extra">{{ fixedRowRef(sec, ex._eid) }}</span><input class="fld-input" type="text" :disabled="!canEdit" placeholder="Meter name…" :value="ex.name" @input="setExtraField(sec.id,ex._eid,'name',$event.target.value)" /></td>
                       <td><textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" placeholder="Location & serial…" :value="ex.locationSerial" @input="setExtraField(sec.id,ex._eid,'locationSerial',$event.target.value)"></textarea></td>
                       <td><textarea v-auto-resize class="fld-textarea fld-mono" placeholder="Reading…" :value="ex.reading" @input="setExtraField(sec.id,ex._eid,'reading',$event.target.value)"></textarea></td>
-                      <td class="td-btn-group"><div class="item-btn-col"><button class="cam-btn" :class="{ 'cam-has': getPhotos(sec.id,ex._eid).length }" @click="togglePanel(sec.id,ex._eid)" title="Photos"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,ex._eid).length" class="cam-count">{{ getPhotos(sec.id,ex._eid).length }}</span></button><button class="cam-btn mic-btn" :class="{ 'mic-active': isItemRecording(sec.id,ex._eid), 'mic-has': !isItemRecording(sec.id,ex._eid) && getItemRecordings(sec.id,ex._eid).length, 'mic-ai': isItemAiProcessing(sec.id,ex._eid) }" @click.stop="toggleItemRecording(sec.id,ex._eid,fixedItemLabel(sec,ex._eid,(ex.name||'Item')))" title="Record"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span v-if="getItemRecordings(sec.id,ex._eid).length && !isItemRecording(sec.id,ex._eid)" class="cam-count mic-count">{{ getItemRecordings(sec.id,ex._eid).length }}</span></button><button v-if="canDelete" class="del-btn" @click="removeExtraRow(sec.id,ex._eid)">×</button></div></td>
+                      <td class="td-btn-group"><div class="item-btn-col"><button class="cam-btn" :class="{ 'cam-has': getPhotos(sec.id,ex._eid).length }" @click="togglePanel(sec.id,ex._eid)" title="Photos"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,ex._eid).length" class="cam-count">{{ getPhotos(sec.id,ex._eid).length }}</span></button><button v-if="canDelete" class="del-btn" @click="removeExtraRow(sec.id,ex._eid)">×</button></div></td>
                     </tr>
                     <tr v-if="isPanelOpen(sec.id,ex._eid)" class="photo-panel-row"><td colspan="6" class="photo-panel-cell"><div class="photo-panel"><div v-for="(ph,pi) in getPhotos(sec.id,ex._eid)" :key="pi" class="ph-thumb" style="cursor:pointer" @click="openLightbox(sec.id,ex._eid,pi)"><img :src="ph" class="ph-img-click" /><button class="ph-del" @click="removePhoto(sec.id,ex._eid,pi)">×</button></div><button v-if="getPhotos(sec.id,ex._eid).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(sec.id,ex._eid,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(sec.id,ex._eid,e.target.files)" /></label></div></td></tr>
                   </template>
@@ -2627,13 +2220,7 @@ async function moveToReview() {
                             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
                             <span v-if="getPhotos(room.id, item.id).length" class="cam-count">{{ getPhotos(room.id, item.id).length }}</span>
                           </button>
-                          <button class="cam-btn cam-btn-item mic-btn"
-                            :class="{ 'mic-active': isItemRecording(room.id, item.id), 'mic-has': !isItemRecording(room.id, item.id) && getItemRecordings(room.id, item.id).length, 'mic-ai': isItemAiProcessing(room.id, item.id) }"
-                            @click.stop="toggleItemRecording(room.id, item.id, room.name + ' — ' + item.label)"
-                            title="Record audio">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-                            <span v-if="getItemRecordings(room.id, item.id).length && !isItemRecording(room.id, item.id)" class="cam-count mic-count">{{ getItemRecordings(room.id, item.id).length }}</span>
-                          </button>
+                          
                           <button v-if="canEdit" class="del-item-icon-btn" @click="hideItem(room.id, item.id)" title="Remove item">
                             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
                           </button>
@@ -2662,13 +2249,7 @@ async function moveToReview() {
                             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
                             <span v-if="getPhotos(room.id, item._eid).length" class="cam-count">{{ getPhotos(room.id, item._eid).length }}</span>
                           </button>
-                          <button class="cam-btn cam-btn-item mic-btn"
-                            :class="{ 'mic-active': isItemRecording(room.id, item._eid), 'mic-has': !isItemRecording(room.id, item._eid) && getItemRecordings(room.id, item._eid).length }"
-                            @click.stop="toggleItemRecording(room.id, item._eid, room.name + ' — ' + (item.label || 'Item'))"
-                            title="Record audio">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-                            <span v-if="getItemRecordings(room.id, item._eid).length && !isItemRecording(room.id, item._eid)" class="cam-count mic-count">{{ getItemRecordings(room.id, item._eid).length }}</span>
-                          </button>
+                          
                           <button v-if="canEdit" class="del-item-icon-btn" @click="removeRoomExtraItem(room.id, item._eid)" title="Remove item">
                             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
                           </button>
@@ -2753,13 +2334,7 @@ async function moveToReview() {
                           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
                           <span v-if="getPhotos(room.id, item._type==='template' ? item.id : item._eid).length" class="cam-count">{{ getPhotos(room.id, item._type==='template' ? item.id : item._eid).length }}</span>
                         </button>
-                        <button class="cam-btn cam-btn-item mic-btn"
-                          :class="{ 'mic-active': isItemRecording(room.id, item._type==='template' ? item.id : item._eid), 'mic-has': !isItemRecording(room.id, item._type==='template' ? item.id : item._eid) && getItemRecordings(room.id, item._type==='template' ? item.id : item._eid).length, 'mic-ai': isItemAiProcessing(room.id, item._type==='template' ? item.id : item._eid) }"
-                          @click.stop="toggleItemRecording(room.id, item._type==='template' ? item.id : item._eid, room.name + ' — ' + (item.label || 'Item'))"
-                          title="Record audio">
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-                          <span v-if="getItemRecordings(room.id, item._type==='template' ? item.id : item._eid).length && !isItemRecording(room.id, item._type==='template' ? item.id : item._eid)" class="cam-count mic-count">{{ getItemRecordings(room.id, item._type==='template' ? item.id : item._eid).length }}</span>
-                        </button>
+                        
                         <button
                           class="cam-btn cam-btn-item action-trigger-btn"
                           :class="{ 'action-has': getItemActions(room.id, item._type==='extra' ? item._eid : item.id).length }"
@@ -2793,13 +2368,7 @@ async function moveToReview() {
                           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
                           <span v-if="getPhotos(room.id, sub._sid).length" class="cam-count">{{ getPhotos(room.id, sub._sid).length }}</span>
                         </button>
-                        <button class="cam-btn cam-btn-item mic-btn"
-                          :class="{ 'mic-active': isItemRecording(room.id, sub._sid), 'mic-has': !isItemRecording(room.id, sub._sid) && getItemRecordings(room.id, sub._sid).length, 'mic-ai': isItemAiProcessing(room.id, sub._sid) }"
-                          @click.stop="toggleItemRecording(room.id, sub._sid, room.name + ' — ' + item.label + ' (sub)')"
-                          title="Record audio">
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-                          <span v-if="getItemRecordings(room.id, sub._sid).length && !isItemRecording(room.id, sub._sid)" class="cam-count mic-count">{{ getItemRecordings(room.id, sub._sid).length }}</span>
-                        </button>
+                        
                         <button class="del-item-icon-btn" @click="removeSubItem(room.id,item.id,sub._sid)" title="Remove sub-item">
                           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
                         </button>
@@ -3274,21 +2843,20 @@ async function moveToReview() {
       </div>
     </div>
 
-  <!-- AUDIO MODULE — fixed footer -->
-  <div class="audio-module" :class="{ 'am-collapsed': !audioModule.expanded, 'am-human-typist': hasHumanTypist }">
+  <!-- RECORDINGS PANEL — playback only, visible when recordings are synced from mobile -->
+  <div v-if="recordings.length" class="audio-module" :class="{ 'am-collapsed': !audioModule.expanded }">
     <audio ref="audioEl" style="display:none" />
 
-    <!-- Topbar -->
+    <!-- Topbar (click to expand/collapse) -->
     <div class="am-topbar" @click="audioModule.expanded = !audioModule.expanded">
       <div class="am-title">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-        Audio Module
-        <span v-if="audioModule.mode === 'recording'" class="am-rec-pill">
-          <span class="am-rec-dot"></span>
-          REC {{ fmtTime(recordingSeconds) }}
-          <span v-if="itemRecordingKey" class="am-rec-item-label">— {{ recordings.find(r => r.itemKey === itemRecordingKey && recordings.indexOf(r) === recordings.length - 1)?.label?.replace(/ \(\d+\)$/, '') || '' }}</span>
+        Recordings
+        <span class="am-rec-count">{{ recordings.length }} clip{{ recordings.length !== 1 ? 's' : '' }}</span>
+        <span v-if="activeRec && audioModule.mode !== 'idle'" class="am-now-inline">
+          — {{ activeRec.label }}
+          <span class="am-now-status">{{ audioModule.mode === 'playing' ? '▶' : '⏸' }}</span>
         </span>
-        <span v-else-if="recordings.length" class="am-rec-count">{{ recordings.length }} clip{{ recordings.length !== 1 ? 's' : '' }}</span>
       </div>
       <button class="am-collapse-btn" @click.stop="audioModule.expanded = !audioModule.expanded">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -3298,19 +2866,11 @@ async function moveToReview() {
       </button>
     </div>
 
-    <!-- Body -->
+    <!-- Body (expanded) -->
     <div v-if="audioModule.expanded" class="am-body">
 
-      <!-- Transport -->
+      <!-- Transport row -->
       <div class="am-transport">
-
-        <!-- Record (general) — hidden when human typist assigned (recordings come from mobile app) -->
-        <button v-if="!hasHumanTypist" class="am-btn am-btn-rec" :class="{ recording: audioModule.mode === 'recording' && !itemRecordingKey }"
-          @click="toggleGeneralRecording"
-          :title="audioModule.mode === 'recording' && !itemRecordingKey ? 'Stop recording' : 'Record general audio'">
-          <svg v-if="!(audioModule.mode === 'recording' && !itemRecordingKey)" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="8"/></svg>
-          <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
-        </button>
 
         <!-- Play/Pause -->
         <button class="am-btn am-btn-play" :disabled="!recordings.length" @click="togglePlay"
@@ -3319,23 +2879,21 @@ async function moveToReview() {
           <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
         </button>
 
-        <!-- Time -->
+        <!-- Time display -->
         <div class="am-time">
-          <span class="am-time-cur">{{ fmtTime(audioModule.mode === 'recording' ? recordingSeconds : playbackTime) }}</span>
+          <span class="am-time-cur">{{ fmtTime(playbackTime) }}</span>
           <span class="am-time-sep">/</span>
-          <span class="am-time-dur">{{ fmtTime(audioModule.mode === 'recording' ? recordingSeconds : audioDuration) }}</span>
+          <span class="am-time-dur">{{ fmtTime(audioDuration) }}</span>
         </div>
 
         <!-- Scrub bar -->
         <div class="am-progress" @click="seekAudio">
           <div class="am-track">
-            <div class="am-fill" :class="{ 'am-fill-rec': audioModule.mode === 'recording' }"
-              :style="{ width: audioModule.mode === 'recording' ? '100%' : audioDuration > 0 ? `${(playbackTime / audioDuration) * 100}%` : '0%' }">
-            </div>
+            <div class="am-fill" :style="{ width: audioDuration > 0 ? `${(playbackTime / audioDuration) * 100}%` : '0%' }"></div>
           </div>
         </div>
 
-        <!-- Speed -->
+        <!-- Speed selector -->
         <div class="am-speed-wrap">
           <button class="am-speed-btn" @click.stop="showSpeedMenu = !showSpeedMenu; showRecMenu = false">{{ playbackSpeed }}×</button>
           <div v-if="showSpeedMenu" class="am-speed-menu">
@@ -3343,7 +2901,7 @@ async function moveToReview() {
           </div>
         </div>
 
-        <!-- Recordings dropdown toggle -->
+        <!-- Recordings list toggle -->
         <div class="am-queue-wrap" v-click-outside="onRecMenuOutside">
           <button class="am-queue-btn" :class="{ active: showRecMenu }"
             @click.stop="showRecMenu = !showRecMenu; showSpeedMenu = false"
@@ -3352,21 +2910,15 @@ async function moveToReview() {
             <span v-if="recordings.length" class="am-queue-count">{{ recordings.length }}</span>
           </button>
 
-          <!-- Dropdown panel -->
+          <!-- Dropdown -->
           <div v-if="showRecMenu" class="am-rec-dropdown">
             <div class="am-rec-dropdown-hd">
               <span>Recordings</span>
               <span class="am-rec-dropdown-total">{{ recordings.length }} clip{{ recordings.length !== 1 ? 's' : '' }}</span>
             </div>
-
             <div class="am-rec-dropdown-body">
-              <div v-if="!recordings.length" class="am-rec-dropdown-empty">No recordings yet</div>
-
               <template v-for="group in groupedRecordings" :key="group.key">
-                <!-- Group heading -->
                 <div class="am-rec-group-hd">{{ groupDisplayLabel(group) }}</div>
-
-                <!-- Clips in group -->
                 <div v-for="rec in group.items" :key="rec.id"
                   class="am-rec-row"
                   :class="{
@@ -3375,7 +2927,6 @@ async function moveToReview() {
                   }"
                   @click="loadRecording(rec, false); showRecMenu = false"
                 >
-                  <!-- Playing indicator -->
                   <span v-if="activeRec?.id === rec.id && audioModule.mode === 'playing'" class="am-playing-bars">
                     <span></span><span></span><span></span>
                   </span>
@@ -3387,11 +2938,8 @@ async function moveToReview() {
                     <span class="am-rec-row-meta">{{ fmtTime(rec.duration) }} · {{ (rec.createdAt instanceof Date ? rec.createdAt : new Date(rec.createdAt)).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) }}</span>
                   </div>
 
-                  <!-- Future: transcript / GPT status badges -->
-                  <span v-if="rec.transcript" class="am-pill am-pill-t" title="Transcript ready">T</span>
-                  <span v-if="rec.gptResult"  class="am-pill am-pill-g" title="GPT result ready">AI</span>
-
-                  <button class="am-rec-del" @click.stop="deleteRecording(rec)" title="Delete">×</button>
+                  <span v-if="rec.transcript" class="am-pill am-pill-t" title="Transcript available">T</span>
+                  <button class="am-rec-del" @click.stop="deleteRecording(rec)" title="Remove">×</button>
                 </div>
               </template>
             </div>
@@ -3400,32 +2948,11 @@ async function moveToReview() {
 
       </div>
 
-      <!-- AI Status bar -->
-      <div v-if="aiProcessing" class="am-ai-status am-ai-processing">
-        <svg class="spin-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>
-        ✨ AI is processing your recording…
-      </div>
-      <div v-else-if="aiError" class="am-ai-status am-ai-error">
-        <span>⚠ {{ aiError }}</span>
-        <button class="am-ai-error-dismiss" @click="aiError = ''">×</button>
-      </div>
-      <div v-else-if="(hasAiTypist || aiKeysAvailable) && !hasHumanTypist" class="am-ai-status am-ai-ready">
-        <span>✨ AI Typist active — item recordings fill automatically</span>
-        <button
-          v-if="recordings.filter(r => !r.itemKey).length"
-          class="am-ai-process-btn"
-          @click="transcribeFullInspection"
-        >Process continuous recording</button>
-      </div>
-
-      <!-- Currently playing label -->
+      <!-- Currently playing info -->
       <div v-if="activeRec" class="am-now-playing">
         <span class="am-now-label">{{ activeRec.label }}</span>
         <span class="am-now-status" v-if="audioModule.mode === 'playing'">▶ Playing</span>
         <span class="am-now-status" v-else-if="audioModule.mode === 'paused'">⏸ Paused</span>
-      </div>
-      <div v-else-if="!recordings.length" class="am-empty">
-        Press <strong>●</strong> to record · or use the <strong>🎤</strong> icon on any item
       </div>
 
     </div>
@@ -3499,7 +3026,7 @@ async function moveToReview() {
 .sidebar-warn{padding:20px 14px;display:flex;flex-direction:column;align-items:flex-start;gap:10px}.sidebar-warn p{font-size:12px;color:#4b6282;line-height:1.5}
 
 /* Main */
-.main{overflow-y:auto;padding:28px 40px 140px;display:flex;flex-direction:column;gap:24px}
+.main{overflow-y:auto;padding:28px 40px 28px;display:flex;flex-direction:column;gap:24px}
 .empty-state{display:flex;flex-direction:column;align-items:center;gap:14px;padding:80px 20px;text-align:center}
 .empty-state h3{font-size:20px;font-weight:600;color:#1e293b}.empty-state p{font-size:14px;color:#64748b;max-width:400px;line-height:1.6}
 
@@ -3594,11 +3121,7 @@ async function moveToReview() {
 .cam-btn-item{width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;color:#94a3b8;cursor:pointer;transition:all 0.15s;position:relative;flex-shrink:0}
 .cam-btn-item:hover{background:#f1f5f9;border-color:#94a3b8;color:#475569}
 .cam-btn-item.cam-has{background:#eff6ff;border-color:#93c5fd;color:#2563eb}
-.cam-btn-item.mic-btn{color:#64748b}
-.cam-btn-item.mic-btn:hover{background:#fdf4ff;border-color:#d8b4fe;color:#7c3aed}
-.cam-btn-item.mic-btn.mic-has{background:#fdf4ff;border-color:#d8b4fe;color:#7c3aed}
-.cam-btn-item.mic-btn.mic-active{background:#7c3aed;border-color:#7c3aed;color:white;animation:mic-pulse 1s ease-in-out infinite}
-.cam-btn-item.mic-btn.mic-ai{background:#fdf4ff;border-color:#d8b4fe;color:#7c3aed;animation:mic-pulse 1.5s ease-in-out infinite}
+
 
 /* Delete icon button */
 .del-item-icon-btn{width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center;background:none;border:1px solid #fca5a5;border-radius:6px;color:#ef4444;cursor:pointer;transition:all 0.12s;flex-shrink:0}
@@ -3713,16 +3236,6 @@ async function moveToReview() {
 .cam-btn-room{width:30px;height:30px;margin-top:18px;align-self:flex-start}
 .cam-count{position:absolute;top:-6px;right:-6px;border-radius:10px;padding:0 4px;font-size:9px;font-weight:700;min-width:14px;text-align:center;line-height:14px;background:#2563eb;color:#fff}
 
-/* Mic button variants */
-.mic-btn{ color:#64748b }
-.mic-btn:hover{ background:#fdf4ff;border-color:#d8b4fe;color:#7c3aed }
-.mic-btn.mic-has{ background:#fdf4ff;border-color:#d8b4fe;color:#7c3aed }
-.mic-btn.mic-active{
-  background:#dc2626;border-color:#dc2626;color:#fff;
-  box-shadow:0 0 0 3px rgba(220,38,38,0.3);
-  animation:am-pulse 1.4s infinite;
-}
-.mic-count{ background:#7c3aed !important }
 
 
 /* Room item — condition + camera/mic stack side by side */
@@ -3837,32 +3350,25 @@ async function moveToReview() {
 /* ═══════════════════════════════════════════════════════════════════ */
 /* AUDIO MODULE                                                        */
 /* ═══════════════════════════════════════════════════════════════════ */
-/* Hide per-item mic buttons when human typist assigned */
-.hide-mic-btns .mic-btn { display: none !important }
-/* Show a playback-only indicator in the audio module */
-.am-human-typist .am-btn-rec { display: none !important }
+
 .audio-module{
-  position:fixed;bottom:0;left:0;right:0;z-index:200;
+  flex-shrink:0;
   background:#0f172a;border-top:2px solid #1e293b;
-  box-shadow:0 -4px 24px rgba(0,0,0,0.35);font-family:inherit;
+  box-shadow:0 -4px 16px rgba(0,0,0,0.2);font-family:inherit;
 }
 .am-collapsed{ height:40px;overflow:hidden }
 .am-topbar{display:flex;align-items:center;justify-content:space-between;padding:0 16px;height:40px;cursor:pointer;user-select:none}
 .am-title{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;color:#94a3b8;letter-spacing:0.5px;text-transform:uppercase}
-.am-rec-pill{display:inline-flex;align-items:center;gap:5px;background:#dc2626;color:#fff;border-radius:10px;padding:2px 9px;font-size:11px;font-weight:700;text-transform:none;letter-spacing:0}
-.am-rec-item-label{opacity:0.8;font-weight:400}
-.am-rec-dot{width:7px;height:7px;border-radius:50%;background:#fca5a5;animation:am-blink 1s infinite;flex-shrink:0}
-@keyframes am-blink{0%,100%{opacity:1}50%{opacity:0.3}}
+.am-now-inline{color:#64748b;font-weight:400;text-transform:none;letter-spacing:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:300px}
+.am-now-inline .am-now-status{margin-left:4px;color:#6366f1}
+
 .am-rec-count{background:#1e293b;color:#64748b;border-radius:8px;padding:1px 8px;font-size:11px;font-weight:600;text-transform:none;letter-spacing:0}
 .am-collapse-btn{background:none;border:none;color:#64748b;cursor:pointer;padding:4px;border-radius:4px;display:flex;align-items:center;justify-content:center}
 .am-collapse-btn:hover{color:#e2e8f0;background:#1e293b}
 .am-body{display:flex;align-items:center;gap:12px;padding:8px 16px 12px;border-top:1px solid #1e293b;flex-wrap:wrap}
 .am-transport{display:flex;align-items:center;gap:10px;flex:1;min-width:300px}
 .am-btn{width:38px;height:38px;border-radius:50%;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all 0.15s;flex-shrink:0}
-.am-btn-rec{background:#dc2626;color:#fff}
-.am-btn-rec:hover{background:#b91c1c}
-.am-btn-rec.recording{background:#dc2626;animation:am-pulse 1.4s infinite}
-@keyframes am-pulse{0%,100%{box-shadow:0 0 0 4px rgba(220,38,38,0.35)}50%{box-shadow:0 0 0 8px rgba(220,38,38,0.1)}}
+
 .am-btn-play{background:#6366f1;color:#fff}
 .am-btn-play:hover:not(:disabled){background:#4f46e5}
 .am-btn-play:disabled{background:#334155;color:#64748b;cursor:not-allowed}
@@ -3872,8 +3378,7 @@ async function moveToReview() {
 .am-track{height:4px;background:#1e293b;border-radius:4px;overflow:hidden;transition:height 0.15s}
 .am-progress:hover .am-track{height:6px}
 .am-fill{height:100%;background:#6366f1;border-radius:4px;transition:width 0.1s linear}
-.am-fill-rec{background:linear-gradient(90deg,#dc2626,#f87171);animation:am-rec-sweep 2s ease-in-out infinite alternate}
-@keyframes am-rec-sweep{from{opacity:0.7}to{opacity:1}}
+
 .am-speed-wrap{position:relative;flex-shrink:0}
 .am-speed-btn{padding:5px 10px;background:#1e293b;border:1px solid #334155;border-radius:6px;font-size:12px;font-weight:700;color:#94a3b8;cursor:pointer;transition:all 0.15s}
 .am-speed-btn:hover{background:#334155;color:#e2e8f0}
@@ -4093,17 +3598,6 @@ async function moveToReview() {
 .pg-cell-label{position:absolute;bottom:0;left:0;right:0;font-size:9px;font-weight:700;color:rgba(255,255,255,0.9);background:linear-gradient(transparent,rgba(0,0,0,0.7));padding:12px 5px 4px;text-align:center;pointer-events:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
 
-/* ── AI Transcription styles ───────────────────────────────────────── */
-.am-ai-status{display:flex;align-items:center;gap:8px;padding:7px 14px;font-size:12px;font-weight:600;border-radius:6px;margin-top:6px;flex-wrap:wrap}
-.am-ai-processing{background:rgba(99,102,241,0.12);color:#a5b4fc;border:1px solid rgba(99,102,241,0.25)}
-.am-ai-ready{background:rgba(16,185,129,0.08);color:#6ee7b7;border:1px solid rgba(16,185,129,0.2);justify-content:space-between}
-.am-ai-error{background:rgba(220,38,38,0.1);color:#fca5a5;border:1px solid rgba(220,38,38,0.2);justify-content:space-between}
-.am-ai-error-dismiss{background:none;border:none;color:#fca5a5;cursor:pointer;font-size:16px;padding:0 4px;line-height:1;font-family:inherit}
-.am-ai-process-btn{padding:4px 10px;background:rgba(16,185,129,0.15);border:1px solid rgba(16,185,129,0.3);border-radius:4px;font-size:11px;font-weight:700;color:#6ee7b7;cursor:pointer;transition:all 0.12s;font-family:inherit;white-space:nowrap}
-.am-ai-process-btn:hover{background:rgba(16,185,129,0.25);color:#a7f3d0}
-/* Item mic button AI processing state — pulsing indigo */
-.mic-ai{background:rgba(99,102,241,0.15)!important;border-color:#6366f1!important;animation:mic-ai-pulse 1.2s ease-in-out infinite}
-@keyframes mic-ai-pulse{0%,100%{opacity:1}50%{opacity:0.5}}
 
 /* ── Photo timestamp overlay ─────────────────────────────────────────────── */
 .lb-timestamp {

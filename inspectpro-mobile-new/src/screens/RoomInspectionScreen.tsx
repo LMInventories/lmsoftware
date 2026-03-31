@@ -494,31 +494,52 @@ export default function RoomInspectionScreen() {
 
   // ── Room dictation callback ────────────────────────────────────────────────
   // Called by RoomDictationRecorder when AI returns filled fields.
-  // Room dictation callback (room sections)
-  // filled = { itemId: { description?: string; condition?: string } }
-  function handleRoomTranscribed(filled: Record<string, Record<string, string>>) {
+  // filled = { itemId: { description?, condition?, _subs?: [{description, condition}] } }
+  // _subs is created when the AI detects multiple distinct elements within one item chapter.
+  function handleRoomTranscribed(filled: Record<string, Record<string, any>>) {
     const rd = getReportData()
     if (!rd[sectionKey]) rd[sectionKey] = {}
     let changed = false
+    let subItemsCreated = 0
 
     for (const [itemId, fields] of Object.entries(filled)) {
       if (!rd[sectionKey][itemId]) rd[sectionKey][itemId] = {}
       const row = rd[sectionKey][itemId]
+
+      // Fill main item fields
       if (fields.description && !row.description) { row.description = fields.description; changed = true }
       if (fields.condition   && !row.condition)   { row.condition   = fields.condition;   changed = true }
+
+      // Create AI-suggested sub-items (only when the AI detected distinct elements)
+      if (Array.isArray(fields._subs) && fields._subs.length > 0) {
+        if (!row._subs) row._subs = []
+        for (const sub of fields._subs) {
+          const sid = `sub_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
+          row._subs.push({
+            _sid:        sid,
+            description: sub.description || '',
+            condition:   sub.condition   || '',
+          })
+          changed = true
+          subItemsCreated++
+        }
+      }
     }
 
     if (changed) {
       setReportData(inspectionId, rd)
-      const count = Object.keys(filled).length
-      Alert.alert('✨ Room filled', `AI filled ${count} item${count !== 1 ? 's' : ''} in ${sectionName}.`)
+      const itemCount = Object.keys(filled).length
+      const subMsg = subItemsCreated > 0
+        ? ` + ${subItemsCreated} sub-item${subItemsCreated !== 1 ? 's' : ''} created`
+        : ''
+      Alert.alert('✨ Room filled', `AI filled ${itemCount} item${itemCount !== 1 ? 's' : ''} in ${sectionName}${subMsg}.`)
     } else {
       Alert.alert('Already filled', 'All fields mentioned were already filled. Existing content was preserved.')
     }
   }
 
   // Fixed section dictation callback — field names vary by section type
-  function handleFixedRoomTranscribed(filled: Record<string, Record<string, string>>) {
+  function handleFixedRoomTranscribed(filled: Record<string, Record<string, any>>) {
     const rd = getReportData()
     if (!rd[sectionKey]) rd[sectionKey] = {}
     let changed = false

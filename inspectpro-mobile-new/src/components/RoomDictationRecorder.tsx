@@ -20,7 +20,7 @@
  *   sectionKey    – room section key
  *   sectionName   – room display name
  *   items         – template items (AI uses names as chapters)
- *   onTranscribed – called with { itemId: { description?, condition? } } on success
+ *   onTranscribed – called with { itemId: { description?, condition?, _subs?: [...] } } on success
  *   showAiButton  – set false for human-typist mode (clips saved, no AI fill)
  */
 import React, { useState, useRef, useEffect, useCallback } from 'react'
@@ -62,7 +62,7 @@ interface Props {
   sectionName: string
   sectionType?: string   // 'room' (default) or fixed section type
   items: RoomDictationItem[]
-  onTranscribed: (filled: Record<string, Record<string, string>>) => void
+  onTranscribed: (filled: Record<string, Record<string, any>>) => void
   showAiButton?: boolean
 }
 

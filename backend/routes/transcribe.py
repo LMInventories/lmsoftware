@@ -628,17 +628,45 @@ SPLITTING description vs condition:
 - Functional observations ("appear complete", "tested", "appears working") are always condition
 - If no condition is mentioned, default condition to "In good order"
 
-Return ONLY valid JSON — no markdown, no extra text:
+SUB-ITEMS — when one chapter heading contains multiple distinct elements:
+A SUB-ITEM exists when, within a single item's chapter, the clerk describes TWO OR MORE
+clearly distinct physical elements where EACH has its own full description AND its own
+condition phrase. This typically happens for items like "Curtains and Blinds" or "Doors and Windows"
+where multiple separate fittings are grouped under one template item.
+
+How to recognise a sub-item boundary:
+- After completing description + condition for the first element, the clerk transitions to
+  describing a second element that gets its own condition phrase
+- Example: "White wood venetian blinds, white pull cords ... cracked slat to bottom right ...
+  Chrome curtain rail, two grey floor length curtains ... in good order"
+  → main item: venetian blinds (description + condition)
+  → sub-item: curtain rail + curtains (description + "In good order")
+- If the clerk just lists multiple components of the SAME element (e.g. "door with chrome handle
+  and hinges") keep them together in the main item using \n — do NOT create a sub-item
+
+Return sub-items as a "_subs" array under the parent item ID. Each sub has "description" and "condition".
+Only create _subs when genuinely warranted — do NOT create them for simple multi-component descriptions.
+
+Return ONLY valid JSON — no markdown, no extra text.
+Items without sub-items use the flat shape. Items WITH sub-items include the "_subs" array:
 {{
   "<itemId>": {{
     "description": "...",
     "condition": "..."
+  }},
+  "<itemIdWithSubs>": {{
+    "description": "first element description",
+    "condition": "first element condition",
+    "_subs": [
+      {{ "description": "second element description", "condition": "second element condition" }},
+      {{ "description": "third element description", "condition": "third element condition" }}
+    ]
   }}
 }}"""
 
     message = client.messages.create(
         model='claude-haiku-4-5',
-        max_tokens=3000,
+        max_tokens=4000,
         messages=[{'role': 'user', 'content': prompt}]
     )
 
@@ -684,8 +712,10 @@ def _claude_fill_fixed_section(transcript: str, section_name: str, section_type:
     elif section_type == 'cleaning_summary':
         field_schema = '{"cleanlinessNotes": "one or more lines of notes"}'
         field_instructions = (
-            'Extract the cleanliness observations into "cleanlinessNotes". '
-            'If multiple points are made, put each on its own line using \\n. '
+            'The clerk mentions the CATEGORY or LINE NAME first (e.g. "flooring", "kitchen surfaces"), '
+            'then describes the cleanliness issue. Use the category name as the chapter heading to match '
+            'the correct item, then fill "cleanlinessNotes" with the observation that follows. '
+            'If multiple points are made for one item, put each on its own line using \\n. '
             'Use the EXACT words the clerk spoke.'
         )
     elif section_type in ('fire_door_safety', 'health_safety', 'smoke_alarms'):
@@ -708,10 +738,12 @@ def _claude_fill_fixed_section(transcript: str, section_name: str, section_type:
     elif section_type == 'meter_readings':
         field_schema = '{"locationSerial": "Located to [location]\\nSerial Number: [number]", "reading": "meter reading value"}'
         field_instructions = (
-            'Extract meter location and serial number into "locationSerial" '
-            '(format: "Located to [location]\\nSerial Number: [number]"). '
-            'Extract the reading value only into "reading". '
-            'Use the EXACT words the clerk spoke.'
+            'The clerk provides explicit headings for each meter (e.g. "Gas meter", "Electricity meter", '
+            '"Water meter"). Use the clerk\'s stated heading to match the correct item by name, then fill: '
+            '"locationSerial" with the location and serial number formatted as '
+            '"Located to [location]\\nSerial Number: [number]" (omit whichever part is not mentioned); '
+            '"reading" with the numeric reading value only. '
+            'Use the EXACT words the clerk spoke for location and serial number descriptions.'
         )
     else:
         field_schema = '{"notes": "..."}'

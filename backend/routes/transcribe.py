@@ -431,9 +431,10 @@ def classify_photo():
     }
     """
     data = request.get_json(force=True)
-    image_base64 = data.get('imageBase64', '')
-    mime_type    = data.get('mimeType', 'image/jpeg')
-    room_context = data.get('roomContext', '')
+    image_base64  = data.get('imageBase64', '')
+    mime_type     = data.get('mimeType', 'image/jpeg')
+    room_context  = data.get('roomContext', '')
+    inspection_id = int(data.get('inspectionId')) if data.get('inspectionId') else None
 
     if not image_base64 or not room_context:
         return jsonify({'error': 'imageBase64 and roomContext are required'}), 400
@@ -506,6 +507,22 @@ Rules:
                 result[field] = ''
         result['confidence'] = float(result.get('confidence', 0))
 
+        # Log usage
+        try:
+            usage_log = TranscriptionUsage(
+                call_type     = 'photo',
+                inspection_id = inspection_id,
+                user_id       = int(get_jwt_identity()),
+                audio_seconds = 0,
+                input_tokens  = message.usage.input_tokens  if message.usage else 0,
+                output_tokens = message.usage.output_tokens if message.usage else 0,
+                section_type  = 'photo',
+            )
+            db.session.add(usage_log)
+            db.session.commit()
+        except Exception:
+            pass  # never let logging break the response
+
         return jsonify(result)
 
     except json.JSONDecodeError as e:
@@ -527,9 +544,9 @@ Rules:
 @transcribe_bp.route('/usage', methods=['GET'])
 @jwt_required()
 def transcribe_usage():
-    """Returns usage stats and cost estimates in GBP."""
+    """Returns usage stats and cost estimates in GBP, grouped by inspection."""
     from datetime import datetime, timedelta
-    from sqlalchemy import func
+    from models import Inspection
 
     # Period filter
     period = request.args.get('period', '30')  # days
@@ -542,26 +559,107 @@ def transcribe_usage():
     HAIKU_IN_PER_1M_USD  = 0.80
     HAIKU_OUT_PER_1M_USD = 4.00
 
+    def _cost_gbp(seconds, in_tok, out_tok):
+        w = (seconds / 60) * WHISPER_PER_MIN_USD
+        c = (in_tok  / 1_000_000) * HAIKU_IN_PER_1M_USD + \
+            (out_tok / 1_000_000) * HAIKU_OUT_PER_1M_USD
+        return round((w + c) * USD_TO_GBP, 4)
+
+    # --- overall summary ---
     total_seconds = sum(r.audio_seconds for r in rows)
     total_in      = sum(r.input_tokens  for r in rows)
     total_out     = sum(r.output_tokens for r in rows)
     item_count    = sum(1 for r in rows if r.call_type == 'item')
     full_count    = sum(1 for r in rows if r.call_type == 'full')
+    photo_count   = sum(1 for r in rows if r.call_type == 'photo')
 
-    whisper_usd = (total_seconds / 60) * WHISPER_PER_MIN_USD
-    claude_usd  = (total_in  / 1_000_000) * HAIKU_IN_PER_1M_USD +                   (total_out / 1_000_000) * HAIKU_OUT_PER_1M_USD
-    total_gbp   = (whisper_usd + claude_usd) * USD_TO_GBP
+    # transcription rows only (item + full) for whisper cost
+    trans_rows = [r for r in rows if r.call_type in ('item', 'full')]
+    trans_secs = sum(r.audio_seconds   for r in trans_rows)
+    trans_in   = sum(r.input_tokens    for r in trans_rows)
+    trans_out  = sum(r.output_tokens   for r in trans_rows)
+
+    photo_rows = [r for r in rows if r.call_type == 'photo']
+    photo_in   = sum(r.input_tokens  for r in photo_rows)
+    photo_out  = sum(r.output_tokens for r in photo_rows)
+
+    whisper_usd = (trans_secs / 60) * WHISPER_PER_MIN_USD
+    trans_claude_usd = (trans_in  / 1_000_000) * HAIKU_IN_PER_1M_USD + \
+                       (trans_out / 1_000_000) * HAIKU_OUT_PER_1M_USD
+    photo_usd   = (photo_in  / 1_000_000) * HAIKU_IN_PER_1M_USD + \
+                  (photo_out / 1_000_000) * HAIKU_OUT_PER_1M_USD
+    total_usd   = whisper_usd + trans_claude_usd + photo_usd
+    total_gbp   = round(total_usd * USD_TO_GBP, 4)
+
+    # --- group by inspection ---
+    from collections import defaultdict
+    by_insp = defaultdict(lambda: {
+        'trans_seconds': 0, 'trans_in': 0, 'trans_out': 0,
+        'photo_in': 0, 'photo_out': 0,
+        'trans_calls': 0, 'photo_calls': 0,
+        'latest_at': None,
+    })
+
+    for r in rows:
+        key = r.inspection_id  # may be None
+        g   = by_insp[key]
+        if r.call_type in ('item', 'full'):
+            g['trans_seconds'] += r.audio_seconds
+            g['trans_in']      += r.input_tokens
+            g['trans_out']     += r.output_tokens
+            g['trans_calls']   += 1
+        elif r.call_type == 'photo':
+            g['photo_in']    += r.input_tokens
+            g['photo_out']   += r.output_tokens
+            g['photo_calls'] += 1
+        if g['latest_at'] is None or r.created_at > g['latest_at']:
+            g['latest_at'] = r.created_at
+
+    # Fetch addresses for known inspection_ids
+    known_ids = [k for k in by_insp if k is not None]
+    insp_map  = {}
+    if known_ids:
+        insp_objs = Inspection.query.filter(Inspection.id.in_(known_ids)).all()
+        for insp in insp_objs:
+            addr = (insp.property.address if insp.property else None) or f'Inspection #{insp.id}'
+            insp_map[insp.id] = addr
+
+    inspections_list = []
+    for insp_id, g in sorted(by_insp.items(),
+                              key=lambda x: x[1]['latest_at'] or datetime.min,
+                              reverse=True):
+        w_usd   = (g['trans_seconds'] / 60) * WHISPER_PER_MIN_USD
+        tc_usd  = (g['trans_in']  / 1_000_000) * HAIKU_IN_PER_1M_USD + \
+                  (g['trans_out'] / 1_000_000) * HAIKU_OUT_PER_1M_USD
+        pc_usd  = (g['photo_in']  / 1_000_000) * HAIKU_IN_PER_1M_USD + \
+                  (g['photo_out'] / 1_000_000) * HAIKU_OUT_PER_1M_USD
+        trans_cost = round((w_usd + tc_usd) * USD_TO_GBP, 4)
+        photo_cost = round(pc_usd * USD_TO_GBP, 4)
+        total_cost = round((w_usd + tc_usd + pc_usd) * USD_TO_GBP, 4)
+
+        inspections_list.append({
+            'inspection_id':         insp_id,
+            'property_address':      insp_map.get(insp_id, 'Unknown property') if insp_id else 'Unlinked calls',
+            'total_cost_gbp':        total_cost,
+            'transcription_cost_gbp': trans_cost,
+            'photo_cost_gbp':        photo_cost,
+            'transcription_calls':   g['trans_calls'],
+            'photo_calls':           g['photo_calls'],
+            'audio_minutes':         round(g['trans_seconds'] / 60, 1),
+            'latest_at':             g['latest_at'].isoformat() if g['latest_at'] else None,
+        })
 
     return jsonify({
-        'period_days':     int(period),
-        'item_calls':      item_count,
-        'full_calls':      full_count,
-        'total_calls':     len(rows),
-        'audio_minutes':   round(total_seconds / 60, 1),
+        'period_days':      int(period),
+        'item_calls':       item_count,
+        'full_calls':       full_count,
+        'photo_calls':      photo_count,
+        'total_calls':      len(rows),
+        'audio_minutes':    round(total_seconds / 60, 1),
         'whisper_cost_gbp': round(whisper_usd * USD_TO_GBP, 4),
-        'claude_cost_gbp':  round(claude_usd  * USD_TO_GBP, 4),
-        'total_cost_gbp':   round(total_gbp, 4),
-        'recent':          [r.to_dict() for r in sorted(rows, key=lambda x: x.created_at, reverse=True)[:20]],
+        'claude_cost_gbp':  round((trans_claude_usd + photo_usd) * USD_TO_GBP, 4),
+        'total_cost_gbp':   total_gbp,
+        'inspections':      inspections_list,
     })
 
 

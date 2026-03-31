@@ -8,6 +8,7 @@ const apiStatus   = ref({ openai: null, anthropic: null })
 const usage       = ref(null)
 const usagePeriod = ref(30)
 const usageLoading = ref(false)
+const expandedInsp = ref(new Set())
 
 const settings = ref({
   turnaroundTime: '24',
@@ -26,6 +27,7 @@ async function loadUsage() {
   try {
     const res = await api.getTranscribeUsage(usagePeriod.value)
     usage.value = res.data
+    expandedInsp.value = new Set()
   } catch {}
   finally { usageLoading.value = false }
 }
@@ -44,6 +46,18 @@ function formatGBP(val) {
   if (val === undefined || val === null) return '£0.00'
   if (val < 0.01) return `£${val.toFixed(4)}`
   return `£${val.toFixed(2)}`
+}
+
+function formatDate(iso) {
+  if (!iso) return '—'
+  return new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+}
+
+function toggleInsp(id) {
+  const s = new Set(expandedInsp.value)
+  if (s.has(id)) s.delete(id)
+  else s.add(id)
+  expandedInsp.value = s
 }
 
 onMounted(() => { checkApiKeys(); loadUsage() })
@@ -113,6 +127,7 @@ onMounted(() => { checkApiKeys(); loadUsage() })
       <div v-if="usageLoading" class="usage-loading">Loading usage data…</div>
 
       <div v-else-if="usage">
+        <!-- Summary cards -->
         <div class="cost-cards">
           <div class="cost-card total">
             <span class="cost-label">Total Cost</span>
@@ -127,7 +142,7 @@ onMounted(() => { checkApiKeys(); loadUsage() })
           <div class="cost-card claude">
             <span class="cost-label">Claude Haiku</span>
             <span class="cost-value">{{ formatGBP(usage.claude_cost_gbp) }}</span>
-            <span class="cost-sub">{{ usage.item_calls }} item · {{ usage.full_calls }} full calls</span>
+            <span class="cost-sub">{{ usage.item_calls }} item · {{ usage.full_calls }} full · {{ usage.photo_calls || 0 }} photo</span>
           </div>
         </div>
 
@@ -135,22 +150,42 @@ onMounted(() => { checkApiKeys(); loadUsage() })
           ⚠️ Estimates only. Whisper at $0.006/min, Claude Haiku at $0.80/$4.00 per 1M tokens, converted at £1 = $1.27. Verify actual charges in your provider billing dashboards above.
         </p>
 
-        <div v-if="usage.recent && usage.recent.length" class="recent-calls">
-          <h4>Recent Calls</h4>
-          <table class="usage-table">
-            <thead>
-              <tr><th>Date</th><th>Type</th><th>Section</th><th>Audio</th><th>Est. Cost</th></tr>
-            </thead>
-            <tbody>
-              <tr v-for="row in usage.recent" :key="row.id">
-                <td>{{ new Date(row.created_at).toLocaleDateString('en-GB') }}</td>
-                <td><span class="call-badge" :class="row.call_type">{{ row.call_type }}</span></td>
-                <td>{{ row.section_type }}</td>
-                <td>{{ Math.round(row.audio_seconds) }}s</td>
-                <td class="cost-cell">{{ formatGBP(row.cost_gbp) }}</td>
-              </tr>
-            </tbody>
-          </table>
+        <!-- Inspection-grouped accordion -->
+        <div v-if="usage.inspections && usage.inspections.length" class="inspections-list">
+          <h4>By Inspection</h4>
+
+          <div
+            v-for="insp in usage.inspections"
+            :key="insp.inspection_id ?? 'unlinked'"
+            class="insp-row-wrap"
+          >
+            <!-- Header row (always visible) -->
+            <button class="insp-row" @click="toggleInsp(insp.inspection_id ?? 'unlinked')">
+              <span class="insp-chevron" :class="{ open: expandedInsp.has(insp.inspection_id ?? 'unlinked') }">›</span>
+              <span class="insp-date">{{ formatDate(insp.latest_at) }}</span>
+              <span class="insp-addr">{{ insp.property_address }}</span>
+              <span class="insp-total">{{ formatGBP(insp.total_cost_gbp) }}</span>
+            </button>
+
+            <!-- Expanded breakdown -->
+            <div v-if="expandedInsp.has(insp.inspection_id ?? 'unlinked')" class="insp-breakdown">
+              <div class="breakdown-row" v-if="insp.transcription_calls > 0">
+                <span class="breakdown-icon">🎙️</span>
+                <span class="breakdown-label">AI Transcription</span>
+                <span class="breakdown-meta">{{ insp.transcription_calls }} call{{ insp.transcription_calls !== 1 ? 's' : '' }} · {{ insp.audio_minutes }} mins</span>
+                <span class="breakdown-cost">{{ formatGBP(insp.transcription_cost_gbp) }}</span>
+              </div>
+              <div class="breakdown-row" v-if="insp.photo_calls > 0">
+                <span class="breakdown-icon">📷</span>
+                <span class="breakdown-label">AI Photo Reassignment</span>
+                <span class="breakdown-meta">{{ insp.photo_calls }} photo{{ insp.photo_calls !== 1 ? 's' : '' }}</span>
+                <span class="breakdown-cost">{{ formatGBP(insp.photo_cost_gbp) }}</span>
+              </div>
+              <div class="breakdown-row breakdown-empty" v-if="insp.transcription_calls === 0 && insp.photo_calls === 0">
+                <span class="breakdown-label" style="color:#94a3b8">No calls recorded</span>
+              </div>
+            </div>
+          </div>
         </div>
         <div v-else class="usage-empty">No transcription calls recorded in this period yet.</div>
       </div>
@@ -248,15 +283,35 @@ onMounted(() => { checkApiKeys(); loadUsage() })
 .cost-card.total .cost-sub { color: rgba(255,255,255,0.5); }
 .usage-disclaimer { font-size: 11px; color: #94a3b8; margin-bottom: 20px; line-height: 1.5; }
 
-.recent-calls h4 { font-size: 13px; font-weight: 700; color: #374151; margin-bottom: 10px; }
-.usage-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.usage-table th { text-align: left; padding: 8px 10px; border-bottom: 2px solid #e2e8f0; color: #64748b; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
-.usage-table td { padding: 8px 10px; border-bottom: 1px solid #f1f5f9; color: #374151; }
-.usage-table tr:last-child td { border-bottom: none; }
-.call-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
-.call-badge.item { background: #dbeafe; color: #1d4ed8; }
-.call-badge.full { background: #ede9fe; color: #7c3aed; }
-.cost-cell { font-weight: 600; color: #1e293b; }
+/* Inspection accordion */
+.inspections-list h4 { font-size: 13px; font-weight: 700; color: #374151; margin-bottom: 8px; }
+.insp-row-wrap { border-radius: 8px; overflow: hidden; margin-bottom: 6px; border: 1px solid #e2e8f0; background: white; }
+.insp-row {
+  width: 100%; display: flex; align-items: center; gap: 10px;
+  padding: 12px 14px; background: white; border: none; cursor: pointer;
+  text-align: left; transition: background 0.1s;
+}
+.insp-row:hover { background: #f8fafc; }
+.insp-chevron {
+  font-size: 16px; color: #94a3b8; font-weight: 700; flex-shrink: 0;
+  transition: transform 0.18s; display: inline-block;
+  transform: rotate(0deg);
+}
+.insp-chevron.open { transform: rotate(90deg); }
+.insp-date { font-size: 12px; color: #94a3b8; white-space: nowrap; flex-shrink: 0; min-width: 80px; }
+.insp-addr { flex: 1; font-size: 14px; font-weight: 500; color: #1e293b; text-align: left; }
+.insp-total { font-size: 15px; font-weight: 700; color: #1e293b; flex-shrink: 0; }
+
+.insp-breakdown { border-top: 1px solid #f1f5f9; background: #f8fafc; padding: 4px 0 6px; }
+.breakdown-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 14px 8px 40px;
+}
+.breakdown-row + .breakdown-row { border-top: 1px solid #f1f5f9; }
+.breakdown-icon { font-size: 13px; flex-shrink: 0; }
+.breakdown-label { flex: 1; font-size: 13px; color: #475569; }
+.breakdown-meta { font-size: 12px; color: #94a3b8; white-space: nowrap; }
+.breakdown-cost { font-size: 13px; font-weight: 600; color: #475569; flex-shrink: 0; min-width: 56px; text-align: right; }
 
 .info-panel { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px; padding: 20px 24px; margin-bottom: 28px; }
 .info-panel h3 { font-size: 15px; font-weight: 700; color: #1e3a8a; margin-bottom: 16px; }

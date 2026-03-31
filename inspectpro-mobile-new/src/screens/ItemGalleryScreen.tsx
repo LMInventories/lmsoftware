@@ -257,9 +257,10 @@ export default function ItemGalleryScreen() {
 
         try {
           const res = await api.classifyPhoto({
-            imageBase64: base64,
-            mimeType: 'image/jpeg',
-            roomContext: roomContextStr,
+            imageBase64:  base64,
+            mimeType:     'image/jpeg',
+            roomContext:  roomContextStr,
+            inspectionId: inspectionId,
           })
           const parsed = res.data
           const suggestion: AiSuggestion = {

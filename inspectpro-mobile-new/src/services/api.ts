@@ -88,7 +88,7 @@ export const api = {
     httpAi.post('/api/transcribe/room', data),
 
   // AI photo classification (for reassign)
-  classifyPhoto: (data: { imageBase64: string; mimeType: string; roomContext: string }) =>
+  classifyPhoto: (data: { imageBase64: string; mimeType: string; roomContext: string; inspectionId?: string | number }) =>
     httpAi.post('/api/transcribe/classify-photo', data),
 
   checkAiStatus: () =>

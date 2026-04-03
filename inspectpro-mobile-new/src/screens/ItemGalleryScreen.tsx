@@ -227,6 +227,8 @@ export default function ItemGalleryScreen() {
       const sections: any[] = tmplData.sections || []
       // Constrain to current room only — photos should only move within the same room
       const thisSection = sections.find((s: any) => String(s.id) === sectionKey)
+      // rd must be declared before roomContextStr so description/condition hints can be included
+      const rd = JSON.parse(activeInspection?.report_data || '{}')
       // Include any filled-in description text so AI has both item names and textual context
       const roomContextStr = thisSection
         ? `Room: "${thisSection.name}" (key: ${sectionKey})\n` +
@@ -241,7 +243,6 @@ export default function ItemGalleryScreen() {
       const selectedPhotos = getPhotos().filter(u => selected.has(u))
       const suggestions: AiSuggestion[] = []
       const autoMoved: string[] = []
-      const rd = JSON.parse(activeInspection?.report_data || '{}')
 
       for (const photoUri of selectedPhotos) {
         // Support both legacy data: URIs and new file:// URIs

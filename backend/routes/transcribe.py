@@ -823,52 +823,84 @@ def _claude_fill_fixed_section(transcript: str, section_name: str, section_type:
         for item in items
     )
 
+    # Build section-specific instructions AND a concrete example output so the model
+    # can follow by example rather than abstract description.
+    # The \\n in field_example strings becomes a literal \n in the prompt, which is
+    # exactly the JSON escape sequence needed to produce a newline in the field value.
+
     if section_type == 'condition_summary':
-        field_schema = '{"condition": "one or more lines of condition text"}'
         field_instructions = (
             'Extract the condition observations into "condition". '
-            'If multiple points are made, put each on its own line using \\n. '
+            'Each separate observation MUST go on its own line — use the \\n escape sequence between them. '
+            'NEVER run multiple observations together as a single sentence. '
             'Use the EXACT words the clerk spoke.'
+        )
+        field_example = (
+            '{\n'
+            '  "42": {"condition": "Some wear to carpet throughout\\nScuff marks to base of walls\\nDoor handle loose"}\n'
+            '}'
         )
     elif section_type == 'cleaning_summary':
-        field_schema = '{"cleanlinessNotes": "one or more lines of notes"}'
         field_instructions = (
             'The clerk mentions the CATEGORY or LINE NAME first (e.g. "flooring", "kitchen surfaces"), '
-            'then describes the cleanliness issue. Use the category name as the chapter heading to match '
-            'the correct item, then fill "cleanlinessNotes" with the observation that follows. '
-            'If multiple points are made for one item, put each on its own line using \\n. '
+            'then describes the cleanliness observation. Match the category name to the closest item, '
+            'then fill "cleanlinessNotes" with the observation that follows. '
+            'Each separate observation MUST go on its own line — use the \\n escape sequence between them. '
+            'NEVER run multiple observations together as a single sentence. '
             'Use the EXACT words the clerk spoke.'
+        )
+        field_example = (
+            '{\n'
+            '  "55": {"cleanlinessNotes": "Grease marks to hob surface\\nLight limescale to sink taps"}\n'
+            '}'
         )
     elif section_type in ('fire_door_safety', 'health_safety', 'smoke_alarms'):
-        field_schema = '{"notes": "one or more lines of notes", "answer": "Yes or No or empty string"}'
         field_instructions = (
             'Extract observations into "notes". '
+            'Each separate observation MUST go on its own line — use the \\n escape sequence between them. '
             'If the clerk gives a yes/no answer (e.g. "yes", "no", "working", "not working"), '
-            'put "Yes" or "No" in "answer"; otherwise leave it as an empty string. '
-            'If multiple note points, put each on its own line using \\n. '
+            'put "Yes" or "No" in "answer"; otherwise leave "answer" as an empty string. '
             'Use the EXACT words the clerk spoke.'
         )
+        field_example = (
+            '{\n'
+            '  "61": {"notes": "Fitted to ceiling in hallway\\nTested and working", "answer": "Yes"}\n'
+            '}'
+        )
     elif section_type == 'keys':
-        field_schema = '{"description": "one or more lines listing keys"}'
         field_instructions = (
             'Extract key descriptions into "description". '
-            'Format each key type as "N x [key type]" on its own line using \\n. '
+            'Each key TYPE must be on its own line — use the \\n escape sequence between them. '
+            'Format each line as "N x [key type]". '
             'Convert spoken numbers to numerals ("two" → "2"). '
             'Use the EXACT words the clerk spoke.'
         )
+        field_example = (
+            '{\n'
+            '  "70": {"description": "2 x front door keys\\n1 x rear gate key\\n1 x window key"}\n'
+            '}'
+        )
     elif section_type == 'meter_readings':
-        field_schema = '{"locationSerial": "Located to [location]\\nSerial Number: [number]", "reading": "meter reading value"}'
         field_instructions = (
             'The clerk provides explicit headings for each meter (e.g. "Gas meter", "Electricity meter", '
-            '"Water meter"). Use the clerk\'s stated heading to match the correct item by name, then fill: '
-            '"locationSerial" with the location and serial number formatted as '
+            '"Water meter"). Match the heading to the closest item by name. Then fill: '
+            '"locationSerial" — the location on the FIRST line and serial number on the SECOND line, '
+            'separated by the \\n escape sequence, formatted EXACTLY as: '
             '"Located to [location]\\nSerial Number: [number]" (omit whichever part is not mentioned); '
-            '"reading" with the numeric reading value only. '
+            '"reading" — the numeric reading value only, no units. '
+            'CRITICAL: locationSerial MUST use \\n between the Located line and the Serial Number line — '
+            'never put them on a single line separated by a space or comma. '
             'Use the EXACT words the clerk spoke for location and serial number descriptions.'
         )
+        field_example = (
+            '{\n'
+            '  "81": {"locationSerial": "Located to entrance hallway storage cupboard\\nSerial Number: AB123456", "reading": "8234.5"},\n'
+            '  "82": {"locationSerial": "Located to kitchen utility area\\nSerial Number: GX987654", "reading": "1045"}\n'
+            '}'
+        )
     else:
-        field_schema = '{"notes": "..."}'
         field_instructions = 'Extract all observations into "notes". Use the EXACT words the clerk spoke.'
+        field_example = '{\n  "<itemId>": {"notes": "Observation text here"}\n}'
 
     prompt = f"""You are processing a UK property inventory inspection dictation for a fixed section.
 
@@ -895,10 +927,15 @@ RULES:
 6. Use British English spelling for any connecting words.
 7. Capitalise the first word of each line.
 
-Return ONLY valid JSON — no markdown, no extra text:
-{{
-  "<itemId>": {field_schema}
-}}"""
+LINE BREAKS — THIS IS CRITICAL:
+Use the JSON escape sequence \\n (backslash + n) inside string values whenever a new line is needed.
+NEVER collapse multiple pieces of information into a single run-on sentence.
+Follow the example output format EXACTLY.
+
+Example output format for this section type:
+{field_example}
+
+Return ONLY valid JSON matching that shape — no markdown, no extra text, real item IDs only."""
 
     message = client.messages.create(
         model='claude-haiku-4-5',

@@ -884,7 +884,7 @@ export default function RoomInspectionScreen() {
                 onChangeText={v => setField(item.id, 'description', v)}
                 placeholder="Describe item appearance, state, notes…"
                 placeholderTextColor={colors.textLight}
-                multiline numberOfLines={3} textAlignVertical="top"
+                multiline textAlignVertical="top"
               />
             </View>
             {item.hasCondition !== false && (
@@ -896,7 +896,7 @@ export default function RoomInspectionScreen() {
                   onChangeText={v => setField(item.id, 'condition', v)}
                   placeholder="e.g. Good, Fair, Worn, Damaged…"
                   placeholderTextColor={colors.textLight}
-                  multiline numberOfLines={2} textAlignVertical="top"
+                  multiline textAlignVertical="top"
                 />
               </View>
             )}
@@ -913,7 +913,7 @@ export default function RoomInspectionScreen() {
               onChangeText={v => setField(item.id, 'condition', v)}
               placeholder="Describe condition…"
               placeholderTextColor={colors.textLight}
-              multiline numberOfLines={2} textAlignVertical="top"
+              multiline textAlignVertical="top"
             />
           </View>
         )}
@@ -935,7 +935,7 @@ export default function RoomInspectionScreen() {
               value={getField(item.id, 'notes')}
               onChangeText={v => setField(item.id, 'notes', v)}
               placeholder="Notes…" placeholderTextColor={colors.textLight}
-              multiline numberOfLines={2} textAlignVertical="top"
+              multiline textAlignVertical="top"
             />
           </View>
         )}
@@ -965,7 +965,7 @@ export default function RoomInspectionScreen() {
               value={getField(item.id, 'cleanlinessNotes')}
               onChangeText={v => setField(item.id, 'cleanlinessNotes', v)}
               placeholder="Additional notes…" placeholderTextColor={colors.textLight}
-              multiline numberOfLines={2} textAlignVertical="top"
+              multiline textAlignVertical="top"
             />
           </View>
         )}
@@ -980,7 +980,22 @@ export default function RoomInspectionScreen() {
               onChangeText={v => setField(item.id, 'description', v)}
               placeholder="e.g. 2 × Yale keys…"
               placeholderTextColor={colors.textLight}
-              multiline numberOfLines={2} textAlignVertical="top"
+              multiline textAlignVertical="top"
+            />
+          </View>
+        )}
+
+        {/* Location / serial */}
+        {item.hasLocationSerial && (
+          <View style={styles.fieldGroup}>
+            <Text style={styles.fieldLabel}>Location / Serial</Text>
+            <TextInput
+              style={styles.notesInput}
+              value={getField(item.id, 'locationSerial')}
+              onChangeText={v => setField(item.id, 'locationSerial', v)}
+              placeholder={'Located to [location]\nSerial Number: [number]'}
+              placeholderTextColor={colors.textLight}
+              multiline textAlignVertical="top"
             />
           </View>
         )}
@@ -995,19 +1010,6 @@ export default function RoomInspectionScreen() {
               onChangeText={v => setField(item.id, 'reading', v)}
               placeholder="e.g. 12345.6" placeholderTextColor={colors.textLight}
               keyboardType="decimal-pad"
-            />
-          </View>
-        )}
-
-        {/* Location / serial */}
-        {item.hasLocationSerial && (
-          <View style={styles.fieldGroup}>
-            <Text style={styles.fieldLabel}>Location / Serial</Text>
-            <TextInput
-              style={[styles.notesInput, styles.inlineInput]}
-              value={getField(item.id, 'locationSerial')}
-              onChangeText={v => setField(item.id, 'locationSerial', v)}
-              placeholder="e.g. Hallway / SN123456" placeholderTextColor={colors.textLight}
             />
           </View>
         )}
@@ -1038,7 +1040,7 @@ export default function RoomInspectionScreen() {
                     onChangeText={v => setSubField(item.id, sub._sid, 'description', v)}
                     placeholder="Describe sub-item…"
                     placeholderTextColor={colors.textLight}
-                    multiline numberOfLines={2} textAlignVertical="top"
+                    multiline textAlignVertical="top"
                   />
                 </View>
                 <View style={styles.fieldGroup}>
@@ -1049,7 +1051,7 @@ export default function RoomInspectionScreen() {
                     onChangeText={v => setSubField(item.id, sub._sid, 'condition', v)}
                     placeholder="e.g. Good, Fair, Worn…"
                     placeholderTextColor={colors.textLight}
-                    multiline numberOfLines={2} textAlignVertical="top"
+                    multiline textAlignVertical="top"
                   />
                 </View>
                 {/* Per-sub-item recorder — AI typist only */}

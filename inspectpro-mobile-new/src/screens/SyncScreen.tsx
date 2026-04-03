@@ -200,11 +200,26 @@ export default function SyncScreen() {
         }
         // Admins/managers: no auto-transition
 
-        await api.updateInspection(id, payload)
+        await api.syncInspection(id, payload)
         await markSynced(id)
         res.push({ id, address: inspection.property_address, success: true })
       } catch (err: any) {
-        const msg = err.response?.data?.error || err.message || 'Network error'
+        let msg = 'Network error'
+        if (err.code === 'ECONNABORTED' || err.message?.includes('timeout')) {
+          msg = 'Upload timed out — the payload may be too large or the server is slow. Try again on Wi-Fi.'
+        } else if (err.response?.status === 413) {
+          msg = 'Payload too large — try syncing with fewer photos or shorter audio.'
+        } else if (err.response?.status === 401 || err.response?.status === 403) {
+          msg = 'Authentication error — please log out and back in.'
+        } else if (err.response?.status >= 500) {
+          msg = `Server error (${err.response.status}) — please try again shortly.`
+        } else if (err.response?.data?.error) {
+          msg = err.response.data.error
+        } else if (err.message && err.message !== 'Network Error') {
+          msg = err.message
+        } else if (!err.response) {
+          msg = 'No internet connection — check your network and try again.'
+        }
         res.push({ id, address: inspection.property_address, success: false, error: msg })
       }
     }

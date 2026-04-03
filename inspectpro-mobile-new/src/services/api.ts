@@ -10,6 +10,15 @@ const http = axios.create({
   timeout: 30000,
 })
 
+// Dedicated instance for sync uploads — large payloads (photos + audio) need a longer timeout.
+// Render free tier also has a cold-start delay, so we give it 5 minutes.
+const httpSync = axios.create({
+  baseURL: BASE_URL,
+  timeout: 300000,  // 5 minutes
+  maxContentLength: Infinity,
+  maxBodyLength: Infinity,
+})
+
 // Separate instance with a longer timeout for AI audio endpoints
 const httpAi = axios.create({
   baseURL: BASE_URL,
@@ -21,6 +30,17 @@ httpAi.interceptors.request.use(async (config) => {
   if (token) config.headers.Authorization = `Bearer ${token}`
   return config
 })
+
+httpSync.interceptors.request.use(async (config) => {
+  const token = await SecureStore.getItemAsync('token')
+  if (token) config.headers.Authorization = `Bearer ${token}`
+  return config
+})
+
+httpSync.interceptors.response.use(
+  (response) => response,
+  (error) => Promise.reject(error)
+)
 
 httpAi.interceptors.response.use(
   (response) => response,
@@ -60,6 +80,10 @@ export const api = {
 
   updateInspection: (id: number, data: any) =>
     http.put(`/api/inspections/${id}`, data),
+
+  // Use the long-timeout sync instance for large payloads (photos + audio)
+  syncInspection: (id: number, data: any) =>
+    httpSync.put(`/api/inspections/${id}`, data),
 
   // Templates
   getTemplate: (id: number) =>

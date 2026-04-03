@@ -201,14 +201,30 @@ export default function RoomSelectionScreen() {
       {
         text: 'Delete', style: 'destructive',
         onPress: async () => {
-          const fresh = await getLocalInspection(inspectionId)
-          const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
-          delete rd[key]
-          if (rd['_roomNames']) delete rd['_roomNames'][key]
-          if (rd['_customRooms']) rd['_customRooms'] = rd['_customRooms'].filter((r: any) => r.key !== key)
-          if (rd['_roomOrder'])  rd['_roomOrder']  = rd['_roomOrder'].filter((k: string) => k !== key)
-          await setReportData(inspectionId, rd)
-          await loadInspection(inspectionId)
+          try {
+            const fresh = getLocalInspection(inspectionId)
+            const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+
+            // Clear data for this room key
+            delete rd[key]
+            if (rd['_roomNames']) delete rd['_roomNames'][key]
+
+            // Remove from custom rooms list (if it was a custom room)
+            if (rd['_customRooms']) rd['_customRooms'] = rd['_customRooms'].filter((r: any) => r.key !== key)
+
+            // Remove from ordering list
+            if (rd['_roomOrder']) rd['_roomOrder'] = rd['_roomOrder'].filter((k: string) => k !== key)
+
+            // For template rooms the key comes from the template and won't be in
+            // _customRooms — track it in _hiddenRooms so buildOrderedRooms() filters it out.
+            if (!rd['_hiddenRooms']) rd['_hiddenRooms'] = []
+            if (!rd['_hiddenRooms'].includes(key)) rd['_hiddenRooms'].push(key)
+
+            setReportData(inspectionId, rd)
+            loadInspection(inspectionId)
+          } catch (e) {
+            Alert.alert('Delete failed', 'Could not delete the room. Please try again.')
+          }
         },
       },
     ])
@@ -261,14 +277,19 @@ export default function RoomSelectionScreen() {
   }
 
   function buildOrderedRooms(): RoomEntry[] {
+    const hidden: string[] = rd['_hiddenRooms'] || []
     const all: RoomEntry[] = [
-      ...templateSections.map((s: any, i: number) => ({
-        key: String(s.id),
-        name: roomNames[String(s.id)] || s.name,
-        templateSectionId: s.id,
-        sectionIndex: i + 1,
-      })),
-      ...customRooms.map(r => ({ key: r.key, name: r.name })),
+      ...templateSections
+        .filter((s: any) => !hidden.includes(String(s.id)))
+        .map((s: any, i: number) => ({
+          key: String(s.id),
+          name: roomNames[String(s.id)] || s.name,
+          templateSectionId: s.id,
+          sectionIndex: i + 1,
+        })),
+      ...customRooms
+        .filter(r => !hidden.includes(r.key))
+        .map(r => ({ key: r.key, name: r.name })),
     ]
     const order: string[] = rd['_roomOrder'] || []
     if (!order.length) return all

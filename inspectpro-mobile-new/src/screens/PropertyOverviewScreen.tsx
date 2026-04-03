@@ -52,8 +52,23 @@ export default function PropertyOverviewScreen() {
     if (result.canceled) return
 
     const uri = result.assets[0].uri
-    const reportData = inspection.report_data ? JSON.parse(inspection.report_data) : {}
-    reportData._overview_photo = uri
+    await updateItemInReport(inspectionId, '_overview', 'photo', { uri })
+    Alert.alert('Photo saved', 'Overview photo has been saved locally.')
+  }
+
+  async function handlePickOverviewFromGallery() {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
+    if (status !== 'granted') { Alert.alert('Permission required', 'Photo library permission is needed to select photos.'); return }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.85,
+      base64: false,
+      allowsEditing: false,
+    })
+    if (result.canceled) return
+
+    const uri = result.assets[0].uri
     await updateItemInReport(inspectionId, '_overview', 'photo', { uri })
     Alert.alert('Photo saved', 'Overview photo has been saved locally.')
   }
@@ -169,17 +184,24 @@ export default function PropertyOverviewScreen() {
 
       <ScrollView contentContainerStyle={styles.scroll}>
         {/* Overview photo */}
-        <TouchableOpacity style={styles.photoArea} onPress={handleTakeOverviewPhoto} activeOpacity={0.85}>
+        <TouchableOpacity
+          style={styles.photoArea}
+          onPress={handleTakeOverviewPhoto}
+          onLongPress={handlePickOverviewFromGallery}
+          delayLongPress={400}
+          activeOpacity={0.85}
+        >
           {overviewPhoto ? (
             <Image source={{ uri: overviewPhoto }} style={styles.overviewImage} />
           ) : (
             <View style={styles.photoPlaceholder}>
               <Text style={styles.photoPlaceholderIcon}>📷</Text>
-              <Text style={styles.photoPlaceholderText}>Tap to take overview photo</Text>
+              <Text style={styles.photoPlaceholderText}>Tap to take photo</Text>
+              <Text style={styles.photoPlaceholderHint}>Hold to select from gallery</Text>
             </View>
           )}
           <View style={styles.photoOverlay}>
-            <Text style={styles.photoOverlayText}>📷 Overview Photo</Text>
+            <Text style={styles.photoOverlayText}>📷  Tap — Camera  ·  Hold — Gallery</Text>
           </View>
         </TouchableOpacity>
 
@@ -319,6 +341,7 @@ const styles = StyleSheet.create({
   },
   photoPlaceholderIcon: { fontSize: 40, marginBottom: spacing.sm },
   photoPlaceholderText: { fontSize: font.sm, color: colors.textLight },
+  photoPlaceholderHint: { fontSize: font.xs, color: colors.textLight, opacity: 0.6, marginTop: 4 },
   photoOverlay: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
     backgroundColor: 'rgba(0,0,0,0.45)',

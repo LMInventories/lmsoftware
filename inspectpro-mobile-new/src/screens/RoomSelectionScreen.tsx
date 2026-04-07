@@ -21,13 +21,15 @@ type Route = RouteProp<RootStackParamList, 'RoomSelection'>
 
 function inferType(cols: string[]): string {
   const c = cols || []
-  if (c.includes('reading'))                                                 return 'meter_readings'
-  if (c.includes('cleanliness'))                                             return 'cleaning_summary'
-  if (c.includes('name') && c.includes('answer') && c.includes('question')) return 'fire_door_safety'
-  if (c.includes('answer') && c.includes('question'))                       return 'smoke_alarms'
-  if (c.includes('answer') && c.includes('name'))                           return 'smoke_alarms'
-  if (c.includes('condition'))                                               return 'condition_summary'
-  if (c.includes('description'))                                             return 'keys'
+  if (c.includes('reading'))                                                   return 'meter_readings'
+  if (c.includes('cleanliness'))                                               return 'cleaning_summary'
+  // answer-based checks must come before condition/description
+  if (c.includes('name') && c.includes('answer') && c.includes('question'))   return 'fire_door_safety'
+  if (c.includes('answer') && c.includes('question'))                         return 'smoke_alarms'
+  if (c.includes('answer') && c.includes('description'))                      return 'health_safety'
+  if (c.includes('answer') && c.includes('name'))                             return 'smoke_alarms'
+  if (c.includes('condition'))                                                 return 'condition_summary'
+  if (c.includes('description'))                                               return 'keys'
   return 'condition_summary'
 }
 

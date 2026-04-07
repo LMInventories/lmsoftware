@@ -93,8 +93,14 @@ def _fetch_image(url: str, max_w_mm: float, max_h_mm: float):
     if not url:
         return None
     try:
-        req  = urllib.request.Request(url, headers={'User-Agent': 'InspectPro/1.0'})
-        data = urllib.request.urlopen(req, timeout=8).read()
+        if url.startswith('data:'):
+            # Base64 data URI — decode directly (used for photos synced from mobile)
+            import base64 as _b64
+            _, b64data = url.split(',', 1)
+            data = _b64.b64decode(b64data)
+        else:
+            req  = urllib.request.Request(url, headers={'User-Agent': 'InspectPro/1.0'})
+            data = urllib.request.urlopen(req, timeout=8).read()
         buf  = io.BytesIO(data)
         img  = RLImage(buf)
         w_pt = max_w_mm * mm
@@ -262,9 +268,13 @@ class _PDFBuilder:
     def _ordered_items(self, room):
         room_rd_key = str(room['id'])   # rooms keyed by String(section.id) in report_data
         stored  = (self.rd.get(room_rd_key) or {}).get('_itemOrder', None)
-        tmpl    = [dict(i, _type='template', label=i.get('name','')) for i in (room.get('sections') or [])]
+        # Filter items deleted by the clerk on mobile
+        deleted = set(str(d) for d in ((self.rd.get(room_rd_key) or {}).get('_deleted', []) or []))
+        tmpl    = [dict(i, _type='template', label=i.get('name','')) for i in (room.get('sections') or [])
+                   if str(i.get('id', '')) not in deleted]
         extras  = [dict(ex, id=ex.get('_eid'), label=ex.get('label') or ex.get('name','New item'), _type='extra')
-                   for ex in ((self.rd.get(room_rd_key) or {}).get('_extra', []) or [])]
+                   for ex in ((self.rd.get(room_rd_key) or {}).get('_extra', []) or [])
+                   if str(ex.get('_eid', '')) not in deleted]
         all_items = tmpl + extras
         if not stored:
             return all_items

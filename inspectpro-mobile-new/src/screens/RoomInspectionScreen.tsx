@@ -198,6 +198,9 @@ export default function RoomInspectionScreen() {
 
         // Also load any extra items saved in report_data._extra
         const savedRd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+        // Filter out template items that were explicitly deleted by the clerk
+        const deletedIds: string[] = savedRd[sectionKey]?._deleted || []
+        const filteredTemplateItems = templateItems.filter((i: any) => !deletedIds.includes(i.id))
         const extras: any[] = (savedRd[sectionKey]?._extra || []).map((e: any) => ({
           id: e._eid,
           label: e.name || '',
@@ -207,7 +210,7 @@ export default function RoomInspectionScreen() {
           custom: true,
         }))
 
-        setItems([...templateItems, ...extras])
+        setItems([...filteredTemplateItems, ...extras])
         setLoading(false)
         return
       }
@@ -652,10 +655,14 @@ export default function RoomInspectionScreen() {
     setItems(prev => prev.filter(i => i.id !== itemId))
     const fresh = await getLocalInspection(inspectionId)
     const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
-    if (rd[sectionKey]) {
-      delete rd[sectionKey][String(itemId)]
-      if (rd[sectionKey]['_extra']) rd[sectionKey]['_extra'] = rd[sectionKey]['_extra'].filter((e: any) => e._eid !== itemId)
-    }
+    if (!rd[sectionKey]) rd[sectionKey] = {}
+    // Remove item data if it exists
+    if (rd[sectionKey][String(itemId)]) delete rd[sectionKey][String(itemId)]
+    // Remove from _extra if it was a custom item
+    if (rd[sectionKey]['_extra']) rd[sectionKey]['_extra'] = rd[sectionKey]['_extra'].filter((e: any) => e._eid !== itemId)
+    // Track deleted template items so they don't reappear when the screen reloads
+    if (!rd[sectionKey]['_deleted']) rd[sectionKey]['_deleted'] = []
+    if (!rd[sectionKey]['_deleted'].includes(itemId)) rd[sectionKey]['_deleted'].push(itemId)
     await setReportData(inspectionId, rd)
   }
 

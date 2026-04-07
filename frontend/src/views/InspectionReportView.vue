@@ -1128,15 +1128,15 @@ function getCI(sectionId, rowId, field) {
 
 function _inferType(cols) {
   const c = cols || []
-  if (c.includes('reading'))                         return 'meter_readings'
-  if (c.includes('cleanliness'))                     return 'cleaning_summary'
-  if (c.includes('condition'))                       return 'condition_summary'
-  // Has both name + question/answer → fire door style table
-  if (c.includes('name') && c.includes('answer') && c.includes('question')) return 'fire_door_safety'
-  // Question-led (no name col, or question is primary) → smoke alarms style
-  if (c.includes('answer') && c.includes('question'))  return 'smoke_alarms'
-  if (c.includes('answer') && c.includes('name'))      return 'smoke_alarms'
-  if (c.includes('description'))                     return 'keys'
+  if (c.includes('reading'))                                                   return 'meter_readings'
+  if (c.includes('cleanliness'))                                               return 'cleaning_summary'
+  // answer-based checks must come before condition/description (mirrors backend _infer_type)
+  if (c.includes('name') && c.includes('answer') && c.includes('question'))   return 'fire_door_safety'
+  if (c.includes('answer') && c.includes('question'))                         return 'smoke_alarms'
+  if (c.includes('answer') && c.includes('description'))                      return 'health_safety'
+  if (c.includes('answer') && c.includes('name'))                             return 'smoke_alarms'
+  if (c.includes('condition'))                                                 return 'condition_summary'
+  if (c.includes('description'))                                               return 'keys'
   return 'condition_summary'
 }
 
@@ -1255,10 +1255,16 @@ function hideItem(roomId, itemId) {
 // ── Ordered room items (template items + extras, respecting stored order) ──
 function getOrderedRoomItems(room) {
   const storedOrder = reportData.value[room.id]?._itemOrder
-  const templateItems = (room.sections || []).map(item => ({ ...item, _type: 'template' }))
-  const extraItems = (reportData.value[room.id]?._extra || []).map(ex => ({
-    ...ex, id: ex._eid, label: ex.label || 'New item', _type: 'extra'
-  }))
+  // Filter items deleted by the clerk on mobile
+  const deletedIds = new Set((reportData.value[room.id]?._deleted || []).map(String))
+  const templateItems = (room.sections || [])
+    .filter(item => !deletedIds.has(String(item.id)))
+    .map(item => ({ ...item, _type: 'template' }))
+  const extraItems = (reportData.value[room.id]?._extra || [])
+    .filter(ex => !deletedIds.has(String(ex._eid)))
+    .map(ex => ({
+      ...ex, id: ex._eid, label: ex.label || 'New item', _type: 'extra'
+    }))
   const all = [...templateItems, ...extraItems]
 
   if (!storedOrder || storedOrder.length === 0) return all

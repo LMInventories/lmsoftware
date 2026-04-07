@@ -61,6 +61,11 @@ def inspection_detail(inspection):
                 'logo': inspection.property.client.logo,
                 'primary_color': inspection.property.client.primary_color,
                 'report_disclaimer': inspection.property.client.report_disclaimer,
+                'report_color_override':    inspection.property.client.report_color_override,
+                'report_header_text_color': inspection.property.client.report_header_text_color,
+                'report_body_text_color':   inspection.property.client.report_body_text_color,
+                'report_orientation':       inspection.property.client.report_orientation,
+                'report_photo_settings':    inspection.property.client.report_photo_settings,
             }
 
     if inspection.inspector:

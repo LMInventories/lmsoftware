@@ -32,9 +32,10 @@ const photoUploading = ref(false)
 const localPhoto = ref(null)
 
 // PDF export
-const showPdfExport = ref(false)
-const pdfTemplate   = ref(null)
-const pdfReportData = ref({})
+const showPdfExport      = ref(false)
+const pdfTemplate        = ref(null)
+const pdfReportData      = ref({})
+const pdfClientSettings  = ref({})
 
 const editForms = ref({
   conduct_date: '',
@@ -325,6 +326,14 @@ async function openPdfExport() {
   try {
     const iRes = await api.getInspection(inspection.value.id)
     const fresh = iRes.data
+    // Fetch full client settings directly so colour/branding fields are always present
+    const clientId = fresh.client?.id || inspection.value?.client?.id
+    if (clientId) {
+      const cRes = await api.getClient(clientId)
+      pdfClientSettings.value = cRes.data || {}
+    } else {
+      pdfClientSettings.value = fresh.client || {}
+    }
     let tpl = null
     if (fresh.template_id) {
       const tRes = await api.getTemplate(fresh.template_id)
@@ -932,7 +941,7 @@ onMounted(() => {
         :inspection="inspection"
         :template="pdfTemplate"
         :report-data="pdfReportData"
-        :client-settings="inspection.client || {}"
+        :client-settings="pdfClientSettings"
         @close="showPdfExport = false"
       />
 

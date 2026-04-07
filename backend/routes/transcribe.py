@@ -720,27 +720,61 @@ SPLITTING description vs condition:
 
 HOW TO PARSE EACH ITEM — follow this algorithm exactly:
 
-STEP 1: When the clerk says an item name (chapter heading), everything that follows is for that item.
-STEP 2: Collect description words until you hit a CONDITION SIGNAL phrase.
-STEP 3: The condition signal (and anything immediately after it describing state) = CONDITION for the current element.
-STEP 4: If MORE TEXT follows that condition signal (before the next item name is spoken), it is ALWAYS a NEW sub-item.
-         → Go back to STEP 2 for the new sub-item.
-STEP 5: Repeat for as many sub-items as appear.
+STEP 1: When the clerk says an item name (CHAPTER HEADING), start collecting for that item.
+STEP 2: Collect words as DESCRIPTION for the current element, until you hit a CONDITION SIGNAL PHRASE.
+STEP 3: When you hit a CONDITION SIGNAL PHRASE, it IMMEDIATELY closes the description.
+         The condition signal PLUS any location qualifiers that follow ("to [place]", "at [place]",
+         "near [place]", "throughout", "on [place]") = the CONDITION for the current element.
+         Keep collecting into the condition until you reach a new DESCRIPTIVE TERM or the next chapter heading.
+STEP 4: After a condition closes, if the next word is a DESCRIPTIVE TERM (material, colour, surface, quantity),
+         it starts a NEW ELEMENT → a "_subs" entry with its own description and condition.
+         → Go back to STEP 2 for the new element.
+STEP 5: Repeat for as many elements as the clerk describes.
 
 The first element = the main item fields ("description" + "condition").
-Each subsequent element = a "_subs" entry with its own "description" and "condition".
+Each additional element = a "_subs" entry.
 
-CONDITION SIGNAL PHRASES — these close the current element:
+CONDITION SIGNAL PHRASES — these close the current element's description:
   State phrases:  "in good order", "in fair order", "in poor order", "good order", "fair order",
                   "poor order", "as new", "as inventory", "in good condition", "in fair condition",
                   "in poor condition", "in clean condition"
-  Defect phrases: "light scuffing", "chipped", "cracked", "stained", "marked", "damaged",
-                  "worn", "faded", "scratched", "some wear", "fair wear and tear",
-                  "scuff to", "chip to", "crack to", "stain to", "mark to"
+  Defect phrases: "light scuffing", "light scratching", "light marking", "light staining",
+                  "chipped", "cracked", "stained", "marked", "damaged", "worn", "faded",
+                  "scratched", "some wear", "fair wear and tear",
+                  "scuff to", "chip to", "crack to", "stain to", "mark to", "scratch to"
 
-THE GOLDEN RULE: A condition signal phrase ENDS the current element.
-  Any description text that follows before the next chapter heading ALWAYS starts a new sub-item.
-  NEVER merge post-condition text back into the main item's description.
+══════════════════════════════════════════════════════
+CRITICAL LOCATION QUALIFIER RULE — read this carefully
+══════════════════════════════════════════════════════
+The words "to [location]", "at [location]", "near [location]", or "on [location]" that
+IMMEDIATELY FOLLOW a defect/state phrase are PART OF THE CONDITION.
+They tell you WHERE the defect is. They are NEVER the start of a new element.
+
+  ✓ CORRECT: "light scuffing to right hand side wall"
+      → condition: "Light scuffing to right hand side wall"
+      → "right hand side wall" is the scuffing's location — NOT a new sub-item description.
+
+  ✓ CORRECT: "chip to base of door"
+      → condition: "Chip to base of door"
+
+  ✓ CORRECT: "marked to left hand wall"
+      → condition: "Marked to left hand wall"
+
+A new element ONLY starts when a NEW DESCRIPTIVE TERM appears (material, colour, surface,
+quantity) AFTER the condition has fully closed.
+
+══════════════════════════════════════════════════════
+THE GOLDEN RULE — what triggers a new sub-item
+══════════════════════════════════════════════════════
+A new sub-item is created ONLY when, after a condition closes, the clerk begins describing
+a DIFFERENT surface or component with its own descriptive words.
+
+  ✓ Creates sub-item: "Green painted [condition closes] … White painted …"
+      (new colour = new element)
+  ✓ Creates sub-item: "White UPVC door, in good order … White painted frame, light scuffing"
+      (new component = new element)
+  ✗ Does NOT create sub-item: "light scuffing to right hand side wall"
+      ("right hand side wall" is a location qualifier, not a new component)
 
 MULTI-COMPONENT (no sub-item): When the clerk lists several parts of the SAME thing and
   gives ONE condition phrase at the end covering everything:
@@ -749,13 +783,28 @@ MULTI-COMPONENT (no sub-item): When the clerk lists several parts of the SAME th
     condition:   "In good order"
   This is NOT a sub-item — everything shares one condition phrase.
 
-EXAMPLE — 2 elements → main + 1 sub-item:
+WORKED EXAMPLES:
+
+EXAMPLE 1 — Two walls, each with its own condition → main + 1 sub-item:
+  Transcript: "Walls. Green painted, in good order. White painted, light scuffing to right hand side wall."
+  Parsing:
+    "green painted" → description of element 1
+    "in good order" → condition signal → closes element 1 description → condition: "In good order"
+    "white painted" → new descriptive term → starts element 2 (sub-item)
+    "light scuffing to right hand side wall" → condition of element 2
+       ("right hand side wall" = location of scuffing, stays in condition)
+  → main:   description="Green painted"   condition="In good order"
+  → sub[0]: description="White painted"   condition="Light scuffing to right hand side wall"
+  ✗ WRONG would be: merging "green painted" + "white painted" into one description
+  ✗ WRONG would be: making "right hand side wall" a sub-item description
+
+EXAMPLE 2 — Door and frame with different conditions → main + 1 sub-item:
   "Door and frame. White UPVC door, chrome lever handle … in good order.
    White painted timber frame, chrome hinges … light scuffing to base."
-  → main:   description="White UPVC door\nChrome lever handle"  condition="In good order"
-  → sub[0]: description="White painted timber frame\nChrome hinges"  condition="Light scuffing to base"
+  → main:   description="White UPVC door\nChrome lever handle"           condition="In good order"
+  → sub[0]: description="White painted timber frame\nChrome hinges"      condition="Light scuffing to base"
 
-EXAMPLE — 3 elements → main + 2 sub-items:
+EXAMPLE 3 — Three elements → main + 2 sub-items:
   "Window and frame. White UPVC frame, chrome handle … in good order.
    White net curtain … in good order.
    White roller blind … one slat cracked."
@@ -763,10 +812,15 @@ EXAMPLE — 3 elements → main + 2 sub-items:
   → sub[0]: description="White net curtain"                condition="In good order"
   → sub[1]: description="White roller blind"               condition="One slat cracked"
 
-EXAMPLE — all components share one condition → NOT a sub-item:
+EXAMPLE 4 — Multiple components, ONE shared condition → NOT a sub-item:
   "Ceiling. White emulsion, coving to perimeter … in good order."
   → description="White emulsion\nCoving to perimeter"  condition="In good order"
-  (No further text after the condition → no sub-item needed.)
+  (No text after the condition → no sub-item needed.)
+
+EXAMPLE 5 — Defect with location qualifier → ONE element, no sub-item:
+  "Walls. White emulsion. Light scuffing to base of wall throughout."
+  → description="White emulsion"   condition="Light scuffing to base of wall throughout"
+  ("to base of wall throughout" qualifies the location → all stays in condition)
 
 Return ONLY valid JSON — no markdown, no extra text.
 Items without sub-items use the flat shape. Items WITH sub-items include the "_subs" array:

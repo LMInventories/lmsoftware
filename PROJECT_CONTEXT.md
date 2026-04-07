@@ -28,7 +28,7 @@ The product was previously branded "LM Inventories". Rebranding to InspectPro is
 - **AI:** OpenAI Whisper (`whisper-1`) for transcription, Anthropic Claude (`claude-haiku-4-5`) for report filling, Claude Opus for photo classification
 - **Email:** SMTP via `email_service.py` with fully inline table-based HTML (Outlook-compatible)
 - **PDF:** ReportLab for server-side auto-generation
-- **Deployment:** Render (free tier — cold starts expected; `DATABASE_URL` env var is critical)
+- **Deployment:** Railway (`DATABASE_URL` env var is critical)
 - **Connection string format:** `postgresql+psycopg://` (not `postgresql://`)
 
 ### Frontend (Web)
@@ -62,15 +62,15 @@ The product was previously branded "LM Inventories". Rebranding to InspectPro is
 
 | Layer | Repo/Source | Deployed At |
 |---|---|---|
-| Backend | `backend/` in monorepo | `https://lmsoftware.onrender.com` |
+| Backend | `backend/` in monorepo | `https://lmsoftware-production.up.railway.app` |
 | Frontend | `frontend/` in monorepo | `https://app.lminventories.co.uk` |
 | Mobile | Separate project, own git repo | EAS builds at expo.dev |
 
-**Backend deploy:** `git push` to main → Render auto-deploys.
+**Backend deploy:** `git push` to main → Railway auto-deploys.
 **Frontend deploy:** `git push` to main → Vercel auto-deploys.
 **Mobile deploy:** `eas build --platform android --profile preview --clear-cache` → APK download link.
 
-Critical env vars on Render:
+Critical env vars on Railway:
 - `DATABASE_URL` — PostgreSQL connection string (must be set or app falls back to ephemeral SQLite)
 - `OPENAI_API_KEY` — Whisper transcription
 - `ANTHROPIC_API_KEY` — Claude report fill + photo classification
@@ -365,7 +365,7 @@ const aiMode = typistIsAi || typistMode === 'ai_instant' || typistMode === 'ai_p
 ## 11. Known Gotchas & Hard-Won Lessons
 
 ### Backend
-- `DATABASE_URL` must be explicitly set on Render — without it, app silently uses ephemeral SQLite and all data is lost on redeploy
+- `DATABASE_URL` must be explicitly set on Railway — without it, app silently uses ephemeral SQLite and all data is lost on redeploy
 - Email calls must always be in `try/except` — never let email failure break an API response
 - Template reorder: always normalise `order_index` before swapping — legacy data may have duplicate indices (all zero)
 - `psycopg[binary]` v3 required for Python 3.14 compatibility; connection string must use `postgresql+psycopg://`
@@ -393,7 +393,7 @@ const aiMode = typistIsAi || typistMode === 'ai_instant' || typistMode === 'ai_p
 
 ---
 
-## 12. Current State (March 2026)
+## 12. Current State (April 2026)
 
 ### Working
 - Web app: full inspection management, template editor, PDF export, email notifications
@@ -407,20 +407,21 @@ const aiMode = typistIsAi || typistMode === 'ai_instant' || typistMode === 'ai_p
 - Item gallery with lightbox, rotate, delete, AI photo reassignment (parallel)
 - Sync back to server
 - Human typist audio bar (`HumanTypistRecorder`) with per-clip playback
-- AI typist banner detection
+- AI typist banner detection and transcription (end-to-end flow working)
+- Backend migrated to Railway (from Render)
+- Client portal: frontend login page exists; forgot-password email flow has backend trigger
 
 ### In Progress / Known Issues
-- **AI typist transcription:** Banner shows correctly but `onRecordingComplete` callback from `AudioRecorderWidget` may not be receiving a valid URI from `stopRecording()`. Debug logging added — check adb logcat for `[AI Typist]` and `[useAudioRecorder]` prefixes.
-- **Camera debug overlay:** A debug overlay (yellow text showing device counts, physicalDevices, UW flags) is still present in `CameraScreen.tsx` controls area. Remove once ultra-wide is confirmed stable across target devices.
-- **Ultra-wide on all devices:** Ultra-wide detection confirmed working on the primary test device. Not yet validated on other device models.
+- **AI transcription prompts:** Transcription is working end-to-end but prompt quality needs improvement for better report fill accuracy.
+- **Forgot password (client portal):** The forgot-password link on the client portal login page fails with "Something went wrong. Please try again" — backend route or email flow needs debugging.
+- **Camera debug overlay:** A debug overlay (yellow text showing device counts, physicalDevices, UW flags) is still present in `CameraScreen.tsx` controls area. **Needs to be removed.**
+- **Ultra-wide on all devices:** Working for current use case / primary test device. Broader device compatibility is a future improvement, not a blocker.
 
 ### Pending / Next Tasks
-- Remove camera debug overlay from `CameraScreen.tsx` once ultra-wide confirmed stable
-- Debug AI typist transcription: confirm URI is reaching `transcribeItem` and API call succeeds (adb logcat test needed)
-- Client portal frontend (backend email trigger exists, frontend login not yet built)
-- Railway migration from Render (backend only; keep Vercel for frontend)
+- Remove camera debug overlay from `CameraScreen.tsx`
+- Debug and fix forgot-password flow on client portal (returns "Something went wrong")
+- Improve AI transcription prompts for better report fill quality
 - EAS Update integration for JS-only patches without full rebuild
-- Get ultra-wide working on a wider range of Android devices
 
 ---
 
@@ -617,7 +618,7 @@ cd inspectpro-mobile-new
 npm install --legacy-peer-deps
 npx expo start
 ```
-Scan QR with Expo Go (SDK 55). API URL hardcoded in `src/services/api.ts` as `https://lmsoftware.onrender.com`
+Scan QR with Expo Go (SDK 55). API URL hardcoded in `src/services/api.ts` as `https://lmsoftware-production.up.railway.app`
 
 ### Building Mobile APK
 ```bash

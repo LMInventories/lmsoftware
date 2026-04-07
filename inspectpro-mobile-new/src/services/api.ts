@@ -2,8 +2,7 @@ import axios from 'axios'
 import * as SecureStore from 'expo-secure-store'
 
 // Set EXPO_PUBLIC_API_URL in your .env or EAS secrets to override.
-// e.g. EXPO_PUBLIC_API_URL=https://inspectpro-backend.up.railway.app
-const BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'https://lmsoftware.onrender.com'
+const BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'https://lmsoftware-production.up.railway.app'
 
 const http = axios.create({
   baseURL: BASE_URL,
@@ -11,7 +10,6 @@ const http = axios.create({
 })
 
 // Dedicated instance for sync uploads — large payloads (photos + audio) need a longer timeout.
-// Render free tier also has a cold-start delay, so we give it 5 minutes.
 const httpSync = axios.create({
   baseURL: BASE_URL,
   timeout: 300000,  // 5 minutes

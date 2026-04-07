@@ -21,6 +21,7 @@
         "image": "ubuntu-22.04-jdk-17-ndk-r26b"
       },
       "env": {
+        "EXPO_PUBLIC_API_URL": "https://lmsoftware-production.up.railway.app",
         "GRADLE_OPTS": "-Dkotlin.compiler.execution.strategy=in-process -Dorg.gradle.daemon=false"
       }
     },
@@ -31,6 +32,7 @@
         "image": "ubuntu-22.04-jdk-17-ndk-r26b"
       },
       "env": {
+        "EXPO_PUBLIC_API_URL": "https://lmsoftware-production.up.railway.app",
         "GRADLE_OPTS": "-Dkotlin.compiler.execution.strategy=in-process -Dorg.gradle.daemon=false"
       }
     }

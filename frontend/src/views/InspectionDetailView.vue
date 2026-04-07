@@ -354,12 +354,15 @@ const previewTemplate = computed(() => {
 })
 
 const previewBranding = computed(() => ({
-  primaryColor: inspection.value?.client?.primary_color || '#1E3A8A',
-  clientName:   inspection.value?.client?.name || 'Client',
-  logoText:     (inspection.value?.client?.name || 'CL').split(' ').map(w => w[0]).join('').slice(0,2).toUpperCase(),
-  logoUrl:      inspection.value?.client?.logo || null,
-  photoUrl:     localPhoto.value || inspection.value?.property?.overview_photo || null,
-  disclaimer:   inspection.value?.client?.report_disclaimer || null,
+  primaryColor:    inspection.value?.client?.primary_color || '#1E3A8A',
+  reportColor:     inspection.value?.client?.report_color_override || inspection.value?.client?.primary_color || '#1E3A8A',
+  headerTextColor: inspection.value?.client?.report_header_text_color || '#FFFFFF',
+  bodyTextColor:   inspection.value?.client?.report_body_text_color   || '#1e293b',
+  clientName:      inspection.value?.client?.name || 'Client',
+  logoText:        (inspection.value?.client?.name || 'CL').split(' ').map(w => w[0]).join('').slice(0,2).toUpperCase(),
+  logoUrl:         inspection.value?.client?.logo || null,
+  photoUrl:        localPhoto.value || inspection.value?.property?.overview_photo || null,
+  disclaimer:      inspection.value?.client?.report_disclaimer || null,
 }))
 
 onMounted(() => {
@@ -478,13 +481,13 @@ onMounted(() => {
             ✅ Inspection Complete
           </div>
 
-          <!-- Preview / Export PDF — available from Review onwards -->
+          <!-- Export PDF — available when complete -->
           <button
-            v-if="['review', 'complete'].includes(inspection.status)"
+            v-if="inspection.status === 'complete'"
             @click="openPdfExport"
             class="btn-export-pdf"
           >
-            {{ inspection.status === 'complete' ? '📄 Export PDF' : '📄 Preview PDF' }}
+            📄 Export PDF
           </button>
         </div>
       </div>

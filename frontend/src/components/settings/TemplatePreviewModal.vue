@@ -18,14 +18,17 @@ const emit = defineEmits(['close'])
 
 // Resolved branding — real values fall through, demo values as fallback
 const demoBranding = computed(() => ({
-  primaryColor: props.branding?.primaryColor || '#1E3A8A',
-  clientName:   props.branding?.clientName   || 'Client Name',
-  logoText:     props.branding?.logoText      || '??',
-  hasLogo:      !!(props.branding?.logoUrl),
-  logoUrl:      props.branding?.logoUrl       || null,
-  hasPhoto:     !!(props.branding?.photoUrl),
-  photoUrl:     props.branding?.photoUrl      || null,
-  disclaimer:   props.branding?.disclaimer    || null,
+  primaryColor:    props.branding?.primaryColor    || '#1E3A8A',
+  reportColor:     props.branding?.reportColor     || props.branding?.primaryColor || '#1E3A8A',
+  headerTextColor: props.branding?.headerTextColor || '#FFFFFF',
+  bodyTextColor:   props.branding?.bodyTextColor   || '#1e293b',
+  clientName:      props.branding?.clientName      || 'Client Name',
+  logoText:        props.branding?.logoText        || '??',
+  hasLogo:         !!(props.branding?.logoUrl),
+  logoUrl:         props.branding?.logoUrl         || null,
+  hasPhoto:        !!(props.branding?.photoUrl),
+  photoUrl:        props.branding?.photoUrl        || null,
+  disclaimer:      props.branding?.disclaimer      || null,
 }))
 
 // System-wide fixed sections loaded from /api/fixed-sections
@@ -177,7 +180,7 @@ const cleanlinessOptions = [
         <!-- PAGE 1: COVER PAGE                          -->
         <!-- ═══════════════════════════════════════════ -->
         <div class="page-label">Cover Page</div>
-        <div class="a4-page cover-page" :style="{ '--brand': demoBranding.primaryColor }">
+        <div class="a4-page cover-page" :style="{ '--brand': demoBranding.reportColor, '--hdr-text': demoBranding.headerTextColor }">
           <!-- Full bleed colour top section -->
           <div class="cover-top">
             <!-- Centred logo — 600px wide, no border, auto height -->
@@ -221,7 +224,7 @@ const cleanlinessOptions = [
                 <div class="cover-info-value">CHK-2026-0001</div>
               </div>
             </div>
-            <div class="cover-footer-strip" :style="{ background: demoBranding.primaryColor }">
+            <div class="cover-footer-strip" :style="{ background: demoBranding.reportColor }">
               <span>Prepared by L&amp;M Inventories</span>
               <span>Confidential</span>
             </div>
@@ -232,8 +235,8 @@ const cleanlinessOptions = [
         <!-- PAGE 2: TABLE OF CONTENTS                   -->
         <!-- ═══════════════════════════════════════════ -->
         <div class="page-label">Contents</div>
-        <div class="a4-page" :style="{ '--brand': demoBranding.primaryColor }">
-          <div class="page-header-bar" :style="{ background: demoBranding.primaryColor }">
+        <div class="a4-page" :style="{ '--brand': demoBranding.reportColor, '--hdr-text': demoBranding.headerTextColor }">
+          <div class="page-header-bar" :style="{ background: demoBranding.reportColor }">
             <span class="page-header-title">Table of Contents</span>
             <span class="page-header-logo">{{ demoBranding.logoText }}</span>
           </div>
@@ -303,8 +306,8 @@ const cleanlinessOptions = [
         <!-- PAGE 3: DISCLAIMER                          -->
         <!-- ═══════════════════════════════════════════ -->
         <div class="page-label">Disclaimer</div>
-        <div class="a4-page" :style="{ '--brand': demoBranding.primaryColor }">
-          <div class="page-header-bar" :style="{ background: demoBranding.primaryColor }">
+        <div class="a4-page" :style="{ '--brand': demoBranding.reportColor, '--hdr-text': demoBranding.headerTextColor }">
+          <div class="page-header-bar" :style="{ background: demoBranding.reportColor }">
             <span class="page-header-title">Disclaimer & Terms</span>
             <span class="page-header-logo">{{ demoBranding.logoText }}</span>
           </div>
@@ -344,8 +347,8 @@ const cleanlinessOptions = [
         <!-- ═══════════════════════════════════════════ -->
         <template v-for="(section, sIdx) in enabledFixedSections" :key="'fs-' + sIdx">
           <div class="page-label">{{ section.name }}</div>
-          <div class="a4-page" :style="{ '--brand': demoBranding.primaryColor }">
-            <div class="page-header-bar" :style="{ background: demoBranding.primaryColor }">
+          <div class="a4-page" :style="{ '--brand': demoBranding.reportColor, '--hdr-text': demoBranding.headerTextColor }">
+            <div class="page-header-bar" :style="{ background: demoBranding.reportColor }">
               <span class="page-header-title">{{ section.name }}</span>
               <span class="page-header-logo">{{ demoBranding.logoText }}</span>
             </div>
@@ -514,8 +517,8 @@ const cleanlinessOptions = [
         <!-- ═══════════════════════════════════════════ -->
         <template v-for="(room, rIdx) in enabledRooms" :key="'room-' + rIdx">
           <div class="page-label">Room: {{ room.name }}</div>
-          <div class="a4-page" :style="{ '--brand': demoBranding.primaryColor }">
-            <div class="page-header-bar" :style="{ background: demoBranding.primaryColor }">
+          <div class="a4-page" :style="{ '--brand': demoBranding.reportColor, '--hdr-text': demoBranding.headerTextColor }">
+            <div class="page-header-bar" :style="{ background: demoBranding.reportColor }">
               <span class="page-header-title">{{ room.name }}</span>
               <span class="page-header-logo">{{ demoBranding.logoText }}</span>
             </div>
@@ -884,7 +887,7 @@ const cleanlinessOptions = [
   align-items: center;
   padding: 12px 28px;
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.8);
+  color: var(--hdr-text);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   font-weight: 500;
 }
@@ -901,7 +904,7 @@ const cleanlinessOptions = [
 .page-header-title {
   font-size: 15px;
   font-weight: 700;
-  color: white;
+  color: var(--hdr-text);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   letter-spacing: 0.3px;
 }
@@ -909,7 +912,8 @@ const cleanlinessOptions = [
 .page-header-logo {
   font-size: 13px;
   font-weight: 700;
-  color: rgba(255, 255, 255, 0.7);
+  color: var(--hdr-text);
+  opacity: 0.7;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
 
@@ -1070,7 +1074,7 @@ const cleanlinessOptions = [
   text-align: left;
   font-size: 11px;
   font-weight: 700;
-  color: rgba(255, 255, 255, 0.95);
+  color: var(--hdr-text);
   text-transform: uppercase;
   letter-spacing: 0.5px;
   border: none;

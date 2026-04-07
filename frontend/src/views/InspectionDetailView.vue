@@ -478,13 +478,13 @@ onMounted(() => {
             ✅ Inspection Complete
           </div>
 
-          <!-- Export PDF — available when complete -->
+          <!-- Preview / Export PDF — available from Review onwards -->
           <button
-            v-if="inspection.status === 'complete'"
+            v-if="['review', 'complete'].includes(inspection.status)"
             @click="openPdfExport"
             class="btn-export-pdf"
           >
-            📄 Export PDF
+            {{ inspection.status === 'complete' ? '📄 Export PDF' : '📄 Preview PDF' }}
           </button>
         </div>
       </div>

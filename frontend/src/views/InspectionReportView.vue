@@ -50,10 +50,14 @@ const vAutoResize = {
   mounted(el) {
     el.style.overflow = 'hidden'
     el.style.resize   = 'none'
+    el._arPrev = el.value
     autoResizeEl(el)
-    el.addEventListener('input', () => autoResizeEl(el))
+    el.addEventListener('input', () => { el._arPrev = el.value; autoResizeEl(el) })
   },
   updated(el) {
+    // Only reflow if displayed value actually changed — avoids 22 forced layouts per keystroke
+    if (el._arPrev === el.value) return
+    el._arPrev = el.value
     el.style.overflow = 'hidden'
     autoResizeEl(el)
   }
@@ -1211,7 +1215,29 @@ const rooms = computed(() => {
     sections:    [],   // items are stored as _extra in reportData
   }))
 
-  return [...templateRooms, ...importedRooms]
+  // Pre-compute ordered items once per room so template lookups are O(1)
+  return [...templateRooms, ...importedRooms].map(room => {
+    const storedOrder = reportData.value[room.id]?._itemOrder
+    const deletedIds  = new Set((reportData.value[room.id]?._deleted || []).map(String))
+    const tmplItems   = (room.sections || [])
+      .filter(item => !deletedIds.has(String(item.id)))
+      .map(item => ({ ...item, _type: 'template', _itemKey: String(item.id) }))
+    const extraItems  = (reportData.value[room.id]?._extra || [])
+      .filter(ex => !deletedIds.has(String(ex._eid)))
+      .map(ex => ({ ...ex, id: ex._eid, label: ex.label || 'New item', _type: 'extra', _itemKey: ex._eid }))
+    const all = [...tmplItems, ...extraItems]
+    if (!storedOrder || storedOrder.length === 0) return { ...room, _orderedItems: all }
+    const ordered = []
+    for (const id of storedOrder) {
+      const found = all.find(i => String(i.id) === String(id) || String(i._eid) === String(id))
+      if (found) ordered.push(found)
+    }
+    for (const item of all) {
+      const key = item._type === 'extra' ? item._eid : String(item.id)
+      if (!storedOrder.some(o => String(o) === key)) ordered.push(item)
+    }
+    return { ...room, _orderedItems: ordered }
+  })
 })
 const allSections   = computed(() => [...fixedSections.value, ...rooms.value])
 
@@ -1252,33 +1278,9 @@ function hideItem(roomId, itemId) {
   unsaved.value = true
 }
 
-// ── Ordered room items (template items + extras, respecting stored order) ──
+// ── Ordered room items — result pre-cached in rooms computed, O(1) lookup ──
 function getOrderedRoomItems(room) {
-  const storedOrder = reportData.value[room.id]?._itemOrder
-  // Filter items deleted by the clerk on mobile
-  const deletedIds = new Set((reportData.value[room.id]?._deleted || []).map(String))
-  const templateItems = (room.sections || [])
-    .filter(item => !deletedIds.has(String(item.id)))
-    .map(item => ({ ...item, _type: 'template' }))
-  const extraItems = (reportData.value[room.id]?._extra || [])
-    .filter(ex => !deletedIds.has(String(ex._eid)))
-    .map(ex => ({
-      ...ex, id: ex._eid, label: ex.label || 'New item', _type: 'extra'
-    }))
-  const all = [...templateItems, ...extraItems]
-
-  if (!storedOrder || storedOrder.length === 0) return all
-
-  const ordered = []
-  for (const id of storedOrder) {
-    const found = all.find(i => String(i.id) === String(id) || String(i._eid) === String(id))
-    if (found) ordered.push(found)
-  }
-  for (const item of all) {
-    const key = item._type === 'extra' ? item._eid : String(item.id)
-    if (!storedOrder.some(o => String(o) === key)) ordered.push(item)
-  }
-  return ordered
+  return room._orderedItems || []
 }
 
 function saveRoomItemOrder(roomId, orderedItems) {
@@ -2171,7 +2173,7 @@ async function moveToReview() {
             <!-- All items (template + extra) in drag-sortable order -->
             <div
               v-for="(item, idx) in getOrderedRoomItems(room)"
-              :key="item._type === 'extra' ? item._eid : item.id"
+              :key="item._itemKey"
               class="room-row"
               draggable="true"
               @dragstart="onRoomDragStart(room.id, idx)"
@@ -2181,7 +2183,7 @@ async function moveToReview() {
               <!-- ── Item header bar ── -->
               <div class="item-header-bar">
                 <span class="drag-handle drag-handle-room">⠿</span>
-                <span class="item-ref-num">{{ itemRef(room.id, getOrderedRoomItems(room), item._type === 'extra' ? item._eid : item.id) }}</span>
+                <span class="item-ref-num">{{ roomIndexMap[room.id] }}.{{ idx + 1 }}</span>
                 <template v-if="item._type === 'extra'">
                   <input class="fld-input label-input item-header-name" type="text" placeholder="Item name…"
                     :value="item.label"
@@ -2271,8 +2273,8 @@ async function moveToReview() {
                         <!-- Description — read from Check In (read-only reference) -->
                         <div class="room-field-desc">
                           <label class="field-lbl">Description</label>
-                          <div class="co-inv-value" :class="{ 'co-inv-empty': !getCI(room.id, item._type==='template' ? item.id : item._eid, 'description') }">
-                            {{ getCI(room.id, item._type==='template' ? item.id : item._eid, 'description') || item.label || '—' }}
+                          <div class="co-inv-value" :class="{ 'co-inv-empty': !getCI(room.id, item._itemKey, 'description') }">
+                            {{ getCI(room.id, item._itemKey, 'description') || item.label || '—' }}
                           </div>
                         </div>
                         <!-- Condition at Check In — read-only -->
@@ -2281,8 +2283,8 @@ async function moveToReview() {
                             Condition at Check In
                             <span class="co-inv-badge">Inventory</span>
                           </label>
-                          <div class="co-inv-value" :class="{ 'co-inv-empty': !getCI(room.id, item._type==='template' ? item.id : item._eid, 'condition') }">
-                            {{ getCI(room.id, item._type==='template' ? item.id : item._eid, 'condition') || '—' }}
+                          <div class="co-inv-value" :class="{ 'co-inv-empty': !getCI(room.id, item._itemKey, 'condition') }">
+                            {{ getCI(room.id, item._itemKey, 'condition') || '—' }}
                           </div>
                         </div>
                         <!-- Condition at Check Out — editable -->
@@ -2308,25 +2310,25 @@ async function moveToReview() {
                               : setRoomExtraField(room.id,item._eid,'checkOutCondition',$event.target.value)"></textarea>
                         </div>
                         <!-- Actions picker: shown on desktop always; on mobile toggled by action-trigger-btn -->
-                        <div class="room-field-actions" :class="{ 'actions-expanded': isActionExpanded(room.id, item._type==='extra' ? item._eid : item.id) }">
+                        <div class="room-field-actions" :class="{ 'actions-expanded': isActionExpanded(room.id, item._itemKey) }">
                           <label class="field-lbl">Actions</label>
                           <CheckOutActionPicker
-                            :actions="getItemActions(room.id, item._type==='extra' ? item._eid : item.id)"
+                            :actions="getItemActions(room.id, item._itemKey)"
                             :room-id="room.id"
-                            :item-id="item._type==='extra' ? item._eid : item.id"
+                            :item-id="item._itemKey"
                             :condition-text="item._type==='template'
                               ? get(room.id, item.id, 'checkOutCondition')
                               : (item.checkOutCondition || '')"
-                            @update:actions="val => setItemActions(room.id, item._type==='extra' ? item._eid : item.id, val)"
+                            @update:actions="val => setItemActions(room.id, item._itemKey, val)"
                           />
                         </div>
                         <!-- View Check In photos link -->
                         <div class="room-field-ci-photos">
-                          <button class="btn-ci-photos" @click="openCIPhotos(room.id, item._type==='template' ? item.id : item._eid, item.label)">
+                          <button class="btn-ci-photos" @click="openCIPhotos(room.id, item._itemKey, item.label)">
                             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
                             View Check In photos
-                            <span v-if="(sourceReportData[room.id]?.[String(item._type==='template' ? item.id : item._eid)]?._photos || []).length" class="ci-photo-count">
-                              {{ (sourceReportData[room.id]?.[String(item._type==='template' ? item.id : item._eid)]?._photos || []).length }}
+                            <span v-if="(sourceReportData[room.id]?.[String(item._itemKey)]?._photos || []).length" class="ci-photo-count">
+                              {{ (sourceReportData[room.id]?.[String(item._itemKey)]?._photos || []).length }}
                             </span>
                           </button>
                         </div>
@@ -2334,20 +2336,20 @@ async function moveToReview() {
                       <!-- Buttons stacked to the right -->
                       <div class="item-btn-col">
                         <button class="cam-btn cam-btn-item"
-                          :class="{ 'cam-has': getPhotos(room.id, item._type==='template' ? item.id : item._eid).length }"
-                          @click="togglePanel(room.id, item._type==='template' ? item.id : item._eid)"
+                          :class="{ 'cam-has': getPhotos(room.id, item._itemKey).length }"
+                          @click="togglePanel(room.id, item._itemKey)"
                           title="Photos">
                           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-                          <span v-if="getPhotos(room.id, item._type==='template' ? item.id : item._eid).length" class="cam-count">{{ getPhotos(room.id, item._type==='template' ? item.id : item._eid).length }}</span>
+                          <span v-if="getPhotos(room.id, item._itemKey).length" class="cam-count">{{ getPhotos(room.id, item._itemKey).length }}</span>
                         </button>
                         
                         <button
                           class="cam-btn cam-btn-item action-trigger-btn"
-                          :class="{ 'action-has': getItemActions(room.id, item._type==='extra' ? item._eid : item.id).length }"
-                          @click.stop="toggleActionExpanded(room.id, item._type==='extra' ? item._eid : item.id)"
+                          :class="{ 'action-has': getItemActions(room.id, item._itemKey).length }"
+                          @click.stop="toggleActionExpanded(room.id, item._itemKey)"
                           title="Actions">
                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-                          <span v-if="getItemActions(room.id, item._type==='extra' ? item._eid : item.id).length" class="cam-count action-count">{{ getItemActions(room.id, item._type==='extra' ? item._eid : item.id).length }}</span>
+                          <span v-if="getItemActions(room.id, item._itemKey).length" class="cam-count action-count">{{ getItemActions(room.id, item._itemKey).length }}</span>
                         </button>
                       </div>
                     </div>
@@ -2396,18 +2398,18 @@ async function moveToReview() {
                 </div>
 
                 <!-- Inline photo panel — shown when camera toggled -->
-                <div v-if="isPanelOpen(room.id, item._type==='template' ? item.id : item._eid)" class="photo-panel-inline">
-                  <div v-for="(ph,pi) in getPhotos(room.id, item._type==='template' ? item.id : item._eid)" :key="pi" class="ph-thumb ph-thumb-lg" style="cursor:pointer" @click="openLightbox(room.id, item._type==='template' ? item.id : item._eid,pi)">
+                <div v-if="isPanelOpen(room.id, item._itemKey)" class="photo-panel-inline">
+                  <div v-for="(ph,pi) in getPhotos(room.id, item._itemKey)" :key="pi" class="ph-thumb ph-thumb-lg" style="cursor:pointer" @click="openLightbox(room.id, item._itemKey,pi)">
                     <img :src="ph" class="ph-img-click" />
-                    <button class="ph-del" @click="removePhoto(room.id, item._type==='template' ? item.id : item._eid, pi)">×</button>
+                    <button class="ph-del" @click="removePhoto(room.id, item._itemKey, pi)">×</button>
                   </div>
-                  <button v-if="getPhotos(room.id,item._type==='template' ? item.id : item._eid).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(room.id,item._type==='template' ? item.id : item._eid,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn">
+                  <button v-if="getPhotos(room.id,item._itemKey).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(room.id,item._itemKey,'')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All</button><label class="ph-upload-btn">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
                     Upload photos
                     <input type="file" accept="image/*" multiple style="display:none"
-                      @change="e=>addPhotos(room.id, item._type==='template' ? item.id : item._eid, e.target.files)" />
+                      @change="e=>addPhotos(room.id, item._itemKey, e.target.files)" />
                   </label>
-                  <span class="ph-ref-label">Ref {{ itemRef(room.id, getOrderedRoomItems(room), item._type==='template' ? item.id : item._eid) }}</span>
+                  <span class="ph-ref-label">Ref {{ roomIndexMap[room.id] }}.{{ idx + 1 }}</span>
                 </div>
 
                 <!-- Action bar removed — buttons now inline in item-btn-col -->

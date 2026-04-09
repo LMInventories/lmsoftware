@@ -498,7 +498,11 @@ export default function RoomDictationRecorder({
               </ScrollView>
 
             </Pressable>
-          </      {/* ── Dictation help modal ──────────────────────────────────── */}
+          </Pressable>
+        </GestureHandlerRootView>
+      </Modal>
+
+      {/* ── Dictation help modal ──────────────────────────────────────────── */}
       <Modal
         visible={helpVisible}
         transparent
@@ -560,9 +564,6 @@ export default function RoomDictationRecorder({
               </ScrollView>
             )}
 
-          </Pressable>
-        </Pressable>
-      </Modal>rollView>
           </Pressable>
         </Pressable>
       </Modal>

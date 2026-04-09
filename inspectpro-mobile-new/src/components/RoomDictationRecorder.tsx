@@ -95,6 +95,7 @@ export default function RoomDictationRecorder({
 
   // Help modal
   const [helpVisible, setHelpVisible] = useState(false)
+  const [helpTopic, setHelpTopic]     = useState<string | null>(null)
   const playerRef = useRef<ReturnType<typeof createAudioPlayer> | null>(null)
 
   const timerRef     = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -497,60 +498,71 @@ export default function RoomDictationRecorder({
               </ScrollView>
 
             </Pressable>
-          </Pressable>
-        </GestureHandlerRootView>
-      </Modal>
-
-      {/* ── Dictation help modal ──────────────────────────────────── */}
-      <Modal visible={helpVisible} transparent animationType="fade" onRequestClose={() => setHelpVisible(false)}>
-        <Pressable style={helpModal.overlay} onPress={() => setHelpVisible(false)}>
+          </      {/* ── Dictation help modal ──────────────────────────────────── */}
+      <Modal
+        visible={helpVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => { setHelpTopic(null); setHelpVisible(false) }}
+      >
+        <Pressable
+          style={helpModal.overlay}
+          onPress={() => { setHelpTopic(null); setHelpVisible(false) }}
+        >
           <Pressable style={helpModal.sheet} onPress={e => e.stopPropagation()}>
+
+            {/* ── Header ─────────────────────────────────────────── */}
             <View style={helpModal.header}>
-              <Text style={helpModal.title}>Dictation Guide</Text>
-              <TouchableOpacity onPress={() => setHelpVisible(false)} style={helpModal.closeBtn}>
+              {helpTopic ? (
+                <TouchableOpacity onPress={() => setHelpTopic(null)} style={helpModal.backBtn}>
+                  <Text style={helpModal.backBtnText}>‹</Text>
+                </TouchableOpacity>
+              ) : (
+                <View style={helpModal.backBtn} />
+              )}
+              <Text style={helpModal.title}>
+                {helpTopic
+                  ? HELP_TOPICS.find(t => t.key === helpTopic)?.label ?? 'Help'
+                  : 'Dictation Guide'}
+              </Text>
+              <TouchableOpacity
+                onPress={() => { setHelpTopic(null); setHelpVisible(false) }}
+                style={helpModal.closeBtn}
+              >
                 <Text style={helpModal.closeBtnText}>✕</Text>
               </TouchableOpacity>
             </View>
-            <ScrollView style={helpModal.body} showsVerticalScrollIndicator={false}>
 
-              <HelpSection heading="Starting a chapter">
-                <HelpRow cmd="Door and Frame" note="Say the item name to begin — everything that follows fills that item" />
-                <HelpRow cmd="Ceiling" note="Abbreviations work too — 'Ceiling' matches 'Ceiling & Coving'" />
-              </HelpSection>
+            {/* ── Menu or Detail ─────────────────────────────────── */}
+            {!helpTopic ? (
+              /* MENU */
+              <ScrollView style={helpModal.scroll} showsVerticalScrollIndicator={false}>
+                {HELP_TOPICS.map((topic, i) => (
+                  <TouchableOpacity
+                    key={topic.key}
+                    style={[helpModal.menuRow, i < HELP_TOPICS.length - 1 && helpModal.menuRowBorder]}
+                    onPress={() => setHelpTopic(topic.key)}
+                    activeOpacity={0.65}
+                  >
+                    <Text style={helpModal.menuRowText}>{topic.label}</Text>
+                    <Text style={helpModal.menuRowChevron}>›</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            ) : (
+              /* DETAIL */
+              <ScrollView style={helpModal.scroll} showsVerticalScrollIndicator={false}>
+                <View style={{ paddingBottom: 24 }}>
+                  {HELP_CONTENT[helpTopic]?.map((row, i) => (
+                    <HelpRow key={i} cmd={row.cmd} note={row.note} />
+                  ))}
+                </View>
+              </ScrollView>
+            )}
 
-              <HelpSection heading="Filling description & condition">
-                <HelpRow cmd="White painted door … in good order" note="First part = description, condition phrase closes the item" />
-                <HelpRow cmd="Light scuffing to base" note="A defect after a condition phrase adds to condition" />
-                <HelpRow cmd="White emulsion" note="No condition mentioned → AI defaults to 'In good order'" />
-              </HelpSection>
-
-              <HelpSection heading="Multiple components (same condition)">
-                <HelpRow cmd="White door, white frame, chrome handle … in good order" note="All components share one condition → listed on separate lines, no sub-item" />
-                <HelpRow cmd="Part carpet, part tile … worn to threshold" note="Mixed surfaces with one condition → same rule" />
-              </HelpSection>
-
-              <HelpSection heading="Sub-items (each element has its own condition)">
-                <HelpRow cmd="Walls. White emulsion. In good order. Sub-item. Light scuffing to base." note="Say ‘sub-item’ to explicitly start a new element — the AI closes the current one and begins fresh" />
-                <HelpRow cmd="Door and frame. White UPVC door, chrome handle. In good order. Sub-item. White painted frame. Light scuffing to base." note="‘Sub-item’ separates door from frame → each gets its own description and condition" />
-                <HelpRow cmd="Walls. White emulsion. In good order. Sub-item. White emulsion. Fair wear. Sub-item. White emulsion. Marked." note="Use ‘sub-item’ as many times as needed for multiple elements" />
-              </HelpSection>
-
-              <HelpSection heading="Skipping or deleting an item">
-                <HelpRow cmd="Built-in Storage … None seen" note="Marks the item as not present — AI writes 'None seen'" />
-                <HelpRow cmd="Smoke Alarm … Not applicable" note="Any not-applicable phrase skips the item" />
-              </HelpSection>
-
-              <HelpSection heading="Returning to a previous item">
-                <HelpRow cmd="Return to Door and Frame … add to condition … chipped to mid level" note="Say the item name again — AI appends rather than overwrites if the field already has content" />
-              </HelpSection>
-
-              <HelpSection heading="Tips">
-                <HelpRow cmd="Pause between clips" note="You can record in multiple short clips — they're joined before transcription" />
-                <HelpRow cmd="Speak numbers as words" note="'Two white curtains' → AI writes '2 x white curtains'" />
-                <HelpRow cmd="British English" note="Spellings like 'colour', 'grey', 'metre' are preserved" />
-              </HelpSection>
-
-            </ScrollView>
+          </Pressable>
+        </Pressable>
+      </Modal>rollView>
           </Pressable>
         </Pressable>
       </Modal>
@@ -741,21 +753,91 @@ const modal = StyleSheet.create({
   clipDuration: { fontSize: font.xs, color: 'rgba(255,255,255,0.45)', marginTop: 2 },
 })
 
-// ── Help modal styles & sub-components ────────────────────────────────────────
-function HelpSection({ heading, children }: { heading: string; children: React.ReactNode }) {
-  return (
-    <View style={{ marginBottom: 16 }}>
-      <Text style={{ fontSize: 11, fontWeight: '800', color: '#6366f1', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 8 }}>{heading}</Text>
-      {children}
-    </View>
-  )
+// ── Help topics data ───────────────────────────────────────────────────────
+type HelpTopicKey = 'item' | 'fields' | 'multi' | 'subs' | 'skip' | 'return' | 'tips'
+
+const HELP_TOPICS: { key: HelpTopicKey; label: string }[] = [
+  { key: 'item',   label: 'Dictating an item' },
+  { key: 'fields', label: 'Filling Description & Condition' },
+  { key: 'multi',  label: 'Multiple Components (same condition)' },
+  { key: 'subs',   label: 'Sub-items (each element has its own condition)' },
+  { key: 'skip',   label: 'Skipping or Deleting an Item' },
+  { key: 'return', label: 'Returning to a Previous Item' },
+  { key: 'tips',   label: 'Tips' },
+]
+
+const HELP_CONTENT: Record<string, { cmd: string; note: string }[]> = {
+  item: [
+    { cmd: 'Door and Frame',
+      note: 'Say the item name to begin — everything that follows fills that item until you say the next item name.' },
+    { cmd: 'Ceiling',
+      note: 'Abbreviations and partial names work — "Ceiling" will match "Ceiling & Coving".' },
+    { cmd: 'Walls',
+      note: 'Speak naturally and at a normal pace. The AI handles the structure — you just describe what you see.' },
+  ],
+  fields: [
+    { cmd: 'White painted door … in good order',
+      note: 'Everything before a condition phrase goes into description. The condition phrase and anything after it goes into condition.' },
+    { cmd: 'Light scuffing to base',
+      note: 'A defect phrase also signals the start of the condition field — the location ("to base") stays attached to it.' },
+    { cmd: 'White emulsion',
+      note: 'If you don\'t mention a condition at all, the AI defaults condition to "In good order".' },
+    { cmd: 'Condition phrases',
+      note: '"In good order", "in fair order", "in poor order", "as new", "as inventory", "chipped", "stained", "worn", "light scuffing" — any of these close the description and open the condition.' },
+  ],
+  multi: [
+    { cmd: 'White door, white frame, chrome handle … in good order',
+      note: 'When several components share one condition, list them together and give the condition once at the end. The AI places each component on its own line — no sub-item is created.' },
+    { cmd: 'Part carpet, part tile … worn to threshold',
+      note: 'Mixed surfaces follow the same rule. One condition phrase at the end covers everything.' },
+    { cmd: 'White emulsion ceiling, white emulsion coving to perimeter … in good order',
+      note: 'As many components as you like — the condition at the end applies to all of them.' },
+  ],
+  subs: [
+    { cmd: 'Walls. White emulsion. In good order. Sub-item. Light scuffing to base of wall.',
+      note: 'Say "sub-item" to explicitly close the current element and start a new one. The AI fills each separately.' },
+    { cmd: 'Door and frame. White UPVC door, chrome handle. In good order. Sub-item. White painted frame, chrome hinges. Light scuffing to base.',
+      note: '"Sub-item" separates the door from the frame — each gets its own description and condition.' },
+    { cmd: 'Sub-item. Sub-item.',
+      note: 'Use "sub-item" as many times as needed. Each one opens a new entry beneath the main item.' },
+    { cmd: 'Automatic detection',
+      note: 'If you don\'t say "sub-item", the AI will still try to detect separate elements when it sees a new descriptive term start after a condition closes — but using "sub-item" is more reliable.' },
+  ],
+  skip: [
+    { cmd: 'Built-in storage … None seen',
+      note: 'Saying "none seen" after an item name tells the AI the item is not present. The item will be automatically removed from the report.' },
+    { cmd: 'Smoke alarm … Not applicable',
+      note: '"Not applicable", "N/A", "not present", and "none" all have the same effect — the item is removed.' },
+    { cmd: 'Items can also be deleted manually',
+      note: 'Swipe left on any item in the room list to delete it without dictating.' },
+  ],
+  return: [
+    { cmd: 'Return to Door and Frame … add to condition … chipped to mid level',
+      note: 'Say the item name again at any point to go back to it. If the field already has content, the AI appends rather than overwrites.' },
+    { cmd: 'Amend description …',
+      note: 'Start a new clip with "amend description" or "amend condition" to overwrite that field for the item you then name.' },
+    { cmd: 'Add to description …',
+      note: 'Start a new clip with "add to description" or "add to condition" to append to an existing field.' },
+  ],
+  tips: [
+    { cmd: 'Pause between clips',
+      note: 'Record in as many short clips as you like — they are joined together before transcription. Tap the record button to pause and save a clip, then tap again to continue.' },
+    { cmd: 'Speak numbers as words',
+      note: '"Two white curtains" → the AI writes "2 x white curtains".' },
+    { cmd: 'British English',
+      note: 'Spellings like "colour", "grey", and "metre" are preserved exactly as spoken.' },
+    { cmd: 'Say item names clearly',
+      note: 'Item names are the chapter headings the AI uses to navigate. A clear item name at the start of each section gives the best results.' },
+  ],
 }
 
 function HelpRow({ cmd, note }: { cmd: string; note: string }) {
   return (
-    <View style={{ marginBottom: 8, paddingLeft: 8 }}>
-      <Text style={{ fontSize: 13, fontWeight: '600', color: '#e2e8f0', fontStyle: 'italic', marginBottom: 2 }}>"{cmd}"</Text>
-      <Text style={{ fontSize: 12, color: 'rgba(255,255,255,0.45)', lineHeight: 17 }}>{note}</Text>
+    <View style={{ marginBottom: 16, paddingHorizontal: 20 }}>
+      <Text style={{ fontSize: 14, fontWeight: '600', color: '#e2e8f0', fontStyle: 'italic', marginBottom: 4 }}>
+        "{cmd}"
+      </Text>
+      <Text style={{ fontSize: 13, color: 'rgba(255,255,255,0.55)', lineHeight: 19 }}>{note}</Text>
     </View>
   )
 }
@@ -764,37 +846,79 @@ const helpModal = StyleSheet.create({
   overlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.65)',
-    justifyContent: 'flex-end',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
   },
   sheet: {
     backgroundColor: '#0f172a',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    height: '85%',
-    borderTopWidth: 1,
+    borderRadius: 20,
+    width: '100%',
+    maxHeight: '85%',
+    borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.1)',
+    overflow: 'hidden',
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(255,255,255,0.08)',
   },
   title: {
-    fontSize: 16,
+    flex: 1,
+    fontSize: 15,
     fontWeight: '700',
     color: '#e2e8f0',
+    textAlign: 'center',
+  },
+  backBtn: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  backBtnText: {
+    fontSize: 26,
+    color: '#6366f1',
+    fontWeight: '300',
+    lineHeight: 30,
   },
   closeBtn: {
-    width: 28, height: 28, borderRadius: 14,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     backgroundColor: 'rgba(255,255,255,0.08)',
-    alignItems: 'center', justifyContent: 'center',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   closeBtnText: { fontSize: 13, color: 'rgba(255,255,255,0.5)', fontWeight: '700' },
-  body: {
+  scroll: {
+    flexGrow: 0,
+  },
+  menuRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+  },
+  menuRowBorder: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(255,255,255,0.08)',
+  },
+  menuRowText: {
     flex: 1,
-    padding: 16,
+    fontSize: 14,
+    color: '#e2e8f0',
+    fontWeight: '500',
+  },
+  menuRowChevron: {
+    fontSize: 20,
+    color: 'rgba(255,255,255,0.25)',
+    fontWeight: '300',
+    marginLeft: 8,
   },
 })

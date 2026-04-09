@@ -501,13 +501,31 @@ export default function RoomInspectionScreen() {
   // Called by RoomDictationRecorder when AI returns filled fields.
   // filled = { itemId: { description?, condition?, _subs?: [{description, condition}] } }
   // _subs is created when the AI detects multiple distinct elements within one item chapter.
-  function handleRoomTranscribed(filled: Record<string, Record<string, any>>) {
+  // Phrases that mean the item is not present — triggers auto-deletion
+  const NONE_SEEN_PHRASES = [
+    'none seen', 'not applicable', 'not present', 'none present',
+    'not found', 'n/a', 'none', 'not seen',
+  ]
+  function isNoneSeen(fields: Record<string, any>): boolean {
+    const text = [fields.description, fields.condition].join(' ').toLowerCase().trim()
+    return NONE_SEEN_PHRASES.some(p => text === p || text.startsWith(p + ' ') || text.endsWith(' ' + p))
+  }
+
+  async function handleRoomTranscribed(filled: Record<string, Record<string, any>>) {
     const rd = getReportData()
     if (!rd[sectionKey]) rd[sectionKey] = {}
     let changed = false
     let subItemsCreated = 0
+    const deletedItems: string[] = []
 
     for (const [itemId, fields] of Object.entries(filled)) {
+      // Auto-delete items the clerk marked as not present
+      if (isNoneSeen(fields)) {
+        await deleteItemImmediate(itemId)
+        deletedItems.push(itemId)
+        continue
+      }
+
       if (!rd[sectionKey][itemId]) rd[sectionKey][itemId] = {}
       const row = rd[sectionKey][itemId]
 
@@ -531,13 +549,15 @@ export default function RoomInspectionScreen() {
       }
     }
 
-    if (changed) {
-      setReportData(inspectionId, rd)
-      const itemCount = Object.keys(filled).length
-      const subMsg = subItemsCreated > 0
-        ? ` + ${subItemsCreated} sub-item${subItemsCreated !== 1 ? 's' : ''} created`
-        : ''
-      Alert.alert('✨ Room filled', `AI filled ${itemCount} item${itemCount !== 1 ? 's' : ''} in ${sectionName}${subMsg}.`)
+    const parts: string[] = []
+    const filledCount = Object.keys(filled).length - deletedItems.length
+    if (filledCount > 0) parts.push(`${filledCount} item${filledCount !== 1 ? 's' : ''} filled`)
+    if (subItemsCreated > 0) parts.push(`${subItemsCreated} sub-item${subItemsCreated !== 1 ? 's' : ''} created`)
+    if (deletedItems.length > 0) parts.push(`${deletedItems.length} removed (none seen)`)
+
+    if (changed || deletedItems.length > 0) {
+      if (changed) setReportData(inspectionId, rd)
+      Alert.alert('✨ Room filled', `${parts.join(' · ')} in ${sectionName}.`)
     } else {
       Alert.alert('Already filled', 'All fields mentioned were already filled. Existing content was preserved.')
     }

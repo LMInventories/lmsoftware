@@ -342,7 +342,7 @@ export default function RoomDictationRecorder({
     }
     if (mode === 'idle') {
       return showAiButton
-        ? 'Say each item name then describe it · pause to save a clip'
+        ? 'Say item name, describe, condition · say "sub-item" for each element · pause to save'
         : 'Record your dictation · pause to save clips'
     }
     return ''
@@ -530,8 +530,9 @@ export default function RoomDictationRecorder({
               </HelpSection>
 
               <HelpSection heading="Sub-items (each element has its own condition)">
-                <HelpRow cmd="White venetian blinds … cracked slat [pause] Chrome curtain rail, grey curtains … in good order" note="State a condition after element 1, then describe element 2 — AI creates a sub-item automatically" />
-                <HelpRow cmd="UPVC door, chrome lock … in good order [pause] Painted frame, chrome hinges … light scuffing" note="Door and frame with different conditions → two sub-items" />
+                <HelpRow cmd="Walls. White emulsion. In good order. Sub-item. Light scuffing to base." note="Say ‘sub-item’ to explicitly start a new element — the AI closes the current one and begins fresh" />
+                <HelpRow cmd="Door and frame. White UPVC door, chrome handle. In good order. Sub-item. White painted frame. Light scuffing to base." note="‘Sub-item’ separates door from frame → each gets its own description and condition" />
+                <HelpRow cmd="Walls. White emulsion. In good order. Sub-item. White emulsion. Fair wear. Sub-item. White emulsion. Marked." note="Use ‘sub-item’ as many times as needed for multiple elements" />
               </HelpSection>
 
               <HelpSection heading="Skipping or deleting an item">
@@ -769,11 +770,9 @@ const helpModal = StyleSheet.create({
     backgroundColor: '#0f172a',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
-    maxHeight: '80%',
+    height: '85%',
     borderTopWidth: 1,
     borderColor: 'rgba(255,255,255,0.1)',
-    flex: 0,
-    flexShrink: 1,
   },
   header: {
     flexDirection: 'row',

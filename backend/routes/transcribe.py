@@ -764,7 +764,37 @@ A new element ONLY starts when a NEW DESCRIPTIVE TERM appears (material, colour,
 quantity) AFTER the condition has fully closed.
 
 ══════════════════════════════════════════════════════
-THE GOLDEN RULE — what triggers a new sub-item
+EXPLICIT SUB-ITEM TRIGGER — highest priority rule
+══════════════════════════════════════════════════════
+The clerk may say "sub-item", "sub item", or "next sub-item" to EXPLICITLY signal
+the start of a new element within the current item.
+When you encounter this trigger word:
+  - Immediately close the current element (its description + condition are complete)
+  - Begin collecting a fresh description and condition for the next _subs entry
+  - Do NOT treat "sub-item" itself as part of any description or item name
+
+Example — two-wall room with explicit trigger:
+  "Walls. White emulsion. In good order. Sub-item. Light scuffing to base of wall."
+  → main:   description="White emulsion"  condition="In good order"
+  → sub[0]: description=""               condition="Light scuffing to base of wall"
+
+Example — door and frame with explicit trigger:
+  "Door and frame. White UPVC door, chrome handle. In good order. Sub-item.
+   White painted frame, chrome hinges. Light scuffing to base."
+  → main:   description="White UPVC door\nChrome handle"     condition="In good order"
+  → sub[0]: description="White painted frame\nChrome hinges" condition="Light scuffing to base"
+
+Example — three elements with two triggers:
+  "Walls. White emulsion. In good order. Sub-item. White emulsion. Light scuffing to base.
+   Sub-item. White emulsion. Fair wear and tear."
+  → main:   description="White emulsion"  condition="In good order"
+  → sub[0]: description="White emulsion"  condition="Light scuffing to base"
+  → sub[1]: description="White emulsion"  condition="Fair wear and tear"
+
+When no explicit trigger is used, fall back to the automatic detection rules below.
+
+══════════════════════════════════════════════════════
+THE GOLDEN RULE — what triggers a new sub-item (automatic detection)
 ══════════════════════════════════════════════════════
 A new sub-item is created ONLY when, after a condition closes, the clerk begins describing
 a DIFFERENT surface or component with its own descriptive words.

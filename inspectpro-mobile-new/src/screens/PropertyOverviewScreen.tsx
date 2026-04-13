@@ -11,7 +11,7 @@ import * as ImagePicker from 'expo-image-picker'
 
 import type { RootStackParamList } from '../../App'
 import { useInspectionStore } from '../stores/inspectionStore'
-import { updateLocalStatus, updateInspectionServerStatus, markFinalised, unmarkFinalised } from '../services/database'
+import { updateLocalStatus, updateInspectionServerStatus, markFinalised, unmarkFinalised, updateLocalTypistMode } from '../services/database'
 import { api } from '../services/api'
 import Header from '../components/Header'
 import { colors, font, radius, spacing, TYPE_LABELS } from '../utils/theme'
@@ -280,6 +280,57 @@ export default function PropertyOverviewScreen() {
           <DetailRow label="Typist"     value={inspection.typist_name || '—'} />
         </View>
 
+        {/* Typist mode — clerks can change this per-report without a system-wide setting */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Typist Mode</Text>
+          <Text style={styles.modeHint}>
+            Choose how this report is processed. Changing this here only affects this inspection.
+          </Text>
+          {(
+            [
+              { key: 'ai_instant', label: '⚡ AI Instant',  sub: 'Per-item mic — fills fields immediately on device' },
+              { key: 'ai_room',    label: '🏠 AI by Room',  sub: 'Record the whole room — AI transcribes all items at once' },
+              { key: 'human',      label: '✍️ Human Typist', sub: 'Audio synced to server — typist types the report' },
+            ] as const
+          ).map(opt => {
+            const current = (inspection as any).typist_mode
+            const active  = current === opt.key
+            return (
+              <TouchableOpacity
+                key={opt.key}
+                style={[modeStyles.row, active && modeStyles.rowActive]}
+                onPress={() => {
+                  updateLocalTypistMode(inspectionId, opt.key)
+                  loadInspection(inspectionId)
+                }}
+              >
+                <View style={modeStyles.radio}>
+                  {active && <View style={modeStyles.radioDot} />}
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[modeStyles.label, active && modeStyles.labelActive]}>{opt.label}</Text>
+                  <Text style={modeStyles.sub}>{opt.sub}</Text>
+                </View>
+              </TouchableOpacity>
+            )
+          })}
+          {(() => {
+            const mode = (inspection as any).typist_mode
+            const isAi = mode === 'ai_instant' || mode === 'ai_room' || (inspection as any).typist_is_ai
+            return (
+              <View style={modeStyles.infoBox}>
+                <Text style={modeStyles.infoText}>
+                  {isAi
+                    ? '⚡ Syncing will upload and move directly to Complete — PDF sent automatically.'
+                    : mode === 'human'
+                      ? '✍️ Syncing will send to the typist queue (Processing stage).'
+                      : 'ℹ️ No mode set — will inherit from your profile setting.'}
+                </Text>
+              </View>
+            )
+          })()}
+        </View>
+
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Property Details</Text>
           <DetailRow label="Address"   value={inspection.property_address || '—'} />
@@ -397,4 +448,44 @@ const styles = StyleSheet.create({
     backgroundColor: colors.successLight,
   },
   btnFinalisedText: { color: colors.success, fontSize: font.md, fontWeight: '600' },
+  modeHint: { fontSize: font.xs, color: colors.textLight, marginBottom: spacing.sm, lineHeight: 16 },
+})
+
+const modeStyles = StyleSheet.create({
+  row: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.xs,
+    borderRadius: radius.md,
+    marginBottom: 4,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    backgroundColor: colors.background,
+  },
+  rowActive: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primaryLight,
+  },
+  radio: {
+    width: 18, height: 18, borderRadius: 9,
+    borderWidth: 2, borderColor: colors.borderDark,
+    alignItems: 'center', justifyContent: 'center',
+    marginTop: 2,
+  },
+  radioDot: {
+    width: 8, height: 8, borderRadius: 4,
+    backgroundColor: colors.primary,
+  },
+  label:       { fontSize: font.sm, fontWeight: '700', color: colors.text },
+  labelActive: { color: colors.primary },
+  sub:         { fontSize: font.xs, color: colors.textMid, lineHeight: 16, marginTop: 1 },
+  infoBox: {
+    marginTop: spacing.sm,
+    backgroundColor: colors.muted,
+    borderRadius: radius.sm,
+    padding: spacing.sm,
+  },
+  infoText: { fontSize: font.xs, color: colors.textMid, lineHeight: 16 },
 })

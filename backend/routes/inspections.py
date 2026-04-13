@@ -83,10 +83,14 @@ def inspection_detail(inspection):
             'email':       inspection.typist.email,
             'phone':       inspection.typist.phone,
             'is_ai':       inspection.typist.is_ai,
-            'typist_mode': inspection.typist.typist_mode,  # 'ai_instant'|'ai_room'|'human'|null
+            'typist_mode': inspection.typist.typist_mode,  # clerk-level default
         }
-    result['typist_is_ai']   = inspection.typist.is_ai        if inspection.typist else False
-    result['typist_mode']    = inspection.typist.typist_mode   if inspection.typist else None
+    result['typist_is_ai'] = inspection.typist.is_ai if inspection.typist else False
+    # Per-inspection typist_mode takes precedence; falls back to clerk-level profile value.
+    result['typist_mode'] = (
+        inspection.typist_mode
+        or (inspection.typist.typist_mode if inspection.typist else None)
+    )
 
     if inspection.template:
         result['template_name'] = inspection.template.name
@@ -235,6 +239,7 @@ def create_inspection():
         property_id=data.get('property_id'),
         inspector_id=data.get('inspector_id'),
         typist_id=data.get('typist_id'),
+        typist_mode=data.get('typist_mode'),  # per-inspection mode; None → falls back to clerk default
         template_id=template_id,
         inspection_type=data.get('inspection_type', 'check_in'),
         status='assigned' if data.get('inspector_id') else 'created',
@@ -367,6 +372,8 @@ def update_inspection(inspection_id):
         inspection.tenant_email = data['tenant_email']
     if 'client_email_override' in data:
         inspection.client_email_override = data['client_email_override']
+    if 'typist_mode' in data:
+        inspection.typist_mode = data['typist_mode'] or None  # empty string → null
     if 'report_data' in data:
         inspection.report_data = data['report_data']
 
@@ -403,6 +410,46 @@ def seed_preview(inspection_id):
         return jsonify({'seeded': {}, 'source_type': source.inspection_type})
     seeded = _transform_report_data(source.inspection_type, target_type, source.report_data)
     return jsonify({'seeded': seeded, 'source_type': source.inspection_type, 'source_template_id': source.template_id})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /api/inspections/<id>/preview-pdf
+#
+# Generates the server-side PDF (same as the auto-send on Complete) and returns
+# it as an inline attachment for admin/manager review — without marking the
+# inspection complete or sending any email.  Useful for QA before release.
+# ─────────────────────────────────────────────────────────────────────────────
+@inspections_bp.route('/<int:inspection_id>/preview-pdf', methods=['GET'])
+@jwt_required()
+def preview_pdf(inspection_id):
+    from flask import make_response
+    from routes.pdf_generator import generate_inspection_pdf
+    from permissions import is_admin_or_manager
+
+    user = get_current_user()
+    if not is_admin_or_manager(user):
+        return jsonify({'error': 'Forbidden — only admins and managers may preview PDFs'}), 403
+
+    inspection = Inspection.query.get_or_404(inspection_id)
+    if not inspection.report_data:
+        return jsonify({'error': 'No report data — inspection has not been filled in yet'}), 400
+
+    try:
+        pdf_bytes = generate_inspection_pdf(inspection_id)
+    except Exception as e:
+        import traceback
+        print(traceback.format_exc())
+        return jsonify({'error': f'PDF generation failed: {e}'}), 500
+
+    # Build a descriptive filename
+    addr  = (inspection.property.address if inspection.property else 'inspection').replace(',', '').replace(' ', '_')[:40]
+    itype = inspection.inspection_type or 'report'
+    fname = f'preview_{itype}_{addr}_{inspection_id}.pdf'
+
+    resp = make_response(pdf_bytes)
+    resp.headers['Content-Type']        = 'application/pdf'
+    resp.headers['Content-Disposition'] = f'inline; filename="{fname}"'
+    return resp
 
 
 # ─────────────────────────────────────────────────────────────────────────────

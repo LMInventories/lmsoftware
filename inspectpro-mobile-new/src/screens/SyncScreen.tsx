@@ -157,7 +157,7 @@ export default function SyncScreen() {
         // Status transitions:
         //
         // Clerk + AI typist (ai_instant / ai_room) or typist flagged as AI:
-        //   Fields already filled on-device → skip Processing → go straight to Review
+        //   Fields already filled on-device → proofread on site → go straight to Complete
         //
         // Clerk + human typist (human) or no typist assigned:
         //   Human needs to type from audio → move to Processing so typist can access it
@@ -167,7 +167,9 @@ export default function SyncScreen() {
         //
         // Admin/manager: no auto-transition
         const role = user?.role
-        const typistMode = user?.typist_mode
+        // Per-inspection typist_mode overrides the clerk-level user setting.
+        // Falls back through: inspection column → typist_is_ai flag → null
+        const typistMode = (fresh as any)?.typist_mode ?? null
         // fresh.status is now reliable: updateInspectionServerStatus() patches the
         // data blob when Start Inspection is tapped, so it no longer freezes at the
         // value from download time.
@@ -188,10 +190,13 @@ export default function SyncScreen() {
 
         const isFinalised = !!(fresh as any)?.is_finalised
 
+        // Send per-inspection typist_mode to server so the override is persisted.
+        if (typistMode !== null) payload.typist_mode = typistMode
+
         if (role === 'clerk' && isActive) {
           if (isFinalised) {
-            // Finalised on device: move to processing (human typist) or review (AI typist)
-            payload.status = isAiMode ? 'review' : 'processing'
+            // Finalised on device: AI → Complete (proofread on site), Human → Processing for typist
+            payload.status = isAiMode ? 'complete' : 'processing'
           }
           // Not finalised: upload report data but leave inspection Active on server
         } else if (role === 'typist' && freshStatus === 'processing') {
@@ -245,22 +250,35 @@ export default function SyncScreen() {
 
   // Explain what status transition will happen for this user
   function syncNote() {
-    const typistMode = user?.typist_mode
-    const isAiMode = typistMode === 'ai_instant' || typistMode === 'ai_room'
     const selectedList = syncable.filter(i => selected.has(i.id))
     const anyFinalised = selectedList.some(i => (i as any).is_finalised)
     const allFinalised = selectedList.length > 0 && selectedList.every(i => (i as any).is_finalised)
 
     if (user?.role === 'clerk') {
+      const finalisedList = selectedList.filter(i => (i as any).is_finalised)
+
+      // Per-inspection typist mode: check each finalised inspection individually
+      const isInspAi = (insp: any) => {
+        const mode = insp.typist_mode
+        return mode === 'ai_instant' || mode === 'ai_room' ||
+               insp.typist_is_ai === true ||
+               (insp.typist?.is_ai === true) ||
+               (insp.typist_name || '').toLowerCase().startsWith('ai ')
+      }
+
+      const allAi    = finalisedList.length > 0 && finalisedList.every(isInspAi)
+      const noneAi   = finalisedList.every(i => !isInspAi(i))
+      const mixedAi  = !allAi && !noneAi
+
       if (allFinalised) {
-        return isAiMode
-          ? 'All selected inspections are finalised. Syncing will upload and move to Review.'
-          : 'All selected inspections are finalised. Syncing will upload and move to Processing for the typist.'
+        if (allAi)   return 'All selected inspections are finalised. Syncing will upload and mark Complete.'
+        if (noneAi)  return 'All selected inspections are finalised. Syncing will upload and move to Processing for the typist.'
+        return 'All selected inspections are finalised. AI reports will move to Complete; human-typed reports will move to Processing.'
       }
       if (anyFinalised) {
-        return isAiMode
-          ? 'Finalised inspections will move to Review. Unfinalised inspections will stay Active.'
-          : 'Finalised inspections will move to Processing. Unfinalised inspections will stay Active.'
+        if (allAi)   return 'Finalised inspections will move to Complete. Unfinalised inspections will stay Active.'
+        if (noneAi)  return 'Finalised inspections will move to Processing. Unfinalised inspections will stay Active.'
+        return 'Finalised AI reports will move to Complete; human-typed reports will move to Processing. Unfinalised inspections will stay Active.'
       }
       return 'None of the selected inspections are finalised. Syncing will upload data but leave them Active.'
     }

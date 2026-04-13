@@ -36,6 +36,9 @@ export function initDatabase(): void {
   try { db.runSync('ALTER TABLE audio_recordings ADD COLUMN item_name TEXT') } catch {}
   try { db.runSync("ALTER TABLE audio_recordings ADD COLUMN label TEXT NOT NULL DEFAULT ''") } catch {}
   try { db.runSync('ALTER TABLE inspections ADD COLUMN is_finalised INTEGER NOT NULL DEFAULT 0') } catch {}
+  // Per-inspection typist mode — overrides the clerk-level global setting.
+  // Null means "inherit from clerk profile".  Stored as TEXT: 'ai_instant'|'ai_room'|'human'
+  try { db.runSync('ALTER TABLE inspections ADD COLUMN typist_mode TEXT') } catch {}
 }
 
 export function saveInspection(inspection: any): void {
@@ -58,24 +61,40 @@ export function saveInspection(inspection: any): void {
 }
 
 export function getLocalInspections(): any[] {
-  const rows = db.getAllSync<{ data: string; report_data: string | null; local_status: string; synced: number; is_finalised: number }>(
-    'SELECT data, report_data, local_status, synced, is_finalised FROM inspections ORDER BY downloaded_at DESC'
-  )
-  return rows.map(r => ({
-    ...JSON.parse(r.data),
-    report_data: r.report_data,
-    local_status: r.local_status,
-    synced: r.synced === 1,
-    is_finalised: r.is_finalised === 1,
-  }))
+  const rows = db.getAllSync<{
+    data: string; report_data: string | null; local_status: string;
+    synced: number; is_finalised: number; typist_mode: string | null;
+  }>('SELECT data, report_data, local_status, synced, is_finalised, typist_mode FROM inspections ORDER BY downloaded_at DESC')
+  return rows.map(r => {
+    const base = JSON.parse(r.data)
+    return {
+      ...base,
+      report_data:  r.report_data,
+      local_status: r.local_status,
+      synced:       r.synced === 1,
+      is_finalised: r.is_finalised === 1,
+      // Local typist_mode column wins over the value baked into the data blob,
+      // letting clerks change the mode per-report without re-downloading.
+      typist_mode: r.typist_mode ?? base.typist_mode ?? null,
+    }
+  })
 }
 
 export function getLocalInspection(id: number): any | null {
-  const r = db.getFirstSync<{ data: string; report_data: string | null; local_status: string; synced: number; is_finalised: number }>(
-    'SELECT data, report_data, local_status, synced, is_finalised FROM inspections WHERE id = ?', [id]
-  )
+  const r = db.getFirstSync<{
+    data: string; report_data: string | null; local_status: string;
+    synced: number; is_finalised: number; typist_mode: string | null;
+  }>('SELECT data, report_data, local_status, synced, is_finalised, typist_mode FROM inspections WHERE id = ?', [id])
   if (!r) return null
-  return { ...JSON.parse(r.data), report_data: r.report_data, local_status: r.local_status, synced: r.synced === 1, is_finalised: r.is_finalised === 1 }
+  const base = JSON.parse(r.data)
+  return {
+    ...base,
+    report_data:  r.report_data,
+    local_status: r.local_status,
+    synced:       r.synced === 1,
+    is_finalised: r.is_finalised === 1,
+    typist_mode: r.typist_mode ?? base.typist_mode ?? null,
+  }
 }
 
 export function updateReportData(inspectionId: number, reportData: string): void {
@@ -117,6 +136,19 @@ export function markSynced(inspectionId: number): void {
   db.runSync(
     'UPDATE inspections SET synced = 1, updated_at = ? WHERE id = ?',
     [new Date().toISOString(), inspectionId]
+  )
+}
+
+/**
+ * Override the typist mode for a single inspection locally.
+ * The value is sent to the server as `typist_mode` during the next sync,
+ * allowing clerks to change the mode per-report without a system-wide change.
+ * Pass null to revert to the server/clerk-profile default.
+ */
+export function updateLocalTypistMode(inspectionId: number, mode: string | null): void {
+  db.runSync(
+    'UPDATE inspections SET typist_mode = ?, synced = 0, updated_at = ? WHERE id = ?',
+    [mode, new Date().toISOString(), inspectionId]
   )
 }
 

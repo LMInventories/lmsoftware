@@ -21,6 +21,7 @@ const showEditConductDate = ref(false)
 const showEditTemplate = ref(false)
 const showEditClerk = ref(false)
 const showEditTypist = ref(false)
+const showEditTypistMode = ref(false)
 const showEditKeyLocation = ref(false)
 const showEditKeyReturn = ref(false)
 const showEditNotes = ref(false)
@@ -45,6 +46,7 @@ const editForms = ref({
   template_id: null,
   inspector_id: null,
   typist_id: null,
+  typist_mode: null,
   key_location: '',
   key_return: '',
   internal_notes: '',
@@ -83,7 +85,13 @@ const timePreferenceOptions = [
 const hourOptions = ['09', '10', '11', '12', '13', '14', '15', '16', '17']
 const minuteOptions = ['00', '15', '30', '45']
 
-// ── Status steps (dynamic: Processing only shown when typist assigned) ──
+// ── Status steps ──────────────────────────────────────────────────────────
+// Human reports: full pipeline — Created → Assigned → Active → Processing →
+//                Review → Complete
+// AI reports (ai_instant / ai_room / is_ai typist): skip Processing AND Review.
+//   Clerk fills the report on-device and syncs directly to Complete.
+// No mode set / no typist: skip Processing only; Review still available for
+//   manual manager sign-off before marking complete.
 const allStatusSteps = [
   { key: 'created',    label: 'Created',    icon: '📋' },
   { key: 'assigned',   label: 'Assigned',   icon: '👤' },
@@ -94,10 +102,20 @@ const allStatusSteps = [
 ]
 
 const statusSteps = computed(() => {
-  const hasTypist = !!(inspection.value?.typist_id)
-  return hasTypist
-    ? allStatusSteps
-    : allStatusSteps.filter(s => s.key !== 'processing')
+  const mode    = inspection.value?.typist_mode
+  const isAi    = inspection.value?.typist_is_ai
+  const isAiMode = isAi || mode === 'ai_instant' || mode === 'ai_room'
+  const isHuman  = mode === 'human'
+  if (isAiMode) {
+    // AI reports: active → complete directly — no Processing, no Review
+    return allStatusSteps.filter(s => s.key !== 'processing' && s.key !== 'review')
+  }
+  if (isHuman) {
+    // Human typist: full pipeline
+    return allStatusSteps
+  }
+  // No mode set: omit Processing (no typist typing queue) but keep Review
+  return allStatusSteps.filter(s => s.key !== 'processing')
 })
 
 const currentStepIndex = computed(() => {
@@ -191,7 +209,8 @@ async function fetchInspection() {
 
     editForms.value.template_id = inspection.value.template_id
     editForms.value.inspector_id = inspection.value.inspector?.id || null
-    editForms.value.typist_id = inspection.value.typist?.id || null
+    editForms.value.typist_id   = inspection.value.typist?.id || null
+    editForms.value.typist_mode = inspection.value.typist_mode || null
     editForms.value.key_location = inspection.value.key_location || ''
     editForms.value.key_return = inspection.value.key_return || ''
     editForms.value.internal_notes = inspection.value.internal_notes || ''
@@ -237,6 +256,7 @@ async function updateField(field, value) {
     showEditTemplate.value = false
     showEditClerk.value = false
     showEditTypist.value = false
+    showEditTypistMode.value = false
     showEditKeyLocation.value = false
     showEditKeyReturn.value = false
     showEditNotes.value = false
@@ -344,6 +364,28 @@ async function openPdfExport() {
     showPdfExport.value = true
   } catch {
     toast.error('Failed to load report data for export')
+  }
+}
+
+// ── Server-side PDF preview (admin/manager — no email sent) ────────
+const pdfPreviewing = ref(false)
+async function previewServerPdf() {
+  if (pdfPreviewing.value) return
+  pdfPreviewing.value = true
+  try {
+    // Use the api instance so the Authorization header is sent automatically
+    const resp = await api.get(`/inspections/${inspection.value.id}/preview-pdf`, {
+      responseType: 'blob',
+    })
+    const blob = new Blob([resp.data], { type: 'application/pdf' })
+    const blobUrl = URL.createObjectURL(blob)
+    const win = window.open(blobUrl, '_blank')
+    // Revoke after a short delay so the opened tab has time to load
+    if (win) setTimeout(() => URL.revokeObjectURL(blobUrl), 10_000)
+  } catch (err) {
+    toast.error('PDF preview failed — check the browser console for details')
+  } finally {
+    pdfPreviewing.value = false
   }
 }
 
@@ -481,13 +523,23 @@ onMounted(() => {
             ✅ Inspection Complete
           </div>
 
-          <!-- Export PDF — available when complete -->
+          <!-- Export PDF (JS/browser renderer) — available when complete -->
           <button
             v-if="inspection.status === 'complete'"
             @click="openPdfExport"
             class="btn-export-pdf"
           >
             📄 Export PDF
+          </button>
+
+          <!-- Preview server-generated PDF — admin/manager, any status with report data -->
+          <button
+            v-if="canEdit && inspection.report_data"
+            @click="previewServerPdf"
+            :disabled="pdfPreviewing"
+            class="btn-preview-pdf"
+          >
+            {{ pdfPreviewing ? '⏳ Generating…' : '🖨 Preview PDF' }}
           </button>
         </div>
       </div>
@@ -556,8 +608,29 @@ onMounted(() => {
                 <span>{{ inspection.typist?.name || 'Not assigned' }}</span>
                 <button v-if="canEdit" @click="showEditTypist = true" class="btn-edit-inline">✏️</button>
               </div>
-              <p v-if="!inspection.typist" class="helper-text" style="margin-top:8px;font-size:12px;color:#94a3b8;">
-                ℹ️ No typist — inspection skips Processing and goes directly Active → Review
+              <div class="assignment-row" style="align-items:center;gap:8px;">
+                <strong>Mode:</strong>
+                <span
+                  class="typist-mode-pill"
+                  :class="'tm-' + (inspection.typist_mode || 'none')"
+                >
+                  {{
+                    { ai_instant: '⚡ AI Instant', ai_room: '🏠 AI by Room', human: '✍️ Human Typist' }[inspection.typist_mode]
+                    || '— Not set'
+                  }}
+                </span>
+                <button v-if="canEdit" @click="showEditTypistMode = true" class="btn-edit-inline">✏️</button>
+              </div>
+              <p class="helper-text" style="margin-top:8px;font-size:12px;color:#94a3b8;">
+                <template v-if="inspection.typist_mode === 'ai_instant' || inspection.typist_mode === 'ai_room' || inspection.typist_is_ai">
+                  ⚡ AI report — syncs directly to Complete (no Processing or Review)
+                </template>
+                <template v-else-if="inspection.typist_mode === 'human'">
+                  ✍️ Human typist — full pipeline: Active → Processing → Review → Complete
+                </template>
+                <template v-else>
+                  ℹ️ No mode set — inspection goes Active → Review → Complete (no Processing)
+                </template>
               </p>
             </div>
           </div>
@@ -801,12 +874,40 @@ onMounted(() => {
               </option>
             </select>
             <p class="helper-text" style="margin-top: 12px;">
-              ℹ️ With a typist assigned, inspection will include a Processing stage after Active.
+              ℹ️ Set the typist who will type this report. Use the Mode selector to control AI vs human workflow.
             </p>
           </div>
           <div class="modal-footer">
             <button @click="showEditTypist = false" class="btn-secondary">Cancel</button>
             <button @click="updateField('typist_id', editForms.typist_id)" class="btn-primary">Save</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Edit Typist Mode -->
+      <div v-if="showEditTypistMode" class="modal-overlay" @click.self="showEditTypistMode = false">
+        <div class="modal">
+          <div class="modal-header">
+            <h2>Set Typist Mode</h2>
+            <button @click="showEditTypistMode = false" class="btn-close">✕</button>
+          </div>
+          <div class="modal-body">
+            <select v-model="editForms.typist_mode" class="input-field">
+              <option :value="null">— Inherit from clerk profile</option>
+              <option value="ai_instant">⚡ AI Instant — clerk's per-item mic fills fields on device</option>
+              <option value="ai_room">🏠 AI by Room — whole-room recorder, AI transcribes on device</option>
+              <option value="human">✍️ Human Typist — audio synced to server; typist types the report</option>
+            </select>
+            <div style="margin-top:14px;padding:10px;background:#f8fafc;border-radius:8px;font-size:12px;color:#475569;line-height:1.6;">
+              <strong>⚡ AI Instant / 🏠 AI by Room:</strong> report is completed on device.
+              Syncing moves the inspection straight to <strong>Complete</strong> — PDF is generated and sent automatically.<br><br>
+              <strong>✍️ Human Typist:</strong> audio clips are sent to the typist queue.
+              Full pipeline: Active → Processing → Review → Complete.
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button @click="showEditTypistMode = false" class="btn-secondary">Cancel</button>
+            <button @click="updateField('typist_mode', editForms.typist_mode)" class="btn-primary">Save</button>
           </div>
         </div>
       </div>
@@ -1177,6 +1278,27 @@ onMounted(() => {
   margin-left: auto;
 }
 .btn-export-pdf:hover { filter: brightness(1.15); }
+
+.btn-preview-pdf {
+  padding: 9px 18px;
+  background: #1e40af;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: white;
+  cursor: pointer;
+  transition: filter 0.15s;
+}
+.btn-preview-pdf:hover  { filter: brightness(1.15); }
+.btn-preview-pdf:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* Typist mode pill */
+.typist-mode-pill { display: inline-block; padding: 2px 9px; border-radius: 10px; font-size: 11px; font-weight: 700; }
+.tm-ai_instant  { background: #eef2ff; color: #4338ca; }
+.tm-ai_room     { background: #f0fdf4; color: #166534; }
+.tm-human       { background: #fef3c7; color: #92400e; }
+.tm-none        { background: #f1f5f9; color: #94a3b8; }
 
 /* Content Grid */
 .content-grid {

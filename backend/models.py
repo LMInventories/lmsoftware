@@ -166,6 +166,10 @@ class Inspection(db.Model):
     inspector_id            = db.Column(db.Integer, db.ForeignKey('users.id'))
     typist_id               = db.Column(db.Integer, db.ForeignKey('users.id'))
     template_id             = db.Column(db.Integer, db.ForeignKey('templates.id'))
+    # Per-inspection typist mode — overrides clerk-level setting so clerks can
+    # choose AI Instant / AI by Room / Human Typist per report, not globally.
+    # 'ai_instant' | 'ai_room' | 'human' | null (null = inherit from clerk profile)
+    typist_mode             = db.Column(db.String(20), nullable=True)
 
     tenant_email            = db.Column(db.String(255))
     client_email_override   = db.Column(db.String(255))
@@ -200,6 +204,7 @@ class Inspection(db.Model):
             'typist_id':               self.typist_id,
             'typist_name':             self.typist.name if self.typist else None,
             'typist_is_ai':            self.typist.is_ai if self.typist else False,
+            'typist_mode':             self.typist_mode,
             'template_id':             self.template_id,
             'tenant_email':            self.tenant_email,
             'client_email_override':   self.client_email_override,

@@ -15,8 +15,8 @@
  * • Front/back flip supported with separate device lookup.
  * • Camera paused when screen loses focus (navigation push/pop).
  * • UI buttons rotate with device: the screen stays portrait-locked but
- *   expo-screen-orientation fires on physical rotation — Animated smoothly
- *   spins each button's icon content in-place so it always faces the user.
+ *   expo-sensors Accelerometer reads raw G-force (works despite portrait lock)
+ *   — Animated smoothly spins each button's icon content in-place.
  * • outputOrientation="device" bakes rotation into pixel data so thumbnails
  *   always display upright regardless of per-device EXIF support.
  * • Capture gate released immediately after takePhoto() resolves — file copy
@@ -39,7 +39,7 @@ import {
 import { Camera, useCameraDevice, useCameraPermission } from 'react-native-vision-camera'
 import type { CameraDevice } from 'react-native-vision-camera'
 import * as MediaLibrary from 'expo-media-library'
-import * as ScreenOrientation from 'expo-screen-orientation'
+import { Accelerometer } from 'expo-sensors'
 // expo-file-system/legacy preserves the makeDirectoryAsync / copyAsync API
 import * as FileSystem from 'expo-file-system/legacy'
 import {
@@ -74,19 +74,37 @@ export default function CameraScreen() {
   const { inspectionId } = route.params
 
   // ── Button rotation (physical device orientation) ──────────────────────────
-  // The app is portrait-locked, so the screen never actually rotates.
-  // expo-screen-orientation still fires when the device is physically rotated,
-  // letting us smoothly spin the icon contents so they always face the user.
+  // The app is portrait-locked so expo-screen-orientation's listener NEVER
+  // fires on Android (it uses Dimensions.addEventListener internally, which
+  // only fires on actual layout changes — portrait-lock prevents that).
+  // expo-sensors Accelerometer reads raw hardware G-force regardless of any
+  // orientation lock, so it works reliably on both platforms.
+  // Sign conventions (verified from AccelerometerModule.kt):
+  //   Portrait UP   → y ≈ +1.0  (default)
+  //   Landscape LEFT (CCW, top-left) → x ≈ +1.0  → buttons rotate +90°
+  //   Landscape RIGHT (CW, top-right) → x ≈ -1.0 → buttons rotate -90°
+  //   Portrait DOWN  → y ≈ -1.0 → buttons rotate 180°
   const rotAnim = useRef(new Animated.Value(0)).current
+  const lastOrientRef = useRef<string>('portrait_up')
+  const isFocused = useIsFocused()
 
   useEffect(() => {
-    const sub = ScreenOrientation.addOrientationChangeListener((event) => {
-      const o = event.orientationInfo.orientation
+    if (!isFocused) return
+    Accelerometer.setUpdateInterval(150) // ~6 fps — enough for smooth UI rotation
+    const sub = Accelerometer.addListener(({ x, y }) => {
+      const absX = Math.abs(x)
+      const absY = Math.abs(y)
+      // Require a clearly dominant axis at > 0.6 g to avoid diagonal flicker
+      let orientation: string
+      if (absX > 0.6 && absX > absY * 1.2)      orientation = x > 0 ? 'landscape_left'  : 'landscape_right'
+      else if (absY > 0.6 && absY > absX * 1.2) orientation = y > 0 ? 'portrait_up'     : 'portrait_down'
+      else return // ambiguous tilt — ignore
+      if (orientation === lastOrientRef.current) return
+      lastOrientRef.current = orientation
       let targetDeg = 0
-      if (o === ScreenOrientation.Orientation.LANDSCAPE_LEFT)  targetDeg =  90
-      else if (o === ScreenOrientation.Orientation.LANDSCAPE_RIGHT) targetDeg = -90
-      else if (o === ScreenOrientation.Orientation.PORTRAIT_DOWN)   targetDeg =  180
-
+      if (orientation === 'landscape_left')  targetDeg =  90
+      if (orientation === 'landscape_right') targetDeg = -90
+      if (orientation === 'portrait_down')   targetDeg =  180
       Animated.spring(rotAnim, {
         toValue: targetDeg,
         useNativeDriver: true,
@@ -94,8 +112,8 @@ export default function CameraScreen() {
         tension: 80,
       }).start()
     })
-    return () => ScreenOrientation.removeOrientationChangeListener(sub)
-  }, [])
+    return () => sub.remove()
+  }, [isFocused])
 
   // Each button wraps its icon text in this Animated.View so the label spins
   // while the button shell (and its hit target) stays in place.
@@ -166,9 +184,6 @@ export default function CameraScreen() {
     : lensMode === 'ultraWide' && hasSeparateUltraWide
       ? ultraWideDevice
       : backDevice
-
-  // Camera pauses automatically when screen is not focused
-  const isFocused = useIsFocused()
 
   // ── State ──────────────────────────────────────────────────────────────────
   const cameraRef = useRef<Camera>(null)

@@ -512,6 +512,16 @@ h1 { font-size: 21px; font-weight: 700; color: #0f172a; margin: 0 0 2px; }
     flex-direction: row;
     align-items: center;
   }
+
+  /* Stack At A Glance above Account Statistics */
+  .dash-top {
+    flex-direction: column;
+  }
+
+  .account-stats-wrap {
+    min-width: unset;
+    width: 100%;
+  }
 }
 
 </style>

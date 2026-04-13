@@ -92,8 +92,8 @@ export default function ItemGalleryScreen() {
       if (selecting)   { exitSelect();          return true }
       return false
     }
-    BackHandler.addEventListener('hardwareBackPress', onBack)
-    return () => BackHandler.removeEventListener('hardwareBackPress', onBack)
+    const sub = BackHandler.addEventListener('hardwareBackPress', onBack)
+    return () => sub.remove()
   }, [lightboxUri, selecting])
 
   // Refs that give the PanResponder fresh data without recreating it.

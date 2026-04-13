@@ -111,8 +111,8 @@ export default function CameraScreen() {
   // ── Hardware back button ───────────────────────────────────────────────────
   useFocusEffect(useCallback(() => {
     const onBack = () => { navigation.goBack(); return true }
-    BackHandler.addEventListener('hardwareBackPress', onBack)
-    return () => BackHandler.removeEventListener('hardwareBackPress', onBack)
+    const sub = BackHandler.addEventListener('hardwareBackPress', onBack)
+    return () => sub.remove()
   }, [navigation]))
 
   // ── VisionCamera permission ────────────────────────────────────────────────
@@ -310,13 +310,13 @@ export default function CameraScreen() {
     capturingRef.current = true
     setIsCapturing(true)
     try {
+      // Cast to any: skipMetadata is valid in VisionCamera v4 at runtime but
+      // missing from the bundled type declarations in some patch versions.
       const photo = await cameraRef.current.takePhoto({
         flash,
         enableShutterSound: false,
-        // skipMetadata skips EXIF processing on Android — measurably faster
-        // on lower-end devices. Disable if GPS-tagged photos are ever needed.
         skipMetadata: true,
-      })
+      } as any)
 
       const srcUri = photo.path.startsWith('file://')
         ? photo.path

@@ -1,19 +1,15 @@
-import React, { useState, useCallback, useRef } from 'react'
+import React, { useState, useCallback, useRef, useEffect } from 'react'
 import {
   View, Text, FlatList, TouchableOpacity, StyleSheet,
   Image, Modal, Dimensions, Alert, ActivityIndicator,
-  ScrollView, BackHandler, Animated,
+  ScrollView, BackHandler, Animated, PanResponder,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native'
 import type { StackNavigationProp, RouteProp } from '@react-navigation/stack'
 import * as ImageManipulator from 'expo-image-manipulator'
 import * as FileSystem from 'expo-file-system/legacy'
-import {
-  GestureHandlerRootView,
-  GestureDetector,
-  Gesture,
-} from 'react-native-gesture-handler'
+import { GestureHandlerRootView } from 'react-native-gesture-handler'
 
 import type { RootStackParamList } from '../../App'
 import { useInspectionStore } from '../stores/inspectionStore'
@@ -87,7 +83,10 @@ export default function ItemGalleryScreen() {
   }, []))
 
   // Hardware back button: dismiss lightbox → exit select → default (go back)
-  useFocusEffect(useCallback(() => {
+  // useEffect (not useFocusEffect) so the handler re-registers whenever these
+  // values change — useFocusEffect only fires on screen focus/blur, which
+  // would leave stale lightboxUri/selecting values in the closure.
+  useEffect(() => {
     const onBack = () => {
       if (lightboxUri) { setLightboxUri(null); return true }
       if (selecting)   { exitSelect();          return true }
@@ -95,23 +94,36 @@ export default function ItemGalleryScreen() {
     }
     BackHandler.addEventListener('hardwareBackPress', onBack)
     return () => BackHandler.removeEventListener('hardwareBackPress', onBack)
-  }, [lightboxUri, selecting]))
+  }, [lightboxUri, selecting])
 
-  // Horizontal swipe gesture for lightbox navigation
-  const lightboxSwipe = Gesture.Pan()
-    .runOnJS(true)
-    .activeOffsetX([-20, 20])
-    .failOffsetY([-20, 20])
-    .onEnd((e) => {
-      if (!lightboxUri) return
-      const currentPhotos = getPhotos()
-      const idx = currentPhotos.indexOf(lightboxUri)
-      if (e.translationX < -50 && idx < currentPhotos.length - 1) {
-        setLightboxUri(currentPhotos[idx + 1])
-      } else if (e.translationX > 50 && idx > 0) {
-        setLightboxUri(currentPhotos[idx - 1])
-      }
+  // Refs that give the PanResponder fresh data without recreating it.
+  // lightboxUriRef is kept in sync with state on every render.
+  const lightboxUriRef = useRef<string | null>(null)
+  useEffect(() => { lightboxUriRef.current = lightboxUri }, [lightboxUri])
+
+  // photosRef is updated inline each render (see `photosRef.current = photos` below)
+  const photosRef = useRef<string[]>([])
+
+  // PanResponder for horizontal swipe in the lightbox Modal.
+  // Using PanResponder (native RN) instead of RNGH GestureDetector because
+  // GestureHandlerRootView nested inside a Modal crashes on New Architecture.
+  const lightboxSwipePan = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_, gs) =>
+        Math.abs(gs.dx) > 10 && Math.abs(gs.dx) > Math.abs(gs.dy),
+      onPanResponderRelease: (_, gs) => {
+        const uri = lightboxUriRef.current
+        if (!uri) return
+        const currentPhotos = photosRef.current
+        const idx = currentPhotos.indexOf(uri)
+        if (gs.dx < -50 && idx < currentPhotos.length - 1) {
+          setLightboxUri(currentPhotos[idx + 1])
+        } else if (gs.dx > 50 && idx > 0) {
+          setLightboxUri(currentPhotos[idx - 1])
+        }
+      },
     })
+  ).current
 
   // ── Helpers ────────────────────────────────────────────────────────────────
   function getPhotos(): string[] {
@@ -378,6 +390,8 @@ export default function ItemGalleryScreen() {
   }
 
   const photos = getPhotos()
+  // Keep ref in sync so PanResponder always has fresh photo list
+  photosRef.current = photos
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
@@ -587,61 +601,59 @@ export default function ItemGalleryScreen() {
       </Modal>
 
       {/* ── Lightbox ──────────────────────────────────────────────────────────── */}
+      {/* NOTE: No GestureHandlerRootView inside Modal — that crashes on New Architecture.
+               Swipe uses PanResponder (native RN) instead of RNGH GestureDetector. */}
       <Modal visible={!!lightboxUri} animationType="fade" statusBarTranslucent>
-        <GestureHandlerRootView style={{ flex: 1 }}>
-          <GestureDetector gesture={lightboxSwipe}>
-            <View style={lbS.screen}>
-              {lightboxUri && (
+        <View style={lbS.screen} {...lightboxSwipePan.panHandlers}>
+          {lightboxUri && (
+            <>
+              <TouchableOpacity style={[lbS.closeBtn, { top: insets.top + 12 }]} onPress={() => setLightboxUri(null)}>
+                <Text style={lbS.closeBtnText}>✕</Text>
+              </TouchableOpacity>
+              <View style={[lbS.counter, { top: insets.top + 16 }]}>
+                <Text style={lbS.counterText}>{photos.indexOf(lightboxUri) + 1} / {photos.length}</Text>
+              </View>
+              <Image source={{ uri: lightboxUri }} style={lbS.image} resizeMode="contain" />
+              {rotating && (
+                <View style={lbS.overlay}>
+                  <ActivityIndicator color="#fff" size="large" />
+                  <Text style={lbS.overlayText}>Rotating…</Text>
+                </View>
+              )}
+              <View style={[lbS.actions, { paddingBottom: insets.bottom + spacing.md }]}>
+                <TouchableOpacity style={lbS.actionBtn} onPress={() => handleRotate(lightboxUri, 'ccw')} disabled={rotating}>
+                  <Text style={lbS.actionIcon}>↺</Text>
+                  <Text style={lbS.actionLabel}>Rotate Left</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={lbS.actionBtn} onPress={() => handleRotate(lightboxUri, 'cw')} disabled={rotating}>
+                  <Text style={lbS.actionIcon}>↻</Text>
+                  <Text style={lbS.actionLabel}>Rotate Right</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={lbS.actionBtn} onPress={() => handleDeleteSingle(lightboxUri)}>
+                  <Text style={lbS.actionIcon}>🗑</Text>
+                  <Text style={[lbS.actionLabel, { color: colors.danger }]}>Delete</Text>
+                </TouchableOpacity>
+              </View>
+              {/* Arrow buttons kept alongside swipe — both methods navigate photos */}
+              {photos.length > 1 && (
                 <>
-                  <TouchableOpacity style={[lbS.closeBtn, { top: insets.top + 12 }]} onPress={() => setLightboxUri(null)}>
-                    <Text style={lbS.closeBtnText}>✕</Text>
-                  </TouchableOpacity>
-                  <View style={[lbS.counter, { top: insets.top + 16 }]}>
-                    <Text style={lbS.counterText}>{photos.indexOf(lightboxUri) + 1} / {photos.length}</Text>
-                  </View>
-                  <Image source={{ uri: lightboxUri }} style={lbS.image} resizeMode="contain" />
-                  {rotating && (
-                    <View style={lbS.overlay}>
-                      <ActivityIndicator color="#fff" size="large" />
-                      <Text style={lbS.overlayText}>Rotating…</Text>
-                    </View>
+                  {photos.indexOf(lightboxUri) > 0 && (
+                    <TouchableOpacity style={[lbS.navBtn, lbS.navLeft]}
+                      onPress={() => { const i = photos.indexOf(lightboxUri) - 1; setLightboxUri(photos[i]) }}>
+                      <Text style={lbS.navText}>‹</Text>
+                    </TouchableOpacity>
                   )}
-                  <View style={[lbS.actions, { paddingBottom: insets.bottom + spacing.md }]}>
-                    <TouchableOpacity style={lbS.actionBtn} onPress={() => handleRotate(lightboxUri, 'ccw')} disabled={rotating}>
-                      <Text style={lbS.actionIcon}>↺</Text>
-                      <Text style={lbS.actionLabel}>Rotate Left</Text>
+                  {photos.indexOf(lightboxUri) < photos.length - 1 && (
+                    <TouchableOpacity style={[lbS.navBtn, lbS.navRight]}
+                      onPress={() => { const i = photos.indexOf(lightboxUri) + 1; setLightboxUri(photos[i]) }}>
+                      <Text style={lbS.navText}>›</Text>
                     </TouchableOpacity>
-                    <TouchableOpacity style={lbS.actionBtn} onPress={() => handleRotate(lightboxUri, 'cw')} disabled={rotating}>
-                      <Text style={lbS.actionIcon}>↻</Text>
-                      <Text style={lbS.actionLabel}>Rotate Right</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={lbS.actionBtn} onPress={() => handleDeleteSingle(lightboxUri)}>
-                      <Text style={lbS.actionIcon}>🗑</Text>
-                      <Text style={[lbS.actionLabel, { color: colors.danger }]}>Delete</Text>
-                    </TouchableOpacity>
-                  </View>
-                  {/* Arrow buttons kept alongside swipe — both methods navigate photos */}
-                  {photos.length > 1 && (
-                    <>
-                      {photos.indexOf(lightboxUri) > 0 && (
-                        <TouchableOpacity style={[lbS.navBtn, lbS.navLeft]}
-                          onPress={() => { const i = photos.indexOf(lightboxUri) - 1; setLightboxUri(photos[i]) }}>
-                          <Text style={lbS.navText}>‹</Text>
-                        </TouchableOpacity>
-                      )}
-                      {photos.indexOf(lightboxUri) < photos.length - 1 && (
-                        <TouchableOpacity style={[lbS.navBtn, lbS.navRight]}
-                          onPress={() => { const i = photos.indexOf(lightboxUri) + 1; setLightboxUri(photos[i]) }}>
-                          <Text style={lbS.navText}>›</Text>
-                        </TouchableOpacity>
-                      )}
-                    </>
                   )}
                 </>
               )}
-            </View>
-          </GestureDetector>
-        </GestureHandlerRootView>
+            </>
+          )}
+        </View>
       </Modal>
 
       {/* Auto-fading AI reassign toast — no interaction required */}

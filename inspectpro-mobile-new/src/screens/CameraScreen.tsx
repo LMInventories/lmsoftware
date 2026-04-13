@@ -14,8 +14,9 @@
  *   shooting — no AF re-run before each capture.
  * • Front/back flip supported with separate device lookup.
  * • Camera paused when screen loses focus (navigation push/pop).
- * • Landscape support: controls column shifts to the right side; button labels
- *   rotate 90° so they face the user when holding the device sideways.
+ * • UI buttons rotate with device: the screen stays portrait-locked but
+ *   expo-screen-orientation fires on physical rotation — Animated smoothly
+ *   spins each button's icon content in-place so it always faces the user.
  * • outputOrientation="device" bakes rotation into pixel data so thumbnails
  *   always display upright regardless of per-device EXIF support.
  * • Capture gate released immediately after takePhoto() resolves — file copy
@@ -38,6 +39,7 @@ import {
 import { Camera, useCameraDevice, useCameraPermission } from 'react-native-vision-camera'
 import type { CameraDevice } from 'react-native-vision-camera'
 import * as MediaLibrary from 'expo-media-library'
+import * as ScreenOrientation from 'expo-screen-orientation'
 // expo-file-system/legacy preserves the makeDirectoryAsync / copyAsync API
 import * as FileSystem from 'expo-file-system/legacy'
 import {
@@ -62,30 +64,49 @@ type FlashMode  = 'off' | 'on' | 'auto'
 type Facing     = 'back' | 'front'
 type FocusMode  = 'auto' | 'locked'
 
-// Controls-strip width in landscape mode (px)
-const CONTROLS_STRIP_W = 110
+// Static screen dimensions — never change because app is portrait-locked.
+const SCREEN_W = Dimensions.get('window').width
+const PREVIEW_H = Math.round(SCREEN_W * 4 / 3)
 
 export default function CameraScreen() {
   const navigation = useNavigation<CameraNavProp>()
   const route      = useRoute<CameraRouteProp>()
   const { inspectionId } = route.params
 
-  // ── Orientation tracking ───────────────────────────────────────────────────
-  // Listen for Dimensions changes so the layout adapts when the device rotates.
-  const [windowDims, setWindowDims] = useState(Dimensions.get('window'))
+  // ── Button rotation (physical device orientation) ──────────────────────────
+  // The app is portrait-locked, so the screen never actually rotates.
+  // expo-screen-orientation still fires when the device is physically rotated,
+  // letting us smoothly spin the icon contents so they always face the user.
+  const rotAnim = useRef(new Animated.Value(0)).current
+
   useEffect(() => {
-    const sub = Dimensions.addEventListener('change', ({ window }) => setWindowDims(window))
-    return () => sub.remove()
+    const sub = ScreenOrientation.addOrientationChangeListener((event) => {
+      const o = event.orientationInfo.orientation
+      let targetDeg = 0
+      if (o === ScreenOrientation.Orientation.LANDSCAPE_LEFT)  targetDeg =  90
+      else if (o === ScreenOrientation.Orientation.LANDSCAPE_RIGHT) targetDeg = -90
+      else if (o === ScreenOrientation.Orientation.PORTRAIT_DOWN)   targetDeg =  180
+
+      Animated.spring(rotAnim, {
+        toValue: targetDeg,
+        useNativeDriver: true,
+        friction: 6,
+        tension: 80,
+      }).start()
+    })
+    return () => ScreenOrientation.removeOrientationChangeListener(sub)
   }, [])
 
-  const W = windowDims.width
-  const H = windowDims.height
-  const isLandscape = W > H
-
-  // Portrait: viewfinder = full screen width, 4:3 height
-  // Landscape: viewfinder fills the screen vertically; controls are a side strip
-  const VFINDER_W = isLandscape ? W - CONTROLS_STRIP_W : W
-  const VFINDER_H = isLandscape ? H : Math.round(W * 4 / 3)
+  // Each button wraps its icon text in this Animated.View so the label spins
+  // while the button shell (and its hit target) stays in place.
+  const btnRotStyle = {
+    transform: [{
+      rotate: rotAnim.interpolate({
+        inputRange: [-180, -90, 0, 90, 180],
+        outputRange: ['-180deg', '-90deg', '0deg', '90deg', '180deg'],
+      }),
+    }],
+  }
 
   // ── Hardware back button ───────────────────────────────────────────────────
   useFocusEffect(useCallback(() => {
@@ -223,14 +244,14 @@ export default function CameraScreen() {
   const cycleFocusMode = useCallback(() => {
     if (focusMode === 'auto') {
       setFocusMode('locked')
-      handleFocus(VFINDER_W / 2, VFINDER_H / 2, true)
+      handleFocus(SCREEN_W / 2, PREVIEW_H / 2, true)
     } else {
       setFocusMode('auto')
       focusTimer.current?.stop()
       focusAnim.setValue(0)
       setFocusPoint(null)
     }
-  }, [focusMode, VFINDER_W, VFINDER_H])
+  }, [focusMode])
 
   // ── Lens / zoom buttons ────────────────────────────────────────────────────
   interface LensButton { label: string; zoom: number; lens: 'main' | 'ultraWide' }
@@ -347,9 +368,6 @@ export default function CameraScreen() {
   const flashLabel  = flash === 'off' ? '⚡✕' : flash === 'on' ? '⚡' : '⚡A'
   const focusLocked = focusMode === 'locked'
 
-  // In landscape, rotate button labels 90° CCW so they face the user
-  const btnRotate: { rotate: string }[] = isLandscape ? [{ rotate: '-90deg' }] : []
-
   // ── Permission gate ────────────────────────────────────────────────────────
   if (!hasPermission) {
     return (
@@ -387,11 +405,11 @@ export default function CameraScreen() {
     <GestureHandlerRootView style={styles.root}>
       {/* Outer gesture detector: pinch-to-zoom across the whole screen */}
       <GestureDetector gesture={pinchGesture}>
-        <View style={[styles.root, isLandscape && styles.rootLandscape]}>
+        <View style={styles.root}>
 
           {/* ── Viewfinder (tap anywhere to focus) ── */}
           <GestureDetector gesture={tapGesture}>
-            <View style={[styles.viewfinder, { width: VFINDER_W, height: VFINDER_H }]}>
+            <View style={styles.viewfinder}>
               <Camera
                 ref={cameraRef}
                 style={StyleSheet.absoluteFill}
@@ -430,31 +448,34 @@ export default function CameraScreen() {
               {/* Top bar overlaid on the viewfinder */}
               <View style={styles.topBar}>
                 <TouchableOpacity style={styles.iconBtn} onPress={() => navigation.goBack()}>
-                  <Text style={styles.iconText}>✕</Text>
+                  <Animated.View style={btnRotStyle}>
+                    <Text style={styles.iconText}>✕</Text>
+                  </Animated.View>
                 </TouchableOpacity>
                 {/* Focus mode toggle: AF (auto) ↔ 🔒 (locked) */}
                 <TouchableOpacity
                   style={[styles.iconBtn, focusLocked && styles.iconBtnActive]}
                   onPress={cycleFocusMode}
                 >
-                  <Text style={[styles.iconText, focusLocked && styles.iconTextActive]}>
-                    {focusLocked ? '🔒' : 'AF'}
-                  </Text>
+                  <Animated.View style={btnRotStyle}>
+                    <Text style={[styles.iconText, focusLocked && styles.iconTextActive]}>
+                      {focusLocked ? '🔒' : 'AF'}
+                    </Text>
+                  </Animated.View>
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.iconBtn} onPress={cycleFlash}>
-                  <Text style={styles.iconText}>{flashLabel}</Text>
+                  <Animated.View style={btnRotStyle}>
+                    <Text style={styles.iconText}>{flashLabel}</Text>
+                  </Animated.View>
                 </TouchableOpacity>
               </View>
             </View>
           </GestureDetector>
 
-          {/* ── Controls (below viewfinder in portrait · right strip in landscape) ── */}
-          <View style={[
-            styles.controlsArea,
-            isLandscape && { width: CONTROLS_STRIP_W, height: H },
-          ]}>
+          {/* ── Controls below viewfinder ── */}
+          <View style={styles.controlsArea}>
             {/* Zoom / lens buttons */}
-            <View style={[styles.zoomBar, isLandscape && styles.zoomBarLandscape]}>
+            <View style={styles.zoomBar}>
               {zoomButtons.map(({ label, zoom: z, lens }) => (
                 <TouchableOpacity
                   key={label}
@@ -465,21 +486,24 @@ export default function CameraScreen() {
                     setActiveZoomLabel(label)
                   }}
                 >
-                  <Text style={[
-                    styles.zoomText,
-                    activeZoomLabel === label && styles.zoomTextActive,
-                    btnRotate.length > 0 && { transform: btnRotate },
-                  ]}>
-                    {label}
-                  </Text>
+                  <Animated.View style={btnRotStyle}>
+                    <Text style={[
+                      styles.zoomText,
+                      activeZoomLabel === label && styles.zoomTextActive,
+                    ]}>
+                      {label}
+                    </Text>
+                  </Animated.View>
                 </TouchableOpacity>
               ))}
             </View>
 
             {/* Shutter row: flip · shutter · last-photo thumbnail */}
-            <View style={[styles.shutterRow, isLandscape && styles.shutterRowLandscape]}>
+            <View style={styles.shutterRow}>
               <TouchableOpacity style={styles.iconBtn} onPress={toggleFacing}>
-                <Text style={[styles.iconText, btnRotate.length > 0 && { transform: btnRotate }]}>🔄</Text>
+                <Animated.View style={btnRotStyle}>
+                  <Text style={styles.iconText}>🔄</Text>
+                </Animated.View>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -529,11 +553,6 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#000',
   },
-  // In landscape the viewfinder and controls sit side-by-side
-  rootLandscape: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-  },
 
   // Centred info screens (permission / no device)
   centreBox: {
@@ -576,13 +595,15 @@ const styles = StyleSheet.create({
     fontSize: 15,
   },
 
-  // Viewfinder — dimensions set dynamically from VFINDER_W / VFINDER_H
+  // Viewfinder — static 4:3 portrait dimensions
   viewfinder: {
+    width: SCREEN_W,
+    height: PREVIEW_H,
     backgroundColor: '#000',
     overflow: 'hidden',
   },
 
-  // Controls area — portrait: flex below viewfinder · landscape: fixed-width strip
+  // Controls area — sits below the viewfinder
   controlsArea: {
     flex: 1,
     backgroundColor: '#111',
@@ -599,18 +620,12 @@ const styles = StyleSheet.create({
     paddingBottom: 12,
   },
 
-  // Zoom buttons — portrait: horizontal row · landscape: vertical column
+  // Zoom buttons — horizontal row
   zoomBar: {
     flexDirection: 'row',
     justifyContent: 'center',
     gap: 12,
     marginBottom: 20,
-  },
-  zoomBarLandscape: {
-    flexDirection: 'column',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 0,
   },
   zoomBtn: {
     paddingHorizontal: 16,
@@ -633,20 +648,12 @@ const styles = StyleSheet.create({
     color: '#000',
   },
 
-  // Shutter row — portrait: horizontal · landscape: vertical column
+  // Shutter row — horizontal
   shutterRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-around',
     paddingHorizontal: 32,
-  },
-  shutterRowLandscape: {
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'space-around',
-    paddingHorizontal: 0,
-    paddingVertical: 16,
-    gap: 16,
   },
 
   iconBtn: {

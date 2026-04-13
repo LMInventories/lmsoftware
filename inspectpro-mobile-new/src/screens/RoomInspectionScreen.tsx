@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback, useRef } from 'react'
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   TextInput, Alert, Image, Modal, ActivityIndicator,
-  KeyboardAvoidingView, Platform, Animated,
+  KeyboardAvoidingView, Platform, Animated, Dimensions,
 } from 'react-native'
 import {
   GestureHandlerRootView,
@@ -76,12 +76,24 @@ export default function RoomInspectionScreen() {
   // ── Item drag-to-reorder ───────────────────────────────────────────────────
   // Approximate row height used to compute target drop index during drag.
   // Items vary in height but this gives a reasonable gap-preview.
-  const ITEM_ROW_H = 180
+  const ITEM_ROW_H  = 180
+  const ITEM_SCR_H  = Dimensions.get('window').height
+  const ITEM_SCROLL_EDGE = 120  // px from top/bottom to trigger auto-scroll
+  const ITEM_SCROLL_STEP = 6    // px per ~16ms scroll frame
+
   const itemDragFromRef = useRef<number | null>(null)
   const itemDragToRef   = useRef<number | null>(null)
   const [itemDragFrom, setItemDragFrom] = useState<number | null>(null)
   const [itemDragTo,   setItemDragTo]   = useState<number | null>(null)
   const itemDragYAnim = useRef(new Animated.Value(0)).current
+
+  // Auto-scroll refs for item drag
+  const itemScrollRef             = useRef<ScrollView>(null)
+  const itemScrollOffsetRef       = useRef(0)
+  const itemDragStartScrollRef    = useRef(0)
+  const itemLastTranslationYRef   = useRef(0)
+  const itemLastAbsYRef           = useRef(0)
+  const itemAutoScrollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // Sub-items stored in report_data[sectionKey][itemId]._subs matching web app format
 
@@ -783,11 +795,50 @@ export default function RoomInspectionScreen() {
     await setReportData(inspectionId, rd)
   }
 
+  function stopItemAutoScroll() {
+    if (itemAutoScrollIntervalRef.current) {
+      clearInterval(itemAutoScrollIntervalRef.current)
+      itemAutoScrollIntervalRef.current = null
+    }
+  }
+
+  function startItemAutoScroll() {
+    if (itemAutoScrollIntervalRef.current) return
+    itemAutoScrollIntervalRef.current = setInterval(() => {
+      if (itemDragFromRef.current === null) { stopItemAutoScroll(); return }
+      const absY = itemLastAbsYRef.current
+      let delta = 0
+      if (absY < ITEM_SCROLL_EDGE)                  delta = -((ITEM_SCROLL_EDGE - absY) / ITEM_SCROLL_EDGE) * ITEM_SCROLL_STEP * 2
+      else if (absY > ITEM_SCR_H - ITEM_SCROLL_EDGE) delta =  ((absY - (ITEM_SCR_H - ITEM_SCROLL_EDGE)) / ITEM_SCROLL_EDGE) * ITEM_SCROLL_STEP * 2
+      if (delta === 0) return
+
+      const newOffset = Math.max(0, itemScrollOffsetRef.current + delta)
+      itemScrollRef.current?.scrollTo({ y: newOffset, animated: false })
+      itemScrollOffsetRef.current = newOffset
+
+      // Keep dragged item following the finger as list scrolls
+      const scrollDelta = itemScrollOffsetRef.current - itemDragStartScrollRef.current
+      itemDragYAnim.setValue(itemLastTranslationYRef.current + scrollDelta)
+
+      // Update drop target with new effective position
+      const from = itemDragFromRef.current!
+      const effectiveY = itemLastTranslationYRef.current + scrollDelta
+      const newTo = Math.max(0, Math.min(items.length - 1, Math.round(from + effectiveY / ITEM_ROW_H)))
+      if (newTo !== itemDragToRef.current) {
+        itemDragToRef.current = newTo
+        setItemDragTo(newTo)
+      }
+    }, 16)
+  }
+
   function makeItemDragGesture(idx: number) {
     return Gesture.Pan()
       .runOnJS(true)
       .minDistance(6)
       .onStart(() => {
+        itemDragStartScrollRef.current = itemScrollOffsetRef.current
+        itemLastTranslationYRef.current = 0
+        itemLastAbsYRef.current = 0
         itemDragYAnim.setValue(0)
         itemDragFromRef.current = idx
         itemDragToRef.current   = idx
@@ -795,14 +846,28 @@ export default function RoomInspectionScreen() {
         setItemDragTo(idx)
       })
       .onUpdate((e) => {
-        itemDragYAnim.setValue(e.translationY)
-        const newTo = Math.max(0, Math.min(items.length - 1, Math.round(idx + e.translationY / ITEM_ROW_H)))
+        itemLastAbsYRef.current = e.absoluteY
+        itemLastTranslationYRef.current = e.translationY
+
+        // Trigger auto-scroll when near screen edges
+        if (e.absoluteY < ITEM_SCROLL_EDGE || e.absoluteY > ITEM_SCR_H - ITEM_SCROLL_EDGE) {
+          startItemAutoScroll()
+        } else {
+          stopItemAutoScroll()
+        }
+
+        const scrollDelta = itemScrollOffsetRef.current - itemDragStartScrollRef.current
+        itemDragYAnim.setValue(e.translationY + scrollDelta)
+
+        const effectiveY = e.translationY + scrollDelta
+        const newTo = Math.max(0, Math.min(items.length - 1, Math.round(idx + effectiveY / ITEM_ROW_H)))
         if (newTo !== itemDragToRef.current) {
           itemDragToRef.current = newTo
           setItemDragTo(newTo)
         }
       })
       .onEnd(() => {
+        stopItemAutoScroll()
         const from = itemDragFromRef.current
         const to   = itemDragToRef.current
         itemDragYAnim.setValue(0)
@@ -815,6 +880,7 @@ export default function RoomInspectionScreen() {
         }
       })
       .onFinalize(() => {
+        stopItemAutoScroll()
         itemDragYAnim.setValue(0)
         itemDragFromRef.current = null
         itemDragToRef.current   = null
@@ -1280,6 +1346,9 @@ export default function RoomInspectionScreen() {
           <View style={styles.loading}><ActivityIndicator color={colors.primary} size="large" /></View>
         ) : (
           <ScrollView
+            ref={itemScrollRef}
+            onScroll={(e) => { itemScrollOffsetRef.current = e.nativeEvent.contentOffset.y }}
+            scrollEventThrottle={16}
             contentContainerStyle={[
               styles.scroll,
               sectionType_ === 'room' &&

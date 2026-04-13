@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react'
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  Alert, TextInput, Modal, ActivityIndicator, FlatList, Animated,
+  Alert, TextInput, Modal, ActivityIndicator, FlatList, Animated, Dimensions,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native'
@@ -18,6 +18,10 @@ import { colors, font, radius, spacing } from '../utils/theme'
 
 type Nav   = StackNavigationProp<RootStackParamList, 'RoomSelection'>
 type Route = RouteProp<RootStackParamList, 'RoomSelection'>
+
+const SCREEN_H    = Dimensions.get('window').height
+const SCROLL_EDGE = 100   // px from top/bottom to trigger auto-scroll
+const SCROLL_STEP = 6     // px per ~16ms scroll frame
 
 function inferType(cols: string[]): string {
   const c = cols || []
@@ -317,6 +321,16 @@ export default function RoomSelectionScreen() {
   // Single Animated.Value drives the dragged row's y position.
   const dragYAnim = useRef(new Animated.Value(0)).current
 
+  // ── Auto-scroll refs ────────────────────────────────────────────────────────
+  const scrollRef              = useRef<ScrollView>(null)
+  const scrollOffsetRef        = useRef(0)       // current scroll offset
+  const dragStartScrollRef     = useRef(0)       // scroll offset when drag began
+  const lastTranslationYRef    = useRef(0)       // most recent gesture translationY
+  const lastAbsYRef            = useRef(0)       // most recent gesture absoluteY
+  const autoScrollIntervalRef  = useRef<ReturnType<typeof setInterval> | null>(null)
+  // orderedRoomsRef is updated each render so the interval sees fresh room list
+  const orderedRoomsRef        = useRef<RoomEntry[]>([])
+
   async function commitReorderByIndex(from: number, to: number) {
     const ordered = buildOrderedRooms()
     const keys = ordered.map(r => r.key)
@@ -329,11 +343,51 @@ export default function RoomSelectionScreen() {
     await loadInspection(inspectionId)
   }
 
+  function stopAutoScroll() {
+    if (autoScrollIntervalRef.current) {
+      clearInterval(autoScrollIntervalRef.current)
+      autoScrollIntervalRef.current = null
+    }
+  }
+
+  function startAutoScroll() {
+    if (autoScrollIntervalRef.current) return
+    autoScrollIntervalRef.current = setInterval(() => {
+      if (dragFromRef.current === null) { stopAutoScroll(); return }
+      const absY = lastAbsYRef.current
+      let delta = 0
+      if (absY < SCROLL_EDGE)               delta = -((SCROLL_EDGE - absY) / SCROLL_EDGE) * SCROLL_STEP * 2
+      else if (absY > SCREEN_H - SCROLL_EDGE) delta =  ((absY - (SCREEN_H - SCROLL_EDGE)) / SCROLL_EDGE) * SCROLL_STEP * 2
+      if (delta === 0) return
+
+      const newOffset = Math.max(0, scrollOffsetRef.current + delta)
+      scrollRef.current?.scrollTo({ y: newOffset, animated: false })
+      scrollOffsetRef.current = newOffset
+
+      // Keep dragged item visually following the finger while list scrolls
+      const scrollDelta = scrollOffsetRef.current - dragStartScrollRef.current
+      dragYAnim.setValue(lastTranslationYRef.current + scrollDelta)
+
+      // Update drop target with new effective position
+      const rooms = orderedRoomsRef.current
+      const effectiveY = lastTranslationYRef.current + scrollDelta
+      const from = dragFromRef.current!
+      const newTo = Math.max(0, Math.min(rooms.length - 1, Math.round(from + effectiveY / ROW_H)))
+      if (newTo !== dragToRef.current) {
+        dragToRef.current = newTo
+        setDragTo(newTo)
+      }
+    }, 16)
+  }
+
   function makeDragGesture(idx: number) {
     return Gesture.Pan()
       .runOnJS(true)
       .minDistance(4)
       .onStart(() => {
+        dragStartScrollRef.current = scrollOffsetRef.current
+        lastTranslationYRef.current = 0
+        lastAbsYRef.current = 0
         dragYAnim.setValue(0)
         dragFromRef.current = idx
         dragToRef.current   = idx
@@ -341,15 +395,29 @@ export default function RoomSelectionScreen() {
         setDragTo(idx)
       })
       .onUpdate((e) => {
-        dragYAnim.setValue(e.translationY)
+        lastAbsYRef.current = e.absoluteY
+        lastTranslationYRef.current = e.translationY
+
+        // Trigger auto-scroll when near screen edges
+        if (e.absoluteY < SCROLL_EDGE || e.absoluteY > SCREEN_H - SCROLL_EDGE) {
+          startAutoScroll()
+        } else {
+          stopAutoScroll()
+        }
+
+        const scrollDelta = scrollOffsetRef.current - dragStartScrollRef.current
+        dragYAnim.setValue(e.translationY + scrollDelta)
+
         const rooms = buildOrderedRooms()
-        const newTo = Math.max(0, Math.min(rooms.length - 1, Math.round(idx + e.translationY / ROW_H)))
+        const effectiveY = e.translationY + scrollDelta
+        const newTo = Math.max(0, Math.min(rooms.length - 1, Math.round(idx + effectiveY / ROW_H)))
         if (newTo !== dragToRef.current) {
           dragToRef.current = newTo
           setDragTo(newTo)
         }
       })
       .onEnd(() => {
+        stopAutoScroll()
         const from = dragFromRef.current
         const to   = dragToRef.current
         dragYAnim.setValue(0)
@@ -362,6 +430,7 @@ export default function RoomSelectionScreen() {
         }
       })
       .onFinalize(() => {
+        stopAutoScroll()
         dragYAnim.setValue(0)
         dragFromRef.current = null
         dragToRef.current   = null
@@ -509,7 +578,12 @@ export default function RoomSelectionScreen() {
       {loadingTemplate ? (
         <View style={styles.loading}><ActivityIndicator color={colors.primary} size="large" /></View>
       ) : (
-        <ScrollView contentContainerStyle={styles.scroll}>
+        <ScrollView
+          ref={scrollRef}
+          onScroll={(e) => { scrollOffsetRef.current = e.nativeEvent.contentOffset.y }}
+          scrollEventThrottle={16}
+          contentContainerStyle={styles.scroll}
+        >
 
           {/* Fixed sections */}
           <Text style={styles.groupLabel}>Fixed Sections</Text>
@@ -546,8 +620,10 @@ export default function RoomSelectionScreen() {
 
           {/* All rooms — template + custom — in user-defined order.
               Each row wraps in an Animated.View so the dragged item follows
-              the finger (dragYAnim) while others shift to show the drop gap. */}
-          {buildOrderedRooms().map((room, idx) => {
+              the finger (dragYAnim) while others shift to show the drop gap.
+              orderedRoomsRef is kept current here so the auto-scroll interval
+              can compute drop targets without stale closures. */}
+          {(() => { orderedRoomsRef.current = buildOrderedRooms(); return orderedRoomsRef.current })().map((room, idx) => {
             const isDragging = dragFrom === idx
             const shift      = (dragFrom !== null && dragTo !== null && !isDragging)
               ? getShift(idx, dragFrom, dragTo)

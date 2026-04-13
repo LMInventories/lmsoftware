@@ -155,6 +155,15 @@ def _setup_database():
         db.session.commit()
         print("✅ users.typist_mode added.")
 
+    # inspections.typist_mode — per-inspection override of clerk-level typist_mode
+    if not column_exists('inspections', 'typist_mode'):
+        print("Migrating: adding inspections.typist_mode column...")
+        db.session.execute(
+            text("ALTER TABLE inspections ADD COLUMN typist_mode VARCHAR(20)")
+        )
+        db.session.commit()
+        print("✅ inspections.typist_mode added.")
+
     # ── Seed (only on a completely empty database) ───────────────────────────
     if User.query.count() == 0:
         print("Fresh database — seeding demo data...")

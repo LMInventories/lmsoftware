@@ -548,7 +548,9 @@ export default function CameraScreen() {
                 activeOpacity={lastPhotoUri && route.params.sectionKey ? 0.75 : 1}
               >
                 {lastPhotoUri ? (
-                  <Image source={{ uri: lastPhotoUri }} style={styles.thumbImg} />
+                  <Animated.View style={btnRotStyle}>
+                    <Image source={{ uri: lastPhotoUri }} style={styles.thumbImg} />
+                  </Animated.View>
                 ) : (
                   <View style={styles.thumbEmpty} />
                 )}

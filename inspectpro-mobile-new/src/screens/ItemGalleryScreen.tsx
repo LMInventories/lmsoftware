@@ -2,7 +2,7 @@ import React, { useState, useCallback, useRef, useEffect } from 'react'
 import {
   View, Text, FlatList, TouchableOpacity, StyleSheet,
   Image, Modal, Dimensions, Alert, ActivityIndicator,
-  ScrollView, BackHandler, Animated, PanResponder,
+  ScrollView, BackHandler, Animated,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native'
@@ -96,34 +96,27 @@ export default function ItemGalleryScreen() {
     return () => sub.remove()
   }, [lightboxUri, selecting])
 
-  // Refs that give the PanResponder fresh data without recreating it.
-  // lightboxUriRef is kept in sync with state on every render.
-  const lightboxUriRef = useRef<string | null>(null)
-  useEffect(() => { lightboxUriRef.current = lightboxUri }, [lightboxUri])
-
   // photosRef is updated inline each render (see `photosRef.current = photos` below)
   const photosRef = useRef<string[]>([])
 
-  // PanResponder for horizontal swipe in the lightbox Modal.
-  // Using PanResponder (native RN) instead of RNGH GestureDetector because
-  // GestureHandlerRootView nested inside a Modal crashes on New Architecture.
-  const lightboxSwipePan = useRef(
-    PanResponder.create({
-      onMoveShouldSetPanResponder: (_, gs) =>
-        Math.abs(gs.dx) > 10 && Math.abs(gs.dx) > Math.abs(gs.dy),
-      onPanResponderRelease: (_, gs) => {
-        const uri = lightboxUriRef.current
-        if (!uri) return
-        const currentPhotos = photosRef.current
-        const idx = currentPhotos.indexOf(uri)
-        if (gs.dx < -50 && idx < currentPhotos.length - 1) {
-          setLightboxUri(currentPhotos[idx + 1])
-        } else if (gs.dx > 50 && idx > 0) {
-          setLightboxUri(currentPhotos[idx - 1])
-        }
-      },
-    })
-  ).current
+  // FlatList ref for the lightbox — allows programmatic scroll when lightboxUri
+  // changes from an arrow-button tap (or re-open at a different photo).
+  // Using a native horizontal FlatList with pagingEnabled instead of PanResponder:
+  // GestureHandlerRootView on New Architecture interferes with PanResponder inside
+  // Modals, but the OS scroll recogniser is unaffected.
+  const lightboxFlatRef = useRef<FlatList<string>>(null)
+
+  useEffect(() => {
+    if (!lightboxUri) return
+    const idx = photosRef.current.indexOf(lightboxUri)
+    if (idx < 0) return
+    // setTimeout(0) defers until after React has committed the render,
+    // ensuring the FlatList is mounted before we attempt scrollToIndex.
+    const t = setTimeout(() => {
+      lightboxFlatRef.current?.scrollToIndex({ index: idx, animated: false })
+    }, 0)
+    return () => clearTimeout(t)
+  }, [lightboxUri])
 
   // ── Helpers ────────────────────────────────────────────────────────────────
   function getPhotos(): string[] {
@@ -390,7 +383,7 @@ export default function ItemGalleryScreen() {
   }
 
   const photos = getPhotos()
-  // Keep ref in sync so PanResponder always has fresh photo list
+  // Keep ref in sync so lightboxFlatRef scroll + onMomentumScrollEnd always see fresh data
   photosRef.current = photos
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -601,10 +594,41 @@ export default function ItemGalleryScreen() {
       </Modal>
 
       {/* ── Lightbox ──────────────────────────────────────────────────────────── */}
-      {/* NOTE: No GestureHandlerRootView inside Modal — that crashes on New Architecture.
-               Swipe uses PanResponder (native RN) instead of RNGH GestureDetector. */}
-      <Modal visible={!!lightboxUri} animationType="fade" statusBarTranslucent>
-        <View style={lbS.screen} {...lightboxSwipePan.panHandlers}>
+      {/* Swipe navigation uses a native horizontal FlatList with pagingEnabled.
+          This bypasses GestureHandlerRootView entirely — the OS's own scroll
+          recogniser works inside Modals on New Architecture without issues.
+          onRequestClose handles the Android hardware back button when a Modal
+          is visible (Belt + suspenders alongside the BackHandler useEffect). */}
+      <Modal
+        visible={!!lightboxUri}
+        animationType="fade"
+        statusBarTranslucent
+        onRequestClose={() => setLightboxUri(null)}
+      >
+        <View style={lbS.screen}>
+          {/* Swipeable photo strip — fills screen, sits behind all overlays */}
+          <FlatList
+            ref={lightboxFlatRef}
+            data={photos}
+            keyExtractor={(_, i) => String(i)}
+            horizontal
+            pagingEnabled
+            showsHorizontalScrollIndicator={false}
+            style={StyleSheet.absoluteFill}
+            renderItem={({ item: uri }) => (
+              <View style={{ width: SW, height: SH, justifyContent: 'center', alignItems: 'center' }}>
+                <Image source={{ uri }} style={lbS.image} resizeMode="contain" />
+              </View>
+            )}
+            onMomentumScrollEnd={(e) => {
+              const newIndex = Math.round(e.nativeEvent.contentOffset.x / SW)
+              if (newIndex >= 0 && newIndex < photosRef.current.length) {
+                setLightboxUri(photosRef.current[newIndex])
+              }
+            }}
+            getItemLayout={(_, index) => ({ length: SW, offset: SW * index, index })}
+          />
+
           {lightboxUri && (
             <>
               <TouchableOpacity style={[lbS.closeBtn, { top: insets.top + 12 }]} onPress={() => setLightboxUri(null)}>
@@ -613,7 +637,6 @@ export default function ItemGalleryScreen() {
               <View style={[lbS.counter, { top: insets.top + 16 }]}>
                 <Text style={lbS.counterText}>{photos.indexOf(lightboxUri) + 1} / {photos.length}</Text>
               </View>
-              <Image source={{ uri: lightboxUri }} style={lbS.image} resizeMode="contain" />
               {rotating && (
                 <View style={lbS.overlay}>
                   <ActivityIndicator color="#fff" size="large" />
@@ -634,7 +657,7 @@ export default function ItemGalleryScreen() {
                   <Text style={[lbS.actionLabel, { color: colors.danger }]}>Delete</Text>
                 </TouchableOpacity>
               </View>
-              {/* Arrow buttons kept alongside swipe — both methods navigate photos */}
+              {/* Arrow buttons remain as an alternative to swiping */}
               {photos.length > 1 && (
                 <>
                   {photos.indexOf(lightboxUri) > 0 && (

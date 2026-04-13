@@ -1,14 +1,19 @@
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, useRef } from 'react'
 import {
   View, Text, FlatList, TouchableOpacity, StyleSheet,
   Image, Modal, Dimensions, Alert, ActivityIndicator,
-  ScrollView,
+  ScrollView, BackHandler, Animated,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native'
 import type { StackNavigationProp, RouteProp } from '@react-navigation/stack'
 import * as ImageManipulator from 'expo-image-manipulator'
 import * as FileSystem from 'expo-file-system/legacy'
+import {
+  GestureHandlerRootView,
+  GestureDetector,
+  Gesture,
+} from 'react-native-gesture-handler'
 
 import type { RootStackParamList } from '../../App'
 import { useInspectionStore } from '../stores/inspectionStore'
@@ -63,11 +68,50 @@ export default function ItemGalleryScreen() {
   const [showAiReview, setShowAiReview]   = useState(false)
   const [autoAssigned, setAutoAssigned]   = useState<string[]>([])
 
+  // Auto-fading toast for AI reassign success
+  const [toastMsg, setToastMsg]     = useState<string | null>(null)
+  const toastOpacity                = useRef(new Animated.Value(0)).current
+  function showAutoToast(msg: string) {
+    setToastMsg(msg)
+    toastOpacity.setValue(1)
+    Animated.sequence([
+      Animated.delay(2000),
+      Animated.timing(toastOpacity, { toValue: 0, duration: 400, useNativeDriver: true }),
+    ]).start(() => setToastMsg(null))
+  }
+
   // Pick up any photo parked in cameraStore (fallback if handler was GC'd)
   useFocusEffect(useCallback(() => {
     const pending = processPendingPhotos()
     if (pending) updatePhotos([...getPhotos(), pending])
   }, []))
+
+  // Hardware back button: dismiss lightbox → exit select → default (go back)
+  useFocusEffect(useCallback(() => {
+    const onBack = () => {
+      if (lightboxUri) { setLightboxUri(null); return true }
+      if (selecting)   { exitSelect();          return true }
+      return false
+    }
+    BackHandler.addEventListener('hardwareBackPress', onBack)
+    return () => BackHandler.removeEventListener('hardwareBackPress', onBack)
+  }, [lightboxUri, selecting]))
+
+  // Horizontal swipe gesture for lightbox navigation
+  const lightboxSwipe = Gesture.Pan()
+    .runOnJS(true)
+    .activeOffsetX([-20, 20])
+    .failOffsetY([-20, 20])
+    .onEnd((e) => {
+      if (!lightboxUri) return
+      const currentPhotos = getPhotos()
+      const idx = currentPhotos.indexOf(lightboxUri)
+      if (e.translationX < -50 && idx < currentPhotos.length - 1) {
+        setLightboxUri(currentPhotos[idx + 1])
+      } else if (e.translationX > 50 && idx > 0) {
+        setLightboxUri(currentPhotos[idx - 1])
+      }
+    })
 
   // ── Helpers ────────────────────────────────────────────────────────────────
   function getPhotos(): string[] {
@@ -303,8 +347,11 @@ export default function ItemGalleryScreen() {
         setShowAiReview(true)
       } else {
         exitSelect()
-        Alert.alert('AI Reassign Complete',
-          `${autoMoved.length} photo${autoMoved.length !== 1 ? 's' : ''} automatically moved within ${sectionName}.`)
+        showAutoToast(
+          autoMoved.length > 0
+            ? `✦ ${autoMoved.length} photo${autoMoved.length !== 1 ? 's' : ''} auto-assigned within ${sectionName}`
+            : '✦ AI analysis complete — no moves needed'
+        )
       }
     } catch { Alert.alert('Error', 'AI analysis failed. Please try again.') }
     finally { setAiLoading(false) }
@@ -334,6 +381,7 @@ export default function ItemGalleryScreen() {
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
+    <GestureHandlerRootView style={{ flex: 1 }}>
     <View style={[styles.screen, { paddingTop: insets.top }]}>
       <Header
         title={itemPosition ? `${itemPosition} — ${itemName}` : itemName}
@@ -540,57 +588,74 @@ export default function ItemGalleryScreen() {
 
       {/* ── Lightbox ──────────────────────────────────────────────────────────── */}
       <Modal visible={!!lightboxUri} animationType="fade" statusBarTranslucent>
-        <View style={lbS.screen}>
-          {lightboxUri && (
-            <>
-              <TouchableOpacity style={[lbS.closeBtn, { top: insets.top + 12 }]} onPress={() => setLightboxUri(null)}>
-                <Text style={lbS.closeBtnText}>✕</Text>
-              </TouchableOpacity>
-              <View style={[lbS.counter, { top: insets.top + 16 }]}>
-                <Text style={lbS.counterText}>{photos.indexOf(lightboxUri) + 1} / {photos.length}</Text>
-              </View>
-              <Image source={{ uri: lightboxUri }} style={lbS.image} resizeMode="contain" />
-              {rotating && (
-                <View style={lbS.overlay}>
-                  <ActivityIndicator color="#fff" size="large" />
-                  <Text style={lbS.overlayText}>Rotating…</Text>
-                </View>
-              )}
-              <View style={[lbS.actions, { paddingBottom: insets.bottom + spacing.md }]}>
-                <TouchableOpacity style={lbS.actionBtn} onPress={() => handleRotate(lightboxUri, 'ccw')} disabled={rotating}>
-                  <Text style={lbS.actionIcon}>↺</Text>
-                  <Text style={lbS.actionLabel}>Rotate Left</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={lbS.actionBtn} onPress={() => handleRotate(lightboxUri, 'cw')} disabled={rotating}>
-                  <Text style={lbS.actionIcon}>↻</Text>
-                  <Text style={lbS.actionLabel}>Rotate Right</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={lbS.actionBtn} onPress={() => handleDeleteSingle(lightboxUri)}>
-                  <Text style={lbS.actionIcon}>🗑</Text>
-                  <Text style={[lbS.actionLabel, { color: colors.danger }]}>Delete</Text>
-                </TouchableOpacity>
-              </View>
-              {photos.length > 1 && (
+        <GestureHandlerRootView style={{ flex: 1 }}>
+          <GestureDetector gesture={lightboxSwipe}>
+            <View style={lbS.screen}>
+              {lightboxUri && (
                 <>
-                  {photos.indexOf(lightboxUri) > 0 && (
-                    <TouchableOpacity style={[lbS.navBtn, lbS.navLeft]}
-                      onPress={() => { const i = photos.indexOf(lightboxUri) - 1; setLightboxUri(photos[i]) }}>
-                      <Text style={lbS.navText}>‹</Text>
-                    </TouchableOpacity>
+                  <TouchableOpacity style={[lbS.closeBtn, { top: insets.top + 12 }]} onPress={() => setLightboxUri(null)}>
+                    <Text style={lbS.closeBtnText}>✕</Text>
+                  </TouchableOpacity>
+                  <View style={[lbS.counter, { top: insets.top + 16 }]}>
+                    <Text style={lbS.counterText}>{photos.indexOf(lightboxUri) + 1} / {photos.length}</Text>
+                  </View>
+                  <Image source={{ uri: lightboxUri }} style={lbS.image} resizeMode="contain" />
+                  {rotating && (
+                    <View style={lbS.overlay}>
+                      <ActivityIndicator color="#fff" size="large" />
+                      <Text style={lbS.overlayText}>Rotating…</Text>
+                    </View>
                   )}
-                  {photos.indexOf(lightboxUri) < photos.length - 1 && (
-                    <TouchableOpacity style={[lbS.navBtn, lbS.navRight]}
-                      onPress={() => { const i = photos.indexOf(lightboxUri) + 1; setLightboxUri(photos[i]) }}>
-                      <Text style={lbS.navText}>›</Text>
+                  <View style={[lbS.actions, { paddingBottom: insets.bottom + spacing.md }]}>
+                    <TouchableOpacity style={lbS.actionBtn} onPress={() => handleRotate(lightboxUri, 'ccw')} disabled={rotating}>
+                      <Text style={lbS.actionIcon}>↺</Text>
+                      <Text style={lbS.actionLabel}>Rotate Left</Text>
                     </TouchableOpacity>
+                    <TouchableOpacity style={lbS.actionBtn} onPress={() => handleRotate(lightboxUri, 'cw')} disabled={rotating}>
+                      <Text style={lbS.actionIcon}>↻</Text>
+                      <Text style={lbS.actionLabel}>Rotate Right</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={lbS.actionBtn} onPress={() => handleDeleteSingle(lightboxUri)}>
+                      <Text style={lbS.actionIcon}>🗑</Text>
+                      <Text style={[lbS.actionLabel, { color: colors.danger }]}>Delete</Text>
+                    </TouchableOpacity>
+                  </View>
+                  {/* Arrow buttons kept alongside swipe — both methods navigate photos */}
+                  {photos.length > 1 && (
+                    <>
+                      {photos.indexOf(lightboxUri) > 0 && (
+                        <TouchableOpacity style={[lbS.navBtn, lbS.navLeft]}
+                          onPress={() => { const i = photos.indexOf(lightboxUri) - 1; setLightboxUri(photos[i]) }}>
+                          <Text style={lbS.navText}>‹</Text>
+                        </TouchableOpacity>
+                      )}
+                      {photos.indexOf(lightboxUri) < photos.length - 1 && (
+                        <TouchableOpacity style={[lbS.navBtn, lbS.navRight]}
+                          onPress={() => { const i = photos.indexOf(lightboxUri) + 1; setLightboxUri(photos[i]) }}>
+                          <Text style={lbS.navText}>›</Text>
+                        </TouchableOpacity>
+                      )}
+                    </>
                   )}
                 </>
               )}
-            </>
-          )}
-        </View>
+            </View>
+          </GestureDetector>
+        </GestureHandlerRootView>
       </Modal>
+
+      {/* Auto-fading AI reassign toast — no interaction required */}
+      {toastMsg && (
+        <Animated.View
+          pointerEvents="none"
+          style={[toastS.container, { opacity: toastOpacity }]}
+        >
+          <Text style={toastS.text}>{toastMsg}</Text>
+        </Animated.View>
+      )}
+
     </View>
+    </GestureHandlerRootView>
   )
 }
 
@@ -739,6 +804,32 @@ const mStyles = StyleSheet.create({
   tick:             { fontSize: font.md, color: colors.primary, fontWeight: '700' },
   emptyOpts:        { padding: spacing.md, fontSize: font.sm, color: colors.textLight, fontStyle: 'italic' },
   previewThumb:     { width: 68, height: 68, borderRadius: radius.sm, marginRight: spacing.sm },
+})
+
+const toastS = StyleSheet.create({
+  container: {
+    position: 'absolute',
+    bottom: 100,
+    left: 32,
+    right: 32,
+    backgroundColor: 'rgba(15,23,42,0.9)',
+    borderRadius: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    alignItems: 'center',
+    zIndex: 999,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 10,
+  },
+  text: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
 })
 
 const aiS = StyleSheet.create({

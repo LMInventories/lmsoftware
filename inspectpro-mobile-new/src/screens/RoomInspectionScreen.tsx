@@ -2,8 +2,13 @@ import React, { useEffect, useState, useCallback, useRef } from 'react'
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   TextInput, Alert, Image, Modal, ActivityIndicator,
-  KeyboardAvoidingView, Platform,
+  KeyboardAvoidingView, Platform, Animated,
 } from 'react-native'
+import {
+  GestureHandlerRootView,
+  GestureDetector,
+  Gesture,
+} from 'react-native-gesture-handler'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native'
 import type { StackNavigationProp, RouteProp } from '@react-navigation/stack'
@@ -67,6 +72,16 @@ export default function RoomInspectionScreen() {
 
   // Sub-item quantity modal — opened when clerk taps the ⊕ swipe action
   const [subQtyModal, setSubQtyModal] = useState<{ itemId: string; label: string; count: number } | null>(null)
+
+  // ── Item drag-to-reorder ───────────────────────────────────────────────────
+  // Approximate row height used to compute target drop index during drag.
+  // Items vary in height but this gives a reasonable gap-preview.
+  const ITEM_ROW_H = 180
+  const itemDragFromRef = useRef<number | null>(null)
+  const itemDragToRef   = useRef<number | null>(null)
+  const [itemDragFrom, setItemDragFrom] = useState<number | null>(null)
+  const [itemDragTo,   setItemDragTo]   = useState<number | null>(null)
+  const itemDragYAnim = useRef(new Animated.Value(0)).current
 
   // Sub-items stored in report_data[sectionKey][itemId]._subs matching web app format
 
@@ -161,7 +176,18 @@ export default function RoomInspectionScreen() {
         const extras: any[] = (savedRd[sectionKey]?._extra || []).map((e: any) =>
           adaptExtraItem(e._eid, e.name || '', type)
         )
-        setItems([...templateItems, ...extras])
+        const allFixedItems = [...templateItems, ...extras]
+        // Apply saved item order if present
+        const fixedOrder: string[] = (savedRd[sectionKey]?._itemOrder || [])
+        if (fixedOrder.length > 0) {
+          const fixedOrderMap = new Map(fixedOrder.map((k: string, i: number) => [k, i]))
+          allFixedItems.sort((a: any, b: any) => {
+            const ai = fixedOrderMap.has(a.id) ? fixedOrderMap.get(a.id)! : Infinity
+            const bi = fixedOrderMap.has(b.id) ? fixedOrderMap.get(b.id)! : Infinity
+            return ai - bi
+          })
+        }
+        setItems(allFixedItems)
       } else if (sectionType === 'room') {
         setSectionType_('room')
         let templateItems: any[] = []
@@ -210,7 +236,18 @@ export default function RoomInspectionScreen() {
           custom: true,
         }))
 
-        setItems([...filteredTemplateItems, ...extras])
+        const allRoomItems = [...filteredTemplateItems, ...extras]
+        // Apply saved item order if present
+        const roomOrder: string[] = savedRd[sectionKey]?._itemOrder || []
+        if (roomOrder.length > 0) {
+          const orderMap = new Map(roomOrder.map((k: string, i: number) => [k, i]))
+          allRoomItems.sort((a: any, b: any) => {
+            const ai = orderMap.has(a.id) ? orderMap.get(a.id)! : Infinity
+            const bi = orderMap.has(b.id) ? orderMap.get(b.id)! : Infinity
+            return ai - bi
+          })
+        }
+        setItems(allRoomItems)
         setLoading(false)
         return
       }
@@ -730,6 +767,72 @@ export default function RoomInspectionScreen() {
     setRenameItemModal(false)
   }
 
+  // ── Item drag-to-reorder helpers ──────────────────────────────────────────
+  async function commitItemReorderByIndex(from: number, to: number) {
+    // Reorder local state immediately for a responsive UI
+    const reordered = [...items]
+    const [moved] = reordered.splice(from, 1)
+    reordered.splice(to, 0, moved)
+    setItems(reordered)
+    // Persist the new order as an array of item IDs
+    const keys = reordered.map((i: any) => i.id)
+    const fresh = await getLocalInspection(inspectionId)
+    const rd = fresh?.report_data ? JSON.parse(fresh.report_data) : {}
+    if (!rd[sectionKey]) rd[sectionKey] = {}
+    rd[sectionKey]['_itemOrder'] = keys
+    await setReportData(inspectionId, rd)
+  }
+
+  function makeItemDragGesture(idx: number) {
+    return Gesture.Pan()
+      .runOnJS(true)
+      .minDistance(6)
+      .onStart(() => {
+        itemDragYAnim.setValue(0)
+        itemDragFromRef.current = idx
+        itemDragToRef.current   = idx
+        setItemDragFrom(idx)
+        setItemDragTo(idx)
+      })
+      .onUpdate((e) => {
+        itemDragYAnim.setValue(e.translationY)
+        const newTo = Math.max(0, Math.min(items.length - 1, Math.round(idx + e.translationY / ITEM_ROW_H)))
+        if (newTo !== itemDragToRef.current) {
+          itemDragToRef.current = newTo
+          setItemDragTo(newTo)
+        }
+      })
+      .onEnd(() => {
+        const from = itemDragFromRef.current
+        const to   = itemDragToRef.current
+        itemDragYAnim.setValue(0)
+        itemDragFromRef.current = null
+        itemDragToRef.current   = null
+        setItemDragFrom(null)
+        setItemDragTo(null)
+        if (from !== null && to !== null && from !== to) {
+          commitItemReorderByIndex(from, to)
+        }
+      })
+      .onFinalize(() => {
+        itemDragYAnim.setValue(0)
+        itemDragFromRef.current = null
+        itemDragToRef.current   = null
+        setItemDragFrom(null)
+        setItemDragTo(null)
+      })
+  }
+
+  // Returns how far a non-dragged item should shift (px) to visualise the gap
+  function getItemShift(idx: number, from: number, to: number): number {
+    if (from < to) {
+      if (idx > from && idx <= to) return -ITEM_ROW_H
+    } else if (from > to) {
+      if (idx >= to && idx < from) return ITEM_ROW_H
+    }
+    return 0
+  }
+
   // ── Sub-items — stored as report_data[sectionKey][itemId]._subs
   // Matches web app: { _sid, description, condition }
   function getSubs(itemId: string): any[] {
@@ -855,7 +958,7 @@ export default function RoomInspectionScreen() {
     )
   }
 
-  function renderItem(item: any) {
+  function renderItem(item: any, idx: number) {
     const label = item.label || item.name || ''
 
     const baseActions = [
@@ -884,17 +987,38 @@ export default function RoomInspectionScreen() {
       ? [{ icon: '⊕', label: 'Sub-item', bg: '#f0fdf4', onPress: () => setSubQtyModal({ itemId: item.id, label: itemLabel, count: 1 }) }, ...baseActions]
       : baseActions
 
+    const isDragging = itemDragFrom === idx
+    const shift = (itemDragFrom !== null && itemDragTo !== null && !isDragging)
+      ? getItemShift(idx, itemDragFrom, itemDragTo)
+      : 0
+
     return (
-      <SwipeableRow
+      <Animated.View
         key={item.id}
-        actions={itemActions}
+        style={
+          isDragging
+            ? { transform: [{ translateY: itemDragYAnim }], zIndex: 20, elevation: 8 }
+            : shift !== 0
+              ? { transform: [{ translateY: shift }] }
+              : {}
+        }
       >
-      <View style={styles.itemCard}>
+      <SwipeableRow
+        actions={itemActions}
+        disabled={itemDragFrom !== null}
+      >
+      <View style={[styles.itemCard, isDragging && styles.itemCardDragging]}>
         {/* Header */}
         <View style={styles.itemHeader}>
           <View style={styles.itemHeaderLeft}>
             <Text style={styles.itemName}>{label}</Text>
           </View>
+          {/* Drag handle — long-press and drag to reorder */}
+          <GestureDetector gesture={makeItemDragGesture(idx)}>
+            <View style={styles.itemDragHandle} hitSlop={{ top: 10, bottom: 10, left: 10, right: 4 }}>
+              <Text style={styles.itemDragHandleIcon}>≡</Text>
+            </View>
+          </GestureDetector>
         </View>
 
         {/* Question label for smoke/health/fire */}
@@ -1113,10 +1237,12 @@ export default function RoomInspectionScreen() {
 
       </View>
       </SwipeableRow>
+      </Animated.View>
     )
   }
 
   return (
+    <GestureHandlerRootView style={{ flex: 1 }}>
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <View style={[styles.screen, { paddingTop: insets.top }]}>
         <Header title={sectionName} subtitle={activeInspection?.property_address} onBack={() => navigation.goBack()} />
@@ -1215,14 +1341,14 @@ export default function RoomInspectionScreen() {
             })()}
 
                         {items.length > 0 && (
-              <Text style={styles.swipeHint}>Swipe left or right for options</Text>
+              <Text style={styles.swipeHint}>Swipe for options · Drag  ≡  to reorder</Text>
             )}
             {items.length === 0 && (
               <View style={styles.emptyNote}>
                 <Text style={styles.emptyNoteText}>No items yet. Tap "+ Add Item" to add one.</Text>
               </View>
             )}
-            {items.map(renderItem)}
+            {items.map((item, idx) => renderItem(item, idx))}
             <TouchableOpacity style={styles.addItemBtn} onPress={() => setAddItemModal(true)}>
               <Text style={styles.addItemText}>+ Add Item</Text>
             </TouchableOpacity>
@@ -1379,6 +1505,7 @@ export default function RoomInspectionScreen() {
         </Modal>
       </View>
     </KeyboardAvoidingView>
+    </GestureHandlerRootView>
   )
 }
 
@@ -1417,10 +1544,13 @@ const styles = StyleSheet.create({
   aiErrorDismiss: { fontSize: font.md, color: colors.danger, fontWeight: '700', paddingLeft: spacing.sm },
   scroll: { paddingHorizontal: spacing.sm, paddingTop: spacing.sm },
   itemCard: { backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.sm, borderWidth: 1, borderColor: colors.border },
+  itemCardDragging: { backgroundColor: '#f0f7ff', borderColor: colors.primary, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 8, elevation: 8 },
   itemHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
   itemHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flex: 1 },
   itemName: { fontSize: font.sm, fontWeight: '700', color: colors.text, flex: 1 },
   deleteBtn: { fontSize: font.md, color: colors.danger, padding: 4 },
+  itemDragHandle: { paddingHorizontal: 8, paddingVertical: 4, alignItems: 'center', justifyContent: 'center' },
+  itemDragHandleIcon: { fontSize: 18, color: colors.textLight, letterSpacing: 1 },
   questionText: { fontSize: font.sm, color: colors.textMid, fontStyle: 'italic', marginBottom: spacing.xs },
   fieldGroup: { marginTop: 8 },
   fieldLabel: { fontSize: font.xs, fontWeight: '700', color: colors.textLight, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 4 },

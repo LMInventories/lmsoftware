@@ -14,6 +14,12 @@
  *   shooting — no AF re-run before each capture.
  * • Front/back flip supported with separate device lookup.
  * • Camera paused when screen loses focus (navigation push/pop).
+ * • Landscape support: controls column shifts to the right side; button labels
+ *   rotate 90° so they face the user when holding the device sideways.
+ * • outputOrientation="device" bakes rotation into pixel data so thumbnails
+ *   always display upright regardless of per-device EXIF support.
+ * • Capture gate released immediately after takePhoto() resolves — file copy
+ *   runs async so the next shot can start without waiting for I/O.
  */
 
 import React, { useRef, useState, useCallback, useEffect } from 'react'
@@ -27,12 +33,12 @@ import {
   Dimensions,
   Animated,
   Image,
+  BackHandler,
 } from 'react-native'
 import { Camera, useCameraDevice, useCameraPermission } from 'react-native-vision-camera'
 import type { CameraDevice } from 'react-native-vision-camera'
 import * as MediaLibrary from 'expo-media-library'
 // expo-file-system/legacy preserves the makeDirectoryAsync / copyAsync API
-// (the top-level export deprecated them in favour of the new File/Directory classes)
 import * as FileSystem from 'expo-file-system/legacy'
 import {
   GestureHandlerRootView,
@@ -43,6 +49,7 @@ import {
   useNavigation,
   useRoute,
   useIsFocused,
+  useFocusEffect,
   RouteProp,
 } from '@react-navigation/native'
 import type { StackNavigationProp } from '@react-navigation/stack'
@@ -55,14 +62,37 @@ type FlashMode  = 'off' | 'on' | 'auto'
 type Facing     = 'back' | 'front'
 type FocusMode  = 'auto' | 'locked'
 
-// 4:3 viewfinder dimensions — width is full screen, height is 4/3 of that
-const SCREEN_W  = Dimensions.get('window').width
-const PREVIEW_H = Math.round(SCREEN_W * 4 / 3)
+// Controls-strip width in landscape mode (px)
+const CONTROLS_STRIP_W = 110
 
 export default function CameraScreen() {
   const navigation = useNavigation<CameraNavProp>()
   const route      = useRoute<CameraRouteProp>()
   const { inspectionId } = route.params
+
+  // ── Orientation tracking ───────────────────────────────────────────────────
+  // Listen for Dimensions changes so the layout adapts when the device rotates.
+  const [windowDims, setWindowDims] = useState(Dimensions.get('window'))
+  useEffect(() => {
+    const sub = Dimensions.addEventListener('change', ({ window }) => setWindowDims(window))
+    return () => sub.remove()
+  }, [])
+
+  const W = windowDims.width
+  const H = windowDims.height
+  const isLandscape = W > H
+
+  // Portrait: viewfinder = full screen width, 4:3 height
+  // Landscape: viewfinder fills the screen vertically; controls are a side strip
+  const VFINDER_W = isLandscape ? W - CONTROLS_STRIP_W : W
+  const VFINDER_H = isLandscape ? H : Math.round(W * 4 / 3)
+
+  // ── Hardware back button ───────────────────────────────────────────────────
+  useFocusEffect(useCallback(() => {
+    const onBack = () => { navigation.goBack(); return true }
+    BackHandler.addEventListener('hardwareBackPress', onBack)
+    return () => BackHandler.removeEventListener('hardwareBackPress', onBack)
+  }, [navigation]))
 
   // ── VisionCamera permission ────────────────────────────────────────────────
   const { hasPermission, requestPermission } = useCameraPermission()
@@ -79,7 +109,7 @@ export default function CameraScreen() {
   })
   const frontDevice = useCameraDevice('front')
 
-  // Re-fetch device list when camera permission is granted (devices may change)
+  // Re-fetch device list when camera permission is granted
   useEffect(() => {
     try { setAllDevices(Camera.getAvailableCameraDevices()) } catch {}
   }, [hasPermission])
@@ -88,8 +118,7 @@ export default function CameraScreen() {
   const backDevices: CameraDevice[] = allDevices.filter((d: CameraDevice) => d.position === 'back')
 
   // Main back camera: prefer the device whose physicalDevices includes
-  // 'wide-angle-camera' (but NOT ultra-wide-angle-camera alone), or fall back
-  // to the first back-facing device.
+  // 'wide-angle-camera' (but NOT ultra-wide-angle-camera alone).
   const backDevice: CameraDevice | undefined =
     backDevices.find((d: CameraDevice) =>
       d.physicalDevices?.includes('wide-angle-camera') &&
@@ -97,19 +126,14 @@ export default function CameraScreen() {
     ) ?? backDevices[0]
 
   // Ultra-wide device: find a back-facing device that explicitly includes
-  // 'ultra-wide-angle-camera' in its physical devices, OR find one where
-  // physicalDevices contains only ultra-wide (some OEMs expose it standalone).
-  // Also check for OEM variants ('ultrawide', 'ultra_wide', etc.) via fuzzy match.
+  // 'ultra-wide-angle-camera'. Do NOT match 'wide' alone — it falsely matches
+  // 'wide-angle-camera' (the main lens).
   const ultraWideDevice: CameraDevice | undefined = backDevices.find((d: CameraDevice) =>
     (d.physicalDevices ?? []).some(
       (p: string) => p === 'ultra-wide-angle-camera' || p.toLowerCase().includes('ultra')
     )
   )
 
-  // Dual detection strategy:
-  //   hasSeparateUltraWide: a distinct camera device for the ultra-wide lens.
-  //   hasZoomBasedUltraWide: fused camera where minZoom < neutralZoom allows
-  //     reaching the wide angle by zooming out below 1×.
   const hasSeparateUltraWide =
     !!ultraWideDevice && !!backDevice && ultraWideDevice.id !== backDevice.id
   const hasZoomBasedUltraWide =
@@ -135,11 +159,6 @@ export default function CameraScreen() {
   const [lastPhotoUri, setLastPhotoUri]       = useState<string | null>(null)
 
   // ── Focus state ────────────────────────────────────────────────────────────
-  // focusMode 'auto'   — camera uses continuous AF (default); tap gives a
-  //                      brief one-shot focus hint then the reticule fades.
-  // focusMode 'locked' — focus is pre-locked at the last tap point; the
-  //                      reticule stays visible. Captures are faster because
-  //                      the camera does NOT re-run AF before each shot.
   const [focusMode, setFocusMode]   = useState<FocusMode>('auto')
   const [focusPoint, setFocusPoint] = useState<{ x: number; y: number } | null>(null)
   const focusAnim    = useRef(new Animated.Value(0)).current
@@ -166,7 +185,7 @@ export default function CameraScreen() {
   // was adding visible latency. isCapturing state is kept only for the UI.
   const capturingRef = useRef(false)
 
-  // Subtle flash blink on capture — quick enough to not slow down rapid shooting
+  // Subtle flash blink on capture
   const captureFlash = useRef(new Animated.Value(0)).current
   function triggerFlash() {
     Animated.sequence([
@@ -175,7 +194,7 @@ export default function CameraScreen() {
     ]).start()
   }
 
-  // Update zoom to device neutral when active device changes (lens switch / flip).
+  // Update zoom to device neutral when active device changes
   const lastDeviceId = useRef<string | undefined>(undefined)
   if (device && device.id !== lastDeviceId.current) {
     lastDeviceId.current = device.id
@@ -183,33 +202,14 @@ export default function CameraScreen() {
     setActiveZoomLabel(lensMode === 'ultraWide' ? '0.6×' : '1×')
   }
 
-  // Debug: log ALL back cameras so we can see what the device exposes
-  useEffect(() => {
-    console.log('--- CAMERA DEBUG ---')
-    console.log('[Camera] total devices:', allDevices.length)
-    backDevices.forEach((d, i) => {
-      console.log(`[Camera] back[${i}] id=${d.id} physDev=${JSON.stringify(d.physicalDevices)} min=${d.minZoom} neu=${d.neutralZoom} max=${d.maxZoom}`)
-    })
-    console.log('[Camera] selected backDevice.id:', backDevice?.id)
-    console.log('[Camera] ultraWideDevice.id:', ultraWideDevice?.id)
-    console.log('[Camera] hasSeparateUltraWide:', hasSeparateUltraWide)
-    console.log('[Camera] hasZoomBasedUltraWide:', hasZoomBasedUltraWide)
-  }, [allDevices.length, backDevice?.id, ultraWideDevice?.id])
-
   // ── Focus ──────────────────────────────────────────────────────────────────
-  // Calls camera.focus() to pre-lock AF at a point, then shows the reticule.
-  // persistent=true keeps the reticule visible (locked mode); false fades it.
   function handleFocus(x: number, y: number, persistent: boolean) {
-    // Fire-and-forget — some devices don't support manual focus, silently ignore
     cameraRef.current?.focus({ x, y }).catch(() => {})
-
-    // Cancel any running fade-out
     focusTimer.current?.stop()
     setFocusPoint({ x, y })
     focusAnim.setValue(1)
 
     if (!persistent) {
-      // Auto mode: show reticule briefly then fade it out
       focusTimer.current = Animated.sequence([
         Animated.delay(1200),
         Animated.timing(focusAnim, { toValue: 0, duration: 400, useNativeDriver: true }),
@@ -218,22 +218,19 @@ export default function CameraScreen() {
         if (finished) setFocusPoint(null)
       })
     }
-    // Locked mode: reticule stays at full opacity (no timer)
   }
 
   const cycleFocusMode = useCallback(() => {
     if (focusMode === 'auto') {
-      // Switch to locked — pre-lock focus at the centre of the viewfinder
       setFocusMode('locked')
-      handleFocus(SCREEN_W / 2, PREVIEW_H / 2, true)
+      handleFocus(VFINDER_W / 2, VFINDER_H / 2, true)
     } else {
-      // Switch back to auto — clear the lock indicator
       setFocusMode('auto')
       focusTimer.current?.stop()
       focusAnim.setValue(0)
       setFocusPoint(null)
     }
-  }, [focusMode])
+  }, [focusMode, VFINDER_W, VFINDER_H])
 
   // ── Lens / zoom buttons ────────────────────────────────────────────────────
   interface LensButton { label: string; zoom: number; lens: 'main' | 'ultraWide' }
@@ -247,13 +244,9 @@ export default function CameraScreen() {
     if (hasUltraWide) {
       buttons.push({
         label: '0.6×',
-        // Separate device: use its own neutral zoom (1× for that sensor)
-        // Zoom-based: use the fused camera's minZoom
         zoom: hasSeparateUltraWide
           ? (ultraWideDevice?.neutralZoom ?? backDevice.minZoom)
           : backDevice.minZoom,
-        // Only physically switch device if it's separate; otherwise stay on
-        // backDevice and just adjust the zoom value
         lens: hasSeparateUltraWide ? 'ultraWide' : 'main',
       })
     }
@@ -264,12 +257,10 @@ export default function CameraScreen() {
   }
   const zoomButtons = buildZoomButtons()
 
-  // ── Pinch gesture (JS thread, no Reanimated needed) ───────────────────────
+  // ── Pinch gesture ─────────────────────────────────────────────────────────
   const baseZoom = useRef(1)
   const pinchGesture = Gesture.Pinch()
-    .onStart(() => {
-      baseZoom.current = zoom
-    })
+    .onStart(() => { baseZoom.current = zoom })
     .onUpdate((e) => {
       if (!device) return
       const next = Math.min(
@@ -277,13 +268,11 @@ export default function CameraScreen() {
         Math.max(device.minZoom, baseZoom.current * e.scale)
       )
       setZoom(next)
-      setActiveZoomLabel('') // deselect preset button during manual pinch
+      setActiveZoomLabel('')
     })
     .runOnJS(true)
 
   // ── Tap-to-focus gesture ───────────────────────────────────────────────────
-  // Sits on the viewfinder only. In 'locked' mode the focus stays put;
-  // in 'auto' mode it gives a brief one-shot pre-focus then fades.
   const tapGesture = Gesture.Tap()
     .runOnJS(true)
     .onEnd((e) => {
@@ -291,11 +280,14 @@ export default function CameraScreen() {
     })
 
   // ── Capture ────────────────────────────────────────────────────────────────
+  // Speed optimisation: the capture gate (capturingRef) is released immediately
+  // after takePhoto() resolves — before the file copy finishes — so the user
+  // can trigger the next shot right away. copyAsync + triggerCapture run as an
+  // independent async chain and never block the shutter button.
   const handleCapture = useCallback(async () => {
-    // Use capturingRef as the hard gate — no state update, no re-render stall.
     if (!cameraRef.current || capturingRef.current || !device || !photoDirRef.current) return
     capturingRef.current = true
-    setIsCapturing(true)   // UI only: dims shutter button
+    setIsCapturing(true)
     try {
       const photo = await cameraRef.current.takePhoto({
         flash,
@@ -305,29 +297,29 @@ export default function CameraScreen() {
         skipMetadata: true,
       })
 
-      // VisionCamera returns an absolute path without file:// on Android.
       const srcUri = photo.path.startsWith('file://')
         ? photo.path
         : `file://${photo.path}`
 
-      // 1. Copy to app-private storage (directory was pre-created at mount).
-      const dest = `${photoDirRef.current}${Date.now()}.jpg`
-      await FileSystem.copyAsync({ from: srcUri, to: dest })
-
-      // 2. Hand off to calling screen. Release gate BEFORE gallery save so the
-      //    next shot can be triggered immediately without waiting for MediaLibrary.
-      triggerCapture(dest)
-      triggerFlash()
-      setLastPhotoUri(dest)
+      // Release gate BEFORE file I/O — next shot can start immediately
       capturingRef.current = false
       setIsCapturing(false)
+      triggerFlash()
 
-      // 3. Save to device gallery async — never blocks the capture pipeline.
-      if (mlPermGranted.current) {
-        MediaLibrary.saveToLibraryAsync(srcUri).catch(e =>
-          console.warn('[CameraScreen] gallery save failed:', e)
-        )
-      }
+      // File copy + handoff + gallery save run asynchronously
+      const dest = `${photoDirRef.current}${Date.now()}.jpg`
+      FileSystem.copyAsync({ from: srcUri, to: dest })
+        .then(() => {
+          triggerCapture(dest)
+          setLastPhotoUri(dest)
+          if (mlPermGranted.current) {
+            MediaLibrary.saveToLibraryAsync(srcUri).catch(e =>
+              console.warn('[CameraScreen] gallery save failed:', e)
+            )
+          }
+        })
+        .catch(e => console.warn('[CameraScreen] copy failed:', e))
+
     } catch (err: any) {
       console.error('[CameraScreen] capture error', err)
       Alert.alert(
@@ -342,8 +334,7 @@ export default function CameraScreen() {
   // ── Controls ───────────────────────────────────────────────────────────────
   const toggleFacing = useCallback(() => {
     setFacing(f => f === 'back' ? 'front' : 'back')
-    setLensMode('main')  // always start on main lens when flipping
-    // Clear any focus lock when flipping cameras
+    setLensMode('main')
     setFocusMode('auto')
     focusAnim.setValue(0)
     setFocusPoint(null)
@@ -353,8 +344,11 @@ export default function CameraScreen() {
     setFlash(f => f === 'off' ? 'on' : f === 'on' ? 'auto' : 'off')
   }, [])
 
-  const flashLabel   = flash === 'off' ? '⚡✕' : flash === 'on' ? '⚡' : '⚡A'
-  const focusLocked  = focusMode === 'locked'
+  const flashLabel  = flash === 'off' ? '⚡✕' : flash === 'on' ? '⚡' : '⚡A'
+  const focusLocked = focusMode === 'locked'
+
+  // In landscape, rotate button labels 90° CCW so they face the user
+  const btnRotate: { rotate: string }[] = isLandscape ? [{ rotate: '-90deg' }] : []
 
   // ── Permission gate ────────────────────────────────────────────────────────
   if (!hasPermission) {
@@ -374,7 +368,6 @@ export default function CameraScreen() {
     )
   }
 
-  // ── No device available ────────────────────────────────────────────────────
   if (!device) {
     return (
       <View style={[styles.root, styles.centreBox]}>
@@ -394,11 +387,11 @@ export default function CameraScreen() {
     <GestureHandlerRootView style={styles.root}>
       {/* Outer gesture detector: pinch-to-zoom across the whole screen */}
       <GestureDetector gesture={pinchGesture}>
-        <View style={styles.root}>
+        <View style={[styles.root, isLandscape && styles.rootLandscape]}>
 
-          {/* ── 4:3 viewfinder — tap anywhere to focus ── */}
+          {/* ── Viewfinder (tap anywhere to focus) ── */}
           <GestureDetector gesture={tapGesture}>
-            <View style={styles.viewfinder}>
+            <View style={[styles.viewfinder, { width: VFINDER_W, height: VFINDER_H }]}>
               <Camera
                 ref={cameraRef}
                 style={StyleSheet.absoluteFill}
@@ -407,6 +400,9 @@ export default function CameraScreen() {
                 photo={true}
                 zoom={zoom}
                 photoQualityBalance="speed"
+                // Bakes device rotation into pixel data so thumbnails always
+                // appear upright, regardless of EXIF support on the device.
+                outputOrientation="device"
               />
 
               {/* White flash overlay — briefly visible after each capture */}
@@ -415,7 +411,7 @@ export default function CameraScreen() {
                 style={[StyleSheet.absoluteFill, { backgroundColor: '#fff', opacity: captureFlash }]}
               />
 
-              {/* Focus reticule — appears at tap point, fades in auto / stays in locked */}
+              {/* Focus reticule — appears at tap point */}
               {focusPoint && (
                 <Animated.View
                   pointerEvents="none"
@@ -436,7 +432,6 @@ export default function CameraScreen() {
                 <TouchableOpacity style={styles.iconBtn} onPress={() => navigation.goBack()}>
                   <Text style={styles.iconText}>✕</Text>
                 </TouchableOpacity>
-
                 {/* Focus mode toggle: AF (auto) ↔ 🔒 (locked) */}
                 <TouchableOpacity
                   style={[styles.iconBtn, focusLocked && styles.iconBtnActive]}
@@ -446,7 +441,6 @@ export default function CameraScreen() {
                     {focusLocked ? '🔒' : 'AF'}
                   </Text>
                 </TouchableOpacity>
-
                 <TouchableOpacity style={styles.iconBtn} onPress={cycleFlash}>
                   <Text style={styles.iconText}>{flashLabel}</Text>
                 </TouchableOpacity>
@@ -454,44 +448,28 @@ export default function CameraScreen() {
             </View>
           </GestureDetector>
 
-          {/* ── Controls below the viewfinder ── */}
-          <View style={styles.controlsArea}>
-            {/* ── TEMP DEBUG OVERLAY — remove once ultra-wide is confirmed working ── */}
-            <View style={styles.debugBox}>
-              <Text style={styles.debugText}>
-                allDev:{allDevices.length}  back:{backDevices.length}  UW:{ultraWideDevice?.id?.slice(-4) ?? 'none'}
-              </Text>
-              {backDevices.map((d, i) => (
-                <Text key={d.id} style={styles.debugText}>
-                  [{i}] {JSON.stringify(d.physicalDevices)} {d.minZoom.toFixed(1)}-{d.maxZoom.toFixed(0)}x
-                </Text>
-              ))}
-              <Text style={styles.debugText}>
-                sepUW:{String(hasSeparateUltraWide)} zoomUW:{String(hasZoomBasedUltraWide)}
-              </Text>
-            </View>
-
-            {/* Zoom / lens buttons — switching to 0.6× physically swaps to ultra-wide device */}
-            <View style={styles.zoomBar}>
+          {/* ── Controls (below viewfinder in portrait · right strip in landscape) ── */}
+          <View style={[
+            styles.controlsArea,
+            isLandscape && { width: CONTROLS_STRIP_W, height: H },
+          ]}>
+            {/* Zoom / lens buttons */}
+            <View style={[styles.zoomBar, isLandscape && styles.zoomBarLandscape]}>
               {zoomButtons.map(({ label, zoom: z, lens }) => (
                 <TouchableOpacity
                   key={label}
-                  style={[
-                    styles.zoomBtn,
-                    activeZoomLabel === label && styles.zoomBtnActive,
-                  ]}
+                  style={[styles.zoomBtn, activeZoomLabel === label && styles.zoomBtnActive]}
                   onPress={() => {
                     setLensMode(lens)
                     setZoom(z)
                     setActiveZoomLabel(label)
                   }}
                 >
-                  <Text
-                    style={[
-                      styles.zoomText,
-                      activeZoomLabel === label && styles.zoomTextActive,
-                    ]}
-                  >
+                  <Text style={[
+                    styles.zoomText,
+                    activeZoomLabel === label && styles.zoomTextActive,
+                    btnRotate.length > 0 && { transform: btnRotate },
+                  ]}>
                     {label}
                   </Text>
                 </TouchableOpacity>
@@ -499,9 +477,9 @@ export default function CameraScreen() {
             </View>
 
             {/* Shutter row: flip · shutter · last-photo thumbnail */}
-            <View style={styles.shutterRow}>
+            <View style={[styles.shutterRow, isLandscape && styles.shutterRowLandscape]}>
               <TouchableOpacity style={styles.iconBtn} onPress={toggleFacing}>
-                <Text style={styles.iconText}>🔄</Text>
+                <Text style={[styles.iconText, btnRotate.length > 0 && { transform: btnRotate }]}>🔄</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -515,7 +493,7 @@ export default function CameraScreen() {
                 }
               </TouchableOpacity>
 
-              {/* Last-photo thumbnail — tap to open ItemGallery for rotate/delete */}
+              {/* Last-photo thumbnail — tap to open ItemGallery */}
               <TouchableOpacity
                 style={styles.thumbBtn}
                 onPress={() => {
@@ -541,7 +519,6 @@ export default function CameraScreen() {
 
         </View>
       </GestureDetector>
-
     </GestureHandlerRootView>
   )
 }
@@ -551,6 +528,11 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: '#000',
+  },
+  // In landscape the viewfinder and controls sit side-by-side
+  rootLandscape: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
   },
 
   // Centred info screens (permission / no device)
@@ -594,15 +576,13 @@ const styles = StyleSheet.create({
     fontSize: 15,
   },
 
-  // 4:3 viewfinder box
+  // Viewfinder — dimensions set dynamically from VFINDER_W / VFINDER_H
   viewfinder: {
-    width: SCREEN_W,
-    height: PREVIEW_H,
     backgroundColor: '#000',
     overflow: 'hidden',
   },
 
-  // Controls area below the viewfinder
+  // Controls area — portrait: flex below viewfinder · landscape: fixed-width strip
   controlsArea: {
     flex: 1,
     backgroundColor: '#111',
@@ -610,24 +590,7 @@ const styles = StyleSheet.create({
     paddingBottom: 16,
   },
 
-  // Temporary debug overlay
-  debugBox: {
-    backgroundColor: 'rgba(0,0,0,0.75)',
-    padding: 6,
-    marginHorizontal: 8,
-    marginBottom: 6,
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: '#ff0',
-  },
-  debugText: {
-    color: '#ff0',
-    fontSize: 10,
-    fontFamily: 'monospace',
-    lineHeight: 15,
-  },
-
-  // Camera layout
+  // Top bar overlaid on the viewfinder
   topBar: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -635,11 +598,19 @@ const styles = StyleSheet.create({
     paddingTop: 52,
     paddingBottom: 12,
   },
+
+  // Zoom buttons — portrait: horizontal row · landscape: vertical column
   zoomBar: {
     flexDirection: 'row',
     justifyContent: 'center',
     gap: 12,
     marginBottom: 20,
+  },
+  zoomBarLandscape: {
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 0,
   },
   zoomBtn: {
     paddingHorizontal: 16,
@@ -661,12 +632,23 @@ const styles = StyleSheet.create({
   zoomTextActive: {
     color: '#000',
   },
+
+  // Shutter row — portrait: horizontal · landscape: vertical column
   shutterRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-around',
     paddingHorizontal: 32,
   },
+  shutterRowLandscape: {
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'space-around',
+    paddingHorizontal: 0,
+    paddingVertical: 16,
+    gap: 16,
+  },
+
   iconBtn: {
     width: 44,
     height: 44,
@@ -675,7 +657,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  // Active state for the AF/lock toggle button (yellow when locked)
   iconBtnActive: {
     backgroundColor: 'rgba(255,220,0,0.9)',
   },
@@ -686,6 +667,7 @@ const styles = StyleSheet.create({
   iconTextActive: {
     color: '#000',
   },
+
   shutter: {
     width: 72,
     height: 72,
@@ -708,7 +690,7 @@ const styles = StyleSheet.create({
     borderColor: '#ddd',
   },
 
-  // Last-photo thumbnail (replaces blank spacer to the right of shutter)
+  // Last-photo thumbnail
   thumbBtn: {
     width: 52,
     height: 52,
@@ -737,7 +719,6 @@ const styles = StyleSheet.create({
     borderColor: '#ffdc00',
     borderRadius: 3,
   },
-  // Locked variant: slightly thicker border to indicate persistent lock
   focusReticuleLocked: {
     borderWidth: 2.5,
     borderColor: '#ffdc00',

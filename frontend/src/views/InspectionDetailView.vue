@@ -33,9 +33,13 @@ const photoUploading = ref(false)
 const localPhoto = ref(null)
 
 // PDF export
-const showPdfExport      = ref(false)
-const pdfTemplate        = ref(null)
-const pdfReportData      = ref({})
+const showPdfExport        = ref(false)
+const pdfTemplate          = ref(null)
+const pdfReportData        = ref({})
+const pdfFixedSections     = ref([])
+const pdfRooms             = ref([])
+const pdfActionCatalogue   = ref([])
+const pdfPhotoSettings     = ref({})
 const pdfClientSettings  = ref({})
 
 const editForms = ref({
@@ -342,25 +346,94 @@ async function savePhoto() {
 }
 
 // ── PDF export ──────────────────────────────────────────────────────
+
+// Mirrors InspectionReportView helpers for building fixed-section rows
+function _inferFsType(cols) {
+  const c = cols || []
+  if (c.includes('reading'))                                                 return 'meter_readings'
+  if (c.includes('cleanliness'))                                             return 'cleaning_summary'
+  if (c.includes('name') && c.includes('answer') && c.includes('question')) return 'fire_door_safety'
+  if (c.includes('answer') && c.includes('question'))                       return 'smoke_alarms'
+  if (c.includes('answer') && c.includes('description'))                    return 'health_safety'
+  if (c.includes('answer') && c.includes('name'))                           return 'smoke_alarms'
+  if (c.includes('condition'))                                               return 'condition_summary'
+  if (c.includes('description'))                                             return 'keys'
+  return 'condition_summary'
+}
+function _adaptFsItem(item, type, idx, secIdx) {
+  const id = `fs_${secIdx}_${idx}`
+  switch (type) {
+    case 'meter_readings':    return { id, name: item.name || '', locationSerial: item.location_serial || '', reading: item.reading || '' }
+    case 'cleaning_summary':  return { id, name: item.name || '', cleanliness: '', cleanlinessNotes: item.additional_notes || '' }
+    case 'condition_summary': return { id, name: item.name || '', condition: item.condition || item.description || '' }
+    case 'keys':              return { id, name: item.name || '', description: item.description || '' }
+    case 'smoke_alarms':      return { id, question: item.name || '', answer: '', location: '' }
+    case 'fire_door_safety':  return { id, name: item.name || '', question: '', answer: '' }
+    case 'health_safety':     return { id, question: item.name || '', answer: '', description: '' }
+    default:                  return { id, name: item.name || '', condition: '' }
+  }
+}
+
 async function openPdfExport() {
   try {
-    const iRes = await api.getInspection(inspection.value.id)
+    const iRes  = await api.getInspection(inspection.value.id)
     const fresh = iRes.data
-    // Fetch full client settings directly so colour/branding fields are always present
+    const rd    = fresh.report_data ? JSON.parse(fresh.report_data) : {}
+
+    // ── Client settings + photo settings ──────────────────────────────
     const clientId = fresh.client?.id || inspection.value?.client?.id
     if (clientId) {
       const cRes = await api.getClient(clientId)
       pdfClientSettings.value = cRes.data || {}
+      try { pdfPhotoSettings.value = JSON.parse(cRes.data.report_photo_settings || '{}') } catch { pdfPhotoSettings.value = {} }
     } else {
       pdfClientSettings.value = fresh.client || {}
+      pdfPhotoSettings.value  = {}
     }
+
+    // ── Template ───────────────────────────────────────────────────────
     let tpl = null
     if (fresh.template_id) {
       const tRes = await api.getTemplate(fresh.template_id)
       tpl = tRes.data
     }
     pdfTemplate.value = tpl
-    pdfReportData.value = fresh.report_data ? JSON.parse(fresh.report_data) : {}
+
+    // ── Rooms (from template relational sections) ───────────────────────
+    const templateRooms = (tpl?.sections || [])
+      .filter(s => s.section_type === 'room')
+      .map(s => ({
+        ...s,
+        name:     rd._roomNames?.[String(s.id)] ?? s.name,
+        sections: (s.items || []).map(item => ({
+          ...item,
+          label:          item.name || item.label || '',
+          hasDescription: true,
+          hasCondition:   item.requires_condition !== false,
+        })),
+      }))
+    const importedRooms = (rd._importedRooms || []).map(r => ({ ...r, _isImported: true, sections: [] }))
+    pdfRooms.value = [...templateRooms, ...importedRooms]
+
+    // ── Fixed sections (from system-wide config) ────────────────────────
+    try {
+      const fsRes = await api.getFixedSections()
+      pdfFixedSections.value = (fsRes.data || [])
+        .filter(s => s.enabled !== false)
+        .map((s, si) => {
+          const type = _inferFsType(s.columns)
+          const rows = (s.items || []).map((item, i) => _adaptFsItem(item, type, i, si))
+          return { id: `fs_${si}_${s.name.toLowerCase().replace(/[^a-z0-9]/g,'_')}`, name: s.name, type, rows }
+        })
+    } catch { pdfFixedSections.value = [] }
+
+    // ── Action catalogue ────────────────────────────────────────────────
+    try {
+      const aRes = await api.getActions()
+      pdfActionCatalogue.value = aRes.data.actions || []
+    } catch { pdfActionCatalogue.value = [] }
+
+    pdfReportData.value = rd
     showPdfExport.value = true
   } catch {
     toast.error('Failed to load report data for export')
@@ -1037,6 +1110,10 @@ onMounted(() => {
         :template="pdfTemplate"
         :report-data="pdfReportData"
         :client-settings="pdfClientSettings"
+        :fixed-sections="pdfFixedSections"
+        :rooms="pdfRooms"
+        :action-catalogue="pdfActionCatalogue"
+        :photo-settings="pdfPhotoSettings"
         @close="showPdfExport = false"
       />
 

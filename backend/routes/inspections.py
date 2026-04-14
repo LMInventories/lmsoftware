@@ -374,28 +374,52 @@ def update_inspection(inspection_id):
 
                     prop   = insp.property
                     client = prop.client if prop else None
-                    print(f'[pdf] background: generating PDF for inspection {_insp_id} — {_prop_addr}')
+
+                    print(f'[pdf] ── background thread: inspection {_insp_id} ──')
+                    print(f'[pdf]   address        : {_prop_addr}')
+                    print(f'[pdf]   client         : {client.name if client else "NONE"}')
+                    print(f'[pdf]   client email   : {client.email if client else "NONE"}')
+                    print(f'[pdf]   email override : {insp.client_email_override!r}')
+                    print(f'[pdf]   tenant email   : {insp.tenant_email!r}')
 
                     from routes.pdf_generator import generate_inspection_pdf, _get_report_recipients
                     recipients = _get_report_recipients(insp)
-                    print(f'[pdf] recipients: {recipients}')
+                    print(f'[pdf]   recipients     : {recipients}')
 
                     if not recipients:
-                        print(f'[pdf] WARNING: no recipients — PDF not sent.')
-                        return
-                    if not client:
-                        print(f'[pdf] WARNING: no client — cannot send email.')
+                        print(f'[pdf] WARNING: no recipients resolved — set client email, email override, or tenant email on the inspection.')
                         return
 
+                    # Generate PDF
                     pdf_bytes = generate_inspection_pdf(_insp_id)
                     print(f'[pdf] PDF generated OK — {len(pdf_bytes)} bytes')
 
+                    # Send — use client object if available; fall back to a stub so the
+                    # email body still renders when client relationship can't be loaded.
                     from routes.email_service import send_report_complete
-                    ok, err = send_report_complete(insp, client, prop, pdf_bytes, recipients=recipients)
+                    effective_client = client
+                    if not effective_client:
+                        class _StubClient:
+                            name    = 'Client'
+                            email   = ''
+                            company = ''
+                            logo    = None
+                            primary_color            = '#1E3A8A'
+                            report_color_override    = None
+                            report_header_text_color = '#FFFFFF'
+                            report_body_text_color   = '#1e293b'
+                            report_orientation       = 'portrait'
+                            report_disclaimer        = ''
+                        effective_client = _StubClient()
+                        print(f'[pdf] WARNING: no client object — using stub for email body')
+
+                    ok, err = send_report_complete(insp, effective_client, prop, pdf_bytes, recipients=recipients)
                     if ok:
                         print(f'[pdf] email sent OK → {recipients}')
                     else:
                         print(f'[pdf] email FAILED: {err}')
+                        if 'credentials not configured' in str(err):
+                            print(f'[pdf] ACTION REQUIRED: set SMTP_USER and SMTP_PASSWORD in Railway environment variables')
 
                 except Exception:
                     import traceback

@@ -23,10 +23,10 @@ const clientPrefs = ref({})   // { [clientId]: { inspection_created, inspection_
 const clientSaveMsg = ref({}) // { [clientId]: 'Saved!' }
 
 const EVENTS = [
-  { key: 'inspection_created',   icon: '🆕', label: 'Inspection Created',   desc: 'Sent when a new inspection is scheduled' },
-  { key: 'inspection_updated',   icon: '✏️', label: 'Inspection Updated',    desc: 'Sent when inspection details are changed' },
-  { key: 'inspection_completed', icon: '✅', label: 'Inspection Completed',  desc: 'Sent when an inspection is marked complete' },
-  { key: 'inspection_reminder',  icon: '⏰', label: '24-Hour Reminder',       desc: 'Sent 24 hours before the scheduled inspection' },
+  { key: 'inspection_created', label: 'Inspection Created',   desc: 'Sent when a new inspection is scheduled' },
+  { key: 'inspection_updated', label: 'Inspection Updated',    desc: 'Sent when inspection details are changed' },
+  { key: 'inspection_completed', label: 'Inspection Completed',  desc: 'Sent when an inspection is marked complete' },
+  { key: 'inspection_reminder', label: '24-Hour Reminder',       desc: 'Sent 24 hours before the scheduled inspection' },
 ]
 
 // ── Load ─────────────────────────────────────────────────────────────────────
@@ -41,6 +41,10 @@ async function loadAll() {
 
     if (globalRes.data) {
       globalSettings.value = { ...globalSettings.value, ...globalRes.data }
+    }
+    // Pre-populate template with default so it is always directly editable
+    if (!globalSettings.value.confirmation_template) {
+      globalSettings.value.confirmation_template = DEFAULT_CONFIRMATION_TEMPLATE
     }
 
     // Load per-client prefs in parallel
@@ -119,14 +123,6 @@ async function triggerClerkSummaries() {
 }
 
 // ── Confirmation emails ────────────────────────────────────────────────────────
-const LEAD_DAYS = [
-  { value: 1,  label: '1 day' },
-  { value: 2,  label: '2 days' },
-  { value: 3,  label: '3 days' },
-  { value: 7,  label: '1 week' },
-  { value: 14, label: '2 weeks' },
-]
-
 const DEFAULT_CONFIRMATION_TEMPLATE = `Dear {recipient_name},
 
 This is a courtesy reminder that an inspection has been scheduled at {property_address}.
@@ -144,11 +140,32 @@ If you have any questions, please don't hesitate to get in touch.
 Kind regards,
 LM Inventories`
 
-function toggleLeadDay(day) {
+// Free-form lead days
+const newDayInput = ref('')
+
+function addLeadDay() {
+  const val = parseInt(newDayInput.value, 10)
+  if (!val || val < 1 || val > 365) return
+  const days = globalSettings.value.confirmation_days
+  if (!days.includes(val)) {
+    days.push(val)
+    days.sort((a, b) => a - b)
+  }
+  newDayInput.value = ''
+}
+
+function removeLeadDay(day) {
   const days = globalSettings.value.confirmation_days
   const idx  = days.indexOf(day)
-  if (idx === -1) days.push(day)
-  else            days.splice(idx, 1)
+  if (idx !== -1) days.splice(idx, 1)
+}
+
+function dayLabel(n) {
+  if (n === 1)  return '1 day'
+  if (n === 7)  return '1 week'
+  if (n === 14) return '2 weeks'
+  if (n % 7 === 0) return `${n / 7} weeks`
+  return `${n} days`
 }
 
 const confirmTriggerResult = ref(null)
@@ -168,18 +185,19 @@ async function triggerConfirmationEmails() {
 
 function insertPlaceholder(ph) {
   const ta = document.getElementById('conf-template-ta')
+  const insertion = '{' + ph + '}'
   if (!ta) {
-    globalSettings.value.confirmation_template += `{${ph}}`
+    globalSettings.value.confirmation_template += insertion
     return
   }
   const start = ta.selectionStart
   const end   = ta.selectionEnd
   const val   = globalSettings.value.confirmation_template
-  globalSettings.value.confirmation_template = val.slice(0, start) + `{${ph}}` + val.slice(end)
-  ta.$nextTick?.(() => {
-    ta.selectionStart = ta.selectionEnd = start + ph.length + 2
+  globalSettings.value.confirmation_template = val.slice(0, start) + insertion + val.slice(end)
+  setTimeout(() => {
+    ta.selectionStart = ta.selectionEnd = start + insertion.length
     ta.focus()
-  })
+  }, 0)
 }
 </script>
 
@@ -366,23 +384,37 @@ function insertPlaceholder(ph) {
           </label>
         </div>
 
-        <!-- Lead times -->
-        <div class="setting-row" :class="{ faded: !globalSettings.confirmation_enabled }">
-          <div class="setting-info">
+        <!-- Lead times — free-form -->
+        <div class="setting-block" :class="{ faded: !globalSettings.confirmation_enabled }">
+          <div class="setting-info" style="margin-bottom:10px;">
             <span class="setting-label">Send Reminders</span>
-            <span class="setting-desc">Choose how many days before the inspection to send each email</span>
+            <span class="setting-desc">Enter any number of days before the inspection date to add a reminder email</span>
           </div>
-          <div class="lead-day-chips">
-            <button
-              v-for="ld in LEAD_DAYS"
-              :key="ld.value"
-              class="day-chip"
-              :class="{ active: globalSettings.confirmation_days.includes(ld.value) }"
+          <div class="days-input-row">
+            <input
+              type="number"
+              class="days-input"
+              v-model="newDayInput"
+              min="1"
+              max="365"
+              placeholder="e.g. 5"
               :disabled="!globalSettings.confirmation_enabled"
-              @click="toggleLeadDay(ld.value)">
-              {{ ld.label }}
+              @keyup.enter="addLeadDay" />
+            <span class="days-input-unit">days before</span>
+            <button
+              class="btn-add-day"
+              :disabled="!globalSettings.confirmation_enabled || !newDayInput"
+              @click="addLeadDay">
+              + Add
             </button>
           </div>
+          <div class="day-tags" v-if="globalSettings.confirmation_days.length">
+            <span v-for="d in globalSettings.confirmation_days" :key="d" class="day-tag">
+              {{ dayLabel(d) }}
+              <button class="day-tag-remove" :disabled="!globalSettings.confirmation_enabled" @click="removeLeadDay(d)" title="Remove">×</button>
+            </span>
+          </div>
+          <p v-else class="days-empty">No reminders configured — add at least one.</p>
         </div>
 
         <!-- Key-holder logic info -->
@@ -410,19 +442,18 @@ function insertPlaceholder(ph) {
               class="ph-chip"
               :disabled="!globalSettings.confirmation_enabled"
               @click="insertPlaceholder(ph)">
-              {​{ ph }}
+              {{ '{' + ph + '}' }}
             </button>
           </div>
           <textarea
             id="conf-template-ta"
             class="template-ta"
-            :placeholder="DEFAULT_CONFIRMATION_TEMPLATE"
             v-model="globalSettings.confirmation_template"
             :disabled="!globalSettings.confirmation_enabled"
             rows="14">
           </textarea>
           <p class="template-hint">
-            If the template is blank, the system default is used (shown as placeholder above).
+            Edit the template above to customise the email for your company. Click any placeholder button to insert it at the cursor.
           </p>
         </div>
 
@@ -624,16 +655,40 @@ function insertPlaceholder(ph) {
 .btn-save:hover:not(:disabled) { background: #1e40af; }
 .btn-save:disabled { background: #cbd5e1; cursor: not-allowed; }
 
-/* ── Lead day chips ── */
-.lead-day-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.day-chip {
-  padding: 5px 14px; border-radius: 999px; border: 1.5px solid #e2e8f0;
-  background: #f8fafc; color: #64748b; font-size: 13px; font-weight: 600;
-  cursor: pointer; transition: all .15s;
+/* ── Free-form days input ── */
+.setting-block {
+  padding: 16px 20px; border-bottom: 1px solid #f1f5f9; transition: opacity .2s;
 }
-.day-chip.active { background: #1e3a8a; color: #fff; border-color: #1e3a8a; }
-.day-chip:hover:not(:disabled):not(.active) { background: #e2e8f0; border-color: #cbd5e1; }
-.day-chip:disabled { opacity: .4; cursor: not-allowed; }
+.setting-block.faded { opacity: .45; pointer-events: none; }
+.days-input-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.days-input {
+  width: 80px; padding: 7px 10px; border: 1px solid #e2e8f0; border-radius: 7px;
+  font-size: 14px; color: #1e293b; background: #fff;
+}
+.days-input:focus { outline: none; border-color: #93c5fd; }
+.days-input:disabled { background: #f8fafc; color: #cbd5e1; }
+.days-input-unit { font-size: 13px; color: #64748b; white-space: nowrap; }
+.btn-add-day {
+  padding: 7px 14px; background: #1e3a8a; color: #fff;
+  border: none; border-radius: 7px; font-size: 13px; font-weight: 600;
+  cursor: pointer; transition: background .15s;
+}
+.btn-add-day:hover:not(:disabled) { background: #1e40af; }
+.btn-add-day:disabled { background: #cbd5e1; cursor: not-allowed; }
+.day-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.day-tag {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 10px; background: #dbeafe; color: #1e40af;
+  border: 1px solid #bfdbfe; border-radius: 999px;
+  font-size: 13px; font-weight: 600;
+}
+.day-tag-remove {
+  background: none; border: none; color: #1e40af; cursor: pointer;
+  font-size: 15px; line-height: 1; padding: 0 1px; opacity: .7;
+}
+.day-tag-remove:hover:not(:disabled) { opacity: 1; }
+.day-tag-remove:disabled { cursor: not-allowed; }
+.days-empty { font-size: 12px; color: #f87171; margin: 4px 0 0; }
 
 /* ── Template section ── */
 .template-section {
@@ -672,3 +727,4 @@ function insertPlaceholder(ph) {
 .test-result.success { background: #dcfce7; color: #166534; border: 1px solid #bbf7d0; }
 .test-result.fail    { background: #fee2e2; color: #b91c1c; border: 1px solid #fecaca; }
 </style>
+                                                             

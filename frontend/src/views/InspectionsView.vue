@@ -694,7 +694,7 @@ onMounted(() => {
     <!-- Tabs -->
     <div class="tabs">
       <button @click="activeTab = 'list'" class="tab-button" :class="{ active: activeTab === 'list' }">
-        📄 List View
+        List View
       </button>
       <button @click="activeTab = 'calendar'" class="tab-button" :class="{ active: activeTab === 'calendar' }">
         Calendar View

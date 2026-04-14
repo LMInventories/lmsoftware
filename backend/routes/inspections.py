@@ -517,8 +517,8 @@ def preview_pdf(inspection_id):
 @jwt_required()
 def share_pdf(inspection_id):
     from routes.pdf_generator import generate_inspection_pdf
-    from routes.email_service import send_report_complete
     from permissions import is_admin_or_manager
+    import threading
 
     user = get_current_user()
     if not is_admin_or_manager(user):
@@ -543,30 +543,52 @@ def share_pdf(inspection_id):
         print(traceback.format_exc())
         return jsonify({'error': f'PDF generation failed: {e}'}), 500
 
-    client = inspection.property.client if inspection.property else None
+    # Run the SMTP send in a background thread so the HTTP response returns
+    # immediately and Gunicorn's request timeout can't kill the worker.
+    from flask import current_app
+    _app        = current_app._get_current_object()
+    _insp_id    = inspection_id
+    _emails     = list(emails)
+    _pdf_bytes  = pdf_bytes
 
-    class _StubClient:
-        name                     = 'Client'
-        email                    = ''
-        company                  = ''
-        logo                     = None
-        primary_color            = '#1E3A8A'
-        report_color_override    = None
-        report_header_text_color = '#FFFFFF'
-        report_body_text_color   = '#1e293b'
-        report_orientation       = 'portrait'
-        report_disclaimer        = ''
+    def _send_shared():
+        with _app.app_context():
+            try:
+                from models import Inspection as _Insp
+                from routes.email_service import send_report_complete
+                insp   = _Insp.query.get(_insp_id)
+                client = insp.property.client if insp.property else None
+                prop   = insp.property
 
-    effective_client = client or _StubClient()
-    prop             = inspection.property
+                class _StubClient:
+                    name                     = 'Client'
+                    email                    = ''
+                    company                  = ''
+                    logo                     = None
+                    primary_color            = '#1E3A8A'
+                    report_color_override    = None
+                    report_header_text_color = '#FFFFFF'
+                    report_body_text_color   = '#1e293b'
+                    report_orientation       = 'portrait'
+                    report_disclaimer        = ''
 
-    ok, err = send_report_complete(
-        inspection, effective_client, prop, pdf_bytes, recipients=emails
-    )
-    if ok:
-        return jsonify({'message': f'Report sent to {", ".join(emails)}'})
-    else:
-        return jsonify({'error': f'Failed to send: {err}'}), 500
+                effective_client = client or _StubClient()
+                ok, err = send_report_complete(
+                    insp, effective_client, prop, _pdf_bytes, recipients=_emails
+                )
+                if ok:
+                    print(f'[share-pdf] sent OK → {_emails}')
+                else:
+                    print(f'[share-pdf] FAILED: {err}')
+            except Exception:
+                import traceback
+                print('[share-pdf] EXCEPTION:')
+                print(traceback.format_exc())
+
+    threading.Thread(target=_send_shared, daemon=False).start()
+
+    # Return immediately — the send happens in the background
+    return jsonify({'message': f'Report queued for delivery to {", ".join(emails)}'})
 
 
 # ─────────────────────────────────────────────────────────────────────────────

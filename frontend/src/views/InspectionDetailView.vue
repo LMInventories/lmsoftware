@@ -40,7 +40,12 @@ const pdfFixedSections     = ref([])
 const pdfRooms             = ref([])
 const pdfActionCatalogue   = ref([])
 const pdfPhotoSettings     = ref({})
-const pdfClientSettings  = ref({})
+const pdfClientSettings    = ref({})
+
+// Share PDF modal
+const showSharePdf      = ref(false)
+const sharePdfEmails    = ref('')
+const sharePdfSending   = ref(false)
 
 const editForms = ref({
   conduct_date: '',
@@ -440,6 +445,25 @@ async function openPdfExport() {
   }
 }
 
+// ── Share PDF — send to user-supplied addresses ─────────────────────
+async function sendSharedPdf() {
+  const raw    = sharePdfEmails.value.trim()
+  const emails = raw.split(',').map(e => e.trim()).filter(Boolean)
+  if (!emails.length) { toast.error('Please enter at least one email address'); return }
+
+  sharePdfSending.value = true
+  try {
+    await api.sharePdf(inspection.value.id, emails)
+    toast.success(`Report sent to ${emails.join(', ')}`)
+    showSharePdf.value  = false
+    sharePdfEmails.value = ''
+  } catch (err) {
+    toast.error(err.response?.data?.error || 'Failed to send report')
+  } finally {
+    sharePdfSending.value = false
+  }
+}
+
 // ── Server-side PDF preview (admin/manager — no email sent) ────────
 const pdfPreviewing = ref(false)
 async function previewServerPdf() {
@@ -603,6 +627,15 @@ onMounted(() => {
             class="btn-export-pdf"
           >
             📄 Export PDF
+          </button>
+
+          <!-- Share PDF — email to specified addresses -->
+          <button
+            v-if="inspection.status === 'complete'"
+            @click="showSharePdf = true"
+            class="btn-share-pdf"
+          >
+            📤 Share PDF
           </button>
 
         </div>
@@ -1103,6 +1136,40 @@ onMounted(() => {
         @close="showPreview = false"
       />
 
+      <!-- Share PDF Modal -->
+      <div v-if="showSharePdf" class="modal-overlay" @click.self="showSharePdf = false">
+        <div class="share-pdf-modal">
+          <div class="share-pdf-header">
+            <h3>📤 Share Report PDF</h3>
+            <button class="share-pdf-close" @click="showSharePdf = false">✕</button>
+          </div>
+          <div class="share-pdf-body">
+            <p class="share-pdf-desc">
+              The completed inspection report PDF will be emailed to the addresses below.
+              Separate multiple addresses with commas.
+            </p>
+            <label class="share-pdf-label">Email addresses</label>
+            <textarea
+              v-model="sharePdfEmails"
+              class="share-pdf-input"
+              placeholder="e.g. landlord@example.com, tenant@example.com"
+              rows="3"
+              @keydown.enter.prevent="sendSharedPdf"
+            />
+          </div>
+          <div class="share-pdf-footer">
+            <button class="btn-cancel" @click="showSharePdf = false">Cancel</button>
+            <button
+              class="btn-send-pdf"
+              :disabled="sharePdfSending || !sharePdfEmails.trim()"
+              @click="sendSharedPdf"
+            >
+              {{ sharePdfSending ? 'Sending…' : 'Send Report' }}
+            </button>
+          </div>
+        </div>
+      </div>
+
       <!-- PDF Export Modal -->
       <PdfExportModal
         v-if="showPdfExport"
@@ -1346,6 +1413,103 @@ onMounted(() => {
   margin-left: auto;
 }
 .btn-export-pdf:hover { filter: brightness(1.15); }
+
+.btn-share-pdf {
+  padding: 9px 18px;
+  background: #0e7490;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: white;
+  cursor: pointer;
+  transition: filter 0.15s;
+}
+.btn-share-pdf:hover { filter: brightness(1.15); }
+
+/* Share PDF modal */
+.share-pdf-modal {
+  background: white;
+  border-radius: 14px;
+  width: 480px;
+  max-width: 96vw;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.18);
+  overflow: hidden;
+}
+.share-pdf-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 22px 16px;
+  border-bottom: 1px solid #e2e8f0;
+}
+.share-pdf-header h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: #1e293b;
+}
+.share-pdf-close {
+  background: none;
+  border: none;
+  font-size: 16px;
+  cursor: pointer;
+  color: #94a3b8;
+  line-height: 1;
+}
+.share-pdf-close:hover { color: #1e293b; }
+.share-pdf-body {
+  padding: 20px 22px;
+}
+.share-pdf-desc {
+  margin: 0 0 14px;
+  font-size: 13px;
+  color: #475569;
+  line-height: 1.55;
+}
+.share-pdf-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+}
+.share-pdf-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #1e293b;
+  resize: vertical;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.share-pdf-input:focus { border-color: #0e7490; }
+.share-pdf-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 22px 18px;
+  border-top: 1px solid #f1f5f9;
+}
+.btn-send-pdf {
+  padding: 9px 20px;
+  background: #0e7490;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: white;
+  cursor: pointer;
+  transition: filter 0.15s;
+}
+.btn-send-pdf:hover:not(:disabled) { filter: brightness(1.12); }
+.btn-send-pdf:disabled { opacity: 0.55; cursor: not-allowed; }
 
 .btn-preview-pdf {
   padding: 9px 18px;

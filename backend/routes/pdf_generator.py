@@ -366,6 +366,8 @@ class _PDFBuilder:
     def _p(self, text, style=None):
         style = style or self.s_cell
         text  = str(text or '').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+        # Convert \n line breaks to ReportLab <br/> tags so multi-line conditions render correctly
+        text  = text.replace('\n', '<br/>')
         return Paragraph(text or '—', style)
 
     def _uw(self):

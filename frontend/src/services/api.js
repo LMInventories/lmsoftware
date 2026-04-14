@@ -95,6 +95,7 @@ const api = {
   getLinkedCheckIn(id)               { return http.get(`/api/inspections/${id}/linked-checkin`) },
   getPropertyHistory(propertyId)     { return http.get(`/api/inspections/property/${propertyId}/history`) },
   applyPdfImport(id, data)           { return http.post(`/api/inspections/${id}/apply-pdf-import`, data) },
+  sharePdf(id, emails)               { return http.post(`/api/inspections/${id}/share-pdf`, { emails }) },
 
   // ── Templates ─────────────────────────────────────────────────────────────
   getTemplates()            { return http.get('/api/templates') },

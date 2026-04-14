@@ -69,21 +69,25 @@ def _send(from_addr, to_addrs, subject, html_body, attachments=None):
     else:
         msg.attach(html_part)
 
+    _TIMEOUT = 30  # seconds — prevents thread from hanging indefinitely
     try:
+        print(f'[smtp] connecting to {SMTP_HOST}:{SMTP_PORT} as {SMTP_USER}')
         if SMTP_PORT == 465:
             ctx = ssl.create_default_context()
-            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=ctx) as server:
+            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=ctx, timeout=_TIMEOUT) as server:
                 server.login(SMTP_USER, SMTP_PASSWORD)
                 server.sendmail(from_addr, to_addrs, msg.as_string())
         else:
-            with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=_TIMEOUT) as server:
                 server.ehlo()
                 server.starttls()
                 server.ehlo()
                 server.login(SMTP_USER, SMTP_PASSWORD)
                 server.sendmail(from_addr, to_addrs, msg.as_string())
+        print(f'[smtp] sent OK to {to_addrs}')
         return True, None
     except Exception as e:
+        print(f'[smtp] ERROR: {e}')
         return False, str(e)
 
 

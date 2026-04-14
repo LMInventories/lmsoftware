@@ -426,7 +426,9 @@ def update_inspection(inspection_id):
                     print(f'[pdf] EXCEPTION in background PDF thread:')
                     print(traceback.format_exc())
 
-        threading.Thread(target=_generate_and_send, daemon=True).start()
+        # daemon=False — thread must finish before worker exits, so the SMTP send completes.
+        # The 30-second timeout in _send() prevents it from hanging forever.
+        threading.Thread(target=_generate_and_send, daemon=False).start()
 
     return jsonify({'message': 'Inspection updated'})
 
@@ -500,6 +502,71 @@ def preview_pdf(inspection_id):
     resp.headers['Content-Type']        = 'application/pdf'
     resp.headers['Content-Disposition'] = f'inline; filename="{fname}"'
     return resp
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /api/inspections/<id>/share-pdf
+#
+# Generates the inspection PDF and emails it to one or more addresses provided
+# by the user.  Uses the same send_report_complete template as the auto-send.
+#
+# Request body:
+#   { "emails": ["alice@example.com", "bob@example.com"] }
+# ─────────────────────────────────────────────────────────────────────────────
+@inspections_bp.route('/<int:inspection_id>/share-pdf', methods=['POST'])
+@jwt_required()
+def share_pdf(inspection_id):
+    from routes.pdf_generator import generate_inspection_pdf
+    from routes.email_service import send_report_complete
+    from permissions import is_admin_or_manager
+
+    user = get_current_user()
+    if not is_admin_or_manager(user):
+        return jsonify({'error': 'Forbidden — only admins and managers may share PDFs'}), 403
+
+    data   = request.get_json(force=True) or {}
+    emails = data.get('emails', [])
+    if isinstance(emails, str):
+        emails = [e.strip() for e in emails.split(',') if e.strip()]
+    emails = [e.strip() for e in emails if e.strip()]
+    if not emails:
+        return jsonify({'error': 'No email addresses provided'}), 400
+
+    inspection = Inspection.query.get_or_404(inspection_id)
+    if not inspection.report_data:
+        return jsonify({'error': 'No report data — inspection has not been filled in yet'}), 400
+
+    try:
+        pdf_bytes = generate_inspection_pdf(inspection_id)
+    except Exception as e:
+        import traceback
+        print(traceback.format_exc())
+        return jsonify({'error': f'PDF generation failed: {e}'}), 500
+
+    client = inspection.property.client if inspection.property else None
+
+    class _StubClient:
+        name                     = 'Client'
+        email                    = ''
+        company                  = ''
+        logo                     = None
+        primary_color            = '#1E3A8A'
+        report_color_override    = None
+        report_header_text_color = '#FFFFFF'
+        report_body_text_color   = '#1e293b'
+        report_orientation       = 'portrait'
+        report_disclaimer        = ''
+
+    effective_client = client or _StubClient()
+    prop             = inspection.property
+
+    ok, err = send_report_complete(
+        inspection, effective_client, prop, pdf_bytes, recipients=emails
+    )
+    if ok:
+        return jsonify({'message': f'Report sent to {", ".join(emails)}'})
+    else:
+        return jsonify({'error': f'Failed to send: {err}'}), 500
 
 
 # ─────────────────────────────────────────────────────────────────────────────

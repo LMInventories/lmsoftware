@@ -300,9 +300,9 @@ def send_inspection_notification(event, inspection, client, property_obj):
         f'''<p style="margin:0 0 12px;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#475569;">Dear {client.name},</p>'''
         f'''<p style="margin:0 0 16px;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#475569;">{intro}</p>'''
         + _info_table_open()
-        + _info_row('Property', f'{prop_addr}{' · ' + prop_detail if prop_detail else ""}')
+        + _info_row('Property', prop_addr + (' \u00b7 ' + prop_detail if prop_detail else ''))
         + _info_row('Type', _pill(insp_type, pill_c, pill_bg))
-        + _info_row('Date', f'{insp_date}{' at ' + insp_time if insp_time else ""}')
+        + _info_row('Date', insp_date + (' at ' + insp_time if insp_time else ''))
         + _info_row('Inspector', clerk_name, last=True)
         + _info_table_close()
         + '''<p style="margin:12px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#475569;">If you have any questions, please contact us directly.</p>'''

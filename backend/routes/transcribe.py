@@ -14,10 +14,17 @@ transcribe_bp = Blueprint('transcribe', __name__)
 # Clerks can prefix a recording with trigger phrases to amend existing fields
 # rather than filling only-if-empty.
 #
-#   "Amend description ..." → overwrite description field
-#   "Amend condition ..."   → overwrite condition field
-#   "Add to description ..."→ append to description field
-#   "Add to condition ..."  → append to condition field
+# Per-field (Instant or By Room):
+#   "Amend description ..." → overwrite description field only
+#   "Amend condition ..."   → overwrite condition field only
+#   "Add to description ..."→ append to description field only
+#   "Add to condition ..."  → append to condition field only
+#
+# Generic (Instant mode — item already known from context):
+#   "Amend ..."             → overwrite both fields (whatever the AI transcribes)
+#   "Add ..."               → append to both fields
+#
+# NOTE: longer/more specific phrases must come before short ones so they match first.
 
 _EDIT_TRIGGERS = [
     ('amend description',     'overwrite', 'description'),
@@ -30,6 +37,9 @@ _EDIT_TRIGGERS = [
     ('add to the condition',   'append',    'condition'),
     ('add to conditions',      'append',    'condition'),
     ('add to the conditions',  'append',    'condition'),
+    # Short forms — for Instant mode where item context is implicit
+    ('amend',                  'overwrite', None),
+    ('add',                    'append',    None),
 ]
 
 def _detect_edit_mode(transcript: str):
@@ -852,12 +862,41 @@ EXAMPLE 5 — Defect with location qualifier → ONE element, no sub-item:
   → description="White emulsion"   condition="Light scuffing to base of wall throughout"
   ("to base of wall throughout" qualifies the location → all stays in condition)
 
+══════════════════════════════════════════════════════
+AMENDMENT RULES — returning to a previously-filled item
+══════════════════════════════════════════════════════
+The clerk may return to an already-described item to correct or extend it using phrases like:
+
+  "Return to [item name], amend description, [new text]"
+  "Return to [item name], amend condition, [new text]"
+  "Return to [item name], add to description, [new text]"
+  "Return to [item name], add to condition, [new text]"
+  "Return to [item name], amend, [new text]"  — overwrite everything for that item
+  "Return to [item name], add, [new text]"    — append to everything for that item
+
+When you detect an amendment phrase, include these optional action flags in that item's JSON:
+  "_descAction": "overwrite"  → caller will replace the existing description
+  "_descAction": "append"     → caller will append this to the existing description
+  "_condAction": "overwrite"  → caller will replace the existing condition
+  "_condAction": "append"     → caller will append this to the existing condition
+
+If no amendment phrase — omit the action flags entirely (default behaviour = fill only if empty).
+"Return to [item], amend" (no field) → set BOTH _descAction and _condAction to "overwrite".
+"Return to [item], add" (no field)   → set BOTH _descAction and _condAction to "append".
+
 Return ONLY valid JSON — no markdown, no extra text.
-Items without sub-items use the flat shape. Items WITH sub-items include the "_subs" array:
+Items without sub-items use the flat shape. Items WITH sub-items include the "_subs" array.
+Amendment flags are optional — only include when the clerk explicitly amends/adds:
 {{
   "<itemId>": {{
     "description": "...",
     "condition": "..."
+  }},
+  "<amendedItemId>": {{
+    "description": "replacement or addition text",
+    "condition": "replacement or addition text",
+    "_descAction": "overwrite",
+    "_condAction": "append"
   }},
   "<itemIdWithSubs>": {{
     "description": "first element description",

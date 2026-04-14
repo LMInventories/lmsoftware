@@ -1,6 +1,6 @@
 <script setup>
 import { ref, onMounted, computed, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import api from '../services/api'
 import { useToast } from '../composables/useToast'
 import { useAuthStore } from '../stores/auth'
@@ -13,6 +13,7 @@ import timeGridPlugin from '@fullcalendar/timegrid'
 import interactionPlugin from '@fullcalendar/interaction'
 
 const router = useRouter()
+const route  = useRoute()
 
 const activeTab = ref(localStorage.getItem('inspections_view') || 'list')
 const calendarView = ref('dayGridMonth')
@@ -661,6 +662,15 @@ function viewInspection(id) {
 }
 
 onMounted(() => {
+  // Pre-apply status filter if navigated from a dashboard workflow card
+  const statusParam = route.query.status
+  if (statusParam) {
+    const valid = ['created', 'assigned', 'active', 'processing', 'review', 'complete']
+    const statuses = (Array.isArray(statusParam) ? statusParam : [statusParam])
+      .filter(s => valid.includes(s))
+    if (statuses.length) filters.value.statuses = statuses
+  }
+
   fetchInspections()
   fetchProperties()
   if (!authStore.isClient) {

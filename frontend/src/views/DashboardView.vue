@@ -131,7 +131,7 @@ onMounted(fetchDashboardStats)
           v-for="(cfg, key) in statusConfig"
           :key="key"
           class="status-tile"
-          @click="router.push('/inspections')"
+          @click="router.push({ path: '/inspections', query: { status: key } })"
         >
           <div class="tile-bar" :style="{ background: cfg.color }"></div>
           <div class="tile-count">{{ stats.status_counts[key] || 0 }}</div>

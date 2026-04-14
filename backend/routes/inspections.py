@@ -345,44 +345,64 @@ def update_inspection(inspection_id):
         inspection.report_data = data['report_data']
 
     # ── Commit all field changes first ───────────────────────────────────────
-    # Status is now saved regardless of what happens in PDF generation below.
+    # Status is saved before PDF generation so a slow/failing PDF never blocks
+    # or rolls back the status update.
     db.session.commit()
 
-    # ── Generate PDF and email when inspection moves to Complete ─────────────
-    # This runs AFTER commit so a PDF failure can never roll back the status.
+    # ── Generate PDF and email in a background thread ────────────────────────
+    # Runs after commit and completely outside the HTTP request so the client
+    # gets an immediate 200 and the worker is never killed by a slow PDF build.
     if going_complete:
-        try:
-            print(f'[pdf] inspection {inspection_id} marked complete — starting PDF generation')
+        from flask import current_app
+        import threading
 
-            prop   = inspection.property
-            client = prop.client if prop else None
-            print(f'[pdf] property={getattr(prop,"address","NONE")} client={getattr(client,"name","NONE")}')
-            print(f'[pdf] client_email_override={inspection.client_email_override!r}  tenant_email={inspection.tenant_email!r}')
+        # Snapshot values needed in the thread before the request context closes
+        _app        = current_app._get_current_object()
+        _insp_id    = inspection_id
+        _prop_addr  = inspection.property.address if inspection.property else 'unknown'
+        _cli_email  = inspection.client_email_override
+        _ten_email  = inspection.tenant_email
 
-            from routes.pdf_generator import generate_inspection_pdf, _get_report_recipients
-            recipients = _get_report_recipients(inspection)
-            print(f'[pdf] recipients resolved: {recipients}')
+        def _generate_and_send():
+            with _app.app_context():
+                try:
+                    from models import Inspection as _Inspection
+                    insp   = _Inspection.query.get(_insp_id)
+                    if not insp:
+                        print(f'[pdf] inspection {_insp_id} not found in background thread')
+                        return
 
-            if not recipients:
-                print(f'[pdf] WARNING: no recipients — PDF will not be sent.')
-            elif not client:
-                print(f'[pdf] WARNING: no client object — cannot send email.')
-            else:
-                pdf_bytes = generate_inspection_pdf(inspection_id)
-                print(f'[pdf] PDF generated OK — {len(pdf_bytes)} bytes')
+                    prop   = insp.property
+                    client = prop.client if prop else None
+                    print(f'[pdf] background: generating PDF for inspection {_insp_id} — {_prop_addr}')
 
-                from routes.email_service import send_report_complete
-                ok, err = send_report_complete(inspection, client, prop, pdf_bytes, recipients=recipients)
-                if ok:
-                    print(f'[pdf] email sent OK → {recipients}')
-                else:
-                    print(f'[pdf] email FAILED: {err}')
+                    from routes.pdf_generator import generate_inspection_pdf, _get_report_recipients
+                    recipients = _get_report_recipients(insp)
+                    print(f'[pdf] recipients: {recipients}')
 
-        except Exception as pdf_err:
-            import traceback
-            print(f'[pdf] EXCEPTION during report generation/send:')
-            print(traceback.format_exc())
-            # Non-fatal: status is already committed as Complete above.
+                    if not recipients:
+                        print(f'[pdf] WARNING: no recipients — PDF not sent.')
+                        return
+                    if not client:
+                        print(f'[pdf] WARNING: no client — cannot send email.')
+                        return
+
+                    pdf_bytes = generate_inspection_pdf(_insp_id)
+                    print(f'[pdf] PDF generated OK — {len(pdf_bytes)} bytes')
+
+                    from routes.email_service import send_report_complete
+                    ok, err = send_report_complete(insp, client, prop, pdf_bytes, recipients=recipients)
+                    if ok:
+                        print(f'[pdf] email sent OK → {recipients}')
+                    else:
+                        print(f'[pdf] email FAILED: {err}')
+
+                except Exception:
+                    import traceback
+                    print(f'[pdf] EXCEPTION in background PDF thread:')
+                    print(traceback.format_exc())
+
+        threading.Thread(target=_generate_and_send, daemon=True).start()
 
     return jsonify({'message': 'Inspection updated'})
 

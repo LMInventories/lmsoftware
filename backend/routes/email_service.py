@@ -516,7 +516,7 @@ def send_typist_assignment(typist, inspection, property_obj, client):
     client_name = getattr(client, 'name', '—') if client else '—'
     login_url   = f"{APP_BASE_URL}/login"
 
-    prop_full = f'{prop_addr}{' · ' + prop_detail if prop_detail else ""}' 
+    prop_full = prop_addr + (' \u00b7 ' + prop_detail if prop_detail else '')
     body = (
         f'''<p style="margin:0 0 12px;font-family:Arial,Helvetica,sans-serif;font-size:17px;font-weight:bold;color:#1e293b;">Report Ready for Typing</p>'''
         f'''<p style="margin:0 0 6px;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#475569;">Hi {typist.name},</p>'''

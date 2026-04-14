@@ -89,6 +89,33 @@ _RED_TXT    = colors.HexColor('#991b1b')
 # Fetch image bytes from URL
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _compress_image(data: bytes, max_px: int = 1200, quality: int = 72) -> bytes:
+    """
+    Resize and re-compress image bytes with Pillow before embedding in PDF.
+    Keeps peak memory low — a 5 MB phone JPEG becomes ~120 KB after this.
+    Falls back to the original bytes if Pillow is unavailable or the image
+    can't be decoded (e.g. corrupt data).
+    """
+    try:
+        from PIL import Image as _PILImage
+        pil = _PILImage.open(io.BytesIO(data))
+        pil = pil.convert('RGB')
+        # Preserve EXIF orientation so photos aren't rotated in the PDF
+        try:
+            from PIL import ImageOps
+            pil = ImageOps.exif_transpose(pil)
+        except Exception:
+            pass
+        w, h = pil.size
+        if w > max_px or h > max_px:
+            pil.thumbnail((max_px, max_px), _PILImage.LANCZOS)
+        out = io.BytesIO()
+        pil.save(out, format='JPEG', quality=quality, optimize=True)
+        return out.getvalue()
+    except Exception:
+        return data
+
+
 def _fetch_image(url: str, max_w_mm: float, max_h_mm: float):
     if not url:
         return None
@@ -101,6 +128,7 @@ def _fetch_image(url: str, max_w_mm: float, max_h_mm: float):
         else:
             req  = urllib.request.Request(url, headers={'User-Agent': 'InspectPro/1.0'})
             data = urllib.request.urlopen(req, timeout=8).read()
+        data = _compress_image(data)
         buf  = io.BytesIO(data)
         img  = RLImage(buf)
         w_pt = max_w_mm * mm
@@ -512,6 +540,7 @@ class _PDFBuilder:
             try:
                 req  = urllib.request.Request(photo_url, headers={'User-Agent': 'InspectPro/1.0'})
                 data = urllib.request.urlopen(req, timeout=8).read()
+                data = _compress_image(data, max_px=1600)
                 img  = ImageReader(io.BytesIO(data))
                 canvas.drawImage(img, 0, photo_y, pw, photo_h,
                                  preserveAspectRatio=False, mask='auto')

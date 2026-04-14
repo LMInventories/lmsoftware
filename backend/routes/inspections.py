@@ -285,6 +285,12 @@ def update_inspection(inspection_id):
         if 'status' in data and data['status'] not in ('processing', 'review'):
             return jsonify({'error': 'Typists can only move inspection to review'}), 403
 
+    going_complete = (
+        'status' in data and
+        data['status'] == 'complete' and
+        inspection.status != 'complete'
+    )
+
     if 'status' in data:
         old_status = inspection.status
         inspection.status = data['status']
@@ -295,45 +301,6 @@ def update_inspection(inspection_id):
                 trigger_typist_assignment(inspection)
             except Exception as email_err:
                 print(f'[email] typist assignment failed (non-fatal): {email_err}')
-
-        # ── Generate PDF and email report when inspection is Complete ───────
-        if data['status'] == 'complete' and old_status != 'complete':
-            try:
-                print(f'[pdf] inspection {inspection.id} marked complete — starting PDF generation')
-
-                # 1. Check property + client are accessible
-                prop   = inspection.property
-                client = prop.client if prop else None
-                print(f'[pdf] property={getattr(prop,"address","NONE")} client={getattr(client,"name","NONE")} client_email={getattr(client,"email","NONE")}')
-                print(f'[pdf] client_email_override={inspection.client_email_override!r}  tenant_email={inspection.tenant_email!r}')
-
-                # 2. Build recipient list
-                from routes.pdf_generator import generate_inspection_pdf, _get_report_recipients
-                recipients = _get_report_recipients(inspection)
-                print(f'[pdf] recipients resolved: {recipients}')
-
-                if not recipients:
-                    print(f'[pdf] WARNING: no recipients — PDF will not be sent. Set client email or client_email_override.')
-                elif not client:
-                    print(f'[pdf] WARNING: no client object — cannot send email.')
-                else:
-                    # 3. Generate PDF
-                    print(f'[pdf] generating PDF...')
-                    pdf_bytes = generate_inspection_pdf(inspection.id)
-                    print(f'[pdf] PDF generated OK — {len(pdf_bytes)} bytes')
-
-                    # 4. Send email
-                    from routes.email_service import send_report_complete
-                    ok, err = send_report_complete(inspection, client, prop, pdf_bytes, recipients=recipients)
-                    if ok:
-                        print(f'[pdf] email sent OK → {recipients}')
-                    else:
-                        print(f'[pdf] email FAILED: {err}')
-
-            except Exception as pdf_err:
-                import traceback
-                print(f'[pdf] EXCEPTION during report generation/send:')
-                print(traceback.format_exc())
 
     if 'inspector_id' in data:
         if data['inspector_id'] is None:
@@ -377,7 +344,46 @@ def update_inspection(inspection_id):
     if 'report_data' in data:
         inspection.report_data = data['report_data']
 
+    # ── Commit all field changes first ───────────────────────────────────────
+    # Status is now saved regardless of what happens in PDF generation below.
     db.session.commit()
+
+    # ── Generate PDF and email when inspection moves to Complete ─────────────
+    # This runs AFTER commit so a PDF failure can never roll back the status.
+    if going_complete:
+        try:
+            print(f'[pdf] inspection {inspection_id} marked complete — starting PDF generation')
+
+            prop   = inspection.property
+            client = prop.client if prop else None
+            print(f'[pdf] property={getattr(prop,"address","NONE")} client={getattr(client,"name","NONE")}')
+            print(f'[pdf] client_email_override={inspection.client_email_override!r}  tenant_email={inspection.tenant_email!r}')
+
+            from routes.pdf_generator import generate_inspection_pdf, _get_report_recipients
+            recipients = _get_report_recipients(inspection)
+            print(f'[pdf] recipients resolved: {recipients}')
+
+            if not recipients:
+                print(f'[pdf] WARNING: no recipients — PDF will not be sent.')
+            elif not client:
+                print(f'[pdf] WARNING: no client object — cannot send email.')
+            else:
+                pdf_bytes = generate_inspection_pdf(inspection_id)
+                print(f'[pdf] PDF generated OK — {len(pdf_bytes)} bytes')
+
+                from routes.email_service import send_report_complete
+                ok, err = send_report_complete(inspection, client, prop, pdf_bytes, recipients=recipients)
+                if ok:
+                    print(f'[pdf] email sent OK → {recipients}')
+                else:
+                    print(f'[pdf] email FAILED: {err}')
+
+        except Exception as pdf_err:
+            import traceback
+            print(f'[pdf] EXCEPTION during report generation/send:')
+            print(traceback.format_exc())
+            # Non-fatal: status is already committed as Complete above.
+
     return jsonify({'message': 'Inspection updated'})
 
 

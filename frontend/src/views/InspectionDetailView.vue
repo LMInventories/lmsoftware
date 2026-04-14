@@ -532,15 +532,6 @@ onMounted(() => {
             📄 Export PDF
           </button>
 
-          <!-- Preview server-generated PDF — admin/manager, any status with report data -->
-          <button
-            v-if="canEdit && inspection.report_data"
-            @click="previewServerPdf"
-            :disabled="pdfPreviewing"
-            class="btn-preview-pdf"
-          >
-            {{ pdfPreviewing ? '⏳ Generating…' : '🖨 Preview PDF' }}
-          </button>
         </div>
       </div>
 

@@ -106,10 +106,23 @@ export async function syncInspection(inspectionId, { onProgress, markFinished = 
     if (markFinished && errors.length === 0) {
       emit('Finalising…')
       try {
-        // Fetch the inspection to check typist assignment
-        const res = await api.getInspection(inspectionId)
+        // Fetch the inspection to resolve typist mode and AI flag
+        const res  = await api.getInspection(inspectionId)
         const insp = res.data
-        const nextStatus = insp.typist_id ? 'processing' : 'review'
+
+        // AI mode (ai_instant / ai_room / typist flagged as AI):
+        //   Report is proofread on site → go straight to Complete (triggers PDF send)
+        // Human typist assigned:
+        //   Needs typing from audio → Processing
+        // No typist:
+        //   No audio to type → Review
+        const isAi = insp.typist_is_ai ||
+                     insp.typist_mode === 'ai_instant' ||
+                     insp.typist_mode === 'ai_room'
+        const nextStatus = isAi ? 'complete'
+                         : insp.typist_id ? 'processing'
+                         : 'review'
+
         await api.updateInspection(inspectionId, { status: nextStatus })
       } catch (err) {
         errors.push(`Status advance: ${err.message}`)

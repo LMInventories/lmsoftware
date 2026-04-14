@@ -581,9 +581,106 @@ def send_report_complete(inspection, client, property_obj, pdf_bytes=None, recip
     if recipients:
         to_addrs = recipients
     else:
-        override = getattr(inspection, 'client_email_override', None)
-        to_addrs = override if override else getattr(client, 'email', '')
+        override  = getattr(inspection, 'client_email_override', None)
+        to_addrs  = override if override else (getattr(client, 'email', '') if client else '')
 
-    attachments = [(pdf_name, pdf_bytes)] if pdf_bytes else None
+    if not to_addrs:
+        return False, 'No recipient email'
 
-    return _send(SMTP_FROM_REPORTS, to_addrs, subject, _wrap(body, subject), attachments=attachments)
+    atts = []
+    if pdf_bytes:
+        atts.append((pdf_name, pdf_bytes, 'application/pdf'))
+
+    return _send(SMTP_FROM_REPORTS, to_addrs, subject, _wrap(body, subject),
+                 attachments=atts if atts else None)
+
+
+# ── 6. Confirmation email (key-holder reminder N days before inspection) ─────
+
+DEFAULT_CONFIRMATION_TEMPLATE = """Dear {recipient_name},
+
+This is a confirmation that a {inspection_type} inspection is scheduled at {property_address} on {date}{time_str}.
+
+Key collection: {key_location}
+
+{inspector_line}Please ensure access is available at the time of the inspection. If you need to rearrange or have any questions, please contact us as soon as possible.
+
+Kind regards,
+InspectPro
+"""
+
+
+def send_confirmation_email(
+    recipient_email,
+    recipient_name,
+    inspection,
+    property_obj,
+    days_before,
+    template=None,
+):
+    """
+    Send a key-holder confirmation email N days before an inspection.
+    recipient_email : resolved from key_location (tenant / client / etc.)
+    recipient_name  : display name for greeting
+    days_before     : used in subject line (Tomorrow / in 2 days / etc.)
+    template        : plain-text body from settings; supports {placeholders}.
+    """
+    prop_addr   = getattr(property_obj, 'address', '') or '\u2014'
+    insp_type   = _type_label(getattr(inspection, 'inspection_type', ''))
+    insp_date   = _fmt_date(
+        getattr(inspection, 'conduct_date', None) or
+        getattr(inspection, 'scheduled_date', None)
+    )
+    insp_time   = _fmt_time(getattr(inspection, 'conduct_time_preference', None))
+    time_str    = f' at {insp_time}' if insp_time else ''
+    key_loc     = getattr(inspection, 'key_location', '') or 'as previously arranged'
+    clerk       = inspection.inspector if getattr(inspection, 'inspector', None) else None
+    clerk_name  = clerk.name if clerk else None
+    inspector_line = f'Your inspector will be {clerk_name}. ' if clerk_name else ''
+
+    if days_before == 1:
+        day_label = 'Tomorrow'
+    elif days_before == 7:
+        day_label = 'in 1 week'
+    else:
+        day_label = f'in {days_before} days'
+
+    subject = f'Inspection Confirmation \u2014 {prop_addr} ({day_label})'
+
+    tmpl = (template or '').strip() or DEFAULT_CONFIRMATION_TEMPLATE
+
+    plain_body = tmpl.format(
+        recipient_name   = recipient_name,
+        property_address = prop_addr,
+        inspection_type  = insp_type,
+        date             = insp_date,
+        time             = insp_time or 'TBC',
+        time_str         = time_str,
+        key_location     = key_loc,
+        inspector_name   = clerk_name or 'TBC',
+        inspector_line   = inspector_line,
+        days_before      = days_before,
+        day_label        = day_label,
+    )
+
+    paragraphs_html = ''.join(
+        f'<p style="margin:0 0 14px;font-family:Arial,Helvetica,sans-serif;'
+        f'font-size:14px;color:#475569;line-height:1.6;">{line}</p>'
+        for line in plain_body.strip().split('\n')
+        if line.strip()
+    )
+
+    body = (
+        f'<p style="margin:0 0 16px;font-family:Arial,Helvetica,sans-serif;'
+        f'font-size:17px;font-weight:bold;color:#1e293b;">'
+        f'Inspection Confirmation \u2014 {day_label.capitalize()}</p>'
+        + _info_table_open()
+        + _info_row('Property', prop_addr)
+        + _info_row('Type',     _pill(insp_type, '#1e40af', '#dbeafe'))
+        + _info_row('Date',     insp_date + time_str)
+        + _info_row('Keys',     key_loc, last=True)
+        + _info_table_close()
+        + f'<div style="margin-top:20px;">{paragraphs_html}</div>'
+    )
+
+    return _send(SMTP_FROM, recipient_email, subject, _wrap(body, subject))

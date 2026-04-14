@@ -25,8 +25,9 @@ const showEditTypistMode = ref(false)
 const showEditKeyLocation = ref(false)
 const showEditKeyReturn = ref(false)
 const showEditNotes = ref(false)
-const showEditTenantEmail = ref(false)
-const showEditClientEmail = ref(false)
+const showEditTenantEmail   = ref(false)
+const showEditLandlordEmail = ref(false)
+const showEditClientEmail   = ref(false)
 const showPreview = ref(false)
 const showPhotoModal = ref(false)
 const photoUploading = ref(false)
@@ -60,6 +61,7 @@ const editForms = ref({
   key_return: '',
   internal_notes: '',
   tenant_email: '',
+  landlord_email: '',
   client_email_override: ''
 })
 
@@ -102,12 +104,12 @@ const minuteOptions = ['00', '15', '30', '45']
 // No mode set / no typist: skip Processing only; Review still available for
 //   manual manager sign-off before marking complete.
 const allStatusSteps = [
-  { key: 'created',    label: 'Created',    icon: '📋' },
-  { key: 'assigned',   label: 'Assigned',   icon: '👤' },
-  { key: 'active',     label: 'Active',     icon: '🔍' },
-  { key: 'processing', label: 'Processing', icon: '✍️'  },
-  { key: 'review',     label: 'Review',     icon: '👁️'  },
-  { key: 'complete',   label: 'Complete',   icon: '✅'  }
+  { key: 'created',    label: 'Created'    },
+  { key: 'assigned',   label: 'Assigned'   },
+  { key: 'active',     label: 'Active'     },
+  { key: 'processing', label: 'Processing' },
+  { key: 'review',     label: 'Review'     },
+  { key: 'complete',   label: 'Complete'   },
 ]
 
 const statusSteps = computed(() => {
@@ -223,7 +225,8 @@ async function fetchInspection() {
     editForms.value.key_location = inspection.value.key_location || ''
     editForms.value.key_return = inspection.value.key_return || ''
     editForms.value.internal_notes = inspection.value.internal_notes || ''
-    editForms.value.tenant_email = inspection.value.tenant_email || ''
+    editForms.value.tenant_email    = inspection.value.tenant_email || ''
+    editForms.value.landlord_email  = inspection.value.landlord_email || ''
     editForms.value.client_email_override = inspection.value.client_email_override || inspection.value.client?.email || ''
     localPhoto.value = inspection.value.property?.overview_photo || null
   } catch (error) {
@@ -269,8 +272,9 @@ async function updateField(field, value) {
     showEditKeyLocation.value = false
     showEditKeyReturn.value = false
     showEditNotes.value = false
-    showEditTenantEmail.value = false
-    showEditClientEmail.value = false
+    showEditTenantEmail.value   = false
+    showEditLandlordEmail.value = false
+    showEditClientEmail.value   = false
   } catch (error) {
     console.error('Failed to update:', error)
     toast.error('Failed to update')
@@ -603,7 +607,7 @@ onMounted(() => {
             @click="showPreview = true"
             class="btn-preview-report"
           >
-            👁 Preview Report
+            Preview Report
           </button>
 
           <!-- Edit Report button — visible when Active, Processing or Review -->
@@ -612,12 +616,12 @@ onMounted(() => {
             @click="router.push(`/inspections/${inspection.id}/report`)"
             class="btn-edit-report"
           >
-            ✍️ Edit Report
+            Edit Report
           </button>
 
           <!-- Complete state -->
           <div v-if="inspection.status === 'complete'" class="complete-badge">
-            ✅ Inspection Complete
+            Inspection Complete
           </div>
 
           <!-- Export PDF (JS/browser renderer) — available when complete -->
@@ -650,15 +654,15 @@ onMounted(() => {
           <!-- Property Overview Photo -->
           <div class="info-card photo-card">
             <div class="card-header" style="padding: 14px 20px;">
-              <h3>🏠 Property Overview</h3>
+              <h3>Property Overview</h3>
               <button class="btn-edit" @click="showPhotoModal = true">
-                {{ localPhoto ? '✏️ Edit' : '+ Add Photo' }}
+                {{ localPhoto ? 'Edit Photo' : '+ Add Photo' }}
               </button>
             </div>
             <div class="photo-card-body">
               <img v-if="localPhoto" :src="localPhoto" alt="Property overview" class="property-photo-img" />
               <div v-else class="photo-placeholder">
-                <span class="photo-icon">🏠</span>
+                <span class="photo-icon">◻</span>
                 <p>No overview photo yet</p>
                 <p style="font-size:12px;opacity:0.7;">Appears on the report cover page</p>
               </div>
@@ -668,8 +672,8 @@ onMounted(() => {
           <!-- Conduct Date & Time -->
           <div class="info-card">
             <div class="card-header">
-              <h3>📅 Conduct Date & Time</h3>
-              <button v-if="canEdit" @click="showEditConductDate = true" class="btn-edit">✏️ Edit</button>
+              <h3>Conduct Date & Time</h3>
+              <button v-if="canEdit" @click="showEditConductDate = true" class="btn-edit">Edit</button>
             </div>
             <div class="card-content">
               <p class="date-display">{{ formatDate(inspection.conduct_date) }}</p>
@@ -680,8 +684,8 @@ onMounted(() => {
           <!-- Template -->
           <div class="info-card">
             <div class="card-header">
-              <h3>📋 Template</h3>
-              <button v-if="canEdit" @click="showEditTemplate = true" class="btn-edit">✏️ Edit</button>
+              <h3>Template</h3>
+              <button v-if="canEdit" @click="showEditTemplate = true" class="btn-edit">Edit</button>
             </div>
             <div class="card-content">
               <p>{{ inspection.template_name || 'No template assigned' }}</p>
@@ -692,18 +696,18 @@ onMounted(() => {
           <!-- Assignments -->
           <div class="info-card">
             <div class="card-header">
-              <h3>👥 Assignments</h3>
+              <h3>Assignments</h3>
             </div>
             <div class="card-content">
               <div class="assignment-row">
                 <strong>Clerk:</strong>
                 <span>{{ inspection.inspector?.name || 'Not assigned' }}</span>
-                <button v-if="canEdit" @click="showEditClerk = true" class="btn-edit-inline">✏️</button>
+                <button v-if="canEdit" @click="showEditClerk = true" class="btn-edit-inline">✎</button>
               </div>
               <div class="assignment-row">
                 <strong>Typist:</strong>
                 <span>{{ inspection.typist?.name || 'Not assigned' }}</span>
-                <button v-if="canEdit" @click="showEditTypist = true" class="btn-edit-inline">✏️</button>
+                <button v-if="canEdit" @click="showEditTypist = true" class="btn-edit-inline">✎</button>
               </div>
               <div class="assignment-row" style="align-items:center;gap:8px;">
                 <strong>Mode:</strong>
@@ -712,21 +716,21 @@ onMounted(() => {
                   :class="'tm-' + (inspection.typist_mode || 'none')"
                 >
                   {{
-                    { ai_instant: '⚡ AI Instant', ai_room: '🏠 AI by Room', human: '✍️ Human Typist' }[inspection.typist_mode]
+                    { ai_instant: 'AI Instant', ai_room: 'AI by Room', human: 'Human Typist' }[inspection.typist_mode]
                     || '— Not set'
                   }}
                 </span>
-                <button v-if="canEdit" @click="showEditTypistMode = true" class="btn-edit-inline">✏️</button>
+                <button v-if="canEdit" @click="showEditTypistMode = true" class="btn-edit-inline">✎</button>
               </div>
               <p class="helper-text" style="margin-top:8px;font-size:12px;color:#94a3b8;">
                 <template v-if="inspection.typist_mode === 'ai_instant' || inspection.typist_mode === 'ai_room' || inspection.typist_is_ai">
-                  ⚡ AI report — syncs directly to Complete (no Processing or Review)
+                  AI report — syncs directly to Complete (no Processing or Review)
                 </template>
                 <template v-else-if="inspection.typist_mode === 'human'">
-                  ✍️ Human typist — full pipeline: Active → Processing → Review → Complete
+                  Human typist — full pipeline: Active → Processing → Review → Complete
                 </template>
                 <template v-else>
-                  ℹ️ No mode set — inspection goes Active → Review → Complete (no Processing)
+                  No mode set — inspection goes Active → Review → Complete (no Processing)
                 </template>
               </p>
             </div>
@@ -735,20 +739,20 @@ onMounted(() => {
           <!-- Key Location & Return -->
           <div class="info-card">
             <div class="card-header">
-              <h3>🔑 Key Information</h3>
+              <h3>Key Information</h3>
             </div>
             <div class="card-content">
               <div class="key-section">
                 <div class="key-header">
                   <strong>Key Location</strong>
-                  <button v-if="canEdit" @click="showEditKeyLocation = true" class="btn-edit-inline">✏️</button>
+                  <button v-if="canEdit" @click="showEditKeyLocation = true" class="btn-edit-inline">✎</button>
                 </div>
                 <p>{{ inspection.key_location || 'Not specified' }}</p>
               </div>
               <div class="key-section">
                 <div class="key-header">
                   <strong>Key Return</strong>
-                  <button v-if="canEdit" @click="showEditKeyReturn = true" class="btn-edit-inline">✏️</button>
+                  <button v-if="canEdit" @click="showEditKeyReturn = true" class="btn-edit-inline">✎</button>
                 </div>
                 <p>{{ inspection.key_return || 'Not specified' }}</p>
               </div>
@@ -763,38 +767,42 @@ onMounted(() => {
           <!-- Client Info -->
           <div class="info-card" v-if="inspection.client">
             <div class="card-header">
-              <h3>👤 Client</h3>
+              <h3>Client</h3>
             </div>
             <div class="card-content">
               <h4>{{ inspection.client.name }}</h4>
-              <p v-if="inspection.client.company" class="company">🏢 {{ inspection.client.company }}</p>
+              <p v-if="inspection.client.company" class="company">{{ inspection.client.company }}</p>
             </div>
           </div>
 
           <!-- Contact Details -->
           <div class="info-card">
             <div class="card-header">
-              <h3>📞 Contacts</h3>
+              <h3>Contacts</h3>
             </div>
             <div class="card-content">
               <div class="contact-row">
                 <strong>Email:</strong>
                 <span>{{ displayClientEmail }}</span>
-                <button v-if="canEdit" @click="showEditClientEmail = true" class="btn-edit-inline">✏️</button>
+                <button v-if="canEdit" @click="showEditClientEmail = true" class="btn-edit-inline">✎</button>
               </div>
               <div class="contact-row" v-if="inspection.client?.phone">
                 <strong>Phone:</strong>
                 <span>{{ inspection.client.phone }}</span>
               </div>
-              <div class="contact-row" v-if="inspection.tenant_email">
+              <div class="contact-row">
                 <strong>Tenant:</strong>
-                <span>{{ inspection.tenant_email }}</span>
-                <button v-if="canEdit" @click="showEditTenantEmail = true" class="btn-edit-inline">✏️</button>
+                <span :style="!inspection.tenant_email ? 'color:#94a3b8' : ''">
+                  {{ inspection.tenant_email || 'Not set' }}
+                </span>
+                <button v-if="canEdit" @click="showEditTenantEmail = true" class="btn-edit-inline">✎</button>
               </div>
-              <div v-if="!inspection.tenant_email" class="contact-row">
-                <strong>Tenant:</strong>
-                <span style="color:#94a3b8">Not set</span>
-                <button v-if="canEdit" @click="showEditTenantEmail = true" class="btn-edit-inline">✏️</button>
+              <div class="contact-row">
+                <strong>Landlord:</strong>
+                <span :style="!inspection.landlord_email ? 'color:#94a3b8' : ''">
+                  {{ inspection.landlord_email || 'Not set' }}
+                </span>
+                <button v-if="canEdit" @click="showEditLandlordEmail = true" class="btn-edit-inline">✎</button>
               </div>
             </div>
           </div>
@@ -802,7 +810,7 @@ onMounted(() => {
           <!-- Property Details -->
           <div class="info-card" v-if="inspection.property">
             <div class="card-header">
-              <h3>🏘 Property Details</h3>
+              <h3>Property Details</h3>
             </div>
             <div class="card-content">
               <div class="address-container">
@@ -846,8 +854,8 @@ onMounted(() => {
           <!-- Internal Notes -->
           <div class="info-card">
             <div class="card-header">
-              <h3>📝 Internal Notes</h3>
-              <button v-if="canEdit" @click="showEditNotes = true" class="btn-edit">✏️ Edit</button>
+              <h3>Internal Notes</h3>
+              <button v-if="canEdit" @click="showEditNotes = true" class="btn-edit">Edit</button>
             </div>
             <div class="card-content">
               <p class="notes-text">{{ inspection.internal_notes || 'No notes added yet' }}</p>
@@ -991,14 +999,14 @@ onMounted(() => {
           <div class="modal-body">
             <select v-model="editForms.typist_mode" class="input-field">
               <option :value="null">— Inherit from clerk profile</option>
-              <option value="ai_instant">⚡ AI Instant — clerk's per-item mic fills fields on device</option>
-              <option value="ai_room">🏠 AI by Room — whole-room recorder, AI transcribes on device</option>
-              <option value="human">✍️ Human Typist — audio synced to server; typist types the report</option>
+              <option value="ai_instant">AI Instant — clerk's per-item mic fills fields on device</option>
+              <option value="ai_room">AI by Room — whole-room recorder, AI transcribes on device</option>
+              <option value="human">Human Typist — audio synced to server; typist types the report</option>
             </select>
             <div style="margin-top:14px;padding:10px;background:#f8fafc;border-radius:8px;font-size:12px;color:#475569;line-height:1.6;">
-              <strong>⚡ AI Instant / 🏠 AI by Room:</strong> report is completed on device.
+              <strong>AI Instant / AI by Room:</strong> report is completed on device.
               Syncing moves the inspection straight to <strong>Complete</strong> — PDF is generated and sent automatically.<br><br>
-              <strong>✍️ Human Typist:</strong> audio clips are sent to the typist queue.
+              <strong>Human Typist:</strong> audio clips are sent to the typist queue.
               Full pipeline: Active → Processing → Review → Complete.
             </div>
           </div>
@@ -1079,6 +1087,23 @@ onMounted(() => {
           <div class="modal-footer">
             <button @click="showEditTenantEmail = false" class="btn-secondary">Cancel</button>
             <button @click="updateField('tenant_email', editForms.tenant_email)" class="btn-primary">Save</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Edit Landlord Email -->
+      <div v-if="showEditLandlordEmail" class="modal-overlay" @click.self="showEditLandlordEmail = false">
+        <div class="modal">
+          <div class="modal-header">
+            <h2>Landlord Email</h2>
+            <button @click="showEditLandlordEmail = false" class="btn-close">✕</button>
+          </div>
+          <div class="modal-body">
+            <input v-model="editForms.landlord_email" type="email" class="input-field" placeholder="landlord@example.com" />
+          </div>
+          <div class="modal-footer">
+            <button @click="showEditLandlordEmail = false" class="btn-secondary">Cancel</button>
+            <button @click="updateField('landlord_email', editForms.landlord_email)" class="btn-primary">Save</button>
           </div>
         </div>
       </div>

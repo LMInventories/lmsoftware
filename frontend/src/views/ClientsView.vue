@@ -219,7 +219,7 @@ onMounted(() => {
               <span>{{ client.email }}</span>
             </div>
             <div v-if="client.phone" class="info-row">
-              <span class="info-icon">📞</span>
+              <span class="info-icon">✆</span>
               <span>{{ client.phone }}</span>
             </div>
             <div v-if="client.address" class="info-row">
@@ -458,7 +458,7 @@ onMounted(() => {
                       <span class="mini-company">{{ form.company || form.name || 'Client Name' }}</span>
                     </div>
                     <div class="mini-photo-area">
-                      <span class="mini-photo-icon">🏠</span>
+                      <span class="mini-photo-icon">◻</span>
                     </div>
                     <div class="mini-footer">
                       <span>Check In Report</span>

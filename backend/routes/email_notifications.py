@@ -8,6 +8,7 @@ Routes:
   PUT  /api/email/client/<id>/settings  → save per-client notification prefs
   POST /api/email/test                  → send a test email
   POST /api/email/clerk-summary/run     → manually trigger clerk summaries (admin)
+  POST /api/email/confirmation/run      → manually trigger confirmation emails (admin)
 
 Scheduler: call schedule_clerk_summaries(app) after create_app() to register the 6pm daily job.
 Requires: APScheduler  →  pip install apscheduler
@@ -34,16 +35,26 @@ DEFAULT_CLIENT_PREFS = {
 import os
 _SETTINGS_PATH = os.path.join(os.path.dirname(__file__), 'email_global_settings.json')
 
+_CONFIRMATION_DEFAULTS = {
+    'confirmation_enabled':  False,
+    'confirmation_days':     [1, 2],
+    'confirmation_template': '',
+}
+
 def _load_global():
     try:
         with open(_SETTINGS_PATH) as f:
-            return json.load(f)
+            data = json.load(f)
     except Exception:
-        return {'clerk_summary_enabled': True, 'clerk_summary_time': '18:00'}
+        data = {}
+    merged = {'clerk_summary_enabled': True, 'clerk_summary_time': '18:00'}
+    merged.update(_CONFIRMATION_DEFAULTS)
+    merged.update(data)
+    return merged
 
 def _save_global(data):
     with open(_SETTINGS_PATH, 'w') as f:
-        json.dump(data, f)
+        json.dump(data, f, indent=2)
 
 
 # ── Routes ───────────────────────────────────────────────────────────────────
@@ -60,6 +71,15 @@ def save_global_settings():
         'clerk_summary_enabled': bool(data.get('clerk_summary_enabled', current.get('clerk_summary_enabled', True))),
         'clerk_summary_time':    data.get('clerk_summary_time', current.get('clerk_summary_time', '18:00')),
     })
+    # Confirmation email settings
+    if 'confirmation_enabled' in data:
+        current['confirmation_enabled'] = bool(data['confirmation_enabled'])
+    if 'confirmation_days' in data:
+        days = data['confirmation_days']
+        if isinstance(days, list):
+            current['confirmation_days'] = [int(d) for d in days if str(d).isdigit() or isinstance(d, int)]
+    if 'confirmation_template' in data:
+        current['confirmation_template'] = str(data['confirmation_template'])
     _save_global(current)
     return jsonify({'success': True, 'settings': current})
 
@@ -110,6 +130,16 @@ def send_test_email():
 def run_clerk_summaries_now():
     """Manually trigger clerk summaries — useful for testing."""
     count, errors = _send_all_clerk_summaries()
+    return jsonify({'success': True, 'sent': count, 'errors': errors})
+
+
+@email_bp.route('/confirmation/run', methods=['POST'])
+def run_confirmation_emails_now():
+    """Manually trigger confirmation emails — useful for testing."""
+    settings = _load_global()
+    if not settings.get('confirmation_enabled', False):
+        return jsonify({'success': False, 'error': 'Confirmation emails are disabled'}), 400
+    count, errors = _send_all_pending_confirmations(settings)
     return jsonify({'success': True, 'sent': count, 'errors': errors})
 
 
@@ -186,6 +216,91 @@ def trigger_typist_assignment(inspection):
 
 
 
+# ── Confirmation email logic ─────────────────────────────────────────────────
+
+def _resolve_confirmation_recipient(inspection):
+    """
+    Return (email, name) for whoever holds the keys for this inspection.
+    Driven by inspection.key_location (structured dropdown value).
+    Falls back to client email if no specific holder found.
+    """
+    key_location = getattr(inspection, 'key_location', None) or ''
+    prop = inspection.property
+    client = prop.client if prop else None
+
+    if key_location == 'With Tenant':
+        email = getattr(inspection, 'tenant_email', None) or ''
+        name  = getattr(inspection, 'tenant_name',  None) or 'Tenant'
+        if email:
+            return email, name
+
+    if key_location in ('With Landlord',):
+        # Future: landlord has separate email field. For now fall through to client.
+        pass
+
+    if key_location == 'With Agent':
+        # Agent = client (the letting agent who booked)
+        if client and client.email:
+            return client.email, client.name or 'Agent'
+
+    # Default: client email covers 'With Agent', 'At Property', 'At Concierge',
+    # 'In Key Safe', 'With Landlord' (until landlord field exists), and unknown values.
+    if client and client.email:
+        return client.email, client.name or 'Client'
+
+    return None, None
+
+
+def _send_all_pending_confirmations(settings=None):
+    """
+    For each enabled lead-day, find inspections scheduled exactly that many days
+    from today and send a confirmation email to the key holder.
+    Skips inspections with status cancelled or complete.
+    """
+    from routes.email_service import send_confirmation_email
+    if settings is None:
+        settings = _load_global()
+
+    days_list = settings.get('confirmation_days', [1, 2])
+    template  = settings.get('confirmation_template', '') or None
+    today     = date.today()
+    sent      = 0
+    errors    = []
+
+    for days_before in days_list:
+        target_date = today + timedelta(days=int(days_before))
+
+        inspections = (
+            Inspection.query
+            .filter(
+                db.func.date(
+                    db.func.coalesce(Inspection.conduct_date, Inspection.scheduled_date)
+                ) == target_date,
+                Inspection.status.notin_(['cancelled', 'complete'])
+            )
+            .all()
+        )
+
+        for insp in inspections:
+            prop = insp.property
+            recipient_email, recipient_name = _resolve_confirmation_recipient(insp)
+            if not recipient_email:
+                continue
+            try:
+                ok, err = send_confirmation_email(
+                    recipient_email, recipient_name, insp, prop,
+                    days_before=days_before, template=template
+                )
+                if ok:
+                    sent += 1
+                else:
+                    errors.append(f'Insp #{insp.id} ({days_before}d): {err}')
+            except Exception as e:
+                errors.append(f'Insp #{insp.id} ({days_before}d): {e}')
+
+    return sent, errors
+
+
 # ── Clerk daily summary logic ────────────────────────────────────────────────
 
 def _send_all_clerk_summaries():
@@ -234,7 +349,7 @@ def _send_all_clerk_summaries():
 
 def schedule_clerk_summaries(app):
     """
-    Register the 6pm daily clerk summary job.
+    Register the daily jobs: clerk summaries and confirmation emails.
     Call this once after create_app():
         from email_notifications import schedule_clerk_summaries
         schedule_clerk_summaries(app)
@@ -245,12 +360,10 @@ def schedule_clerk_summaries(app):
 
         scheduler = BackgroundScheduler(timezone='Europe/London')
 
-        def job():
+        def clerk_job():
             settings = _load_global()
             if not settings.get('clerk_summary_enabled', True):
                 return
-            t = settings.get('clerk_summary_time', '18:00')
-            # Job always fires at configured time; check handled in _load_global
             with app.app_context():
                 sent, errors = _send_all_clerk_summaries()
                 print(f'[email] clerk summaries: {sent} sent, errors: {errors}')
@@ -260,10 +373,23 @@ def schedule_clerk_summaries(app):
         t = settings.get('clerk_summary_time', '18:00').split(':')
         hour, minute = int(t[0]), int(t[1]) if len(t) > 1 else 0
 
-        scheduler.add_job(job, CronTrigger(hour=hour, minute=minute, timezone='Europe/London'))
+        scheduler.add_job(clerk_job, CronTrigger(hour=hour, minute=minute, timezone='Europe/London'))
+
+        # Confirmation emails fire at 8am daily
+        def confirmation_job():
+            conf_settings = _load_global()
+            if not conf_settings.get('confirmation_enabled', False):
+                return
+            with app.app_context():
+                sent, errors = _send_all_pending_confirmations(conf_settings)
+                print(f'[email] confirmation emails: {sent} sent, errors: {errors}')
+
+        scheduler.add_job(confirmation_job, CronTrigger(hour=8, minute=0, timezone='Europe/London'))
+
         scheduler.start()
         print(f'[email] clerk summary scheduler started — fires at {hour:02d}:{minute:02d} Europe/London')
+        print(f'[email] confirmation email scheduler started — fires at 08:00 Europe/London')
         return scheduler
     except ImportError:
-        print('[email] APScheduler not installed — clerk summaries disabled. Run: pip install apscheduler')
+        print('[email] APScheduler not installed — scheduled emails disabled. Run: pip install apscheduler')
         return None

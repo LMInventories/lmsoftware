@@ -79,8 +79,7 @@ const upcomingNext7Days = computed(() => {
 })
 
 function activityIcon(item) {
-  const m = { complete: '✅', review: '👁', processing: '✍️', active: '🔍', assigned: '👤', created: '📋' }
-  return m[item.status] || '📌'
+  return '●'
 }
 
 function activityVerb(item) {
@@ -124,7 +123,11 @@ onMounted(fetchDashboardStats)
       <!-- Top layout: workflow tiles left, account stats top-right -->
       <div class="dash-top">
         <div class="dash-top-left">
-          <div class="section-label">At a Glance</div>
+          <div class="stats-header">
+            <span class="stats-divider"></span>
+            <span class="stats-label">At a Glance</span>
+            <span class="stats-divider"></span>
+          </div>
           <!-- Status tiles -->
           <div class="status-tiles">
         <div
@@ -185,7 +188,7 @@ onMounted(fetchDashboardStats)
               :class="{ clickable: !!item.id }"
               @click="item.id && viewInspection(item.id)"
             >
-              <div class="activity-icon">{{ activityIcon(item) }}</div>
+              <div class="activity-icon" :style="{ color: statusConfig[item.status]?.color || '#94a3b8' }">{{ activityIcon(item) }}</div>
               <div class="activity-body">
                 <div class="activity-top">
                   <span class="activity-verb">{{ activityVerb(item) }}</span>
@@ -386,14 +389,13 @@ h1 { font-size: 21px; font-weight: 700; color: #0f172a; margin: 0 0 2px; }
 /* Upcoming */
 .dash-top { display: flex; align-items: stretch; gap: 20px; margin-bottom: 20px; }
 .dash-top-left { flex: 1; display: flex; flex-direction: column; }
-.section-label { font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 8px; }
 .account-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .stat-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 3px; cursor: pointer; transition: box-shadow 0.12s, border-color 0.12s; min-height: 90px; }
 .stat-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.07); border-color: #c7d2fe; }
 .stat-num { font-size: 26px; font-weight: 700; color: #0f172a; line-height: 1; margin-bottom: 4px; }
 .stat-lbl { font-size: 11px; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.3px; }
 .account-stats-wrap { min-width: 220px; display: flex; flex-direction: column; gap: 8px; }
-.stats-header { display: flex; align-items: center; gap: 8px; }
+.stats-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .stats-label { font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.6px; white-space: nowrap; }
 .stats-divider { flex: 1; height: 1px; background: #e2e8f0; }
 .upcoming-scroll { flex: 1; overflow-y: auto; max-height: 500px; }

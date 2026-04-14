@@ -197,14 +197,14 @@ onMounted(() => {
 
           <div class="user-details">
             <div class="detail-row"><span class="detail-icon">✉</span>{{ user.email }}</div>
-            <div v-if="user.phone" class="detail-row"><span class="detail-icon">📞</span>{{ user.phone }}</div>
+            <div v-if="user.phone" class="detail-row"><span class="detail-icon">✆</span>{{ user.phone }}</div>
             <div v-if="user.role === 'clerk' && user.typist_mode" class="detail-row">
-              <span class="detail-icon">🎙</span>
+              <span class="detail-icon"></span>
               <span class="typist-mode-pill" :class="'tm-' + user.typist_mode">
                 {{ { ai_instant: 'AI Instant', ai_room: 'AI by Room', human: 'Human Typist' }[user.typist_mode] || user.typist_mode }}
               </span>
             </div>
-            <div class="detail-row detail-muted"><span class="detail-icon">📅</span>Since {{ new Date(user.created_at).toLocaleDateString('en-GB', {day:'2-digit',month:'short',year:'numeric'}) }}</div>
+            <div class="detail-row detail-muted"><span class="detail-icon"></span>Since {{ new Date(user.created_at).toLocaleDateString('en-GB', {day:'2-digit',month:'short',year:'numeric'}) }}</div>
           </div>
         </div>
 

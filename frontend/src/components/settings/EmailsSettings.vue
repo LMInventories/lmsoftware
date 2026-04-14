@@ -7,15 +7,15 @@ const clients        = ref([])
 const loading        = ref(true)
 const saving         = ref(false)
 const savingGlobal   = ref(false)
-const testSending    = ref(false)
-const testEmail      = ref('')
-const testResult     = ref(null)   // { success, error }
 const saveMsg        = ref('')
-const activeTab      = ref('clients')  // 'clients' | 'clerk' | 'smtp'
+const activeTab      = ref('clients')  // 'clients' | 'clerk' | 'confirmation'
 
 const globalSettings = ref({
-  clerk_summary_enabled: true,
-  clerk_summary_time:    '18:00',
+  clerk_summary_enabled:  true,
+  clerk_summary_time:     '18:00',
+  confirmation_enabled:   false,
+  confirmation_days:      [1, 2],
+  confirmation_template:  '',
 })
 
 // Per-client prefs keyed by client id
@@ -102,21 +102,6 @@ function allEnabled(clientId) {
   return prefs && EVENTS.every(e => prefs[e.key])
 }
 
-// ── Test email ────────────────────────────────────────────────────────────────
-async function sendTest() {
-  if (!testEmail.value) return
-  testSending.value = true
-  testResult.value  = null
-  try {
-    const res = await api.sendTestEmail(testEmail.value)
-    testResult.value = res.data
-  } catch (err) {
-    testResult.value = { success: false, error: 'Request failed' }
-  } finally {
-    testSending.value = false
-  }
-}
-
 // ── Clerk summary manual trigger ──────────────────────────────────────────────
 const triggerResult = ref(null)
 const triggering    = ref(false)
@@ -132,6 +117,70 @@ async function triggerClerkSummaries() {
     triggering.value = false
   }
 }
+
+// ── Confirmation emails ────────────────────────────────────────────────────────
+const LEAD_DAYS = [
+  { value: 1,  label: '1 day' },
+  { value: 2,  label: '2 days' },
+  { value: 3,  label: '3 days' },
+  { value: 7,  label: '1 week' },
+  { value: 14, label: '2 weeks' },
+]
+
+const DEFAULT_CONFIRMATION_TEMPLATE = `Dear {recipient_name},
+
+This is a courtesy reminder that an inspection has been scheduled at {property_address}.
+
+Inspection type: {inspection_type}
+Date: {date}
+Time: {time_str}
+Key location: {key_location}
+{inspector_line}
+
+Please ensure keys are available {days_before} ({day_label}).
+
+If you have any questions, please don't hesitate to get in touch.
+
+Kind regards,
+LM Inventories`
+
+function toggleLeadDay(day) {
+  const days = globalSettings.value.confirmation_days
+  const idx  = days.indexOf(day)
+  if (idx === -1) days.push(day)
+  else            days.splice(idx, 1)
+}
+
+const confirmTriggerResult = ref(null)
+const confirmTriggering    = ref(false)
+async function triggerConfirmationEmails() {
+  confirmTriggering.value = true
+  confirmTriggerResult.value = null
+  try {
+    const res = await api.triggerConfirmationEmails()
+    confirmTriggerResult.value = res.data
+  } catch (err) {
+    confirmTriggerResult.value = { success: false, error: 'Request failed' }
+  } finally {
+    confirmTriggering.value = false
+  }
+}
+
+function insertPlaceholder(ph) {
+  const ta = document.getElementById('conf-template-ta')
+  if (!ta) {
+    globalSettings.value.confirmation_template += `{${ph}}`
+    return
+  }
+  const start = ta.selectionStart
+  const end   = ta.selectionEnd
+  const val   = globalSettings.value.confirmation_template
+  globalSettings.value.confirmation_template = val.slice(0, start) + `{${ph}}` + val.slice(end)
+  ta.$nextTick?.(() => {
+    ta.selectionStart = ta.selectionEnd = start + ph.length + 2
+    ta.focus()
+  })
+}
 </script>
 
 <template>
@@ -144,13 +193,13 @@ async function triggerClerkSummaries() {
     <!-- Tab bar -->
     <div class="tab-bar">
       <button :class="['tab-btn', activeTab === 'clients' && 'active']" @click="activeTab = 'clients'">
-        👥 Client Notifications
+        Client Notifications
       </button>
       <button :class="['tab-btn', activeTab === 'clerk' && 'active']" @click="activeTab = 'clerk'">
-        📋 Clerk Summaries
+        Clerk Summaries
       </button>
-      <button :class="['tab-btn', activeTab === 'smtp' && 'active']" @click="activeTab = 'smtp'">
-        🔧 Test Connection
+      <button :class="['tab-btn', activeTab === 'confirmation' && 'active']" @click="activeTab = 'confirmation'">
+        Confirmation Emails
       </button>
     </div>
 
@@ -260,7 +309,6 @@ async function triggerClerkSummaries() {
         </div>
 
         <div class="info-note">
-          <span>📋</span>
           <div>
             <strong>What's included:</strong> Inspection time · Property address · Bedrooms/bathrooms ·
             Client name & address · Key collect and return info · Internal notes (if any).
@@ -276,10 +324,10 @@ async function triggerClerkSummaries() {
               :disabled="triggering"
               @click="triggerClerkSummaries"
               title="Send summaries now for testing">
-              {{ triggering ? 'Sending…' : '▶ Send Now (Test)' }}
+              {{ triggering ? 'Sending…' : 'Send Now (Test)' }}
             </button>
             <button class="btn-save" :disabled="savingGlobal" @click="saveGlobal">
-              {{ savingGlobal ? 'Saving…' : '💾 Save Settings' }}
+              {{ savingGlobal ? 'Saving…' : 'Save Settings' }}
             </button>
           </div>
         </div>
@@ -295,55 +343,116 @@ async function triggerClerkSummaries() {
     </div>
 
     <!-- ═══════════════════════════════════════════════════════════════
-         TAB 3 — SMTP test
+         TAB 3 — Confirmation emails
     ═══════════════════════════════════════════════════════════════ -->
-    <div v-if="activeTab === 'smtp'" class="tab-content">
+    <div v-if="activeTab === 'confirmation'" class="tab-content">
       <div class="settings-card">
-        <h3>Test Email Connection</h3>
+        <h3>Inspection Confirmation Emails</h3>
         <p class="card-description">
-          Send a test email to confirm your SMTP credentials on Render are working correctly.
+          Automatically email whoever holds the keys for each upcoming inspection,
+          a set number of days beforehand. The recipient is determined by the
+          <strong>Key Location</strong> field on the inspection.
         </p>
 
-        <div class="smtp-info-box">
-          <div class="smtp-row"><span class="smtp-label">From Address</span><span class="smtp-value">no-reply@lminventories.co.uk</span></div>
-          <div class="smtp-row"><span class="smtp-label">SMTP Host</span><span class="smtp-value">smtp.fasthosts.co.uk</span></div>
-          <div class="smtp-row"><span class="smtp-label">Port</span><span class="smtp-value">587 (STARTTLS)</span></div>
-          <div class="smtp-row"><span class="smtp-label">Credentials</span><span class="smtp-value">Set via Render environment variables</span></div>
+        <!-- Enable toggle -->
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-label">Enable Confirmation Emails</span>
+            <span class="setting-desc">Send reminder emails to key holders before inspections</span>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" v-model="globalSettings.confirmation_enabled" />
+            <span class="toggle-slider"></span>
+          </label>
         </div>
 
-        <div class="setting-row" style="margin-top: 20px;">
+        <!-- Lead times -->
+        <div class="setting-row" :class="{ faded: !globalSettings.confirmation_enabled }">
           <div class="setting-info">
-            <span class="setting-label">Send test to</span>
-            <span class="setting-desc">Enter any email address to receive the test</span>
+            <span class="setting-label">Send Reminders</span>
+            <span class="setting-desc">Choose how many days before the inspection to send each email</span>
           </div>
-          <div class="test-input-row">
-            <input
-              type="email"
-              class="email-input"
-              v-model="testEmail"
-              placeholder="you@example.com"
-              @keyup.enter="sendTest" />
-            <button class="btn-test" :disabled="testSending || !testEmail" @click="sendTest">
-              {{ testSending ? 'Sending…' : 'Send Test' }}
+          <div class="lead-day-chips">
+            <button
+              v-for="ld in LEAD_DAYS"
+              :key="ld.value"
+              class="day-chip"
+              :class="{ active: globalSettings.confirmation_days.includes(ld.value) }"
+              :disabled="!globalSettings.confirmation_enabled"
+              @click="toggleLeadDay(ld.value)">
+              {{ ld.label }}
             </button>
           </div>
         </div>
 
-        <div v-if="testResult" class="test-result" :class="testResult.success ? 'success' : 'fail'">
-          <span v-if="testResult.success">✓ Test email sent successfully.</span>
-          <span v-else>✗ Failed: {{ testResult.error }}</span>
+        <!-- Key-holder logic info -->
+        <div class="info-note" :class="{ faded: !globalSettings.confirmation_enabled }">
+          <div>
+            <strong>Recipient logic:</strong> With Agent → client email · With Tenant → tenant email ·
+            With Landlord / At Property / At Concierge / In Key Safe → client email.
+            Inspections with no resolvable email address are skipped.
+          </div>
         </div>
 
-        <div class="info-note" style="margin-top: 24px;">
-          <span>🔑</span>
-          <div>
-            <strong>Required Render environment variables:</strong><br/>
-            <code>SMTP_HOST</code> · <code>SMTP_PORT</code> · <code>SMTP_USER</code> ·
-            <code>SMTP_PASSWORD</code> · <code>SMTP_FROM</code> · <code>SMTP_FROM_REPORTS</code>
+        <!-- Template -->
+        <div class="template-section" :class="{ faded: !globalSettings.confirmation_enabled }">
+          <div class="template-header">
+            <span class="setting-label">Email Template</span>
+            <span class="setting-desc">
+              Plain text. Leave blank to use the default template.
+              Click a placeholder to insert it at the cursor.
+            </span>
           </div>
+          <div class="placeholder-chips">
+            <button
+              v-for="ph in ['recipient_name','property_address','inspection_type','date','time_str','key_location','inspector_line','days_before','day_label']"
+              :key="ph"
+              class="ph-chip"
+              :disabled="!globalSettings.confirmation_enabled"
+              @click="insertPlaceholder(ph)">
+              {​{ ph }}
+            </button>
+          </div>
+          <textarea
+            id="conf-template-ta"
+            class="template-ta"
+            :placeholder="DEFAULT_CONFIRMATION_TEMPLATE"
+            v-model="globalSettings.confirmation_template"
+            :disabled="!globalSettings.confirmation_enabled"
+            rows="14">
+          </textarea>
+          <p class="template-hint">
+            If the template is blank, the system default is used (shown as placeholder above).
+          </p>
+        </div>
+
+        <!-- Footer -->
+        <div class="card-footer">
+          <span class="save-msg" :class="{ visible: saveMsg }">{{ saveMsg }}</span>
+          <div class="footer-btns">
+            <button
+              class="btn-secondary"
+              :disabled="confirmTriggering || !globalSettings.confirmation_enabled"
+              @click="triggerConfirmationEmails"
+              title="Send confirmation emails now for testing">
+              {{ confirmTriggering ? 'Sending…' : 'Send Now (Test)' }}
+            </button>
+            <button class="btn-save" :disabled="savingGlobal" @click="saveGlobal">
+              {{ savingGlobal ? 'Saving…' : 'Save Settings' }}
+            </button>
+          </div>
+        </div>
+
+        <div v-if="confirmTriggerResult" class="test-result" :class="confirmTriggerResult.success ? 'success' : 'fail'">
+          <span v-if="confirmTriggerResult.success">✓ Sent {{ confirmTriggerResult.sent }} confirmation email(s).</span>
+          <span v-else>✗ {{ confirmTriggerResult.error }}</span>
+          <span v-if="confirmTriggerResult.errors && confirmTriggerResult.errors.length">
+            Issues: {{ confirmTriggerResult.errors.join(', ') }}
+          </span>
         </div>
       </div>
     </div>
+
   </div>
 </template>
 
@@ -444,6 +553,7 @@ async function triggerClerkSummaries() {
 }
 .save-msg {
   font-size: 13px; font-weight: 600; color: #166534;
+
   opacity: 0; transition: opacity .2s;
 }
 .save-msg.visible { opacity: 1; }
@@ -456,7 +566,7 @@ async function triggerClerkSummaries() {
 .btn-save-client:hover:not(:disabled) { background: #1e40af; }
 .btn-save-client:disabled { background: #cbd5e1; cursor: not-allowed; }
 
-/* ── Settings card (clerk / smtp tabs) ── */
+/* ── Settings card (clerk / confirmation tabs) ── */
 .settings-card {
   max-width: 680px; background: #fff; border: 1px solid #e2e8f0;
   border-radius: 12px; overflow: hidden;
@@ -470,7 +580,7 @@ async function triggerClerkSummaries() {
   margin: 0;
 }
 
-/* ── Setting rows (clerk tab) ── */
+/* ── Setting rows ── */
 .setting-row {
   display: flex; align-items: center; justify-content: space-between;
   padding: 16px 20px; border-bottom: 1px solid #f1f5f9; gap: 16px;
@@ -489,11 +599,10 @@ async function triggerClerkSummaries() {
 
 /* ── Info note ── */
 .info-note {
-  display: flex; gap: 12px; align-items: flex-start;
   margin: 0 20px 4px; padding: 12px 14px; background: #f0f9ff;
   border: 1px solid #bae6fd; border-radius: 8px; font-size: 13px; color: #0369a1; line-height: 1.5;
 }
-.info-note span:first-child { font-size: 16px; flex-shrink: 0; }
+.info-note.faded { opacity: .4; }
 .info-note code {
   background: #e0f2fe; padding: 1px 5px; border-radius: 4px; font-size: 12px;
 }
@@ -515,31 +624,45 @@ async function triggerClerkSummaries() {
 .btn-save:hover:not(:disabled) { background: #1e40af; }
 .btn-save:disabled { background: #cbd5e1; cursor: not-allowed; }
 
-/* ── SMTP tab ── */
-.smtp-info-box {
-  margin: 16px 20px; background: #f8fafc; border: 1px solid #e2e8f0;
-  border-radius: 8px; overflow: hidden;
+/* ── Lead day chips ── */
+.lead-day-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.day-chip {
+  padding: 5px 14px; border-radius: 999px; border: 1.5px solid #e2e8f0;
+  background: #f8fafc; color: #64748b; font-size: 13px; font-weight: 600;
+  cursor: pointer; transition: all .15s;
 }
-.smtp-row {
-  display: flex; gap: 12px; padding: 10px 14px; border-bottom: 1px solid #f1f5f9;
-  font-size: 13px;
-}
-.smtp-row:last-child { border-bottom: none; }
-.smtp-label { color: #94a3b8; font-weight: 600; min-width: 130px; flex-shrink: 0; }
-.smtp-value { color: #1e293b; font-family: monospace; }
+.day-chip.active { background: #1e3a8a; color: #fff; border-color: #1e3a8a; }
+.day-chip:hover:not(:disabled):not(.active) { background: #e2e8f0; border-color: #cbd5e1; }
+.day-chip:disabled { opacity: .4; cursor: not-allowed; }
 
-.test-input-row { display: flex; gap: 8px; align-items: center; }
-.email-input {
-  padding: 8px 12px; border: 1px solid #e2e8f0; border-radius: 7px;
-  font-size: 14px; width: 220px;
+/* ── Template section ── */
+.template-section {
+  padding: 16px 20px; border-top: 1px solid #f1f5f9; transition: opacity .2s;
 }
-.btn-test {
-  padding: 8px 16px; background: #0284c7; color: #fff;
-  border: none; border-radius: 7px; font-size: 13px; font-weight: 600;
-  cursor: pointer; white-space: nowrap;
+.template-section.faded { opacity: .4; pointer-events: none; }
+.template-header { margin-bottom: 10px; }
+.template-header .setting-label { display: block; font-size: 14px; font-weight: 600; color: #1e293b; }
+.template-header .setting-desc  { display: block; font-size: 12px; color: #94a3b8; margin-top: 2px; }
+
+.placeholder-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 10px; }
+.ph-chip {
+  padding: 3px 10px; border-radius: 5px; border: 1px solid #bae6fd;
+  background: #e0f2fe; color: #0369a1; font-size: 11px; font-family: monospace;
+  cursor: pointer; transition: background .12px;
 }
-.btn-test:hover:not(:disabled) { background: #0369a1; }
-.btn-test:disabled { background: #cbd5e1; cursor: not-allowed; }
+.ph-chip:hover:not(:disabled) { background: #bae6fd; }
+.ph-chip:disabled { opacity: .4; cursor: not-allowed; }
+
+.template-ta {
+  width: 100%; box-sizing: border-box; padding: 12px 14px;
+  border: 1px solid #e2e8f0; border-radius: 8px; font-size: 13px;
+  font-family: 'Courier New', monospace; color: #1e293b;
+  background: #fafbfc; resize: vertical; line-height: 1.6;
+  transition: border-color .15s;
+}
+.template-ta:focus { outline: none; border-color: #93c5fd; }
+.template-ta:disabled { background: #f1f5f9; color: #94a3b8; }
+.template-hint { font-size: 11px; color: #94a3b8; margin: 6px 0 0; }
 
 /* ── Test result ── */
 .test-result {

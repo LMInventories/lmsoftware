@@ -697,7 +697,7 @@ onMounted(() => {
         📄 List View
       </button>
       <button @click="activeTab = 'calendar'" class="tab-button" :class="{ active: activeTab === 'calendar' }">
-        📅 Calendar View
+        Calendar View
       </button>
     </div>
 
@@ -869,7 +869,7 @@ onMounted(() => {
               v-for="v in calendarViews" :key="v.value"
               class="cal-view-btn" :class="{ active: calendarView === v.value }"
               @click="switchCalView(v.value)">{{ v.label }}</button>
-            <button class="cal-view-btn cal-goto-btn" @click="openDatePicker">📅 Go to Date</button>
+            <button class="cal-view-btn cal-goto-btn" @click="openDatePicker">Go to Date</button>
           </div>
         </div>
         <FullCalendar ref="calendarRef" :options="calendarOptions" />
@@ -1000,7 +1000,7 @@ onMounted(() => {
                   </option>
                 </select>
                 <p v-if="filteredTemplates.length === 0" class="helper-text warning">
-                  ⚠️ No templates for this type. Create one in Settings → Templates.
+                  No templates for this type. Create one in Settings → Templates.
                 </p>
                 <p v-else class="helper-text">
                   {{ filteredTemplates.length }} template{{ filteredTemplates.length !== 1 ? 's' : '' }} available.
@@ -1017,7 +1017,7 @@ onMounted(() => {
                   </option>
                 </select>
                 <p v-if="clerks.length === 0" class="helper-text warning">
-                  ⚠️ No clerks available. Create clerk users first.
+                  No clerks available. Create clerk users first.
                 </p>
               </div>
 

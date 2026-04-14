@@ -13,14 +13,14 @@ const activeTab = ref(localStorage.getItem('settings_tab') || 'general')
 function setTab(id) { activeTab.value = id; localStorage.setItem('settings_tab', id) }
 
 const tabs = [
-  { id: 'general',        label: 'General',          icon: '⚙️' },
-  { id: 'reports',        label: 'Reports',           icon: '📄' },
-  { id: 'actions',        label: 'Actions',           icon: '🏷️' },
-  { id: 'templates',      label: 'Templates',         icon: '📋' },
-  { id: 'fixed-sections', label: 'Fixed Sections',    icon: '📌' },
-  { id: 'transcription',  label: 'Transcription',     icon: '✍️' },
-  { id: 'emails',         label: 'Emails',            icon: '📧' },
-  { id: 'integrations',  label: 'Integrations',      icon: '🔗' },
+  { id: 'general',        label: 'General'        },
+  { id: 'reports',        label: 'Reports'        },
+  { id: 'actions',        label: 'Actions'        },
+  { id: 'templates',      label: 'Templates'      },
+  { id: 'fixed-sections', label: 'Fixed Sections' },
+  { id: 'transcription',  label: 'Transcription'  },
+  { id: 'emails',         label: 'Emails'         },
+  { id: 'integrations',   label: 'Integrations'   },
 ]
 </script>
 
@@ -40,7 +40,6 @@ const tabs = [
           :class="{ active: activeTab === tab.id }"
           @click="setTab(tab.id)"
         >
-          <span class="tab-icon">{{ tab.icon }}</span>
           <span class="tab-label">{{ tab.label }}</span>
         </button>
       </div>

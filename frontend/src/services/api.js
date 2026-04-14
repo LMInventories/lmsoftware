@@ -168,6 +168,7 @@ const api = {
   saveClientEmailSettings(clientId, prefs) { return http.put(`/api/email/client/${clientId}/settings`, prefs) },
   sendTestEmail(to)                    { return http.post('/api/email/test', { to }) },
   triggerClerkSummaries()              { return http.post('/api/email/clerk-summary/run') },
+  triggerConfirmationEmails()          { return http.post('/api/email/confirmation/run') },
 }
 
 export default api

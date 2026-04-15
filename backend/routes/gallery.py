@@ -3,8 +3,8 @@ gallery.py — Public photo gallery endpoint for PDF clickable-photo links.
 
 Routes:
   GET /api/gallery/<inspection_id>/<sid>/<rid>
-      → Full HTML gallery with photos embedded as compressed data URIs.
-        No secondary requests needed — everything is in one response.
+      → Full HTML gallery with photos embedded as data URIs (no secondary requests).
+        When photos aren't found, shows diagnostic info about what keys DO exist.
 
   GET /api/gallery/<inspection_id>/<sid>/<rid>/debug
       → JSON diagnostic: shows what keys exist and how many photos were found.
@@ -13,12 +13,10 @@ Token:  HMAC-SHA256(JWT_SECRET_KEY, "{inspection_id}:{sid}:{rid}")[:16]
 No login required — the HMAC token provides security without a session.
 """
 
-import io
 import os
 import json
 import hmac
 import hashlib
-import base64
 import html as _html
 from flask import Blueprint, request, abort, make_response
 
@@ -31,38 +29,19 @@ def make_gallery_token(inspection_id, sid, rid):
     return hmac.new(secret.encode(), msg.encode(), hashlib.sha256).hexdigest()[:16]
 
 
-def _load_photos(inspection_id, sid, rid):
-    """Return (photos_list, label) for the given inspection / section / row."""
+def _load_report_data(inspection_id):
+    """Return (rd dict, label string, parse_error string|None) for the inspection."""
     from models import Inspection
     insp = Inspection.query.get_or_404(inspection_id)
 
     rd = {}
+    parse_error = None
     if insp.report_data:
         try:
             rd = json.loads(insp.report_data) if isinstance(insp.report_data, str) else insp.report_data
         except Exception as e:
+            parse_error = str(e)
             print(f'[gallery] ERROR parsing report_data for inspection {inspection_id}: {e}')
-
-    sid_key = str(sid)
-    rid_key = str(rid)
-    section_data = rd.get(sid_key) or {}
-    row_data     = section_data.get(rid_key) or {}
-    raw          = row_data.get('_photos', []) or []
-
-    print(f'[gallery] inspection={inspection_id} sid={sid_key!r} rid={rid_key!r} '
-          f'section_keys={list(section_data.keys())[:10]} raw_count={len(raw)}')
-
-    # Normalise: items may be strings (URL / data-URI) or dicts with a 'url' key
-    photos = []
-    for p in raw:
-        if isinstance(p, str):
-            photos.append(p)
-        elif isinstance(p, dict):
-            url = p.get('url') or p.get('src') or ''
-            if url:
-                photos.append(url)
-
-    print(f'[gallery] normalised photo count: {len(photos)}')
 
     label = ''
     try:
@@ -74,44 +53,49 @@ def _load_photos(inspection_id, sid, rid):
     if not label:
         label = f'Inspection #{inspection_id}'
 
-    return photos, label
+    return rd, label, parse_error
 
 
-def _compress_to_data_uri(raw_url: str, max_px: int = 1400, quality: int = 75) -> str:
+def _extract_photos(rd, sid, rid):
     """
-    Decode a photo (data URI or HTTP URL) and return a compressed JPEG data URI.
-    Falls back to the original string if anything fails.
+    Return list of photo src strings from rd[sid][rid]['_photos'].
+    Also returns diagnostic dict with what was found / not found.
     """
-    try:
-        if raw_url.startswith('data:'):
-            _, b64data = raw_url.split(',', 1)
-            data = base64.b64decode(b64data)
-        else:
-            import urllib.request
-            req  = urllib.request.Request(raw_url, headers={'User-Agent': 'InspectPro/1.0'})
-            data = urllib.request.urlopen(req, timeout=10).read()
+    sid_key      = str(sid)
+    rid_key      = str(rid)
+    top_keys     = list(rd.keys())
+    section_data = rd.get(sid_key) or {}
+    sec_keys     = list(section_data.keys())
+    row_data     = section_data.get(rid_key) or {}
+    raw          = row_data.get('_photos', []) or []
 
-        from PIL import Image as _PILImage, ImageOps
-        pil = _PILImage.open(io.BytesIO(data)).convert('RGB')
-        try:
-            pil = ImageOps.exif_transpose(pil)
-        except Exception:
-            pass
-        w, h = pil.size
-        if w > max_px or h > max_px:
-            pil.thumbnail((max_px, max_px), _PILImage.LANCZOS)
-        out = io.BytesIO()
-        pil.save(out, format='JPEG', quality=quality, optimize=True)
-        compressed = base64.b64encode(out.getvalue()).decode('ascii')
-        return f'data:image/jpeg;base64,{compressed}'
-    except Exception as e:
-        print(f'[gallery] compress error: {e}')
-        # If we can't compress, return the original if it's already a data URI;
-        # otherwise return empty string to skip the broken image.
-        return raw_url if raw_url.startswith('data:') else ''
+    print(f'[gallery] sid={sid_key!r} rid={rid_key!r} '
+          f'top_keys={top_keys[:15]} sec_keys={sec_keys[:15]} raw={len(raw)}')
+
+    photos = []
+    for p in raw:
+        if isinstance(p, str) and p:
+            photos.append(p)
+        elif isinstance(p, dict):
+            url = p.get('url') or p.get('src') or ''
+            if url:
+                photos.append(url)
+
+    diag = {
+        'sid_key':       sid_key,
+        'rid_key':       rid_key,
+        'top_keys':      top_keys[:20],
+        'section_found': bool(section_data),
+        'sec_keys':      sec_keys[:20],
+        'row_found':     bool(row_data),
+        'row_keys':      list(row_data.keys()),
+        'raw_count':     len(raw),
+        'photo_count':   len(photos),
+    }
+    return photos, diag
 
 
-# ── Gallery HTML (photos embedded inline) ─────────────────────────────────────
+# ── Gallery HTML ──────────────────────────────────────────────────────────────
 
 @gallery_bp.route('/gallery/<int:inspection_id>/<sid>/<rid>')
 def photo_gallery(inspection_id, sid, rid):
@@ -120,51 +104,55 @@ def photo_gallery(inspection_id, sid, rid):
     if not hmac.compare_digest(token, expected):
         abort(403)
 
-    photos, label = _load_photos(inspection_id, sid, rid)
+    rd, label, parse_error = _load_report_data(inspection_id)
+    photos, diag           = _extract_photos(rd, sid, rid)
 
+    # ── No photos: show diagnostic page ──────────────────────────────────────
     if not photos:
-        body = (
-            '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
-            '<meta name="viewport" content="width=device-width,initial-scale=1">'
-            f'<title>{_html.escape(label)}</title>'
-            '<style>body{background:#0f172a;font-family:system-ui,sans-serif;'
-            'display:flex;align-items:center;justify-content:center;min-height:100vh}'
-            'p{color:#64748b;font-size:15px;text-align:center;padding:24px}</style>'
-            '</head><body>'
-            f'<p>No photos found for this item.<br>'
-            f'<small style="color:#475569">({_html.escape(label)} — {sid}/{rid})</small></p>'
-            '</body></html>'
-        )
+        esc_label = _html.escape(label)
+        diag_rows = ''
+        for k, v in diag.items():
+            diag_rows += (
+                f'<tr><td style="color:#94a3b8;padding:4px 12px 4px 0;'
+                f'white-space:nowrap;vertical-align:top">{_html.escape(k)}</td>'
+                f'<td style="color:#e2e8f0;word-break:break-all">{_html.escape(str(v))}</td></tr>'
+            )
+        if parse_error:
+            diag_rows += (
+                f'<tr><td colspan="2" style="color:#f87171;padding-top:8px">'
+                f'Parse error: {_html.escape(parse_error)}</td></tr>'
+            )
+        body = f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{esc_label}</title>
+<style>
+body{{background:#0f172a;font-family:system-ui,sans-serif;
+     padding:32px 20px;color:#f1f5f9;max-width:680px;margin:0 auto}}
+h2{{font-size:16px;margin:0 0 6px}}
+p{{color:#64748b;font-size:13px;margin:0 0 20px}}
+table{{font-size:12px;border-collapse:collapse;width:100%}}
+</style></head>
+<body>
+<h2>No photos found — {esc_label}</h2>
+<p>Looking for: inspection {inspection_id} → section <code>{_html.escape(str(sid))}</code>
+   → row <code>{_html.escape(str(rid))}</code></p>
+<table>{diag_rows}</table>
+</body></html>"""
         return make_response(body, 200, {'Content-Type': 'text/html; charset=utf-8'})
 
     count  = len(photos)
     plural = 's' if count != 1 else ''
 
-    # Compress every photo and embed directly as data URIs.
-    # This avoids all secondary /photo/<n> requests and works in any browser context.
-    photo_srcs = []
-    for p in photos:
-        uri = _compress_to_data_uri(p)
-        if uri:
-            photo_srcs.append(uri)
-
-    if not photo_srcs:
-        # All photos failed to compress — shouldn't happen but handle gracefully
-        body = (
-            '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
-            '<style>body{background:#0f172a;display:flex;align-items:center;'
-            'justify-content:center;min-height:100vh}'
-            'p{color:#ef4444;font-size:15px;font-family:system-ui}</style>'
-            '</head><body><p>Photos could not be loaded. Please try again.</p></body></html>'
-        )
-        return make_response(body, 200, {'Content-Type': 'text/html; charset=utf-8'})
-
-    # Embed srcs directly into the HTML — no JS fetch needed.
+    # Embed photos directly as <img src="..."> — data URIs go straight in,
+    # HTTP URLs go in as-is (browser fetches them). No Pillow, no extra requests.
     imgs_html = ''
-    for i, src in enumerate(photo_srcs):
+    for i, src in enumerate(photos):
+        # Escape any stray quotes in the src value (shouldn't exist in base64, but be safe)
+        safe_src = src.replace('"', '%22')
         imgs_html += (
-            f'<img src="{src}" alt="Photo {i+1}" loading="lazy" '
-            f'onclick="openLb(this.src)">'
+            f'<img src="{safe_src}" alt="Photo {i + 1}" loading="lazy" '
+            f'onclick="openLb(this.src)">\n'
         )
 
     html = f"""<!DOCTYPE html>

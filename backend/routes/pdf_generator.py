@@ -320,7 +320,7 @@ class _PDFBuilder:
         self.s_hdr_cell = ParagraphStyle('hdr_cell', fontName='Helvetica-Bold', fontSize=7.5,  leading=10, textColor=self.hdr_c)
         self.s_cell     = ParagraphStyle('cell',     fontName='Helvetica',      fontSize=8,    leading=11, textColor=bc)
         self.s_cell_sm  = ParagraphStyle('cell_sm',  fontName='Helvetica',      fontSize=7,    leading=10, textColor=_SLATE_500)
-        self.s_ref      = ParagraphStyle('ref',      fontName='Helvetica-Bold', fontSize=7.5,  leading=10, textColor=self.brand)
+        self.s_ref      = ParagraphStyle('ref',      fontName='Helvetica-Bold', fontSize=7.5,  leading=10, textColor=bc)
         self.s_title    = ParagraphStyle('title',    fontName='Helvetica-Bold', fontSize=20,   leading=26, textColor=self.hdr_c, alignment=TA_CENTER)
         self.s_toc_num  = ParagraphStyle('toc_num',  fontName='Helvetica-Bold', fontSize=9.5,  leading=14, textColor=self.brand)
         self.s_toc_ttl  = ParagraphStyle('toc_ttl',  fontName='Helvetica',      fontSize=9.5,  leading=14, textColor=bc)

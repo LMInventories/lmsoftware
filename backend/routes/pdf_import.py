@@ -127,7 +127,6 @@ Return ONLY valid JSON — no markdown, no explanation:
             headers={
                 'x-api-key':          api_key,
                 'anthropic-version':  '2023-06-01',
-                'anthropic-beta':     'pdfs-2024-09-25',
                 'content-type':       'application/json',
             },
             json=payload,

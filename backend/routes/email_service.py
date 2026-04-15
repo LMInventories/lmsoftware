@@ -589,7 +589,7 @@ def send_report_complete(inspection, client, property_obj, pdf_bytes=None, recip
 
     atts = []
     if pdf_bytes:
-        atts.append((pdf_name, pdf_bytes, 'application/pdf'))
+        atts.append((pdf_name, pdf_bytes))
 
     return _send(SMTP_FROM_REPORTS, to_addrs, subject, _wrap(body, subject),
                  attachments=atts if atts else None)

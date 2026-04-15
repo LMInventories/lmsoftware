@@ -736,7 +736,9 @@ class _PDFBuilder:
                 ts.add('BACKGROUND',     (0,ri),(-1,ri), _WHITE)
             tbl.setStyle(ts)
 
-            story += [_HeaderBar(section.get('name',''), self.brand, self.hdr_c), Spacer(1,2*mm), tbl, PageBreak()]
+            is_last = (si == len(self.fixed_sections) - 1)
+            story += [_HeaderBar(section.get('name',''), self.brand, self.hdr_c), Spacer(1,2*mm), tbl]
+            story += [PageBreak()] if is_last else [Spacer(1, 6*mm)]
 
         return story
 

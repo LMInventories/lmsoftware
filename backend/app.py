@@ -57,21 +57,21 @@ def create_app():
     def health():
         return {'status': 'ok'}, 200
 
-    # ── Temporary: test Resend API connectivity ───────────────────────────────
+    # ── Temporary: test Resend sending ───────────────────────────────────────
     # DELETE THIS ROUTE once email is confirmed working
     @app.route('/debug/smtp-ping')
     def smtp_ping():
-        import resend as _resend
-        from routes.email_service import RESEND_API_KEY, SMTP_FROM
-        if not RESEND_API_KEY:
-            return {'status': 'error', 'detail': 'RESEND_API_KEY env var not set'}, 200
-        try:
-            _resend.api_key = RESEND_API_KEY
-            domains = _resend.Domains.list()
-            names = [d.get('name') for d in (domains.get('data') or [])]
-            return {'status': 'ok', 'smtp_from': SMTP_FROM, 'verified_domains': names}, 200
-        except Exception as e:
-            return {'status': 'error', 'detail': str(e)}, 200
+        from routes.email_service import _send, SMTP_FROM
+        ok, err = _send(
+            from_addr = SMTP_FROM,
+            to_addrs  = ['robynsaysrelax@gmail.com'],
+            subject   = 'InspectPro — Resend test',
+            html_body = '<p>If you can read this, Resend is working correctly.</p>',
+        )
+        if ok:
+            return {'status': 'ok', 'sent_from': SMTP_FROM, 'sent_to': 'robynsaysrelax@gmail.com'}, 200
+        else:
+            return {'status': 'error', 'detail': err}, 200
 
     db.init_app(app)
     JWTManager(app)

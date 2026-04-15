@@ -1,11 +1,14 @@
 """
 gallery.py — Public photo gallery endpoint for PDF clickable-photo links.
 
-URL:  GET /api/gallery/<inspection_id>/<sid>/<rid>?token=<hmac>
-  sid = section or room id (matches report_data key)
-  rid = row or item id, or '_overview' for room overview photos
+Routes:
+  GET /api/gallery/<inspection_id>/<sid>/<rid>
+      → HTML gallery shell (lightweight, no embedded photos)
 
-The token is HMAC-SHA256(JWT_SECRET_KEY, "{inspection_id}:{sid}:{rid}")[:16]
+  GET /api/gallery/<inspection_id>/<sid>/<rid>/photo/<index>
+      → binary image response for photo[index]
+
+Token:  HMAC-SHA256(JWT_SECRET_KEY, "{inspection_id}:{sid}:{rid}")[:16]
 No login required — the HMAC token provides security without a session.
 """
 
@@ -13,6 +16,7 @@ import os
 import json
 import hmac
 import hashlib
+import base64
 import html as _html
 from flask import Blueprint, request, abort, make_response
 
@@ -25,13 +29,8 @@ def make_gallery_token(inspection_id, sid, rid):
     return hmac.new(secret.encode(), msg.encode(), hashlib.sha256).hexdigest()[:16]
 
 
-@gallery_bp.route('/gallery/<int:inspection_id>/<sid>/<rid>')
-def photo_gallery(inspection_id, sid, rid):
-    token    = request.args.get('token', '')
-    expected = make_gallery_token(inspection_id, sid, rid)
-    if not hmac.compare_digest(token, expected):
-        abort(403)
-
+def _load_photos(inspection_id, sid, rid):
+    """Return (photos_list, label) for the given inspection / section / row."""
     from models import Inspection
     insp = Inspection.query.get_or_404(inspection_id)
 
@@ -42,9 +41,18 @@ def photo_gallery(inspection_id, sid, rid):
         except Exception:
             pass
 
-    photos = (rd.get(str(sid)) or {}).get(str(rid), {}).get('_photos', []) or []
+    raw = (rd.get(str(sid)) or {}).get(str(rid), {}).get('_photos', []) or []
 
-    # Build a human-readable title
+    # Normalise: items may be strings (URL / data-URI) or dicts with a 'url' key
+    photos = []
+    for p in raw:
+        if isinstance(p, str):
+            photos.append(p)
+        elif isinstance(p, dict):
+            url = p.get('url') or p.get('src') or ''
+            if url:
+                photos.append(url)
+
     label = ''
     try:
         prop = insp.property
@@ -55,32 +63,49 @@ def photo_gallery(inspection_id, sid, rid):
     if not label:
         label = f'Inspection #{inspection_id}'
 
+    return photos, label
+
+
+# ── Gallery HTML shell ────────────────────────────────────────────────────────
+
+@gallery_bp.route('/gallery/<int:inspection_id>/<sid>/<rid>')
+def photo_gallery(inspection_id, sid, rid):
+    token    = request.args.get('token', '')
+    expected = make_gallery_token(inspection_id, sid, rid)
+    if not hmac.compare_digest(token, expected):
+        abort(403)
+
+    photos, label = _load_photos(inspection_id, sid, rid)
+
     if not photos:
         return make_response(
-            f'<p style="font-family:system-ui;padding:24px;color:#64748b">'
-            f'No photos found for this item.</p>',
+            '<p style="font-family:system-ui;padding:24px;color:#64748b">'
+            'No photos found for this item.</p>',
             200, {'Content-Type': 'text/html; charset=utf-8'}
         )
 
-    return make_response(
-        _build_gallery_html(_html.escape(label), photos),
-        200, {'Content-Type': 'text/html; charset=utf-8'}
-    )
+    count  = len(photos)
+    plural = 's' if count != 1 else ''
 
+    # Build photo src list: use /photo/<n> endpoint for data URIs (avoids
+    # embedding megabytes of base64 in the HTML), pass through http URLs directly.
+    photo_srcs = []
+    for i, p in enumerate(photos):
+        if p.startswith('data:'):
+            photo_srcs.append(
+                f'/api/gallery/{inspection_id}/{sid}/{rid}/photo/{i}?token={token}'
+            )
+        else:
+            photo_srcs.append(p)
 
-def _build_gallery_html(label, photos):
-    count      = len(photos)
-    plural     = 's' if count != 1 else ''
-    # Inject photos via JSON into a JS variable so data URIs are never
-    # parsed as HTML attributes (avoids encoding / truncation issues).
-    photos_js  = json.dumps(photos)
+    srcs_js = json.dumps(photo_srcs)
 
-    return f"""<!DOCTYPE html>
+    html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{label}</title>
+<title>{_html.escape(label)}</title>
 <style>
 *{{box-sizing:border-box;margin:0;padding:0}}
 body{{background:#0f172a;font-family:system-ui,-apple-system,sans-serif;min-height:100vh}}
@@ -90,7 +115,7 @@ body{{background:#0f172a;font-family:system-ui,-apple-system,sans-serif;min-heig
 .hdr p{{color:#94a3b8;font-size:12px}}
 .grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:3px;padding:3px}}
 .grid img{{width:100%;height:220px;object-fit:cover;cursor:zoom-in;
-           transition:opacity .15s;display:block}}
+           transition:opacity .15s;display:block;background:#1e293b}}
 .grid img:hover{{opacity:.82}}
 .lb{{display:none;position:fixed;inset:0;background:rgba(0,0,0,.93);
      z-index:9999;align-items:center;justify-content:center;padding:16px}}
@@ -103,7 +128,7 @@ body{{background:#0f172a;font-family:system-ui,-apple-system,sans-serif;min-heig
 </head>
 <body>
 <div class="hdr">
-  <h1>{label}</h1>
+  <h1>{_html.escape(label)}</h1>
   <p>{count} photo{plural}</p>
 </div>
 <div class="grid" id="grid"></div>
@@ -112,13 +137,13 @@ body{{background:#0f172a;font-family:system-ui,-apple-system,sans-serif;min-heig
   <img id="lb-img" src="" alt="">
 </div>
 <script>
-var PHOTOS = {photos_js};
-var grid   = document.getElementById('grid');
-PHOTOS.forEach(function(src, i) {{
-  var img       = document.createElement('img');
-  img.alt       = 'Photo ' + (i + 1);
-  img.onclick   = function() {{ openLb(src); }};
-  img.src       = src;
+var SRCS = {srcs_js};
+var grid = document.getElementById('grid');
+SRCS.forEach(function(src, i) {{
+  var img     = document.createElement('img');
+  img.alt     = 'Photo ' + (i + 1);
+  img.src     = src;
+  img.onclick = (function(s) {{ return function() {{ openLb(s); }}; }})(src);
   grid.appendChild(img);
 }});
 function openLb(src) {{
@@ -134,3 +159,39 @@ document.addEventListener('keydown', function(e) {{
 </script>
 </body>
 </html>"""
+
+    return make_response(html, 200, {'Content-Type': 'text/html; charset=utf-8'})
+
+
+# ── Individual photo binary endpoint ─────────────────────────────────────────
+
+@gallery_bp.route('/gallery/<int:inspection_id>/<sid>/<rid>/photo/<int:index>')
+def gallery_photo(inspection_id, sid, rid, index):
+    token    = request.args.get('token', '')
+    expected = make_gallery_token(inspection_id, sid, rid)
+    if not hmac.compare_digest(token, expected):
+        abort(403)
+
+    photos, _ = _load_photos(inspection_id, sid, rid)
+
+    if index < 0 or index >= len(photos):
+        abort(404)
+
+    photo = photos[index]
+
+    if photo.startswith('data:'):
+        # Parse  data:<mime>;base64,<data>
+        try:
+            header, b64data = photo.split(',', 1)
+            mime = header.split(':')[1].split(';')[0]  # e.g. 'image/jpeg'
+            image_bytes = base64.b64decode(b64data)
+            return make_response(image_bytes, 200, {
+                'Content-Type':  mime,
+                'Cache-Control': 'private, max-age=3600',
+            })
+        except Exception:
+            abort(500)
+    else:
+        # HTTP URL — redirect the browser to fetch it directly
+        from flask import redirect
+        return redirect(photo)

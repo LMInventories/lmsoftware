@@ -269,9 +269,12 @@ class _PDFBuilder:
         self.rooms = []
         tmpl = inspection.template
         if tmpl:
-            room_names = self.rd.get('_roomNames', {})
+            room_names   = self.rd.get('_roomNames', {})
+            hidden_rooms = set(str(x) for x in (self.rd.get('_hiddenRooms') or []))
             for s in sorted(tmpl.sections or [], key=lambda x: x.order_index):
                 if s.section_type == 'room':
+                    if str(s.id) in hidden_rooms:
+                        continue          # room was deleted by clerk — skip entirely
                     name = room_names.get(str(s.id), s.name)
                     self.rooms.append({
                         'id':   s.id,   # used as report_data key (String(s.id))
@@ -732,16 +735,20 @@ class _PDFBuilder:
             def gv(r, is_extra, field):
                 return (r.get(field) or '') if is_extra else (self._get(sid, r['id'], field) or r.get(field) or '')
 
+            # All width sets must sum exactly to uw so tables are the same width.
+            # vw = variable space after subtracting fixed-width columns (Ref=10mm, Answer=18mm)
+            _vw  = uw - 10*mm          # variable width (no fixed Answer col)
+            _vwa = uw - 10*mm - 18*mm  # variable width when Answer col present
             COL_DEFS = {
-                'condition_summary': {'heads':['Ref','Name','Condition'],                                  'widths':[10*mm,uw*0.40,uw*0.50]},
-                'cleaning_summary':  {'heads':['Ref','Area','Cleanliness','Notes'],                        'widths':[10*mm,uw*0.28,uw*0.20,uw*0.42]},
-                'smoke_alarms':      {'heads':['Ref','Question','Answer','Notes'],                         'widths':[10*mm,uw*0.40,18*mm,uw*0.34]},
-                'health_safety':     {'heads':['Ref','Question','Answer','Notes'],                         'widths':[10*mm,uw*0.40,18*mm,uw*0.34]},
-                'fire_door_safety':  {'heads':['Ref','Name','Question','Answer','Notes'],                  'widths':[10*mm,uw*0.18,uw*0.28,18*mm,uw*0.24]},
-                'keys':              {'heads':['Ref','Key / Item','Description'],                          'widths':[10*mm,uw*0.35,uw*0.55]},
-                'meter_readings':    {'heads':['Ref','Meter','Location & Serial','Reading'],               'widths':[10*mm,uw*0.22,uw*0.40,uw*0.28]},
+                'condition_summary': {'heads':['Ref','Name','Condition'],                                  'widths':[10*mm, _vw*0.44, _vw*0.56]},
+                'cleaning_summary':  {'heads':['Ref','Area','Cleanliness','Notes'],                        'widths':[10*mm, _vw*0.30, _vw*0.22, _vw*0.48]},
+                'smoke_alarms':      {'heads':['Ref','Question','Answer','Notes'],                         'widths':[10*mm, _vwa*0.55, 18*mm, _vwa*0.45]},
+                'health_safety':     {'heads':['Ref','Question','Answer','Notes'],                         'widths':[10*mm, _vwa*0.55, 18*mm, _vwa*0.45]},
+                'fire_door_safety':  {'heads':['Ref','Name','Question','Answer','Notes'],                  'widths':[10*mm, _vwa*0.22, _vwa*0.38, 18*mm, _vwa*0.40]},
+                'keys':              {'heads':['Ref','Key / Item','Description'],                          'widths':[10*mm, _vw*0.38, _vw*0.62]},
+                'meter_readings':    {'heads':['Ref','Meter','Location & Serial','Reading'],               'widths':[10*mm, _vw*0.22, _vw*0.44, _vw*0.34]},
             }
-            cd = COL_DEFS.get(t, {'heads':['Ref','Item','Details'], 'widths':[10*mm,uw*0.35,uw*0.55]})
+            cd = COL_DEFS.get(t, {'heads':['Ref','Item','Details'], 'widths':[10*mm, _vw*0.38, _vw*0.62]})
 
             tbl_data = [[Paragraph(h, self.s_hdr_cell) for h in cd['heads']]]
 

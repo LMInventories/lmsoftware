@@ -57,21 +57,6 @@ def create_app():
     def health():
         return {'status': 'ok'}, 200
 
-    # ── Temporary: test Resend sending ───────────────────────────────────────
-    # DELETE THIS ROUTE once email is confirmed working
-    @app.route('/debug/smtp-ping')
-    def smtp_ping():
-        from routes.email_service import _send, SMTP_FROM
-        ok, err = _send(
-            from_addr = SMTP_FROM,
-            to_addrs  = ['robynsaysrelax@gmail.com'],
-            subject   = 'InspectPro — Resend test',
-            html_body = '<p>If you can read this, Resend is working correctly.</p>',
-        )
-        if ok:
-            return {'status': 'ok', 'sent_from': SMTP_FROM, 'sent_to': 'robynsaysrelax@gmail.com'}, 200
-        else:
-            return {'status': 'error', 'detail': err}, 200
 
     db.init_app(app)
     JWTManager(app)

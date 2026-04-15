@@ -15,10 +15,8 @@ Env vars required on Railway:
 
 import os
 import base64
-import urllib.request
-import urllib.error
-import json
 from datetime import datetime
+import resend
 
 # ── Config ──────────────────────────────────────────────────────────────────
 RESEND_API_KEY     = os.environ.get('RESEND_API_KEY', '')
@@ -26,17 +24,14 @@ SMTP_FROM          = os.environ.get('SMTP_FROM', 'no-reply@lminventories.co.uk')
 SMTP_FROM_REPORTS  = os.environ.get('SMTP_FROM_REPORTS', 'no-reply@lminventories.co.uk')
 APP_BASE_URL       = os.environ.get('APP_BASE_URL', 'https://app.lminventories.co.uk/')
 
-# Legacy SMTP vars — kept so the /debug/smtp-ping route still has something to read
-SMTP_HOST = os.environ.get('SMTP_HOST', 'smtp.resend.com')
-SMTP_PORT = int(os.environ.get('SMTP_PORT', 465))
-SMTP_USER = os.environ.get('SMTP_USER', 'resend')
+resend.api_key = RESEND_API_KEY
 
 
 # ── Low-level sender ─────────────────────────────────────────────────────────
 
 def _send(from_addr, to_addrs, subject, html_body, attachments=None):
     """
-    Send an email via Resend HTTP API (avoids Railway's outbound SMTP port block).
+    Send an email via Resend SDK (avoids Railway's outbound SMTP port block).
     to_addrs: list of strings or a comma-separated string.
     attachments: list of (filename, bytes) tuples.
     Returns (True, None) on success, (False, error_message) on failure.
@@ -49,7 +44,7 @@ def _send(from_addr, to_addrs, subject, html_body, attachments=None):
     if not to_addrs:
         return False, 'No recipients'
 
-    payload = {
+    params: resend.Emails.SendParams = {
         'from':    from_addr,
         'to':      to_addrs,
         'subject': subject,
@@ -57,7 +52,7 @@ def _send(from_addr, to_addrs, subject, html_body, attachments=None):
     }
 
     if attachments:
-        payload['attachments'] = [
+        params['attachments'] = [
             {
                 'filename': fname,
                 'content':  base64.b64encode(fdata).decode('utf-8'),
@@ -66,25 +61,10 @@ def _send(from_addr, to_addrs, subject, html_body, attachments=None):
         ]
 
     try:
-        print(f'[resend] sending to {to_addrs} via Resend API')
-        body = json.dumps(payload).encode('utf-8')
-        req  = urllib.request.Request(
-            'https://api.resend.com/emails',
-            data    = body,
-            headers = {
-                'Authorization': f'Bearer {RESEND_API_KEY}',
-                'Content-Type':  'application/json',
-            },
-            method = 'POST',
-        )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read().decode('utf-8'))
-            print(f'[resend] sent OK — id: {result.get("id")}')
-            return True, None
-    except urllib.error.HTTPError as e:
-        err = e.read().decode('utf-8')
-        print(f'[resend] HTTP {e.code}: {err}')
-        return False, f'HTTP {e.code}: {err}'
+        print(f'[resend] sending to {to_addrs}')
+        result = resend.Emails.send(params)
+        print(f'[resend] sent OK — id: {result.get("id")}')
+        return True, None
     except Exception as e:
         print(f'[resend] ERROR: {e}')
         return False, str(e)

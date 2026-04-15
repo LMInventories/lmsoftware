@@ -61,21 +61,15 @@ def create_app():
     # DELETE THIS ROUTE once email is confirmed working
     @app.route('/debug/smtp-ping')
     def smtp_ping():
-        import urllib.request, urllib.error, json
+        import resend as _resend
         from routes.email_service import RESEND_API_KEY, SMTP_FROM
         if not RESEND_API_KEY:
             return {'status': 'error', 'detail': 'RESEND_API_KEY env var not set'}, 200
         try:
-            req = urllib.request.Request(
-                'https://api.resend.com/domains',
-                headers={'Authorization': f'Bearer {RESEND_API_KEY}'},
-            )
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read().decode('utf-8'))
-                domains = [d.get('name') for d in data.get('data', [])]
-                return {'status': 'ok', 'smtp_from': SMTP_FROM, 'verified_domains': domains}, 200
-        except urllib.error.HTTPError as e:
-            return {'status': 'error', 'http_code': e.code, 'detail': e.read().decode()}, 200
+            _resend.api_key = RESEND_API_KEY
+            domains = _resend.Domains.list()
+            names = [d.get('name') for d in (domains.get('data') or [])]
+            return {'status': 'ok', 'smtp_from': SMTP_FROM, 'verified_domains': names}, 200
         except Exception as e:
             return {'status': 'error', 'detail': str(e)}, 200
 

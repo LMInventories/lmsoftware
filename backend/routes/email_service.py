@@ -20,11 +20,19 @@ import resend
 
 # ── Config ──────────────────────────────────────────────────────────────────
 RESEND_API_KEY     = os.environ.get('RESEND_API_KEY', '')
-SMTP_FROM          = os.environ.get('SMTP_FROM', 'no-reply@lminventories.co.uk')
-SMTP_FROM_REPORTS  = os.environ.get('SMTP_FROM_REPORTS', 'no-reply@lminventories.co.uk')
+SMTP_FROM          = os.environ.get('SMTP_FROM',          'no-reply@lminventories.co.uk')
+SMTP_FROM_REPORTS  = os.environ.get('SMTP_FROM_REPORTS',  'no-reply@lminventories.co.uk')
+SMTP_FROM_NAME     = os.environ.get('SMTP_FROM_NAME',     'L&M Inventories')
 APP_BASE_URL       = os.environ.get('APP_BASE_URL', 'https://app.lminventories.co.uk/')
 
 resend.api_key = RESEND_API_KEY
+
+
+def _with_name(addr):
+    """Wrap an email address with the sender display name: 'Name <addr>'."""
+    if SMTP_FROM_NAME:
+        return f'{SMTP_FROM_NAME} <{addr}>'
+    return addr
 
 
 # ── Low-level sender ─────────────────────────────────────────────────────────
@@ -45,7 +53,7 @@ def _send(from_addr, to_addrs, subject, html_body, attachments=None):
         return False, 'No recipients'
 
     params: resend.Emails.SendParams = {
-        'from':    from_addr,
+        'from':    _with_name(from_addr),
         'to':      to_addrs,
         'subject': subject,
         'html':    html_body,

@@ -69,12 +69,11 @@ def photo_gallery(inspection_id, sid, rid):
 
 
 def _build_gallery_html(label, photos):
-    count = len(photos)
-    photo_tags = '\n'.join(
-        f'<img src="{p}" loading="lazy" onclick="openLb(this.src)" alt="Photo {i+1}">'
-        for i, p in enumerate(photos)
-    )
-    plural = 's' if count != 1 else ''
+    count      = len(photos)
+    plural     = 's' if count != 1 else ''
+    # Inject photos via JSON into a JS variable so data URIs are never
+    # parsed as HTML attributes (avoids encoding / truncation issues).
+    photos_js  = json.dumps(photos)
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -107,23 +106,30 @@ body{{background:#0f172a;font-family:system-ui,-apple-system,sans-serif;min-heig
   <h1>{label}</h1>
   <p>{count} photo{plural}</p>
 </div>
-<div class="grid">
-{photo_tags}
-</div>
+<div class="grid" id="grid"></div>
 <div class="lb" id="lb" onclick="closeLb()">
   <span class="lb-x">&#215;</span>
   <img id="lb-img" src="" alt="">
 </div>
 <script>
-function openLb(src){{
-  document.getElementById('lb-img').src=src;
+var PHOTOS = {photos_js};
+var grid   = document.getElementById('grid');
+PHOTOS.forEach(function(src, i) {{
+  var img       = document.createElement('img');
+  img.alt       = 'Photo ' + (i + 1);
+  img.onclick   = function() {{ openLb(src); }};
+  img.src       = src;
+  grid.appendChild(img);
+}});
+function openLb(src) {{
+  document.getElementById('lb-img').src = src;
   document.getElementById('lb').classList.add('on');
 }}
-function closeLb(){{
+function closeLb() {{
   document.getElementById('lb').classList.remove('on');
 }}
-document.addEventListener('keydown',function(e){{
-  if(e.key==='Escape') closeLb();
+document.addEventListener('keydown', function(e) {{
+  if (e.key === 'Escape') closeLb();
 }});
 </script>
 </body>

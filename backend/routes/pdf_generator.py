@@ -15,6 +15,8 @@ Usage:
 
 import io
 import json
+import hmac as _hmac
+import hashlib
 import urllib.request
 from datetime import datetime
 
@@ -116,7 +118,7 @@ def _compress_image(data: bytes, max_px: int = 1200, quality: int = 72) -> bytes
         return data
 
 
-def _fetch_image(url: str, max_w_mm: float, max_h_mm: float):
+def _fetch_image(url: str, max_w_mm: float, max_h_mm: float, link_url: str = None):
     if not url:
         return None
     try:
@@ -136,6 +138,8 @@ def _fetch_image(url: str, max_w_mm: float, max_h_mm: float):
         scale = min(w_pt / img.drawWidth, h_pt / img.drawHeight, 1.0)
         img.drawWidth  *= scale
         img.drawHeight *= scale
+        if link_url:
+            return _ClickableImage(img, link_url)
         return img
     except Exception:
         return None
@@ -165,6 +169,52 @@ class _HeaderBar(Flowable):
         c.setFillColor(self.txt_color)
         c.setFont('Helvetica-Bold', self.font_size)
         c.drawString(8, self.height * 0.25, self.text)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Clickable image wrapper
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _ClickableImage(Flowable):
+    """Wraps an RLImage and overlays a clickable URL annotation."""
+    def __init__(self, img, url):
+        super().__init__()
+        self._img       = img
+        self._url       = url
+        self.drawWidth  = img.drawWidth
+        self.drawHeight = img.drawHeight
+
+    def wrap(self, availW, availH):
+        w, h            = self._img.wrap(availW, availH)
+        self.drawWidth  = w
+        self.drawHeight = h
+        return w, h
+
+    def draw(self):
+        self._img.drawOn(self.canv, 0, 0)
+        if self._url:
+            self.canv.linkURL(
+                self._url,
+                (0, 0, self.drawWidth, self.drawHeight),
+                relative=1,
+            )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Gallery URL helpers  (must match gallery.py make_gallery_token exactly)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _gallery_token(inspection_id, sid, rid):
+    import os
+    secret = os.environ.get('JWT_SECRET_KEY', 'change-me-in-production')
+    msg    = f'{inspection_id}:{sid}:{rid}'
+    return _hmac.new(secret.encode(), msg.encode(), hashlib.sha256).hexdigest()[:16]
+
+
+def _gallery_url(base_url, inspection_id, sid, rid):
+    token = _gallery_token(inspection_id, sid, rid)
+    base  = (base_url or '').rstrip('/')
+    return f'{base}/api/gallery/{inspection_id}/{sid}/{rid}?token={token}'
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -269,6 +319,7 @@ class _PDFBuilder:
         self.s_toc_num  = ParagraphStyle('toc_num',  fontName='Helvetica-Bold', fontSize=9.5,  leading=14, textColor=self.brand)
         self.s_toc_ttl  = ParagraphStyle('toc_ttl',  fontName='Helvetica',      fontSize=9.5,  leading=14, textColor=bc)
         self.s_decl     = ParagraphStyle('decl',     fontName='Helvetica',      fontSize=9,    leading=15, textColor=bc, spaceAfter=20)
+        self.s_link     = ParagraphStyle('link',     fontName='Helvetica',      fontSize=7.5,  leading=11, textColor=colors.HexColor('#3b82f6'))
 
     # ── Report data accessors ─────────────────────────────────────────────────
 
@@ -394,7 +445,7 @@ class _PDFBuilder:
             ('ROWBACKGROUNDS', (0, 1), (-1,-1), [_WHITE, _SLATE_100]),
         ])
 
-    def _photo_grid(self, sid, rid, cols=4):
+    def _photo_grid(self, sid, rid, cols=4, gallery_url=None):
         urls = self._photos(sid, rid)
         ts   = self._photo_ts(sid, rid)
         if not urls:
@@ -403,7 +454,7 @@ class _PDFBuilder:
         cell_w  = uw / cols
         cells   = []
         for i, url in enumerate(urls):
-            img    = _fetch_image(url, cell_w / mm - 4, 38)
+            img    = _fetch_image(url, cell_w / mm - 4, 38, link_url=gallery_url)
             ts_txt = self._fmt_ts(ts[i] if i < len(ts) else None) if self.add_ts else ''
             inner  = [img or Paragraph('(photo)', self.s_small)]
             if ts_txt:
@@ -715,14 +766,16 @@ class _PDFBuilder:
             photo_row_indices = []
             for r in vis_rows:
                 tbl_data.append(build_data_row(r, False))
-                pg = self._photo_grid(sid, r['id'], cols=6)
+                g_url = _gallery_url(APP_BASE_URL, self.inspection.id, sid, r['id'])
+                pg = self._photo_grid(sid, r['id'], cols=6, gallery_url=g_url)
                 if pg:
                     photo_row_indices.append(len(tbl_data))
                     tbl_data.append([pg] + [Paragraph('', self.s_small)]*(len(cd['heads'])-1))
             for r in extra_rows:
                 tbl_data.append(build_data_row(r, True))
-                rid = r.get('_eid')
-                pg  = self._photo_grid(sid, rid, cols=6)
+                rid   = r.get('_eid')
+                g_url = _gallery_url(APP_BASE_URL, self.inspection.id, sid, rid)
+                pg    = self._photo_grid(sid, rid, cols=6, gallery_url=g_url)
                 if pg:
                     photo_row_indices.append(len(tbl_data))
                     tbl_data.append([pg] + [Paragraph('', self.s_small)]*(len(cd['heads'])-1))
@@ -753,7 +806,15 @@ class _PDFBuilder:
             items    = self._ordered_items(room)
             co       = self.is_check_out
 
-            ov_tbl = self._photo_grid(room['id'], '_overview', cols=4)
+            ov_g_url = _gallery_url(APP_BASE_URL, self.inspection.id, room['id'], '_overview')
+            ov_tbl   = self._photo_grid(room['id'], '_overview', cols=4, gallery_url=ov_g_url)
+
+            # photo_links: iid -> gallery URL, populated for all items with photos
+            photo_links = {}
+            for item in items:
+                iid = item.get('_eid') if item['_type'] == 'extra' else item.get('id')
+                if self._photos(room['id'], iid):
+                    photo_links[iid] = _gallery_url(APP_BASE_URL, self.inspection.id, room['id'], iid)
 
             item_photo_cells = []
             if self.item_pos != 'hyperlink':
@@ -762,9 +823,10 @@ class _PDFBuilder:
                     iid = item.get('_eid') if item['_type']=='extra' else item.get('id')
                     if self._item_hidden(room['id'], iid): idx+=1; continue
                     ts_list = self._photo_ts(room['id'], iid)
-                    ref = f'{room_num}.{idx}'
+                    ref     = f'{room_num}.{idx}'
+                    g_url   = photo_links.get(iid)
                     for pi, url in enumerate(self._photos(room['id'], iid)):
-                        img    = _fetch_image(url, uw/mm/4-4, 38)
+                        img    = _fetch_image(url, uw/mm/4-4, 38, link_url=g_url)
                         ts_txt = self._fmt_ts(ts_list[pi] if pi < len(ts_list) else None) if self.add_ts else ''
                         cell   = [img or Paragraph('(photo)', self.s_small)]
                         if ts_txt: cell.append(Paragraph(ts_txt, self.s_small))
@@ -801,15 +863,24 @@ class _PDFBuilder:
                 label = item.get('label') or item.get('name') or ''
                 desc  = item.get('description','') if is_ex else self._get(room['id'], item['id'], 'description')
 
+                # "View additional photos" link for hyperlink mode
+                gal = photo_links.get(iid)
+                link_p = [Paragraph(
+                    f'<link href="{gal}"><u>View additional photos</u></link>',
+                    self.s_link
+                )] if (self.item_pos == 'hyperlink' and gal) else []
+
                 if co:
                     inv  = (item.get('inventoryCondition') or '') if is_ex else (self._get(room['id'],item['id'],'inventoryCondition') or self._get(room['id'],item['id'],'condition'))
                     co_c = (item.get('checkOutCondition')  or 'As Check In') if is_ex else (self._get(room['id'],item['id'],'checkOutCondition') or 'As Check In')
                     acts = self._item_actions(room['id'], iid)
                     act_txt = ', '.join(self._action_name(a['actionId']) for a in acts if a.get('actionId'))
-                    tbl_data.append([Paragraph(ref,self.s_ref), self._p(label,self.s_bold), self._p(desc or '—'), self._p(inv or '—'), self._p(co_c), self._p(act_txt or '—',self.s_cell_sm)])
+                    acts_cell = [self._p(act_txt or '—', self.s_cell_sm)] + link_p
+                    tbl_data.append([Paragraph(ref,self.s_ref), self._p(label,self.s_bold), self._p(desc or '—'), self._p(inv or '—'), self._p(co_c), acts_cell])
                 else:
                     cond = (item.get('condition') or '') if is_ex else self._get(room['id'],item['id'],'condition')
-                    tbl_data.append([Paragraph(ref,self.s_ref), self._p(label,self.s_bold), self._p(desc or '—'), self._p(cond or '—')])
+                    cond_cell = [self._p(cond or '—')] + link_p
+                    tbl_data.append([Paragraph(ref,self.s_ref), self._p(label,self.s_bold), self._p(desc or '—'), cond_cell])
 
             room_tbl = Table(tbl_data, colWidths=widths, repeatRows=1)
             room_tbl.setStyle(self._table_style())

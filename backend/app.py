@@ -57,29 +57,27 @@ def create_app():
     def health():
         return {'status': 'ok'}, 200
 
-    # ── Temporary: test outbound SMTP reachability ────────────────────────────
+    # ── Temporary: test Resend API connectivity ───────────────────────────────
     # DELETE THIS ROUTE once email is confirmed working
     @app.route('/debug/smtp-ping')
     def smtp_ping():
-        import socket
-        from routes.email_service import SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_FROM
-        results = {}
-        for port in [465, 587]:
-            try:
-                s = socket.socket()
-                s.settimeout(5)
-                s.connect((SMTP_HOST, port))
-                s.close()
-                results[str(port)] = 'reachable'
-            except Exception as e:
-                results[str(port)] = str(e)
-        return {
-            'host': SMTP_HOST,
-            'configured_port': SMTP_PORT,
-            'smtp_user': SMTP_USER,
-            'smtp_from': SMTP_FROM,
-            'port_results': results,
-        }, 200
+        import urllib.request, urllib.error, json
+        from routes.email_service import RESEND_API_KEY, SMTP_FROM
+        if not RESEND_API_KEY:
+            return {'status': 'error', 'detail': 'RESEND_API_KEY env var not set'}, 200
+        try:
+            req = urllib.request.Request(
+                'https://api.resend.com/domains',
+                headers={'Authorization': f'Bearer {RESEND_API_KEY}'},
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+                domains = [d.get('name') for d in data.get('data', [])]
+                return {'status': 'ok', 'smtp_from': SMTP_FROM, 'verified_domains': domains}, 200
+        except urllib.error.HTTPError as e:
+            return {'status': 'error', 'http_code': e.code, 'detail': e.read().decode()}, 200
+        except Exception as e:
+            return {'status': 'error', 'detail': str(e)}, 200
 
     db.init_app(app)
     JWTManager(app)

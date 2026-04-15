@@ -1,93 +1,92 @@
 """
-email_service.py — Core SMTP email sender and all email templates for InspectPro.
+email_service.py — Core HTTP email sender (Resend API) and all email templates for InspectPro.
 
 Templates:
   - send_inspection_notification()  → client notification emails
   - send_clerk_daily_summary()       → 6pm clerk work summary
   - send_report_complete()           → report complete with PDF attachment (reports@ address)
 
-Env vars required on Render:
-  SMTP_HOST       e.g. smtp.fasthosts.co.uk
-  SMTP_PORT       587 (STARTTLS) or 465 (SSL)
-  SMTP_USER       no-reply@inspectpro.co.uk  (or your sending address)
-  SMTP_PASSWORD   mailbox password
-  SMTP_FROM       no-reply@inspectpro.co.uk
-  SMTP_FROM_REPORTS  no-reply@inspectpro.co.uk  (for PDF emails)
-  APP_BASE_URL    https://app.lminventories.co.uk   (used in email links)
+Env vars required on Railway:
+  RESEND_API_KEY     re_xxxxxxxxxxxx  (from resend.com dashboard)
+  SMTP_FROM          no-reply@lminventories.co.uk  (verified sender on Resend)
+  SMTP_FROM_REPORTS  no-reply@lminventories.co.uk  (can be the same address)
+  APP_BASE_URL       https://app.lminventories.co.uk   (used in email links)
 """
 
 import os
-import smtplib
-import ssl
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.mime.application import MIMEApplication
+import base64
+import urllib.request
+import urllib.error
+import json
 from datetime import datetime
 
 # ── Config ──────────────────────────────────────────────────────────────────
-SMTP_HOST          = os.environ.get('SMTP_HOST', 'smtp.fasthosts.co.uk')
-SMTP_PORT          = int(os.environ.get('SMTP_PORT', 587))
-SMTP_USER          = os.environ.get('SMTP_USER', '')
-SMTP_PASSWORD      = os.environ.get('SMTP_PASSWORD', '')
+RESEND_API_KEY     = os.environ.get('RESEND_API_KEY', '')
 SMTP_FROM          = os.environ.get('SMTP_FROM', 'no-reply@lminventories.co.uk')
 SMTP_FROM_REPORTS  = os.environ.get('SMTP_FROM_REPORTS', 'no-reply@lminventories.co.uk')
 APP_BASE_URL       = os.environ.get('APP_BASE_URL', 'https://app.lminventories.co.uk/')
+
+# Legacy SMTP vars — kept so the /debug/smtp-ping route still has something to read
+SMTP_HOST = os.environ.get('SMTP_HOST', 'smtp.resend.com')
+SMTP_PORT = int(os.environ.get('SMTP_PORT', 465))
+SMTP_USER = os.environ.get('SMTP_USER', 'resend')
 
 
 # ── Low-level sender ─────────────────────────────────────────────────────────
 
 def _send(from_addr, to_addrs, subject, html_body, attachments=None):
     """
-    Send an email via SMTP.
+    Send an email via Resend HTTP API (avoids Railway's outbound SMTP port block).
     to_addrs: list of strings or a comma-separated string.
     attachments: list of (filename, bytes) tuples.
     Returns (True, None) on success, (False, error_message) on failure.
     """
-    if not SMTP_USER or not SMTP_PASSWORD:
-        return False, 'SMTP credentials not configured'
+    if not RESEND_API_KEY:
+        return False, 'RESEND_API_KEY not configured'
 
     if isinstance(to_addrs, str):
         to_addrs = [a.strip() for a in to_addrs.split(',') if a.strip()]
     if not to_addrs:
         return False, 'No recipients'
 
-    msg = MIMEMultipart('alternative') if not attachments else MIMEMultipart('mixed')
-    msg['Subject'] = subject
-    msg['From']    = from_addr
-    msg['To']      = ', '.join(to_addrs)
+    payload = {
+        'from':    from_addr,
+        'to':      to_addrs,
+        'subject': subject,
+        'html':    html_body,
+    }
 
-    html_part = MIMEText(html_body, 'html', 'utf-8')
     if attachments:
-        # For mixed messages wrap HTML in a related part
-        alt = MIMEMultipart('alternative')
-        alt.attach(html_part)
-        msg.attach(alt)
-        for fname, fdata in attachments:
-            part = MIMEApplication(fdata, Name=fname)
-            part['Content-Disposition'] = f'attachment; filename="{fname}"'
-            msg.attach(part)
-    else:
-        msg.attach(html_part)
+        payload['attachments'] = [
+            {
+                'filename': fname,
+                'content':  base64.b64encode(fdata).decode('utf-8'),
+            }
+            for fname, fdata in attachments
+        ]
 
-    _TIMEOUT = 30  # seconds — prevents thread from hanging indefinitely
     try:
-        print(f'[smtp] connecting to {SMTP_HOST}:{SMTP_PORT} as {SMTP_USER}')
-        if SMTP_PORT == 465:
-            ctx = ssl.create_default_context()
-            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=ctx, timeout=_TIMEOUT) as server:
-                server.login(SMTP_USER, SMTP_PASSWORD)
-                server.sendmail(from_addr, to_addrs, msg.as_string())
-        else:
-            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=_TIMEOUT) as server:
-                server.ehlo()
-                server.starttls()
-                server.ehlo()
-                server.login(SMTP_USER, SMTP_PASSWORD)
-                server.sendmail(from_addr, to_addrs, msg.as_string())
-        print(f'[smtp] sent OK to {to_addrs}')
-        return True, None
+        print(f'[resend] sending to {to_addrs} via Resend API')
+        body = json.dumps(payload).encode('utf-8')
+        req  = urllib.request.Request(
+            'https://api.resend.com/emails',
+            data    = body,
+            headers = {
+                'Authorization': f'Bearer {RESEND_API_KEY}',
+                'Content-Type':  'application/json',
+            },
+            method = 'POST',
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read().decode('utf-8'))
+            print(f'[resend] sent OK — id: {result.get("id")}')
+            return True, None
+    except urllib.error.HTTPError as e:
+        err = e.read().decode('utf-8')
+        print(f'[resend] HTTP {e.code}: {err}')
+        return False, f'HTTP {e.code}: {err}'
     except Exception as e:
-        print(f'[smtp] ERROR: {e}')
+        print(f'[resend] ERROR: {e}')
         return False, str(e)
 
 

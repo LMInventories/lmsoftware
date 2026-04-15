@@ -57,6 +57,30 @@ def create_app():
     def health():
         return {'status': 'ok'}, 200
 
+    # ── Temporary: test outbound SMTP reachability ────────────────────────────
+    # DELETE THIS ROUTE once email is confirmed working
+    @app.route('/debug/smtp-ping')
+    def smtp_ping():
+        import socket
+        from routes.email_service import SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_FROM
+        results = {}
+        for port in [465, 587]:
+            try:
+                s = socket.socket()
+                s.settimeout(5)
+                s.connect((SMTP_HOST, port))
+                s.close()
+                results[str(port)] = 'reachable'
+            except Exception as e:
+                results[str(port)] = str(e)
+        return {
+            'host': SMTP_HOST,
+            'configured_port': SMTP_PORT,
+            'smtp_user': SMTP_USER,
+            'smtp_from': SMTP_FROM,
+            'port_results': results,
+        }, 200
+
     db.init_app(app)
     JWTManager(app)
 

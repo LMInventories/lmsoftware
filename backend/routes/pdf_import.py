@@ -1,11 +1,13 @@
 import os
 import json
 import base64
-import anthropic
+import requests
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required
 
 pdf_import_bp = Blueprint('pdf_import', __name__)
+
+ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 
 
 @pdf_import_bp.route('/pdf-import', methods=['POST'])
@@ -38,6 +40,10 @@ def pdf_import():
       }
     }
     """
+    api_key = os.environ.get('ANTHROPIC_API_KEY')
+    if not api_key:
+        return jsonify({'error': 'ANTHROPIC_API_KEY not configured on server'}), 503
+
     data = request.get_json()
     if not data:
         return jsonify({'error': 'No data provided'}), 400
@@ -47,9 +53,6 @@ def pdf_import():
 
     if not pdf_b64:
         return jsonify({'error': 'No PDF data provided'}), 400
-
-    if not os.environ.get('ANTHROPIC_API_KEY'):
-        return jsonify({'error': 'ANTHROPIC_API_KEY not configured on server'}), 503
 
     # Validate base64
     try:
@@ -94,13 +97,11 @@ Return ONLY valid JSON — no markdown, no explanation:
   }}
 }}"""
 
-    try:
-        client = anthropic.Anthropic(api_key=os.environ.get('ANTHROPIC_API_KEY'))
-
-        message = client.messages.create(
-            model='claude-sonnet-4-6',
-            max_tokens=8000,
-            messages=[{
+    payload = {
+        'model':      'claude-sonnet-4-6',
+        'max_tokens': 16000,
+        'messages': [
+            {
                 'role': 'user',
                 'content': [
                     {
@@ -109,17 +110,36 @@ Return ONLY valid JSON — no markdown, no explanation:
                             'type':       'base64',
                             'media_type': 'application/pdf',
                             'data':       pdf_b64,
-                        }
+                        },
                     },
                     {
                         'type': 'text',
                         'text': prompt,
-                    }
-                ]
-            }]
+                    },
+                ],
+            }
+        ],
+    }
+
+    try:
+        resp = requests.post(
+            ANTHROPIC_API_URL,
+            headers={
+                'x-api-key':          api_key,
+                'anthropic-version':  '2023-06-01',
+                'anthropic-beta':     'pdfs-2024-09-25',
+                'content-type':       'application/json',
+            },
+            json=payload,
+            timeout=180,
         )
 
-        raw = message.content[0].text.strip()
+        if resp.status_code != 200:
+            print(f'[pdf-import] Anthropic error {resp.status_code}: {resp.text[:400]}')
+            return jsonify({'error': f'Claude API error: {resp.status_code}', 'detail': resp.text[:400]}), 502
+
+        result = resp.json()
+        raw = result.get('content', [{}])[0].get('text', '').strip()
 
         # Strip any accidental markdown fences
         raw = raw.replace('```json', '').replace('```', '').strip()
@@ -132,10 +152,13 @@ Return ONLY valid JSON — no markdown, no explanation:
 
         return jsonify(parsed)
 
+    except requests.exceptions.Timeout:
+        return jsonify({'error': 'PDF analysis timed out — try a smaller PDF'}), 504
+
     except json.JSONDecodeError as e:
         print(f'[pdf-import] JSON parse error: {e}')
         print(f'[pdf-import] Raw response: {raw[:500]}')
-        return jsonify({'error': f'Claude returned invalid JSON: {str(e)}'}), 500
+        return jsonify({'error': f'Claude returned invalid JSON: {str(e)}', 'raw': raw[:500]}), 500
 
     except Exception as e:
         import traceback

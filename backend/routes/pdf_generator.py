@@ -15,10 +15,13 @@ Usage:
 
 import io
 import json
+import os
 import hmac as _hmac
 import hashlib
 import urllib.request
 from datetime import datetime
+
+APP_BASE_URL = os.environ.get('APP_BASE_URL', 'https://app.lminventories.co.uk')
 
 from models import db, Inspection
 

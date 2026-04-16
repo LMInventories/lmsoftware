@@ -255,16 +255,9 @@ async function runPdfImportParse() {
   pdfImportParsing.value = true
   pdfImportError.value = ''
   try {
-    const base64 = await new Promise((resolve, reject) => {
-      const reader = new FileReader()
-      reader.onload  = e => resolve(e.target.result.split(',')[1])
-      reader.onerror = reject
-      reader.readAsDataURL(pdfImportFile.value)
-    })
-
-    // Use the dedicated backend endpoint — it handles prompting + JSON extraction
-    // This avoids sending a large PDF payload through the generic claude proxy
-    const res = await api.pdfImport({ pdf: base64 })
+    // Send the File object directly as multipart — backend does the base64 encoding.
+    // This avoids proxying a large JSON body through Express (the cause of Network Error).
+    const res = await api.pdfImport(pdfImportFile.value)
     pdfImportParsed.value = res.data
     pdfImportParsed.value._fileName = pdfImportFileName.value
     pdfImportStep.value = 3

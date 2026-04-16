@@ -1,3 +1,18 @@
+"""
+pdf_import.py — Parse a PDF inspection report with Claude.
+
+Accepts multipart/form-data (same pattern as /api/ai/transcribe):
+  file              — the PDF binary (required)
+  templateStructure — optional JSON string of the template structure
+
+Sending binary via multipart avoids the "Network Error" that occurs when
+a large base64-encoded PDF is sent as JSON through the Express proxy.
+The base64 encoding is done here on the server, never over the wire.
+
+Response JSON:
+  { "rooms": [...], "fixedSections": { ... } }
+"""
+
 import os
 import json
 import base64
@@ -13,52 +28,33 @@ ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 @pdf_import_bp.route('/pdf-import', methods=['POST'])
 @jwt_required()
 def pdf_import():
-    """
-    Parse a PDF inspection report using Claude's document understanding.
-
-    Request JSON:
-    {
-      "pdf":               "<base64-encoded PDF>",
-      "templateStructure": "<JSON string of template structure or null>"
-    }
-
-    Response JSON:
-    {
-      "rooms": [
-        {
-          "name": "Lounge",
-          "items": [
-            { "label": "Door & Frame", "description": "...", "condition": "..." }
-          ]
-        }
-      ],
-      "fixedSections": {
-        "condition_summary":  [...],
-        "keys":               [...],
-        "meter_readings":     [...],
-        "cleaning_summary":   [...]
-      }
-    }
-    """
     api_key = os.environ.get('ANTHROPIC_API_KEY')
     if not api_key:
         return jsonify({'error': 'ANTHROPIC_API_KEY not configured on server'}), 503
 
-    data = request.get_json()
-    if not data:
-        return jsonify({'error': 'No data provided'}), 400
+    # ── Accept multipart/form-data (preferred) OR legacy JSON {pdf: base64} ──
+    pdf_b64 = None
 
-    pdf_b64          = data.get('pdf')
-    template_structure = data.get('templateStructure') or 'No template — infer structure from PDF'
-
-    if not pdf_b64:
-        return jsonify({'error': 'No PDF data provided'}), 400
-
-    # Validate base64
-    try:
-        base64.b64decode(pdf_b64)
-    except Exception:
-        return jsonify({'error': 'Invalid base64 PDF data'}), 400
+    if request.content_type and 'multipart/form-data' in request.content_type:
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file provided in form data'}), 400
+        file_obj = request.files['file']
+        raw_bytes = file_obj.read()
+        if not raw_bytes:
+            return jsonify({'error': 'Uploaded file is empty'}), 400
+        pdf_b64 = base64.b64encode(raw_bytes).decode('utf-8')
+        template_structure = request.form.get('templateStructure') or 'No template — infer structure from PDF'
+        print(f'[pdf-import] received file via multipart: {file_obj.filename!r}, {len(raw_bytes)} bytes')
+    else:
+        # Fallback: legacy JSON body { "pdf": "<base64>", "templateStructure": "..." }
+        data = request.get_json(silent=True)
+        if not data:
+            return jsonify({'error': 'No data provided — send multipart/form-data with a "file" field'}), 400
+        pdf_b64 = data.get('pdf')
+        template_structure = data.get('templateStructure') or 'No template — infer structure from PDF'
+        if not pdf_b64:
+            return jsonify({'error': 'No PDF data provided'}), 400
+        print(f'[pdf-import] received file via JSON base64: {len(pdf_b64)} chars')
 
     prompt = f"""You are parsing a UK property inspection report PDF (inventory or check-in) to extract structured data for a Check Out system.
 
@@ -121,13 +117,14 @@ Return ONLY valid JSON — no markdown, no explanation:
         ],
     }
 
+    raw = ''
     try:
         resp = requests.post(
             ANTHROPIC_API_URL,
             headers={
-                'x-api-key':          api_key,
-                'anthropic-version':  '2023-06-01',
-                'content-type':       'application/json',
+                'x-api-key':         api_key,
+                'anthropic-version': '2023-06-01',
+                'content-type':      'application/json',
             },
             json=payload,
             timeout=180,

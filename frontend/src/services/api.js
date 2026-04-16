@@ -157,8 +157,15 @@ const api = {
     })
   },
   checkAiStatus() { return http.get('/api/ai/status') },
-  pdfImport(data) {
-    return http.post('/api/ai/pdf-import', data, { timeout: 120000 })
+  // Send the PDF as binary via multipart/form-data — avoids the "Network Error"
+  // that occurs when a large base64 JSON body is proxied through Express.
+  pdfImport(file) {
+    const form = new FormData()
+    form.append('file', file, file.name || 'report.pdf')
+    return http.post('/api/ai/pdf-import', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 180000,
+    })
   },
 
   // ── Email notifications ───────────────────────────────────────────────────

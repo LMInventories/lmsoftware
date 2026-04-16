@@ -152,20 +152,38 @@ def _fetch_image(url: str, max_w_mm: float, max_h_mm: float, link_url: str = Non
 # Coloured header-bar flowable
 # ─────────────────────────────────────────────────────────────────────────────
 
+class _Anchor(Flowable):
+    """Zero-height flowable that drops a named PDF destination for TOC links."""
+    def __init__(self, name):
+        super().__init__()
+        self.name = name
+
+    def wrap(self, available_w, available_h):
+        self.width = available_w
+        return available_w, 0
+
+    def draw(self):
+        self.canv.bookmarkHorizontal(self.name, 0, 0)
+
+
 class _HeaderBar(Flowable):
-    def __init__(self, text, bg_color, txt_color, font_size=11):
+    def __init__(self, text, bg_color, txt_color, font_size=11, anchor=None):
         super().__init__()
         self.text      = text
         self.bg_color  = bg_color
         self.txt_color = txt_color
         self.font_size = font_size
         self.height    = font_size * 1.8 + 8
+        self.anchor    = anchor
 
     def wrap(self, available_w, available_h):
         self.width = available_w
         return available_w, self.height
 
     def draw(self):
+        # Place PDF bookmark at the top of this header bar so TOC links jump here
+        if self.anchor:
+            self.canv.bookmarkHorizontal(self.anchor, 0, self.height)
         c = self.canv
         c.setFillColor(self.bg_color)
         c.rect(0, 0, self.width, self.height, fill=1, stroke=0)
@@ -324,6 +342,7 @@ class _PDFBuilder:
         self.s_title    = ParagraphStyle('title',    fontName='Helvetica-Bold', fontSize=20,   leading=26, textColor=self.hdr_c, alignment=TA_CENTER)
         self.s_toc_num  = ParagraphStyle('toc_num',  fontName='Helvetica-Bold', fontSize=9.5,  leading=14, textColor=self.brand)
         self.s_toc_ttl  = ParagraphStyle('toc_ttl',  fontName='Helvetica',      fontSize=9.5,  leading=14, textColor=bc)
+        self.s_toc_link = ParagraphStyle('toc_link', fontName='Helvetica',      fontSize=9.5,  leading=14, textColor=bc)
         self.s_decl     = ParagraphStyle('decl',     fontName='Helvetica',      fontSize=9,    leading=15, textColor=bc, spaceAfter=20)
         self.s_link     = ParagraphStyle('link',     fontName='Helvetica',      fontSize=7.5,  leading=11, textColor=colors.HexColor('#3b82f6'))
 
@@ -668,35 +687,48 @@ class _PDFBuilder:
     def _cover(self):
         """Returns a single NextPageTemplate + PageBreak — actual drawing happens in _draw_cover."""
         from reportlab.platypus import NextPageTemplate
-        return [NextPageTemplate('main'), PageBreak()]
+        return [_Anchor('anchor_cover'), NextPageTemplate('main'), PageBreak()]
 
     # ── Contents ──────────────────────────────────────────────────────────────
 
     def _contents(self):
-        rows = []
-        n    = 1
-        def add(title):
-            nonlocal n
-            rows.append([Paragraph(str(n), self.s_toc_num), Paragraph(title, self.s_toc_ttl)])
-            n += 1
+        import re, html as _html_mod
 
-        add('Cover Page'); add('Contents')
-        if self.cl.get('report_disclaimer'):           add('Disclaimers')
-        if self.is_check_out and self.act_pos == 'top' and self.actions_summary: add('Action Summary')
-        for s in self.fixed_sections:  add(s.get('name',''))
-        for r in self.rooms:           add(r.get('name',''))
-        if self.is_check_out and self.act_pos == 'bottom' and self.actions_summary: add('Action Summary')
-        add('Declaration')
+        def _anchor_id(prefix, name=''):
+            slug = re.sub(r'[^a-z0-9]', '_', name.lower()).strip('_') if name else ''
+            return f'{prefix}_{slug}' if slug else prefix
+
+        rows = []
+
+        def add(title, anchor):
+            safe = _html_mod.escape(title)
+            rows.append([Paragraph(f'<a href="#{anchor}">{safe}</a>', self.s_toc_link)])
+
+        add('Cover Page',  'anchor_cover')
+        add('Contents',    'anchor_contents')
+        if self.cl.get('report_disclaimer'):
+            add('Disclaimers', 'anchor_disclaimers')
+        if self.is_check_out and self.act_pos == 'top' and self.actions_summary:
+            add('Action Summary', 'anchor_action_summary')
+        for s in self.fixed_sections:
+            add(s.get('name', ''), f'anchor_{s["id"]}')
+        for r in self.rooms:
+            add(r.get('name', ''), f'anchor_room_{r["id"]}')
+        if self.is_check_out and self.act_pos == 'bottom' and self.actions_summary:
+            add('Action Summary', 'anchor_action_summary')
+        add('Declaration', 'anchor_declaration')
 
         uw  = self._uw()
-        tbl = Table(rows, colWidths=[12*mm, uw-12*mm])
+        tbl = Table(rows, colWidths=[uw])
         tbl.setStyle(TableStyle([
-            ('TOPPADDING',    (0,0),(-1,-1), 4),
-            ('BOTTOMPADDING', (0,0),(-1,-1), 4),
+            ('TOPPADDING',    (0,0),(-1,-1), 5),
+            ('BOTTOMPADDING', (0,0),(-1,-1), 5),
+            ('LEFTPADDING',   (0,0),(-1,-1), 4),
             ('LINEBELOW',     (0,0),(-1,-2), 0.5, _SLATE_100),
             ('VALIGN',        (0,0),(-1,-1), 'MIDDLE'),
         ]))
-        return [_HeaderBar('Contents', self.brand, self.hdr_c), Spacer(1,4*mm), tbl, PageBreak()]
+        return [_HeaderBar('Contents', self.brand, self.hdr_c, anchor='anchor_contents'),
+                Spacer(1, 4*mm), tbl, PageBreak()]
 
     # ── Disclaimer ────────────────────────────────────────────────────────────
 
@@ -705,7 +737,7 @@ class _PDFBuilder:
         if not disc:
             return []
         text = disc.replace('&','&amp;').replace('<','&lt;').replace('>','&gt;').replace('\n','<br/>')
-        return [_HeaderBar('Disclaimers', self.brand, self.hdr_c), Spacer(1,4*mm), Paragraph(text, self.s_body), PageBreak()]
+        return [_HeaderBar('Disclaimers', self.brand, self.hdr_c, anchor='anchor_disclaimers'), Spacer(1,4*mm), Paragraph(text, self.s_body), PageBreak()]
 
     # ── Fixed sections ────────────────────────────────────────────────────────
 
@@ -800,7 +832,7 @@ class _PDFBuilder:
             tbl.setStyle(ts)
 
             is_last = (si == len(self.fixed_sections) - 1)
-            story += [_HeaderBar(section.get('name',''), self.brand, self.hdr_c), Spacer(1,2*mm), tbl]
+            story += [_HeaderBar(section.get('name',''), self.brand, self.hdr_c, anchor=f'anchor_{sid}'), Spacer(1,2*mm), tbl]
             story += [PageBreak()] if is_last else [Spacer(1, 6*mm)]
 
         return story
@@ -895,7 +927,7 @@ class _PDFBuilder:
             room_tbl = Table(tbl_data, colWidths=widths, repeatRows=1)
             room_tbl.setStyle(self._table_style())
 
-            parts = [_HeaderBar(room.get('name',''), self.brand, self.hdr_c), Spacer(1,2*mm)]
+            parts = [_HeaderBar(room.get('name',''), self.brand, self.hdr_c, anchor=f'anchor_room_{room["id"]}'), Spacer(1,2*mm)]
             if ov_tbl        and self.ov_pos   == 'above': parts += [ov_tbl, Spacer(1,2*mm)]
             if item_photo_tbl and self.item_pos == 'above': parts += [item_photo_tbl, Spacer(1,2*mm)]
             parts.append(room_tbl)
@@ -911,7 +943,7 @@ class _PDFBuilder:
     def _action_summary(self):
         if not self.is_check_out or self.act_pos == 'none' or not self.actions_summary:
             return []
-        story = []
+        story = [_Anchor('anchor_action_summary')]
         uw    = self._uw()
 
         for group in self.action_groups.values():
@@ -958,7 +990,7 @@ class _PDFBuilder:
         sig_tbl = Table([[sig_block('Signed by the Tenant(s)'), sig_block('Signed by the Landlord / Agent')]], colWidths=[uw/2, uw/2])
         sig_tbl.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),8)]))
 
-        return [_HeaderBar('Declaration', self.brand, self.hdr_c), Spacer(1,6*mm), Paragraph(text, self.s_decl), Spacer(1,8*mm), sig_tbl]
+        return [_HeaderBar('Declaration', self.brand, self.hdr_c, anchor='anchor_declaration'), Spacer(1,6*mm), Paragraph(text, self.s_decl), Spacer(1,8*mm), sig_tbl]
 
 
 # ─────────────────────────────────────────────────────────────────────────────

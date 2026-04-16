@@ -3,8 +3,13 @@ gallery.py — Public photo gallery endpoint for PDF clickable-photo links.
 
 Routes:
   GET /api/gallery/<inspection_id>/<sid>/<rid>
-      → Full HTML gallery with photos embedded as data URIs (no secondary requests).
+      → HTML gallery shell.  Photos are loaded via separate /photo/<n> requests
+        so the initial page is tiny even when there are many large photos.
         When photos aren't found, shows diagnostic info about what keys DO exist.
+
+  GET /api/gallery/<inspection_id>/<sid>/<rid>/photo/<n>
+      → Binary JPEG for the nth photo (Pillow-compressed to ≤1600 px, quality 82).
+        Cached for 1 hour.  Same token as the gallery URL.
 
   GET /api/gallery/<inspection_id>/<sid>/<rid>/debug
       → JSON diagnostic: shows what keys exist and how many photos were found.
@@ -13,10 +18,12 @@ Token:  HMAC-SHA256(JWT_SECRET_KEY, "{inspection_id}:{sid}:{rid}")[:16]
 No login required — the HMAC token provides security without a session.
 """
 
+import io
 import os
 import json
 import hmac
 import hashlib
+import base64 as _b64
 import html as _html
 from flask import Blueprint, request, abort, make_response
 
@@ -95,6 +102,36 @@ def _extract_photos(rd, sid, rid):
     return photos, diag
 
 
+def _compress_photo(src: str) -> bytes:
+    """
+    Decode a photo src (data URI or URL) and compress it with Pillow.
+    Returns JPEG bytes.  Falls back to raw decoded bytes on any error.
+    """
+    if src.startswith('data:'):
+        _, b64 = src.split(',', 1)
+        data = _b64.b64decode(b64)
+    else:
+        import urllib.request
+        req  = urllib.request.Request(src, headers={'User-Agent': 'InspectPro/1.0'})
+        data = urllib.request.urlopen(req, timeout=10).read()
+
+    try:
+        from PIL import Image as _PILImg, ImageOps
+        pil = _PILImg.open(io.BytesIO(data)).convert('RGB')
+        try:
+            pil = ImageOps.exif_transpose(pil)
+        except Exception:
+            pass
+        w, h = pil.size
+        if w > 1600 or h > 1600:
+            pil.thumbnail((1600, 1600), _PILImg.LANCZOS)
+        out = io.BytesIO()
+        pil.save(out, format='JPEG', quality=82, optimize=True)
+        return out.getvalue()
+    except Exception:
+        return data
+
+
 # ── Gallery HTML ──────────────────────────────────────────────────────────────
 
 @gallery_bp.route('/gallery/<int:inspection_id>/<sid>/<rid>')
@@ -144,14 +181,14 @@ table{{font-size:12px;border-collapse:collapse;width:100%}}
     count  = len(photos)
     plural = 's' if count != 1 else ''
 
-    # Embed photos directly as <img src="..."> — data URIs go straight in,
-    # HTTP URLs go in as-is (browser fetches them). No Pillow, no extra requests.
+    # Build <img> tags that load each photo via the /photo/<n> endpoint.
+    # This keeps the HTML page tiny — photos are fetched on demand and
+    # compressed server-side (Pillow), so each is ~100–200 KB instead of 5 MB.
     imgs_html = ''
-    for i, src in enumerate(photos):
-        # Escape any stray quotes in the src value (shouldn't exist in base64, but be safe)
-        safe_src = src.replace('"', '%22')
+    for i in range(count):
+        photo_url = f'/api/gallery/{inspection_id}/{sid}/{rid}/photo/{i}?token={token}'
         imgs_html += (
-            f'<img src="{safe_src}" alt="Photo {i + 1}" loading="lazy" '
+            f'<img src="{photo_url}" alt="Photo {i + 1}" loading="lazy" '
             f'onclick="openLb(this.src)">\n'
         )
 
@@ -211,6 +248,37 @@ document.addEventListener('keydown', function(e) {{
     return make_response(html, 200, {'Content-Type': 'text/html; charset=utf-8'})
 
 
+# ── Per-photo binary endpoint ─────────────────────────────────────────────────
+
+@gallery_bp.route('/gallery/<int:inspection_id>/<sid>/<rid>/photo/<int:n>')
+def gallery_photo(inspection_id, sid, rid, n):
+    """
+    Serve the nth photo for an inspection item as a compressed JPEG.
+    Uses the same HMAC token as the gallery page — no extra auth needed.
+    """
+    token    = request.args.get('token', '')
+    expected = make_gallery_token(inspection_id, sid, rid)
+    if not hmac.compare_digest(token, expected):
+        abort(403)
+
+    rd, _, _ = _load_report_data(inspection_id)
+    photos, _ = _extract_photos(rd, sid, rid)
+
+    if n < 0 or n >= len(photos):
+        abort(404)
+
+    try:
+        data = _compress_photo(photos[n])
+    except Exception as e:
+        print(f'[gallery] photo {n} compress error: {e}')
+        abort(500)
+
+    return make_response(data, 200, {
+        'Content-Type':  'image/jpeg',
+        'Cache-Control': 'private, max-age=3600',
+    })
+
+
 # ── Debug endpoint ─────────────────────────────────────────────────────────────
 
 @gallery_bp.route('/gallery/<int:inspection_id>/<sid>/<rid>/debug')
@@ -241,7 +309,6 @@ def gallery_debug(inspection_id, sid, rid):
     row_data     = section_data.get(rid_key) or {}
     raw_photos   = row_data.get('_photos', []) or []
 
-    # Summarise photo types without dumping full base64 payloads
     photo_types = []
     for p in raw_photos:
         if isinstance(p, str):

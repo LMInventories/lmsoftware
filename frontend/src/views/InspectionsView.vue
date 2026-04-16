@@ -79,6 +79,7 @@ const filters = ref({
   postcode: '',
   statuses: [],    // multi-select array
   clerk_ids: [],   // multi-select array
+  month: '',       // 'YYYY-MM' or ''
 })
 
 // Calendar filters
@@ -104,67 +105,65 @@ const form = ref({
   include_photos: false
 })
 
-// ── PDF import state (for Check Out with no linked Check In) ─────────
-const pdfFile     = ref(null)
-const pdfFileName = ref('')
-
-function onPdfSelected(e) {
-  const file = e.target?.files?.[0] || e.dataTransfer?.files?.[0]
-  if (!file) return
-  if (file.type !== 'application/pdf') { toast.error('Please choose a PDF file'); return }
-  pdfFile.value     = file
-  pdfFileName.value = file.name
-}
-
 // ── Lifecycle suggestion state ─────────────────────────────────────────
-const propertyHistory    = ref([])
-const lifecycleSuggestion = ref(null)  // { sourceId, sourceType, sourceDateStr, label }
-const historyLoading     = ref(false)
+const propertyHistory     = ref([])
+const lifecycleSuggestion = ref(null)   // { sourceId, sourceType, sourceDateStr, label }
+const noCheckInFound      = ref(false)  // true when check_out selected but no check_in exists
+const historyLoading      = ref(false)
 
 // Watch property + inspection_type — load history and compute suggestion
 watch(
   () => [form.value.property_id, form.value.inspection_type],
   async ([propId, iType]) => {
     lifecycleSuggestion.value = null
+    noCheckInFound.value = false
     form.value.source_inspection_id = null
-    pdfFile.value     = null
-    pdfFileName.value = ''
     if (!propId) return
+
+    // Damage reports are standalone — no lifecycle lookup needed
+    if (iType === 'damage_report') return
 
     historyLoading.value = true
     try {
       const res = await api.getPropertyHistory(propId)
       propertyHistory.value = res.data
 
-      // Determine what type of prior report can seed this new inspection
-      const seedableTypes = iType === 'check_out'
-        ? ['check_in', 'inventory']
-        : iType === 'check_in'
-          ? ['check_out']
-          : []
-
-      // For check_out: find any check_in/inventory, prefer ones with report data
-      // For check_in: find any check_out with report data
-      const source = res.data.find(h =>
-        h.id !== undefined &&
-        seedableTypes.includes(h.inspection_type) &&
-        (iType === 'check_out' ? true : h.has_report_data)
-      )
-
-      if (source) {
-        const typeLabel = { check_in: 'Check In', check_out: 'Check Out', inventory: 'Inventory' }[source.inspection_type] || source.inspection_type
-        const dateStr = source.conduct_date
-          ? new Date(source.conduct_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
-          : new Date(source.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
-
-        lifecycleSuggestion.value = {
-          sourceId: source.id,
-          sourceType: source.inspection_type,
-          sourceDateStr: dateStr,
-          label: typeLabel
+      if (iType === 'check_out') {
+        // Only look for the most recent Check In (not inventory/check_out)
+        const source = res.data.find(h =>
+          h.id !== undefined && h.inspection_type === 'check_in'
+        )
+        if (source) {
+          const dateStr = source.conduct_date
+            ? new Date(source.conduct_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+            : new Date(source.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+          lifecycleSuggestion.value = {
+            sourceId: source.id,
+            sourceType: 'check_in',
+            sourceDateStr: dateStr,
+            label: 'Check In'
+          }
+          form.value.source_inspection_id = source.id
+        } else {
+          noCheckInFound.value = true
         }
-        // Pre-select it
-        form.value.source_inspection_id = source.id
+      } else if (iType === 'check_in') {
+        // Seed from most recent check_out with report data
+        const source = res.data.find(h =>
+          h.id !== undefined && h.inspection_type === 'check_out' && h.has_report_data
+        )
+        if (source) {
+          const dateStr = source.conduct_date
+            ? new Date(source.conduct_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+            : new Date(source.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+          lifecycleSuggestion.value = {
+            sourceId: source.id,
+            sourceType: 'check_out',
+            sourceDateStr: dateStr,
+            label: 'Check Out'
+          }
+          form.value.source_inspection_id = source.id
+        }
       }
     } catch {
       // silent fail
@@ -173,6 +172,173 @@ watch(
     }
   }
 )
+
+// ── Create-from-PDF modal state ────────────────────────────────────────
+const showPdfImportModal   = ref(false)
+const pdfImportStep        = ref(1)  // 1=select property, 2=upload+parse, 3=review, 4=saving
+const pdfImportForm        = ref({
+  client_id:   null,
+  property_id: null,
+  conduct_date: '',
+  conductDateDisplay: '',
+  inspector_id: null,
+  template_id:  null,
+})
+const pdfImportFile        = ref(null)
+const pdfImportFileName    = ref('')
+const pdfImportParsed      = ref(null)   // { rooms, fixedSections }
+const pdfImportError       = ref('')
+const pdfImportSaving      = ref(false)
+const pdfImportParsing     = ref(false)
+
+function openPdfImportModal() {
+  pdfImportStep.value = 1
+  pdfImportForm.value = { client_id: authStore.isClient ? authStore.user.client_id : null, property_id: null, conduct_date: '', conductDateDisplay: '', inspector_id: null, template_id: null }
+  pdfImportFile.value = null
+  pdfImportFileName.value = ''
+  pdfImportParsed.value = null
+  pdfImportError.value = ''
+  pdfImportSaving.value = false
+  pdfImportParsing.value = false
+  showPdfImportModal.value = true
+}
+
+function onPdfImportClientChange() {
+  pdfImportForm.value.property_id = null
+}
+
+const filteredPdfProperties = computed(() => {
+  if (!pdfImportForm.value.client_id) return properties.value
+  return properties.value.filter(p => p.client_id === pdfImportForm.value.client_id)
+})
+
+const filteredPdfTemplates = computed(() => templates.value.filter(t => t.inspection_type === 'check_in'))
+
+function onPdfImportConductDateInput(e) {
+  let v = e.target.value.replace(/[^0-9]/g, '')
+  if (v.length > 2) v = v.slice(0,2) + '/' + v.slice(2)
+  if (v.length > 5) v = v.slice(0,5) + '/' + v.slice(5,9)
+  pdfImportForm.value.conductDateDisplay = v
+  if (v.length === 10) {
+    const [dd, mm, yyyy] = v.split('/')
+    pdfImportForm.value.conduct_date = `${yyyy}-${mm}-${dd}`
+  } else {
+    pdfImportForm.value.conduct_date = ''
+  }
+}
+
+function onPdfImportNativeDateChange(e) {
+  const val = e.target.value
+  if (!val) return
+  const [yyyy, mm, dd] = val.split('-')
+  pdfImportForm.value.conductDateDisplay = `${dd}/${mm}/${yyyy}`
+  pdfImportForm.value.conduct_date = val
+}
+
+function onPdfImportFileSelected(e) {
+  const file = e.target?.files?.[0] || e.dataTransfer?.files?.[0]
+  if (!file) return
+  if (file.type !== 'application/pdf') { toast.error('Please choose a PDF file'); return }
+  pdfImportFile.value = file
+  pdfImportFileName.value = file.name
+}
+
+async function runPdfImportParse() {
+  if (!pdfImportFile.value) { toast.warning('Please select a PDF file'); return }
+  pdfImportParsing.value = true
+  pdfImportError.value = ''
+  try {
+    const base64 = await new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload  = e => resolve(e.target.result.split(',')[1])
+      reader.onerror = reject
+      reader.readAsDataURL(pdfImportFile.value)
+    })
+
+    const prompt = `You are parsing a UK property inspection report PDF (inventory or check-in) to extract structured data.
+
+Extract ALL rooms and items. For each item extract:
+- label: the item name exactly as written
+- description: the physical description of the item
+- condition: the condition recorded at check-in (NOT the check-out column if present)
+
+Return ONLY valid JSON — no markdown, no explanation:
+{
+  "rooms": [
+    {
+      "name": "Lounge",
+      "items": [
+        { "label": "Door, Frame, Threshold & Furniture", "description": "White painted panel door with chrome effect fitment", "condition": "Appears in good condition" }
+      ]
+    }
+  ],
+  "fixedSections": {
+    "condition_summary": [{ "name": "General Cleanliness", "condition": "Appears in good condition" }],
+    "cleaning_summary": [{ "name": "General Cleanliness", "cleanliness": "Professionally Cleaned", "cleanlinessNotes": "" }],
+    "keys": [{ "name": "Front Door", "description": "2x Yale key, 1x deadlock key" }],
+    "meter_readings": [{ "name": "Gas Meter", "locationSerial": "Under stairs", "reading": "12345.6" }],
+    "smoke_alarms": [{ "question": "Smoke alarm present and tested?", "answer": "Yes", "notes": "Audible alarm noted" }]
+  }
+}`
+
+    const aiResponse = await api.claudeProxy({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 8000,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } },
+          { type: 'text', text: prompt }
+        ]
+      }]
+    })
+
+    const rawText = (aiResponse.data.content || []).map(b => b.text || '').join('')
+    const clean   = rawText.replace(/```json[\s\S]*?```|```[\s\S]*?```/g, s => s.replace(/```json|```/g, '')).trim()
+    pdfImportParsed.value = JSON.parse(clean)
+    pdfImportParsed.value._fileName = pdfImportFileName.value
+    pdfImportStep.value = 3
+  } catch (e) {
+    console.error('PDF parse error:', e)
+    pdfImportError.value = 'AI parsing failed: ' + (e?.response?.data?.error || e.message || 'unknown error')
+  } finally {
+    pdfImportParsing.value = false
+  }
+}
+
+async function savePdfImportInspection() {
+  if (!pdfImportForm.value.property_id) { toast.warning('Please select a property'); return }
+  if (!pdfImportForm.value.inspector_id) { toast.warning('Please assign a clerk'); return }
+  pdfImportSaving.value = true
+  try {
+    const payload = {
+      property_id: pdfImportForm.value.property_id,
+      inspection_type: 'check_in',
+      inspector_id: pdfImportForm.value.inspector_id,
+      template_id: pdfImportForm.value.template_id || null,
+      status: 'complete',
+      source_inspection_id: null,
+    }
+    if (pdfImportForm.value.conduct_date) {
+      payload.conduct_date = pdfImportForm.value.conduct_date + 'T00:00:00'
+    }
+    const createRes = await api.createInspection(payload)
+    const newId = createRes.data?.id || createRes.data?.inspection?.id
+
+    if (pdfImportParsed.value && newId) {
+      await api.applyPdfImport(newId, pdfImportParsed.value)
+    }
+
+    toast.success('Backdated Check In created successfully')
+    showPdfImportModal.value = false
+    fetchInspections()
+  } catch (e) {
+    console.error('Save PDF inspection error:', e)
+    toast.error('Failed to save inspection')
+  } finally {
+    pdfImportSaving.value = false
+  }
+}
 
 // Time options
 const timePreferenceOptions = [
@@ -255,9 +421,10 @@ const calendarEvents = computed(() => {
       }
       let typeShort = ''
       switch (inspection.inspection_type) {
-        case 'check_in':  typeShort = 'C/I'; break
-        case 'check_out': typeShort = 'C/O'; break
-        case 'inventory': typeShort = 'INV'; break
+        case 'check_in':      typeShort = 'C/I'; break
+        case 'check_out':     typeShort = 'C/O'; break
+        case 'inventory':     typeShort = 'INV'; break
+        case 'damage_report': typeShort = 'DMG'; break
         default: typeShort = inspection.inspection_type.substring(0, 3).toUpperCase()
       }
       const title = `${typeShort} - ${postcode}`
@@ -293,6 +460,13 @@ const filteredInspections = computed(() => {
     result = result.filter(i => filters.value.statuses.includes(i.status))
   if (filters.value.clerk_ids?.length)
     result = result.filter(i => filters.value.clerk_ids.map(Number).includes(Number(i.inspector_id)))
+  if (filters.value.month) {
+    result = result.filter(i => {
+      const d = i.conduct_date || i.created_at
+      if (!d) return false
+      return d.startsWith(filters.value.month)
+    })
+  }
   return result
 })
 
@@ -359,7 +533,7 @@ function clerkFilterLabel(ids, isCalendar) {
 }
 
 function clearFilters() {
-  filters.value = { client_ids: [], postcode: '', statuses: [], clerk_ids: [] }
+  filters.value = { client_ids: [], postcode: '', statuses: [], clerk_ids: [], month: '' }
 }
 
 function clearCalendarFilters() {
@@ -507,12 +681,11 @@ function openModal() {
     time_hour: '09',
     time_minute: '00',
     source_inspection_id: null,
-  include_photos: false
+    include_photos: false
   }
   lifecycleSuggestion.value = null
+  noCheckInFound.value = false
   propertyHistory.value = []
-  pdfFile.value     = null
-  pdfFileName.value = ''
   showModal.value = true
 }
 
@@ -554,89 +727,9 @@ async function handleSubmit() {
       payload.conduct_date = form.value.conduct_date + 'T00:00:00'
     }
 
-    const createRes = await api.createInspection(payload)
-    const newId = createRes.data?.id || createRes.data?.inspection?.id
+    await api.createInspection(payload)
 
-    // If a PDF was uploaded for a check_out with no linked source, process it now
-    if (pdfFile.value && form.value.inspection_type === 'check_out' && newId) {
-      toast.info('Analysing PDF — please wait…')
-      try {
-        const base64 = await new Promise((resolve, reject) => {
-          const reader = new FileReader()
-          reader.onload  = e => resolve(e.target.result.split(',')[1])
-          reader.onerror = reject
-          reader.readAsDataURL(pdfFile.value)
-        })
-
-        // ── Step 1: Ask Claude to parse the PDF into structured data ──────
-        // We don't have the template here (it was just assigned by the backend),
-        // so we extract raw structure and let the backend map it to template IDs.
-        const prompt = `You are parsing a UK property inspection report PDF (inventory or check-in) to extract structured data for a Check Out report system.
-
-Extract ALL rooms and items. For each item extract:
-- label: the item name exactly as written
-- description: the physical description of the item
-- condition: the condition recorded at check-in (NOT the check-out column if present)
-
-The PDF format is typically: [Ref] [Item Name] [Description] [Condition at Check In] [Condition at Check Out]
-Only extract the Check In condition — ignore the Check Out column.
-
-Also extract fixed sections: keys, meter readings, schedule of condition, cleaning summary, smoke alarms.
-
-Return ONLY valid JSON — no markdown, no explanation:
-{
-  "rooms": [
-    {
-      "name": "Lounge",
-      "items": [
-        { "label": "Door, Frame, Threshold & Furniture", "description": "White painted panel door with chrome effect fitment", "condition": "Appears in good condition" }
-      ]
-    }
-  ],
-  "fixedSections": {
-    "condition_summary": [{ "name": "General Cleanliness", "condition": "Appears in good condition" }],
-    "cleaning_summary": [{ "name": "General Cleanliness", "cleanliness": "Professionally Cleaned", "cleanlinessNotes": "" }],
-    "keys": [{ "name": "Front Door", "description": "2x Yale key, 1x deadlock key" }],
-    "meter_readings": [{ "name": "Gas Meter", "locationSerial": "Under stairs", "reading": "12345.6" }],
-    "smoke_alarms": [{ "question": "Smoke alarm present and tested?", "answer": "Yes", "notes": "Audible alarm noted" }]
-  }
-}`
-
-        const aiResponse = await api.claudeProxy({
-            model: 'claude-sonnet-4-6',
-            max_tokens: 8000,
-            messages: [{
-              role: 'user',
-              content: [
-                { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } },
-                { type: 'text', text: prompt }
-              ]
-            }]
-          })
-
-        // api.claudeProxy uses axios — throws on non-2xx, data is already parsed
-        const aiData  = aiResponse.data
-        const rawText = (aiData.content || []).map(b => b.text || '').join('')
-        const clean   = rawText.replace(/```json[\s\S]*?```|```[\s\S]*?```/g, s => s.replace(/```json|```/g, '')).trim()
-        const parsed  = JSON.parse(clean)
-
-        // ── Step 2: Send parsed data to backend to map against template ───
-        // The backend knows the inspection's assigned template and maps
-        // room/item names to real template IDs, storing as _importedSource.
-        parsed._fileName = pdfFileName.value
-        const importRes = await api.applyPdfImport(newId, parsed)
-
-        const { room_count, item_count } = importRes.data
-        toast.success(`PDF imported: ${room_count} rooms, ${item_count} items loaded as Check In reference`)
-
-      } catch (pdfErr) {
-        console.error('PDF import error:', pdfErr)
-        toast.warning('Inspection created — PDF analysis failed. You can re-import from the report screen.')
-      }
-    } else {
-      toast.success('Inspection created')
-    }
-
+    toast.success('Inspection created')
     showModal.value = false
     fetchInspections()
   } catch (error) {
@@ -688,7 +781,10 @@ onMounted(() => {
         <h1 class="page-title">Inspections</h1>
         <p class="page-sub">Manage and track property inspections</p>
       </div>
-      <button v-if="authStore.isAdmin || authStore.isManager || authStore.isClient" @click="openModal" class="btn-primary">+ Add Inspection</button>
+      <div class="header-actions">
+        <button v-if="authStore.isAdmin || authStore.isManager" @click="openPdfImportModal" class="btn-secondary btn-pdf-import">📄 Create from PDF</button>
+        <button v-if="authStore.isAdmin || authStore.isManager || authStore.isClient" @click="openModal" class="btn-primary">+ Add Inspection</button>
+      </div>
     </div>
 
     <!-- Tabs -->
@@ -751,10 +847,14 @@ onMounted(() => {
             <div v-if="!clerks.length" class="ms-empty">No clerks</div>
           </div>
         </div>
+        <div class="filter-group">
+          <label>Month</label>
+          <input v-model="filters.month" type="month" class="filter-input" style="min-width:140px" />
+        </div>
         <button @click="clearFilters" class="btn-clear-filters">Clear Filters</button>
       </div>
 
-      
+
     <!-- Mobile FAB -->
     <button class="mobile-fab-add" @click="openCreateModal" style="display:none">+</button>
 
@@ -939,6 +1039,7 @@ onMounted(() => {
                   <option value="check_out">Check Out</option>
                   <option value="interim">Interim Inspection</option>
                   <option value="inventory">Inventory</option>
+                  <option value="damage_report">Damage Report</option>
                 </select>
               </div>
 
@@ -1045,7 +1146,7 @@ onMounted(() => {
           <!-- ── End columns ─────────────────────────────────────────── -->
 
           <!-- ── Lifecycle suggestion banner (full-width below cols) ─── -->
-          <div v-if="historyLoading" class="lc-loading">
+          <div v-if="historyLoading && form.property_id && form.inspection_type !== 'damage_report'" class="lc-loading">
             <span class="lc-spinner"></span> Checking property history…
           </div>
 
@@ -1082,40 +1183,19 @@ onMounted(() => {
             </div>
           </div>
 
-          <!-- ── PDF import for Check Out with no linked Check In ──── -->
+          <!-- ── No Check In found warning for Check Out ─────────────── -->
           <div
-            v-if="form.inspection_type === 'check_out' && !historyLoading && !lifecycleSuggestion"
-            class="pdf-import-section"
+            v-else-if="noCheckInFound && !historyLoading"
+            class="lc-warning-banner"
           >
-            <div class="pdf-import-header">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-              <span>No previous Check In found for this property</span>
+            <div class="lc-banner-icon">⚠️</div>
+            <div class="lc-banner-body">
+              <strong class="lc-banner-title lc-warn-title">No previous Check In found for this property</strong>
+              <p class="lc-banner-desc lc-warn-desc">
+                An empty report will be assigned. To create a backdated Check In from an existing PDF, use the
+                <strong>Create from PDF</strong> button on the Inspections page.
+              </p>
             </div>
-            <p class="pdf-import-hint">
-              Upload a Check In or Inventory PDF from another system to use as the reference for this Check Out.
-              The report's room layout, descriptions, and conditions will be extracted automatically.
-            </p>
-            <label
-              class="pdf-dropzone-sm"
-              :class="{ 'pdf-dropzone-sm-has': pdfFileName }"
-              @dragover.prevent
-              @drop.prevent="onPdfSelected"
-            >
-              <template v-if="!pdfFileName">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                <span>Drop PDF here or <u>browse</u></span>
-                <span class="pdf-dz-sm-hint">Optional — can also import from the report screen</span>
-              </template>
-              <template v-else>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-                <span class="pdf-dz-sm-name">{{ pdfFileName }}</span>
-                <span class="pdf-dz-sm-hint">Click to change</span>
-              </template>
-              <input type="file" accept="application/pdf" style="display:none" @change="onPdfSelected" />
-            </label>
-            <p v-if="pdfFileName" class="pdf-import-notice">
-              ✓ PDF will be analysed by AI when you create the inspection
-            </p>
           </div>
 
           <div class="modal-footer">
@@ -1123,6 +1203,158 @@ onMounted(() => {
             <button type="submit" class="btn-primary">Create Inspection</button>
           </div>
         </form>
+      </div>
+    </div>
+
+    <!-- ══ Create Inspection from PDF Modal ════════════════════════════ -->
+    <div v-if="showPdfImportModal" class="modal-overlay" @click.self="showPdfImportModal = false">
+      <div class="modal modal-wide">
+        <div class="modal-header">
+          <h2>Create Inspection from PDF</h2>
+          <button @click="showPdfImportModal = false" class="btn-close">✕</button>
+        </div>
+
+        <!-- Step indicators -->
+        <div class="pdf-steps">
+          <div class="pdf-step" :class="{ active: pdfImportStep >= 1, done: pdfImportStep > 1 }">
+            <span class="pdf-step-num">1</span><span class="pdf-step-label">Property</span>
+          </div>
+          <div class="pdf-step-line"></div>
+          <div class="pdf-step" :class="{ active: pdfImportStep >= 2, done: pdfImportStep > 2 }">
+            <span class="pdf-step-num">2</span><span class="pdf-step-label">Upload PDF</span>
+          </div>
+          <div class="pdf-step-line"></div>
+          <div class="pdf-step" :class="{ active: pdfImportStep >= 3 }">
+            <span class="pdf-step-num">3</span><span class="pdf-step-label">Review &amp; Save</span>
+          </div>
+        </div>
+
+        <div class="modal-body">
+
+          <!-- Step 1: Select property + clerk + date -->
+          <div v-if="pdfImportStep === 1">
+            <div class="modal-cols">
+              <div class="modal-col">
+                <div class="col-section-title">Property Details</div>
+                <div v-if="!authStore.isClient" class="form-group">
+                  <label>Portfolio *</label>
+                  <select v-model="pdfImportForm.client_id" @change="onPdfImportClientChange">
+                    <option :value="null" disabled>Select a portfolio...</option>
+                    <option v-for="client in clients" :key="client.id" :value="client.id">{{ client.name }}</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label>Property *</label>
+                  <select v-model="pdfImportForm.property_id" :disabled="!pdfImportForm.client_id">
+                    <option :value="null" disabled>{{ pdfImportForm.client_id ? 'Select a property...' : 'Select a portfolio first' }}</option>
+                    <option v-for="p in filteredPdfProperties" :key="p.id" :value="p.id">{{ p.address }}</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label>Original Inspection Date</label>
+                  <div class="date-input-row">
+                    <input :value="pdfImportForm.conductDateDisplay" type="text" placeholder="DD/MM/YYYY" class="input-field date-text-input" maxlength="10" @input="onPdfImportConductDateInput" />
+                    <label class="date-cal-btn" title="Pick from calendar">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="pointer-events:none;position:relative;z-index:0"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                      <input type="date" :value="pdfImportForm.conduct_date" @change="onPdfImportNativeDateChange" style="position:absolute;inset:0;opacity:0;width:100%;height:100%;cursor:pointer;z-index:1" />
+                    </label>
+                  </div>
+                  <p class="helper-text">Set the original check-in date from the PDF</p>
+                </div>
+              </div>
+              <div class="modal-col">
+                <div class="col-section-title">Assignment</div>
+                <div class="form-group">
+                  <label>Clerk (Inspector) *</label>
+                  <select v-model="pdfImportForm.inspector_id">
+                    <option :value="null" disabled>Select a clerk...</option>
+                    <option v-for="clerk in clerks" :key="clerk.id" :value="clerk.id">{{ clerk.name }}</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label>Template</label>
+                  <select v-model="pdfImportForm.template_id">
+                    <option :value="null">Use default check-in template</option>
+                    <option v-for="t in filteredPdfTemplates" :key="t.id" :value="t.id">{{ t.name }}{{ t.is_default ? ' ★' : '' }}</option>
+                  </select>
+                </div>
+                <div class="pdf-step1-info">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                  <span>The inspection will be created as a completed Check In backdated to the date you enter. You can then start a Check Out against it.</span>
+                </div>
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button type="button" @click="showPdfImportModal = false" class="btn-secondary">Cancel</button>
+              <button type="button" @click="pdfImportStep = 2" :disabled="!pdfImportForm.property_id || !pdfImportForm.inspector_id" class="btn-primary">Next: Upload PDF →</button>
+            </div>
+          </div>
+
+          <!-- Step 2: Upload PDF + parse -->
+          <div v-if="pdfImportStep === 2">
+            <p class="pdf-step2-intro">Upload the original Check In or Inventory PDF. Claude will extract all rooms, items, descriptions and conditions automatically.</p>
+            <label
+              class="pdf-dropzone"
+              :class="{ 'pdf-dropzone-has': pdfImportFileName }"
+              @dragover.prevent
+              @drop.prevent="onPdfImportFileSelected"
+            >
+              <template v-if="!pdfImportFileName">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                <span class="pdf-dz-title">Drop PDF here or <u>browse</u></span>
+                <span class="pdf-dz-hint">Supports Check In and Inventory reports in PDF format</span>
+              </template>
+              <template v-else>
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                <span class="pdf-dz-filename">{{ pdfImportFileName }}</span>
+                <span class="pdf-dz-hint">Click to change</span>
+              </template>
+              <input type="file" accept="application/pdf" style="display:none" @change="onPdfImportFileSelected" />
+            </label>
+            <div v-if="pdfImportError" class="pdf-error">{{ pdfImportError }}</div>
+            <div v-if="pdfImportParsing" class="pdf-parsing-status">
+              <span class="lc-spinner"></span> Analysing PDF with AI — this may take 30–60 seconds…
+            </div>
+            <div class="modal-footer">
+              <button type="button" @click="pdfImportStep = 1" class="btn-secondary" :disabled="pdfImportParsing">← Back</button>
+              <button type="button" @click="runPdfImportParse" :disabled="!pdfImportFileName || pdfImportParsing" class="btn-primary">
+                {{ pdfImportParsing ? 'Analysing…' : 'Analyse PDF →' }}
+              </button>
+            </div>
+          </div>
+
+          <!-- Step 3: Review & Save -->
+          <div v-if="pdfImportStep === 3 && pdfImportParsed">
+            <div class="pdf-review-summary">
+              <div class="pdf-review-stat">
+                <span class="pdf-review-num">{{ pdfImportParsed.rooms?.length || 0 }}</span>
+                <span class="pdf-review-lbl">Rooms found</span>
+              </div>
+              <div class="pdf-review-stat">
+                <span class="pdf-review-num">{{ pdfImportParsed.rooms?.reduce((n, r) => n + (r.items?.length || 0), 0) || 0 }}</span>
+                <span class="pdf-review-lbl">Items extracted</span>
+              </div>
+              <div class="pdf-review-stat">
+                <span class="pdf-review-num">{{ Object.keys(pdfImportParsed.fixedSections || {}).length }}</span>
+                <span class="pdf-review-lbl">Fixed sections</span>
+              </div>
+            </div>
+            <div class="pdf-review-rooms">
+              <div v-for="room in (pdfImportParsed.rooms || [])" :key="room.name" class="pdf-review-room">
+                <div class="pdf-review-room-name">{{ room.name }}</div>
+                <div class="pdf-review-items">{{ room.items?.length || 0 }} items</div>
+              </div>
+            </div>
+            <p class="pdf-review-note">✓ Review looks correct? Click Save to create the backdated Check In with this data.</p>
+            <div class="modal-footer">
+              <button type="button" @click="pdfImportStep = 2" class="btn-secondary" :disabled="pdfImportSaving">← Re-upload</button>
+              <button type="button" @click="savePdfImportInspection" :disabled="pdfImportSaving" class="btn-primary">
+                {{ pdfImportSaving ? 'Saving…' : 'Save Backdated Check In' }}
+              </button>
+            </div>
+          </div>
+
+        </div>
       </div>
     </div>
 
@@ -2030,4 +2262,180 @@ onMounted(() => {
   background: #eef2ff;
   color: #6366f1;
 }
+
+/* ── Header action buttons ─────────────────────────────────────────────── */
+.header-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.btn-pdf-import {
+  font-size: 13px;
+  font-weight: 600;
+  padding: 9px 16px;
+  border-radius: 8px;
+  white-space: nowrap;
+}
+
+/* ── Warning banner (no check-in found) ────────────────────────────────── */
+.lc-warning-banner {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  padding: 14px 16px;
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  border-radius: 10px;
+}
+.lc-warn-title { color: #92400e !important; }
+.lc-warn-desc  { color: #78350f !important; }
+
+/* ── Create from PDF modal steps ────────────────────────────────────────── */
+.pdf-steps {
+  display: flex;
+  align-items: center;
+  padding: 16px 24px 0;
+  gap: 0;
+}
+.pdf-step {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  opacity: 0.4;
+  transition: opacity 0.2s;
+}
+.pdf-step.active { opacity: 1; }
+.pdf-step-num {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #e2e8f0;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.2s, color 0.2s;
+}
+.pdf-step.active .pdf-step-num { background: #6366f1; color: #fff; }
+.pdf-step.done .pdf-step-num   { background: #10b981; color: #fff; }
+.pdf-step-label { font-size: 12px; font-weight: 600; color: #64748b; white-space: nowrap; }
+.pdf-step.active .pdf-step-label { color: #1e293b; }
+.pdf-step-line {
+  flex: 1;
+  height: 2px;
+  background: #e2e8f0;
+  margin: 0 8px;
+  min-width: 20px;
+}
+
+/* Step 1 info box */
+.pdf-step1-info {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  background: #eef2ff;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 12px;
+  color: #4338ca;
+  line-height: 1.5;
+  margin-top: 4px;
+}
+.pdf-step1-info svg { flex-shrink: 0; margin-top: 1px; }
+
+/* Step 2 intro */
+.pdf-step2-intro {
+  font-size: 13px;
+  color: #64748b;
+  margin: 0 0 16px;
+  line-height: 1.5;
+}
+
+/* PDF dropzone (large) */
+.pdf-dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 2px dashed #cbd5e1;
+  border-radius: 10px;
+  padding: 40px 24px;
+  cursor: pointer;
+  transition: all 0.15s;
+  background: #f8fafc;
+  text-align: center;
+  color: #64748b;
+  min-height: 160px;
+}
+.pdf-dropzone:hover, .pdf-dropzone-has {
+  border-color: #6366f1;
+  background: #eef2ff;
+}
+.pdf-dz-title  { font-size: 15px; font-weight: 600; color: #475569; }
+.pdf-dz-hint   { font-size: 12px; color: #94a3b8; }
+.pdf-dz-filename { font-size: 14px; font-weight: 700; color: #4338ca; }
+
+.pdf-error {
+  background: #fef2f2;
+  color: #dc2626;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  margin-top: 10px;
+}
+
+.pdf-parsing-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #6366f1;
+  padding: 12px 0 4px;
+  font-weight: 600;
+}
+
+/* Step 3 review */
+.pdf-review-summary {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.pdf-review-stat {
+  flex: 1;
+  background: #f1f5f9;
+  border-radius: 8px;
+  padding: 12px;
+  text-align: center;
+}
+.pdf-review-num {
+  display: block;
+  font-size: 28px;
+  font-weight: 800;
+  color: #6366f1;
+  line-height: 1;
+  margin-bottom: 4px;
+}
+.pdf-review-lbl { font-size: 11px; color: #64748b; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; }
+.pdf-review-rooms {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+  margin-bottom: 12px;
+}
+.pdf-review-room {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 7px;
+  padding: 8px 10px;
+}
+.pdf-review-room-name { font-size: 12px; font-weight: 700; color: #1e293b; margin-bottom: 2px; }
+.pdf-review-items     { font-size: 11px; color: #94a3b8; }
+.pdf-review-note      { font-size: 12px; color: #16a34a; font-weight: 600; margin: 0; }
 </style>

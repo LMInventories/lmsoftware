@@ -1505,8 +1505,9 @@ const cleanlinessOpts = [
   'Not Clean'
 ]
 
-const typeLabel  = computed(() => ({ check_in:'Check In', check_out:'Check Out', interim:'Interim Inspection', inventory:'Inventory' })[inspection.value?.inspection_type] ?? '')
-const isCheckOut = computed(() => inspection.value?.inspection_type === 'check_out')
+const typeLabel       = computed(() => ({ check_in:'Check In', check_out:'Check Out', interim:'Interim Inspection', inventory:'Inventory', damage_report:'Damage Report' })[inspection.value?.inspection_type] ?? '')
+const isCheckOut      = computed(() => inspection.value?.inspection_type === 'check_out')
+const isDamageReport  = computed(() => inspection.value?.inspection_type === 'damage_report')
 const savedTime  = computed(() => lastSaved.value ? lastSaved.value.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' }) : null)
 
 function sectionStarted(sectionId) {
@@ -2202,7 +2203,7 @@ async function moveToReview() {
                       <!-- Desc + Condition side by side, buttons on right -->
                       <div class="item-fields-row">
                         <div class="item-fields-main">
-                          <div v-if="item.hasDescription" class="room-field-desc">
+                          <div v-if="item.hasDescription && !isDamageReport" class="room-field-desc">
                             <label class="field-lbl">Description</label>
                             <textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" rows="3" :placeholder="`Describe ${item.label.toLowerCase()}…`"
                               :value="get(room.id,item.id,'description')"
@@ -2220,7 +2221,7 @@ async function moveToReview() {
                               :value="get(room.id,item.id,'notes')"
                               @input="set(room.id,item.id,'notes',$event.target.value)"></textarea>
                           </div>
-                          <button v-if="canEdit && item.hasDescription" class="add-sub-btn add-sub-below" @click="addSubItem(room.id, item.id)">+ Add sub-item</button>
+                          <button v-if="canEdit && item.hasDescription && !isDamageReport" class="add-sub-btn add-sub-below" @click="addSubItem(room.id, item.id)">+ Add sub-item</button>
                         </div>
                         <!-- Buttons stacked to the right -->
                         <div class="item-btn-col" v-if="item.hasCondition || item.hasDescription || (!item.hasCondition && !item.hasDescription)">
@@ -2239,7 +2240,7 @@ async function moveToReview() {
                       <!-- Extra (non-template) item -->
                       <div class="item-fields-row">
                         <div class="item-fields-main">
-                          <div class="room-field-desc">
+                          <div v-if="!isDamageReport" class="room-field-desc">
                             <label class="field-lbl">Description</label>
                             <textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" rows="3" placeholder="Describe…"
                               :value="item.description"

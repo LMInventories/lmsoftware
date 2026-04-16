@@ -313,12 +313,14 @@ class _PDFBuilder:
         self.action_catalogue = []
 
         itype = inspection.inspection_type or ''
-        self.is_check_out = itype == 'check_out'
+        self.is_check_out    = itype == 'check_out'
+        self.is_damage_report = itype == 'damage_report'
         self.type_label   = {
-            'check_in':  'Inventory & Check In',
-            'check_out': 'Check Out',
-            'interim':   'Interim Inspection',
-            'inventory': 'Inventory Report',
+            'check_in':      'Inventory & Check In',
+            'check_out':     'Check Out',
+            'interim':       'Interim Inspection',
+            'inventory':     'Inventory Report',
+            'damage_report': 'Damage Report',
         }.get(itype, 'Inspection Report')
 
         self._init_styles()
@@ -888,9 +890,13 @@ class _PDFBuilder:
                     ('LEFTPADDING',(0,0),(-1,-1),2),('RIGHTPADDING',(0,0),(-1,-1),2),
                 ]))
 
+            dmg = self.is_damage_report
             if co:
                 heads  = ['Ref','Item','Description','Condition at Check In','Condition at Check Out','Actions']
                 widths = [10*mm, uw*0.14, uw*0.19, uw*0.17, uw*0.17, uw*0.16]
+            elif dmg:
+                heads  = ['Ref','Item','Condition']
+                widths = [10*mm, uw*0.30, uw*0.60]
             else:
                 heads  = ['Ref','Item','Description','Condition']
                 widths = [10*mm, uw*0.20, uw*0.35, uw*0.35]
@@ -919,6 +925,10 @@ class _PDFBuilder:
                     act_txt = ', '.join(self._action_name(a['actionId']) for a in acts if a.get('actionId'))
                     acts_cell = [self._p(act_txt or '—', self.s_cell_sm)] + link_p
                     tbl_data.append([Paragraph(ref,self.s_ref), self._p(label,self.s_bold), self._p(desc or '—'), self._p(inv or '—'), self._p(co_c), acts_cell])
+                elif dmg:
+                    cond = (item.get('condition') or '') if is_ex else self._get(room['id'],item['id'],'condition')
+                    cond_cell = [self._p(cond or '—')] + link_p
+                    tbl_data.append([Paragraph(ref,self.s_ref), self._p(label,self.s_bold), cond_cell])
                 else:
                     cond = (item.get('condition') or '') if is_ex else self._get(room['id'],item['id'],'condition')
                     cond_cell = [self._p(cond or '—')] + link_p

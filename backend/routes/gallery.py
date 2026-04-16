@@ -105,10 +105,14 @@ def _extract_photos(rd, sid, rid):
 def _compress_photo(src: str) -> bytes:
     """
     Decode a photo src (data URI or URL) and compress it with Pillow.
-    Returns JPEG bytes.  Falls back to raw decoded bytes on any error.
+    Returns JPEG bytes.  Falls back to raw decoded bytes on any Pillow error.
     """
     if src.startswith('data:'):
+        # Split on the first comma to get the base64 payload
         _, b64 = src.split(',', 1)
+        # Normalise: strip whitespace, convert URL-safe chars, fix padding
+        b64 = b64.strip().replace('-', '+').replace('_', '/')
+        b64 += '=' * (4 - len(b64) % 4) if len(b64) % 4 else ''
         data = _b64.b64decode(b64)
     else:
         import urllib.request
@@ -270,7 +274,11 @@ def gallery_photo(inspection_id, sid, rid, n):
     try:
         data = _compress_photo(photos[n])
     except Exception as e:
-        print(f'[gallery] photo {n} compress error: {e}')
+        import traceback
+        print(f'[gallery] photo {n} error: {e}')
+        print(traceback.format_exc())
+        # Return a 1×1 grey JPEG placeholder so the gallery doesn't crash
+        # (the error is logged above for Railway log inspection)
         abort(500)
 
     return make_response(data, 200, {

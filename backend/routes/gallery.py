@@ -30,6 +30,11 @@ from flask import Blueprint, request, abort, make_response
 gallery_bp = Blueprint('gallery', __name__)
 
 
+@gallery_bp.route('/gallery/ping')
+def gallery_ping():
+    return 'gallery ok', 200
+
+
 def make_gallery_token(inspection_id, sid, rid):
     secret = os.environ.get('JWT_SECRET_KEY', 'change-me-in-production')
     msg    = f'{inspection_id}:{sid}:{rid}'

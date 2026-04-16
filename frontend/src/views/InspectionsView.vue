@@ -175,14 +175,14 @@ watch(
 
 // ── Create-from-PDF modal state ────────────────────────────────────────
 const showPdfImportModal   = ref(false)
-const pdfImportStep        = ref(1)  // 1=select property, 2=upload+parse, 3=review, 4=saving
+const pdfImportStep        = ref(1)  // 1=select property, 2=upload+parse, 3=review
 const pdfImportForm        = ref({
-  client_id:   null,
-  property_id: null,
-  conduct_date: '',
+  client_id:       null,
+  property_id:     null,
+  conduct_date:    '',
   conductDateDisplay: '',
-  inspector_id: null,
-  template_id:  null,
+  template_id:     null,
+  suppress_emails: true,   // default ON — backdated reports don't need client emails
 })
 const pdfImportFile        = ref(null)
 const pdfImportFileName    = ref('')
@@ -193,7 +193,14 @@ const pdfImportParsing     = ref(false)
 
 function openPdfImportModal() {
   pdfImportStep.value = 1
-  pdfImportForm.value = { client_id: authStore.isClient ? authStore.user.client_id : null, property_id: null, conduct_date: '', conductDateDisplay: '', inspector_id: null, template_id: null }
+  pdfImportForm.value = {
+    client_id: authStore.isClient ? authStore.user.client_id : null,
+    property_id: null,
+    conduct_date: '',
+    conductDateDisplay: '',
+    template_id: null,
+    suppress_emails: true,
+  }
   pdfImportFile.value = null
   pdfImportFileName.value = ''
   pdfImportParsed.value = null
@@ -255,52 +262,16 @@ async function runPdfImportParse() {
       reader.readAsDataURL(pdfImportFile.value)
     })
 
-    const prompt = `You are parsing a UK property inspection report PDF (inventory or check-in) to extract structured data.
-
-Extract ALL rooms and items. For each item extract:
-- label: the item name exactly as written
-- description: the physical description of the item
-- condition: the condition recorded at check-in (NOT the check-out column if present)
-
-Return ONLY valid JSON — no markdown, no explanation:
-{
-  "rooms": [
-    {
-      "name": "Lounge",
-      "items": [
-        { "label": "Door, Frame, Threshold & Furniture", "description": "White painted panel door with chrome effect fitment", "condition": "Appears in good condition" }
-      ]
-    }
-  ],
-  "fixedSections": {
-    "condition_summary": [{ "name": "General Cleanliness", "condition": "Appears in good condition" }],
-    "cleaning_summary": [{ "name": "General Cleanliness", "cleanliness": "Professionally Cleaned", "cleanlinessNotes": "" }],
-    "keys": [{ "name": "Front Door", "description": "2x Yale key, 1x deadlock key" }],
-    "meter_readings": [{ "name": "Gas Meter", "locationSerial": "Under stairs", "reading": "12345.6" }],
-    "smoke_alarms": [{ "question": "Smoke alarm present and tested?", "answer": "Yes", "notes": "Audible alarm noted" }]
-  }
-}`
-
-    const aiResponse = await api.claudeProxy({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 8000,
-      messages: [{
-        role: 'user',
-        content: [
-          { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } },
-          { type: 'text', text: prompt }
-        ]
-      }]
-    })
-
-    const rawText = (aiResponse.data.content || []).map(b => b.text || '').join('')
-    const clean   = rawText.replace(/```json[\s\S]*?```|```[\s\S]*?```/g, s => s.replace(/```json|```/g, '')).trim()
-    pdfImportParsed.value = JSON.parse(clean)
+    // Use the dedicated backend endpoint — it handles prompting + JSON extraction
+    // This avoids sending a large PDF payload through the generic claude proxy
+    const res = await api.pdfImport({ pdf: base64 })
+    pdfImportParsed.value = res.data
     pdfImportParsed.value._fileName = pdfImportFileName.value
     pdfImportStep.value = 3
   } catch (e) {
     console.error('PDF parse error:', e)
-    pdfImportError.value = 'AI parsing failed: ' + (e?.response?.data?.error || e.message || 'unknown error')
+    const msg = e?.response?.data?.error || e?.response?.data?.detail || e.message || 'unknown error'
+    pdfImportError.value = 'AI parsing failed: ' + msg
   } finally {
     pdfImportParsing.value = false
   }
@@ -308,16 +279,16 @@ Return ONLY valid JSON — no markdown, no explanation:
 
 async function savePdfImportInspection() {
   if (!pdfImportForm.value.property_id) { toast.warning('Please select a property'); return }
-  if (!pdfImportForm.value.inspector_id) { toast.warning('Please assign a clerk'); return }
   pdfImportSaving.value = true
   try {
     const payload = {
-      property_id: pdfImportForm.value.property_id,
-      inspection_type: 'check_in',
-      inspector_id: pdfImportForm.value.inspector_id,
-      template_id: pdfImportForm.value.template_id || null,
-      status: 'complete',
+      property_id:          pdfImportForm.value.property_id,
+      inspection_type:      'check_in',
+      template_id:          pdfImportForm.value.template_id || null,
+      status:               'complete',
       source_inspection_id: null,
+      // SUPPRESS sentinel tells the backend not to send client emails for this inspection
+      client_email_override: pdfImportForm.value.suppress_emails ? 'SUPPRESS' : undefined,
     }
     if (pdfImportForm.value.conduct_date) {
       payload.conduct_date = pdfImportForm.value.conduct_date + 'T00:00:00'
@@ -1263,20 +1234,20 @@ onMounted(() => {
                 </div>
               </div>
               <div class="modal-col">
-                <div class="col-section-title">Assignment</div>
-                <div class="form-group">
-                  <label>Clerk (Inspector) *</label>
-                  <select v-model="pdfImportForm.inspector_id">
-                    <option :value="null" disabled>Select a clerk...</option>
-                    <option v-for="clerk in clerks" :key="clerk.id" :value="clerk.id">{{ clerk.name }}</option>
-                  </select>
-                </div>
+                <div class="col-section-title">Options</div>
                 <div class="form-group">
                   <label>Template</label>
                   <select v-model="pdfImportForm.template_id">
                     <option :value="null">Use default check-in template</option>
                     <option v-for="t in filteredPdfTemplates" :key="t.id" :value="t.id">{{ t.name }}{{ t.is_default ? ' ★' : '' }}</option>
                   </select>
+                </div>
+                <div class="pdf-suppress-row">
+                  <label class="pdf-suppress-label">
+                    <input type="checkbox" v-model="pdfImportForm.suppress_emails" />
+                    <span>Disable client email notifications</span>
+                  </label>
+                  <p class="pdf-suppress-hint">Prevents the system sending a completed report email for this backdated inspection.</p>
                 </div>
                 <div class="pdf-step1-info">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
@@ -1286,7 +1257,7 @@ onMounted(() => {
             </div>
             <div class="modal-footer">
               <button type="button" @click="showPdfImportModal = false" class="btn-secondary">Cancel</button>
-              <button type="button" @click="pdfImportStep = 2" :disabled="!pdfImportForm.property_id || !pdfImportForm.inspector_id" class="btn-primary">Next: Upload PDF →</button>
+              <button type="button" @click="pdfImportStep = 2" :disabled="!pdfImportForm.property_id" class="btn-primary">Next: Upload PDF →</button>
             </div>
           </div>
 
@@ -1541,6 +1512,14 @@ onMounted(() => {
   background: white;
   color: #1e293b;
   font-family: inherit;
+  height: 36px;
+  box-sizing: border-box;
+}
+/* Normalise month picker height to match other filter controls */
+.filter-input[type="month"] {
+  height: 36px;
+  padding: 0 10px;
+  line-height: 36px;
 }
 
 .btn-clear-filters,
@@ -2136,7 +2115,9 @@ onMounted(() => {
   justify-content: space-between;
   border: 1.5px solid #e2e8f0;
   border-radius: 7px;
-  padding: 7px 10px;
+  padding: 0 10px;
+  height: 36px;
+  box-sizing: border-box;
   background: #fff;
   cursor: pointer;
   font-size: 13px;
@@ -2438,4 +2419,34 @@ onMounted(() => {
 .pdf-review-room-name { font-size: 12px; font-weight: 700; color: #1e293b; margin-bottom: 2px; }
 .pdf-review-items     { font-size: 11px; color: #94a3b8; }
 .pdf-review-note      { font-size: 12px; color: #16a34a; font-weight: 600; margin: 0; }
+
+/* Email suppress toggle */
+.pdf-suppress-row {
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.pdf-suppress-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #92400e;
+  cursor: pointer;
+}
+.pdf-suppress-label input[type="checkbox"] {
+  accent-color: #f59e0b;
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.pdf-suppress-hint {
+  font-size: 11px;
+  color: #b45309;
+  margin: 5px 0 0 23px;
+  line-height: 1.4;
+}
 </style>

@@ -1176,8 +1176,13 @@ def _get_report_recipients(inspection) -> list:
     """
     Deduplicated recipient list from the Contacts section:
       1. client_email_override if set, else client.email
+         ('SUPPRESS' sentinel → no recipients, no email sent)
       2. tenant_email if set and not already included
     """
+    # 'SUPPRESS' is set on backdated imports where no email should fire
+    if inspection.client_email_override == 'SUPPRESS':
+        return []
+
     recipients = []
     primary = ''
     if inspection.client_email_override:

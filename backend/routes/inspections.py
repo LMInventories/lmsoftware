@@ -235,6 +235,14 @@ def create_inspection():
             )
             seeded_report_data = json.dumps(transformed) if transformed else None
 
+    # Allow admin/manager to set status directly (e.g. backdated PDF imports)
+    _allowed_statuses = {'created', 'assigned', 'active', 'processing', 'review', 'complete'}
+    _req_status = data.get('status')
+    if _req_status in _allowed_statuses:
+        initial_status = _req_status
+    else:
+        initial_status = 'assigned' if data.get('inspector_id') else 'created'
+
     inspection = Inspection(
         property_id=data.get('property_id'),
         inspector_id=data.get('inspector_id'),
@@ -242,7 +250,7 @@ def create_inspection():
         typist_mode=data.get('typist_mode'),  # per-inspection mode; None → falls back to clerk default
         template_id=template_id,
         inspection_type=data.get('inspection_type', 'check_in'),
-        status='assigned' if data.get('inspector_id') else 'created',
+        status=initial_status,
         source_inspection_id=source_id,
         tenant_email=data.get('tenant_email'),
         client_email_override=data.get('client_email_override'),
@@ -794,24 +802,6 @@ def _transform_report_data(source_type, target_type, raw, include_photos=False):
                         new_row[field] = row_data[field]
                 if include_photos and 'photos' in row_data:
                     new_row['photos'] = row_data['photos']
-
-            elif source_type == 'check_out' and target_type in ('check_in', 'inventory'):
-                checkout_cond = (row_data.get('checkOutCondition')
-                                 or row_data.get('inventoryCondition')
-                                 or row_data.get('condition', ''))
-                new_row['condition'] = checkout_cond
-                new_row['description'] = row_data.get('description', '')
-                for field in ('cleanliness', 'cleanlinessNotes', 'locationSerial',
-                              'reading', 'answer', 'notes', 'name'):
-                    if field in row_data:
-                        new_row[field] = row_data[field]
-                if include_photos and 'photos' in row_data:
-                    new_row['photos'] = row_data['photos']
-
-            else:
-                # Same-type seeding — copy as-is, strip subs and actions
-                new_row = {k: v for k, v in row_data.items()
-                           if k != '_subs' and not k.startswith('_actions_')}
 
             new_section[row_id] = new_row
 

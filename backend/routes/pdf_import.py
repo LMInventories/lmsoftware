@@ -149,11 +149,16 @@ def pdf_import():
         ]
 
     def generate():
-        from anthropic import Anthropic
-        client = Anthropic(api_key=api_key)
+        # Yield immediately so Flask flushes headers and Railway sees activity at once
+        yield ': init\n\n'
         accumulated = []
         token_count = 0
         try:
+            from anthropic import Anthropic
+            client = Anthropic(api_key=api_key)
+            yield ': connected\n\n'
+            print('[pdf-import] starting Anthropic stream')
+
             with client.messages.stream(
                 model='claude-sonnet-4-6',
                 max_tokens=8192,
@@ -162,8 +167,8 @@ def pdf_import():
                 for text in stream.text_stream:
                     accumulated.append(text)
                     token_count += 1
-                    # Ping every 30 tokens to keep Railway's proxy alive
-                    if token_count % 30 == 0:
+                    # Ping every 10 tokens (~every second) to keep the proxy alive
+                    if token_count % 10 == 0:
                         yield ': ping\n\n'
 
             full_text = ''.join(accumulated).strip()
@@ -185,7 +190,7 @@ def pdf_import():
 
         except Exception as e:
             import traceback
-            print('[pdf-import] Error: ' + str(e))
+            print('[pdf-import] Error in generate(): ' + str(e))
             print(traceback.format_exc())
             yield 'data: ' + json.dumps({'ok': False, 'error': str(e)}) + '\n\n'
 

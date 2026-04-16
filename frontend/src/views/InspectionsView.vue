@@ -264,17 +264,13 @@ async function runPdfImportParse() {
       throw new Error(data.error || 'Server error ' + response.status)
     }
 
+    if (!response.body) throw new Error('No response body — streaming not supported')
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
     let result = null
 
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() ?? ''
+    const processLines = (lines) => {
       for (const line of lines) {
         if (!line.startsWith('data: ')) continue
         const payload = JSON.parse(line.slice(6))
@@ -286,6 +282,23 @@ async function runPdfImportParse() {
       }
     }
 
+    while (true) {
+      const { done, value } = await reader.read()
+      if (value) {
+        buffer += decoder.decode(value, { stream: !done })
+        const lines = buffer.split('\n')
+        buffer = done ? '' : (lines.pop() ?? '')
+        processLines(lines)
+      }
+      if (done) break
+    }
+
+    // Process anything left in the buffer after the stream closes
+    if (buffer.trim()) {
+      processLines(buffer.split('\n'))
+    }
+
+    console.log('[pdf-import] stream done, result:', result ? 'received' : 'null')
     if (!result) throw new Error('No result received from server')
     pdfImportParsed.value = result
     pdfImportParsed.value._fileName = pdfImportFileName.value

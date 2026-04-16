@@ -9,11 +9,12 @@ python3 migrate_report_colors.py             || echo "migrate_report_colors: ski
 python3 migrate_inspection_typist_mode.py    || echo "migrate_inspection_typist_mode: skipped or already done"
 
 echo "==> Starting Gunicorn on port ${PORT:-8000}..."
-exec python3 -m gunicorn app:app \
+echo "==> Worker config: gthread x${WEB_CONCURRENCY:-2} workers, 4 threads, 600s timeout"
+exec gunicorn app:app \
   --bind "0.0.0.0:${PORT:-8000}" \
   --workers "${WEB_CONCURRENCY:-2}" \
   --worker-class gthread \
   --threads 4 \
-  --timeout 300 \
+  --timeout 600 \
   --access-logfile - \
   --error-logfile -

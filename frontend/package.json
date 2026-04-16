@@ -11,7 +11,6 @@
   },
   "dependencies": {
     "express": "^4.21.2",
-    "http-proxy-middleware": "^3.0.3",
     "@capacitor-community/sqlite": "^8.0.0",
     "@capacitor/android": "^8.1.0",
     "@capacitor/camera": "^8.0.1",

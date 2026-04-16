@@ -255,26 +255,45 @@ async function runPdfImportParse() {
   pdfImportParsing.value = true
   pdfImportError.value = ''
   try {
-    // Send the File object directly as multipart — backend does the base64 encoding.
-    // This avoids proxying a large JSON body through Express (the cause of Network Error).
-    const res = await api.pdfImport(pdfImportFile.value)
-    pdfImportParsed.value = res.data
+    // Use SSE streaming so Railway's proxy doesn't drop the idle connection.
+    // The backend sends ": ping" keep-alives while Claude generates, then a
+    // single "data: {ok, result}" event with the parsed JSON.
+    const response = await api.pdfImportStream(pdfImportFile.value)
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}))
+      throw new Error(data.error || 'Server error ' + response.status)
+    }
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let result = null
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() ?? ''
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue
+        const payload = JSON.parse(line.slice(6))
+        if (payload.ok) {
+          result = payload.result
+        } else {
+          throw new Error(payload.error || 'Unknown error from server')
+        }
+      }
+    }
+
+    if (!result) throw new Error('No result received from server')
+    pdfImportParsed.value = result
     pdfImportParsed.value._fileName = pdfImportFileName.value
     pdfImportStep.value = 3
+
   } catch (e) {
     console.error('PDF parse error:', e)
-    const serverMsg = e?.response?.data?.error || e?.response?.data?.detail
-    const isTimeout = e?.code === 'ECONNABORTED' || (e.message || '').toLowerCase().includes('timeout')
-    const isNetworkErr = !e?.response && (e.message || '') === 'Network Error'
-    let msg
-    if (serverMsg) {
-      msg = serverMsg
-    } else if (isTimeout || isNetworkErr) {
-      msg = 'Request timed out — this PDF is very large. Please try a smaller PDF or wait and retry.'
-    } else {
-      msg = e.message || 'unknown error'
-    }
-    pdfImportError.value = 'AI parsing failed: ' + msg
+    pdfImportError.value = 'AI parsing failed: ' + (e.message || 'unknown error')
   } finally {
     pdfImportParsing.value = false
   }

@@ -157,14 +157,19 @@ const api = {
     })
   },
   checkAiStatus() { return http.get('/api/ai/status') },
-  // Send the PDF as binary via multipart/form-data — avoids the "Network Error"
-  // that occurs when a large base64 JSON body is proxied through Express.
-  pdfImport(file) {
+  // Send the PDF as multipart and consume the SSE stream.
+  // Returns a native fetch Response so the caller can read the stream.
+  // The endpoint sends ": ping" keep-alives while Claude generates, then a
+  // single "data: {ok, result}" or "data: {ok: false, error}" event.
+  pdfImportStream(file) {
+    const base = getBaseURL()
     const form = new FormData()
     form.append('file', file, file.name || 'report.pdf')
-    return http.post('/api/ai/pdf-import', form, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-      timeout: 330000,
+    const token = localStorage.getItem('token')
+    return fetch(base + '/api/ai/pdf-import', {
+      method: 'POST',
+      headers: token ? { Authorization: 'Bearer ' + token } : {},
+      body: form,
     })
   },
 

@@ -1,34 +1,33 @@
 """
-pdf_import.py — Parse a PDF inspection report with Claude.
+pdf_import.py — Parse a PDF inspection report with Claude, streaming the response.
 
 Accepts multipart/form-data:
   file              — the PDF binary (required)
   templateStructure — optional JSON string of the template structure
 
 Strategy:
-  1. Extract text from the PDF using pdfplumber (fast, works for text-based PDFs).
-  2. Send the extracted text to Claude as a plain text message (much faster than
-     sending the binary document — a 5MB PDF becomes ~100KB of text).
-  3. If text extraction yields too little content (scanned/image PDF), fall back
-     to the Anthropic document API with the raw binary.
+  1. Extract text with pdfplumber (text-based PDFs — fast path).
+  2. Stream the Anthropic response back as Server-Sent Events so Railway's edge
+     proxy never sees an idle connection and drops it.
+  3. Fall back to binary document API for scanned/image PDFs.
 
-Response JSON:
-  { "rooms": [...], "fixedSections": { ... } }
+SSE events emitted:
+  : ping          — keep-alive comment every ~30 tokens
+  data: {"ok": true,  "result": {...}}   — final parsed JSON
+  data: {"ok": false, "error": "..."}    — error
+
+Response Content-Type: text/event-stream
 """
 
 import os
 import io
 import json
 import base64
-import requests
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, Response, stream_with_context
 from flask_jwt_extended import jwt_required
 
 pdf_import_bp = Blueprint('pdf_import', __name__)
 
-ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
-
-# Minimum characters of extracted text before we trust it (vs treating as scanned)
 MIN_TEXT_CHARS = 500
 
 PROMPT_TEMPLATE = """You are parsing a UK property inspection report (inventory or check-in) to extract structured data for a Check Out system.
@@ -56,14 +55,14 @@ Return ONLY valid JSON - no markdown, no explanation:
     {
       "name": "Lounge",
       "items": [
-        { "label": "Door, Frame, Threshold & Furniture", "description": "White painted panel door with chrome handle", "condition": "Appears in good condition" }
+        { "label": "Door, Frame & Furniture", "description": "White painted panel door", "condition": "Good condition" }
       ]
     }
   ],
   "fixedSections": {
     "condition_summary": [{ "name": "General Condition", "condition": "Good overall" }],
     "keys": [{ "name": "Front Door Key", "description": "2 x Yale, 1 x Deadlock" }],
-    "meter_readings": [{ "name": "Gas Meter", "locationSerial": "Under stairs\\nSerial Number: 123456", "reading": "12345.6" }],
+    "meter_readings": [{ "name": "Gas Meter", "locationSerial": "Under stairs", "reading": "12345.6" }],
     "cleaning_summary": [{ "name": "General Cleanliness", "cleanliness": "Professionally Cleaned", "cleanlinessNotes": "" }]
   }
 }"""
@@ -112,7 +111,7 @@ def pdf_import():
     else:
         data = request.get_json(silent=True)
         if not data:
-            return jsonify({'error': 'No data provided - send multipart/form-data with a "file" field'}), 400
+            return jsonify({'error': 'No data provided'}), 400
         pdf_b64 = data.get('pdf')
         template_structure = data.get('templateStructure') or 'No template - infer structure from PDF'
         if not pdf_b64:
@@ -123,92 +122,79 @@ def pdf_import():
     # Try text extraction first (fast path)
     extracted_text = _extract_pdf_text(raw_bytes)
     use_text_mode = len(extracted_text) >= MIN_TEXT_CHARS
-
     prompt = _build_prompt(template_structure)
 
     if use_text_mode:
-        print('[pdf-import] text extraction OK: ' + str(len(extracted_text)) + ' chars - using text mode')
-        payload = {
-            'model': 'claude-sonnet-4-6',
-            'max_tokens': 16000,
-            'messages': [
-                {
-                    'role': 'user',
-                    'content': prompt + '\n\n---\nPDF TEXT CONTENT:\n' + extracted_text,
-                }
-            ],
-        }
+        print('[pdf-import] text extraction OK: ' + str(len(extracted_text)) + ' chars - streaming text mode')
+        messages = [{'role': 'user', 'content': prompt + '\n\n---\nPDF TEXT CONTENT:\n' + extracted_text}]
     else:
-        # Fallback: send raw PDF as a document (works for scanned/image PDFs)
-        print('[pdf-import] text extraction insufficient (' + str(len(extracted_text)) + ' chars) - using document mode')
+        print('[pdf-import] text extraction insufficient (' + str(len(extracted_text)) + ' chars) - streaming document mode')
         if pdf_b64 is None:
             pdf_b64 = base64.b64encode(raw_bytes).decode('utf-8')
-        payload = {
-            'model': 'claude-sonnet-4-6',
-            'max_tokens': 16000,
-            'messages': [
-                {
-                    'role': 'user',
-                    'content': [
-                        {
-                            'type': 'document',
-                            'source': {
-                                'type': 'base64',
-                                'media_type': 'application/pdf',
-                                'data': pdf_b64,
-                            },
+        messages = [
+            {
+                'role': 'user',
+                'content': [
+                    {
+                        'type': 'document',
+                        'source': {
+                            'type': 'base64',
+                            'media_type': 'application/pdf',
+                            'data': pdf_b64,
                         },
-                        {
-                            'type': 'text',
-                            'text': prompt,
-                        },
-                    ],
-                }
-            ],
-        }
+                    },
+                    {'type': 'text', 'text': prompt},
+                ],
+            }
+        ]
 
-    raw = ''
-    try:
-        resp = requests.post(
-            ANTHROPIC_API_URL,
-            headers={
-                'x-api-key': api_key,
-                'anthropic-version': '2023-06-01',
-                'content-type': 'application/json',
-            },
-            json=payload,
-            timeout=270,
-        )
+    def generate():
+        from anthropic import Anthropic
+        client = Anthropic(api_key=api_key)
+        accumulated = []
+        token_count = 0
+        try:
+            with client.messages.stream(
+                model='claude-sonnet-4-6',
+                max_tokens=8192,
+                messages=messages,
+            ) as stream:
+                for text in stream.text_stream:
+                    accumulated.append(text)
+                    token_count += 1
+                    # Ping every 30 tokens to keep Railway's proxy alive
+                    if token_count % 30 == 0:
+                        yield ': ping\n\n'
 
-        if resp.status_code != 200:
-            print('[pdf-import] Anthropic error ' + str(resp.status_code) + ': ' + resp.text[:400])
-            return jsonify({'error': 'Claude API error: ' + str(resp.status_code), 'detail': resp.text[:400]}), 502
+            full_text = ''.join(accumulated).strip()
+            full_text = full_text.replace('```json', '').replace('```', '').strip()
 
-        result = resp.json()
-        raw = result.get('content', [{}])[0].get('text', '').strip()
+            parsed = json.loads(full_text)
+            room_count = len(parsed.get('rooms', []))
+            item_count = sum(len(r.get('items', [])) for r in parsed.get('rooms', []))
+            mode = 'text' if use_text_mode else 'document'
+            print('[pdf-import] done: ' + str(room_count) + ' rooms, ' + str(item_count) + ' items (mode=' + mode + ')')
 
-        # Strip any accidental markdown fences
-        raw = raw.replace('```json', '').replace('```', '').strip()
+            yield 'data: ' + json.dumps({'ok': True, 'result': parsed}) + '\n\n'
 
-        parsed = json.loads(raw)
+        except json.JSONDecodeError as e:
+            preview = ''.join(accumulated)[:300]
+            print('[pdf-import] JSON parse error: ' + str(e))
+            print('[pdf-import] Raw preview: ' + preview)
+            yield 'data: ' + json.dumps({'ok': False, 'error': 'Claude returned invalid JSON: ' + str(e), 'raw': preview}) + '\n\n'
 
-        room_count = len(parsed.get('rooms', []))
-        item_count = sum(len(r.get('items', [])) for r in parsed.get('rooms', []))
-        mode = 'text' if use_text_mode else 'document'
-        print('[pdf-import] extracted ' + str(room_count) + ' rooms, ' + str(item_count) + ' items (mode=' + mode + ')')
+        except Exception as e:
+            import traceback
+            print('[pdf-import] Error: ' + str(e))
+            print(traceback.format_exc())
+            yield 'data: ' + json.dumps({'ok': False, 'error': str(e)}) + '\n\n'
 
-        return jsonify(parsed)
-
-    except requests.exceptions.Timeout:
-        return jsonify({'error': 'PDF analysis timed out - try a smaller PDF'}), 504
-
-    except json.JSONDecodeError as e:
-        print('[pdf-import] JSON parse error: ' + str(e))
-        print('[pdf-import] Raw response: ' + raw[:500])
-        return jsonify({'error': 'Claude returned invalid JSON: ' + str(e), 'raw': raw[:500]}), 500
-
-    except Exception as e:
-        import traceback
-        print('[pdf-import] Error: ' + str(e))
-        print(traceback.format_exc())
-        return jsonify({'error': str(e)}), 500
+    return Response(
+        stream_with_context(generate()),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+            'Connection': 'keep-alive',
+        },
+    )

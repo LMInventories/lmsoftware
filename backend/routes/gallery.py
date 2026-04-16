@@ -25,7 +25,16 @@ import hmac
 import hashlib
 import base64 as _b64
 import html as _html
+import time
 from flask import Blueprint, request, abort, make_response
+
+# ── In-memory cache for report_data ───────────────────────────────────────────
+# Each gallery page fires N concurrent photo requests for the same inspection.
+# Caching for 2 minutes means only the first request hits the DB; the rest
+# are served from memory.  Workers have independent caches (gunicorn fork
+# model) but each worker still benefits from repeated requests to the same page.
+_RD_CACHE: dict = {}     # {inspection_id: (expires_at, rd, label)}
+_RD_TTL   = 120          # seconds
 
 gallery_bp = Blueprint('gallery', __name__)
 
@@ -41,8 +50,14 @@ def make_gallery_token(inspection_id, sid, rid):
     return hmac.new(secret.encode(), msg.encode(), hashlib.sha256).hexdigest()[:16]
 
 
-def _load_report_data(inspection_id):
+def _load_report_data(inspection_id, use_cache=True):
     """Return (rd dict, label string, parse_error string|None) for the inspection."""
+    if use_cache:
+        now = time.time()
+        entry = _RD_CACHE.get(inspection_id)
+        if entry and now < entry[0]:
+            return entry[1], entry[2], None
+
     from models import Inspection
     insp = Inspection.query.get_or_404(inspection_id)
 
@@ -64,6 +79,15 @@ def _load_report_data(inspection_id):
         pass
     if not label:
         label = f'Inspection #{inspection_id}'
+
+    # Populate cache; evict stale entries if the cache grows large
+    if use_cache:
+        _RD_CACHE[inspection_id] = (time.time() + _RD_TTL, rd, label)
+        if len(_RD_CACHE) > 100:
+            now = time.time()
+            stale = [k for k, v in _RD_CACHE.items() if v[0] < now]
+            for k in stale:
+                del _RD_CACHE[k]
 
     return rd, label, parse_error
 

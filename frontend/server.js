@@ -58,11 +58,23 @@ app.use('/api', (req, res) => {
   proxy.web(req, res, { target: BACKEND_URL })
 })
 
-// Serve built Vue SPA
-app.use(express.static(join(__dirname, 'dist')))
+// Serve built Vue SPA.
+// Vite hashes all asset filenames (main.abc123.js) so they can be cached forever.
+// Only index.html must stay uncached so the browser always gets the latest shell.
+app.use(express.static(join(__dirname, 'dist'), {
+  maxAge: '1y',          // cache hashed assets for a year
+  etag:   true,
+  setHeaders(res, filePath) {
+    if (filePath.endsWith('index.html')) {
+      // Never cache the SPA entry point
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate')
+    }
+  },
+}))
 
 // SPA fallback — let Vue Router handle everything else
 app.get('*', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate')
   res.sendFile(join(__dirname, 'dist', 'index.html'))
 })
 

@@ -127,7 +127,7 @@ Return ONLY valid JSON — no markdown, no explanation:
                 'content-type':      'application/json',
             },
             json=payload,
-            timeout=180,
+            timeout=270,
         )
 
         if resp.status_code != 200:

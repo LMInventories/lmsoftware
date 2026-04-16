@@ -164,7 +164,7 @@ const api = {
     form.append('file', file, file.name || 'report.pdf')
     return http.post('/api/ai/pdf-import', form, {
       headers: { 'Content-Type': 'multipart/form-data' },
-      timeout: 180000,
+      timeout: 330000,
     })
   },
 

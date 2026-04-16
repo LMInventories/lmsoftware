@@ -263,7 +263,17 @@ async function runPdfImportParse() {
     pdfImportStep.value = 3
   } catch (e) {
     console.error('PDF parse error:', e)
-    const msg = e?.response?.data?.error || e?.response?.data?.detail || e.message || 'unknown error'
+    const serverMsg = e?.response?.data?.error || e?.response?.data?.detail
+    const isTimeout = e?.code === 'ECONNABORTED' || (e.message || '').toLowerCase().includes('timeout')
+    const isNetworkErr = !e?.response && (e.message || '') === 'Network Error'
+    let msg
+    if (serverMsg) {
+      msg = serverMsg
+    } else if (isTimeout || isNetworkErr) {
+      msg = 'Request timed out — this PDF is very large. Please try a smaller PDF or wait and retry.'
+    } else {
+      msg = e.message || 'unknown error'
+    }
     pdfImportError.value = 'AI parsing failed: ' + msg
   } finally {
     pdfImportParsing.value = false

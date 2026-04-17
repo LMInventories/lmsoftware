@@ -255,54 +255,29 @@ async function runPdfImportParse() {
   pdfImportParsing.value = true
   pdfImportError.value = ''
   try {
-    // Use SSE streaming so Railway's proxy doesn't drop the idle connection.
-    // The backend sends ": ping" keep-alives while Claude generates, then a
-    // single "data: {ok, result}" event with the parsed JSON.
-    const response = await api.pdfImportStream(pdfImportFile.value)
-    if (!response.ok) {
-      const data = await response.json().catch(() => ({}))
-      throw new Error(data.error || 'Server error ' + response.status)
-    }
+    // POST the PDF — returns a job_id immediately (background thread does the work)
+    const startRes = await api.pdfImport(pdfImportFile.value)
+    const jobId = startRes.data.job_id
+    if (!jobId) throw new Error('No job ID returned from server')
 
-    if (!response.body) throw new Error('No response body — streaming not supported')
-    const reader = response.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-    let result = null
+    // Poll every 2 seconds until done
+    const MAX_POLLS = 150  // 5 minutes max
+    for (let i = 0; i < MAX_POLLS; i++) {
+      await new Promise(r => setTimeout(r, 2000))
+      const statusRes = await api.pdfImportStatus(jobId)
+      const { status, result, error } = statusRes.data
 
-    const processLines = (lines) => {
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue
-        const payload = JSON.parse(line.slice(6))
-        if (payload.ok) {
-          result = payload.result
-        } else {
-          throw new Error(payload.error || 'Unknown error from server')
-        }
+      if (status === 'done') {
+        pdfImportParsed.value = result
+        pdfImportParsed.value._fileName = pdfImportFileName.value
+        pdfImportStep.value = 3
+        return
       }
+      if (status === 'error') throw new Error(error || 'AI parsing failed')
+      if (status === 'not_found') throw new Error('Job expired — please try again')
+      // status === 'processing' — keep polling
     }
-
-    while (true) {
-      const { done, value } = await reader.read()
-      if (value) {
-        buffer += decoder.decode(value, { stream: !done })
-        const lines = buffer.split('\n')
-        buffer = done ? '' : (lines.pop() ?? '')
-        processLines(lines)
-      }
-      if (done) break
-    }
-
-    // Process anything left in the buffer after the stream closes
-    if (buffer.trim()) {
-      processLines(buffer.split('\n'))
-    }
-
-    console.log('[pdf-import] stream done, result:', result ? 'received' : 'null')
-    if (!result) throw new Error('No result received from server')
-    pdfImportParsed.value = result
-    pdfImportParsed.value._fileName = pdfImportFileName.value
-    pdfImportStep.value = 3
+    throw new Error('Timed out waiting for AI — please try again')
 
   } catch (e) {
     console.error('PDF parse error:', e)

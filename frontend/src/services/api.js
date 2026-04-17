@@ -157,20 +157,18 @@ const api = {
     })
   },
   checkAiStatus() { return http.get('/api/ai/status') },
-  // Send the PDF as multipart and consume the SSE stream.
-  // Returns a native fetch Response so the caller can read the stream.
-  // The endpoint sends ": ping" keep-alives while Claude generates, then a
-  // single "data: {ok, result}" or "data: {ok: false, error}" event.
-  pdfImportStream(file) {
-    const base = getBaseURL()
+  // POST: upload PDF, returns {job_id} immediately (background thread does the work)
+  pdfImport(file) {
     const form = new FormData()
     form.append('file', file, file.name || 'report.pdf')
-    const token = localStorage.getItem('token')
-    return fetch(base + '/api/ai/pdf-import', {
-      method: 'POST',
-      headers: token ? { Authorization: 'Bearer ' + token } : {},
-      body: form,
+    return http.post('/api/ai/pdf-import', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 30000,
     })
+  },
+  // GET: poll for job result — returns {status: processing|done|error, result?, error?}
+  pdfImportStatus(jobId) {
+    return http.get('/api/ai/pdf-import-status/' + jobId, { timeout: 10000 })
   },
 
   // ── Email notifications ───────────────────────────────────────────────────

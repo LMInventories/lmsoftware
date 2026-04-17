@@ -235,17 +235,30 @@ table{{font-size:12px;border-collapse:collapse;width:100%}}
     count  = len(photos)
     plural = 's' if count != 1 else ''
 
-    # Build <img> tags that load each photo via the /photo/<n> endpoint.
-    # Use absolute URLs (GALLERY_BASE_URL = backend's public domain) so the
-    # browser fetches photos directly from the backend, bypassing the frontend
-    # proxy.  This prevents ETIMEDOUT errors on Railway's private network.
+    # ── Inline every photo as a base64 data URI ───────────────────────────────
+    # This makes the gallery a single self-contained HTML response.  The
+    # browser needs no further requests, so the frontend proxy is only hit
+    # once — eliminating the ETIMEDOUT errors caused by parallel sub-requests
+    # going through Railway's private network.
+    #
+    # Each photo is compressed to ≤1600 px / quality 82 by _compress_photo
+    # (same as the /photo/<n> endpoint), so payload size is the same total
+    # data, just delivered in one response instead of N+1 round trips.
     imgs_html = ''
-    for i in range(count):
-        photo_url = f'{GALLERY_BASE_URL}/api/gallery/{inspection_id}/{sid}/{rid}/photo/{i}?token={token}'
-        imgs_html += (
-            f'<img src="{photo_url}" alt="Photo {i + 1}" loading="lazy" '
-            f'onclick="openLb(this.src)">\n'
-        )
+    for i, src in enumerate(photos):
+        try:
+            jpeg_bytes = _compress_photo(src)
+            b64        = _b64.b64encode(jpeg_bytes).decode('ascii')
+            data_uri   = f'data:image/jpeg;base64,{b64}'
+        except Exception as e:
+            print(f'[gallery] inline photo {i} failed: {e}')
+            data_uri = ''   # skip broken photos
+
+        if data_uri:
+            imgs_html += (
+                f'<img src="{data_uri}" alt="Photo {i + 1}" loading="lazy" '
+                f'onclick="openLb(this.src)">\n'
+            )
 
     html = f"""<!DOCTYPE html>
 <html lang="en">

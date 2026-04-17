@@ -62,6 +62,26 @@ proxy.on('proxyRes', (proxyRes, req) => {
 // ── Routes ────────────────────────────────────────────────────────────────────
 const app = express()
 
+// ── Gallery redirect ──────────────────────────────────────────────────────────
+// Gallery pages are self-contained HTML + inline images served by the backend.
+// Rather than proxying them (which hits Railway's private network and causes
+// ETIMEDOUT on larger responses), we redirect the browser straight to the
+// backend's public URL.  Set BACKEND_PUBLIC_URL to the backend's Railway public
+// domain (e.g. https://lmsoftware-backend.up.railway.app).
+// Falls back to proxying if the env var isn't set.
+const BACKEND_PUBLIC_URL = (process.env.BACKEND_PUBLIC_URL || '').trim().replace(/\/$/, '')
+
+app.use('/api/gallery', (req, res) => {
+  if (BACKEND_PUBLIC_URL) {
+    const target = `${BACKEND_PUBLIC_URL}/api/gallery${req.url}`
+    return res.redirect(302, target)
+  }
+  // Fallback: proxy as normal
+  if (!BACKEND_URL) { res.status(503).send('BACKEND_URL is not set.'); return }
+  req.url = '/api/gallery' + req.url
+  proxy.web(req, res, { target: BACKEND_URL, agent: agentFor(BACKEND_URL) })
+})
+
 // Forward /api/* to Flask.
 // Express strips the /api prefix from req.url inside this middleware, so we
 // restore it before forwarding so Flask sees the full /api/... path.

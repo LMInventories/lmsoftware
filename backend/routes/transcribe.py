@@ -14,20 +14,25 @@ transcribe_bp = Blueprint('transcribe', __name__)
 # Clerks can prefix a recording with trigger phrases to amend existing fields
 # rather than filling only-if-empty.
 #
-# Per-field (Instant or By Room):
-#   "Amend description ..." → overwrite description field only
-#   "Amend condition ..."   → overwrite condition field only
-#   "Add to description ..."→ append to description field only
-#   "Add to condition ..."  → append to condition field only
-#
-# Generic (Instant mode — item already known from context):
-#   "Amend ..."             → overwrite both fields (whatever the AI transcribes)
-#   "Add ..."               → append to both fields
+# Supported commands (per-item / Instant mode):
+#   "Not Applicable"         → mark item for deletion
+#   "Add sub item ..."       → add a sub-item beneath the current item
+#   "Amend description ..."  → overwrite description field only
+#   "Amend condition ..."    → overwrite condition field only
+#   "Add to description ..." → append to description field only
+#   "Add to condition ..."   → append to condition field only
+#   "Amend ..."              → overwrite both fields (item context is implicit)
+#   "Add ..."                → append to both fields
 #
 # NOTE: longer/more specific phrases must come before short ones so they match first.
 
 _EDIT_TRIGGERS = [
-    ('amend description',     'overwrite', 'description'),
+    # Delete command — item is not applicable, remove it
+    ('not applicable',         'delete',    None),
+    # Sub-item command — treat transcript content as a new sub-item
+    ('add sub item',           'add_sub',   None),
+    # Specific field amend/add
+    ('amend description',      'overwrite', 'description'),
     ('amend the description',  'overwrite', 'description'),
     ('amend condition',        'overwrite', 'condition'),
     ('amend the condition',    'overwrite', 'condition'),
@@ -46,7 +51,7 @@ def _detect_edit_mode(transcript: str):
     """
     Check if transcript starts with an edit-mode trigger phrase.
     Returns (mode, field, cleaned_transcript).
-      mode:    'overwrite' | 'append' | 'normal'
+      mode:    'overwrite' | 'append' | 'delete' | 'add_sub' | 'normal'
       field:   'description' | 'condition' | None
       cleaned: transcript with trigger phrase stripped
     """
@@ -99,7 +104,11 @@ def _whisper_transcribe(audio_bytes: bytes, mime_type: str) -> str:
                     'This is a UK property inventory inspection dictation. '
                     'The speaker is describing the condition and appearance of items in a room. '
                     'Items may include furniture, fixtures, fittings, walls, floors, ceilings. '
-                    'Preserve all detail accurately.'
+                    'The speaker may use these commands — preserve them exactly as spoken: '
+                    '"Not Applicable", "Add sub item", '
+                    '"Amend description", "Amend condition", '
+                    '"Add to description", "Add to condition". '
+                    'Preserve all detail and command phrases accurately.'
                 )
             )
         return str(response).strip()
@@ -107,7 +116,7 @@ def _whisper_transcribe(audio_bytes: bytes, mime_type: str) -> str:
         os.unlink(tmp_path)
 
 
-def _claude_fill_item(transcript: str, item_label: str, room_name: str, section_type: str = 'room') -> dict:
+def _claude_fill_item(transcript: str, item_label: str, room_name: str, section_type: str = 'room', edit_mode: str = 'normal') -> dict:
     """
     Given a short transcript for a single item, return the appropriate fields
     based on section type. Uses claude-haiku-4-5.
@@ -174,7 +183,23 @@ Return ONLY valid JSON, no markdown:
 {"description": "..."}"""
 
     else:
-        field_instructions = """Extract and structure this into:
+        # "Add sub item" mode — clerk is adding a sub-item to an existing item.
+        # Parse description and condition from the transcript and return them
+        # nested inside a _subs array so the caller knows to append, not overwrite.
+        if edit_mode == 'add_sub':
+            field_instructions = """The clerk is dictating a SUB-ITEM to add beneath an existing inspection item.
+Extract description and condition from the transcript exactly as you would for a normal item,
+then return the result inside a "_subs" array with a single entry.
+
+Condition signal phrases: "in good order", "in fair order", "in poor order", "good order", "as new", "as inventory"
+Functional observations ("appear complete", "tested", "appears working") are always condition.
+If no condition is mentioned, default condition to "In good order".
+Use \n to separate multiple components within description or condition.
+
+Return ONLY valid JSON, no markdown:
+{"_subs": [{"description": "...", "condition": "In good order"}]}"""
+        else:
+            field_instructions = """Extract and structure this into:
 - description: the physical appearance (material, colour, size, style, finish)
 - condition: the state or working order
 
@@ -377,7 +402,18 @@ def transcribe_item():
         edit_mode, edit_field, transcript = _detect_edit_mode(raw_transcript)
         print(f'[transcribe/item] edit_mode={edit_mode!r} field={edit_field!r} transcript={transcript[:60]!r}')
 
-        filled, filled_msg = _claude_fill_item(transcript, item_label, room_name, section_type)
+        # ── Delete: "Not Applicable" — no Claude call needed ──────────────
+        if edit_mode == 'delete':
+            return jsonify({
+                'transcript': raw_transcript,
+                'editMode':   'delete',
+                'editField':  None,
+                'sectionId':  section_id,
+                'rowId':      row_id,
+                'sectionType': section_type,
+            })
+
+        filled, filled_msg = _claude_fill_item(transcript, item_label, room_name, section_type, edit_mode)
 
         # Log usage
         try:
@@ -403,10 +439,11 @@ def transcribe_item():
             'cleanlinessNotes': filled.get('cleanlinessNotes', ''),
             'locationSerial':   filled.get('locationSerial', ''),
             'reading':          filled.get('reading', ''),
+            '_subs':            filled.get('_subs', []),   # populated when "Add sub item" used
             'sectionId':        section_id,
             'rowId':            row_id,
             'sectionType':      section_type,
-            'editMode':         edit_mode,    # 'normal' | 'overwrite' | 'append'
+            'editMode':         edit_mode,    # 'normal' | 'overwrite' | 'append' | 'add_sub'
             'editField':        edit_field,   # 'description' | 'condition' | None
         })
 
@@ -774,22 +811,39 @@ A new element ONLY starts when a NEW DESCRIPTIVE TERM appears (material, colour,
 quantity) AFTER the condition has fully closed.
 
 ══════════════════════════════════════════════════════
+NOT APPLICABLE — delete command
+══════════════════════════════════════════════════════
+The clerk may say "[item name] Not Applicable" to mark an item as not present or irrelevant.
+When you detect this command:
+  - Set "_delete": true on that item's output
+  - Do NOT fill description or condition — omit them
+
+Example:
+  "Fireplace. Not Applicable."
+  → {"<fireplaceId>": {"_delete": true}}
+
+══════════════════════════════════════════════════════
 EXPLICIT SUB-ITEM TRIGGER — highest priority rule
 ══════════════════════════════════════════════════════
-The clerk may say "sub-item", "sub item", or "next sub-item" to EXPLICITLY signal
-the start of a new element within the current item.
-When you encounter this trigger word:
+The clerk may say "sub-item", "sub item", "next sub-item", or "add sub item" to EXPLICITLY
+signal the start of a new element within the current item.
+When you encounter any of these trigger phrases:
   - Immediately close the current element (its description + condition are complete)
   - Begin collecting a fresh description and condition for the next _subs entry
-  - Do NOT treat "sub-item" itself as part of any description or item name
+  - Do NOT treat the trigger phrase itself as part of any description or item name
+
+The "Add sub item" command may appear at any point in the dictation — including at the start
+of a new recording clip — to add a sub-item to the most recently described room item.
+It may also appear AFTER a fully described item (description + condition already given),
+in which case what follows is the new sub-item's content.
 
 Example — two-wall room with explicit trigger:
   "Walls. White emulsion. In good order. Sub-item. Light scuffing to base of wall."
   → main:   description="White emulsion"  condition="In good order"
   → sub[0]: description=""               condition="Light scuffing to base of wall"
 
-Example — door and frame with explicit trigger:
-  "Door and frame. White UPVC door, chrome handle. In good order. Sub-item.
+Example — door and frame with "Add sub item":
+  "Door and frame. White UPVC door, chrome handle. In good order. Add sub item.
    White painted frame, chrome hinges. Light scuffing to base."
   → main:   description="White UPVC door\nChrome handle"     condition="In good order"
   → sub[0]: description="White painted frame\nChrome hinges" condition="Light scuffing to base"
@@ -863,34 +917,45 @@ EXAMPLE 5 — Defect with location qualifier → ONE element, no sub-item:
   ("to base of wall throughout" qualifies the location → all stays in condition)
 
 ══════════════════════════════════════════════════════
-AMENDMENT RULES — returning to a previously-filled item
+AMENDMENT RULES — correcting or extending a previously-filled item
 ══════════════════════════════════════════════════════
-The clerk may return to an already-described item to correct or extend it using phrases like:
+The clerk may amend or extend an already-described item using these commands:
 
+  PRIMARY FORMAT (preferred):
+  "Amend [item name] description [new content]"   → overwrite description only
+  "Amend [item name] condition [new content]"     → overwrite condition only
+  "Add to [item name] description [new content]"  → append to description only
+  "Add to [item name] condition [new content]"    → append to condition only
+
+  LEGACY FORMAT (also accepted):
   "Return to [item name], amend description, [new text]"
   "Return to [item name], amend condition, [new text]"
   "Return to [item name], add to description, [new text]"
   "Return to [item name], add to condition, [new text]"
-  "Return to [item name], amend, [new text]"  — overwrite everything for that item
-  "Return to [item name], add, [new text]"    — append to everything for that item
+  "Return to [item name], amend, [new text]"  — overwrite both fields
+  "Return to [item name], add, [new text]"    — append to both fields
 
-When you detect an amendment phrase, include these optional action flags in that item's JSON:
+When you detect any amendment phrase, include these optional action flags in that item's JSON:
   "_descAction": "overwrite"  → caller will replace the existing description
   "_descAction": "append"     → caller will append this to the existing description
   "_condAction": "overwrite"  → caller will replace the existing condition
   "_condAction": "append"     → caller will append this to the existing condition
 
 If no amendment phrase — omit the action flags entirely (default behaviour = fill only if empty).
-"Return to [item], amend" (no field) → set BOTH _descAction and _condAction to "overwrite".
-"Return to [item], add" (no field)   → set BOTH _descAction and _condAction to "append".
+"Amend [item]" with no field specified → set BOTH _descAction and _condAction to "overwrite".
+"Add to [item]" with no field specified → set BOTH _descAction and _condAction to "append".
 
 Return ONLY valid JSON — no markdown, no extra text.
 Items without sub-items use the flat shape. Items WITH sub-items include the "_subs" array.
-Amendment flags are optional — only include when the clerk explicitly amends/adds:
+Amendment flags are optional — only include when the clerk explicitly amends/adds.
+The "_delete" flag is only included when the clerk says "Not Applicable" for that item.
 {{
   "<itemId>": {{
     "description": "...",
     "condition": "..."
+  }},
+  "<deletedItemId>": {{
+    "_delete": true
   }},
   "<amendedItemId>": {{
     "description": "replacement or addition text",

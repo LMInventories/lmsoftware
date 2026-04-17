@@ -28,6 +28,22 @@ import html as _html
 import time
 from flask import Blueprint, request, abort, make_response
 
+# ── Gallery base URL ───────────────────────────────────────────────────────────
+# Photo <img> tags use absolute URLs so the browser fetches them directly from
+# the backend, bypassing the frontend Express proxy entirely.  This eliminates
+# the ETIMEDOUT errors caused by many parallel photo requests going through the
+# proxy to the Railway private network.
+#
+# Railway injects RAILWAY_PUBLIC_DOMAIN automatically (e.g. "xyz.up.railway.app").
+# Set GALLERY_BASE_URL explicitly to override (e.g. for a custom domain on the
+# backend, or for local dev where neither var is set).
+# Falls back to '' which means relative URLs (safe for local dev).
+_RAILWAY_DOMAIN  = os.environ.get('RAILWAY_PUBLIC_DOMAIN', '')
+GALLERY_BASE_URL = os.environ.get(
+    'GALLERY_BASE_URL',
+    f'https://{_RAILWAY_DOMAIN}' if _RAILWAY_DOMAIN else ''
+)
+
 # ── In-memory cache for report_data ───────────────────────────────────────────
 # Each gallery page fires N concurrent photo requests for the same inspection.
 # Caching for 2 minutes means only the first request hits the DB; the rest
@@ -220,11 +236,12 @@ table{{font-size:12px;border-collapse:collapse;width:100%}}
     plural = 's' if count != 1 else ''
 
     # Build <img> tags that load each photo via the /photo/<n> endpoint.
-    # This keeps the HTML page tiny — photos are fetched on demand and
-    # compressed server-side (Pillow), so each is ~100–200 KB instead of 5 MB.
+    # Use absolute URLs (GALLERY_BASE_URL = backend's public domain) so the
+    # browser fetches photos directly from the backend, bypassing the frontend
+    # proxy.  This prevents ETIMEDOUT errors on Railway's private network.
     imgs_html = ''
     for i in range(count):
-        photo_url = f'/api/gallery/{inspection_id}/{sid}/{rid}/photo/{i}?token={token}'
+        photo_url = f'{GALLERY_BASE_URL}/api/gallery/{inspection_id}/{sid}/{rid}/photo/{i}?token={token}'
         imgs_html += (
             f'<img src="{photo_url}" alt="Photo {i + 1}" loading="lazy" '
             f'onclick="openLb(this.src)">\n'

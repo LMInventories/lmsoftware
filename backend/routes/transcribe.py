@@ -820,7 +820,7 @@ When you detect this command:
 
 Example:
   "Fireplace. Not Applicable."
-  → {"<fireplaceId>": {"_delete": true}}
+  → {{"<fireplaceId>": {{"_delete": true}}}}
 
 ══════════════════════════════════════════════════════
 EXPLICIT SUB-ITEM TRIGGER — highest priority rule

@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from models import db, Inspection, Property, User, Template
+from models import db, Inspection, Property, User, Template, Section, Item
 from permissions import get_current_user, require_admin_or_manager, filter_inspections_for_user, is_admin_or_manager
 from datetime import datetime
 import json
@@ -600,23 +600,121 @@ def share_pdf(inspection_id):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# Helpers for apply_pdf_import
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _pdf_norm(s):
+    """Normalise a string for fuzzy section/item name matching."""
+    return (s or '').lower().replace(' ', '').replace('/', '').replace(',', '').replace('&', '').replace('-', '').replace('(', '').replace(')', '')
+
+def _fuzzy_match_section(name, sections):
+    n = _pdf_norm(name)
+    for sec in sections:
+        if _pdf_norm(sec.name) == n:
+            return sec
+    for sec in sections:
+        sn = _pdf_norm(sec.name)
+        if sn and (sn in n or n in sn):
+            return sec
+    return None
+
+def _fuzzy_match_item(label, items):
+    n = _pdf_norm(label)
+    for item in items:
+        if _pdf_norm(item.name) == n:
+            return item
+    for item in items:
+        ln = _pdf_norm(item.name)
+        if ln and (ln in n or n in ln):
+            return item
+    return None
+
+_FIXED_SECTION_META = {
+    'condition_summary': {'label': 'Condition Summary',  'order': 100},
+    'keys':              {'label': 'Keys & Fobs',        'order': 101},
+    'meter_readings':    {'label': 'Meter Readings',     'order': 102},
+    'cleaning_summary':  {'label': 'Cleaning Summary',   'order': 103},
+}
+
+def _build_template_from_pdf(pdf_rooms, pdf_fixed, inspection):
+    """
+    Create a new Template with relational Section+Item records for each room,
+    and a fixedSections JSON blob in template.content for fixed section types
+    that have data.  Assigns the new template to the inspection.
+    """
+    prop = getattr(inspection, 'property', None)
+    tpl_name = 'PDF Import'
+    if prop and getattr(prop, 'address', None):
+        tpl_name = 'PDF Import \u2013 ' + prop.address
+
+    # Build fixedSections JSON (IDs starting at 10000 to avoid collision with DB ints)
+    next_json_id = [10000]
+    def next_id():
+        nid = next_json_id[0]
+        next_json_id[0] += 1
+        return nid
+
+    fixed_json = []
+    for sec_type, rows in (pdf_fixed or {}).items():
+        if not isinstance(rows, list) or not rows:
+            continue
+        meta  = _FIXED_SECTION_META.get(sec_type, {'label': sec_type, 'order': 200})
+        sec_id = next_id()
+        json_rows = []
+        for row in rows:
+            json_rows.append({'id': next_id(), **{k: v for k, v in row.items()}})
+        fixed_json.append({
+            'id':      sec_id,
+            'type':    sec_type,
+            'label':   meta['label'],
+            'enabled': True,
+            'rows':    json_rows,
+        })
+
+    template = Template(
+        name=tpl_name,
+        inspection_type='check_in',
+        content=json.dumps({'fixedSections': fixed_json}),
+        is_default=False,
+    )
+    db.session.add(template)
+    db.session.flush()  # get template.id
+
+    for i, room in enumerate(pdf_rooms or []):
+        section = Section(
+            template_id=template.id,
+            name=room['name'],
+            section_type='room',
+            order_index=i,
+        )
+        db.session.add(section)
+        db.session.flush()  # get section.id
+        for j, item in enumerate(room.get('items') or []):
+            db.session.add(Item(
+                section_id=section.id,
+                name=item.get('label', 'Item'),
+                description='',
+                requires_photo=False,
+                requires_condition=True,
+                order_index=j,
+            ))
+
+    db.session.flush()
+    # Expire only the sections relationship so it's re-fetched from DB on next
+    # access.  SQLAlchemy won't auto-populate the collection when sections are
+    # added via db.session.add rather than template.sections.append(), so we
+    # must force a reload to ensure apply_pdf_import sees them.
+    db.session.expire(template, ['sections'])
+    return template
+
+
 # POST /api/inspections/<id>/apply-pdf-import
 #
-# Called by the frontend after Claude has parsed a Check In PDF.
-# Receives the raw parsed JSON from Claude, maps it to the inspection's
-# template structure, and stores the result as _importedSource in report_data.
-#
-# This is the server-side equivalent of applyPdfImport() in InspectionReportView —
-# used when the PDF is uploaded at inspection creation time (before the user
-# has ever opened the report screen).
-#
-# Request body:
-#   {
-#     "rooms": [ { "name": "Lounge", "items": [ { "label": "...", "description": "...", "condition": "..." } ] } ],
-#     "fixedSections": { "keys": [...], "meter_readings": [...], ... }
-#   }
-#
-# The template is fetched from the inspection's assigned template_id.
+# Stores Claude's parsed PDF data as the full report_data for the check-in.
+# If no template is assigned, creates one from the PDF structure.
+# Data is written to both the main report_data fields (so the check-in view
+# renders it) and to _importedSource (so check-out comparison columns work).
 # ─────────────────────────────────────────────────────────────────────────────
 @inspections_bp.route('/<int:inspection_id>/apply-pdf-import', methods=['POST'])
 @jwt_required()
@@ -626,106 +724,79 @@ def apply_pdf_import(inspection_id):
         return jsonify({'error': 'Forbidden'}), 403
 
     inspection = Inspection.query.get_or_404(inspection_id)
-    parsed = request.json  # { rooms: [...], fixedSections: {...} }
-
+    parsed = request.json
     if not parsed:
         return jsonify({'error': 'No parsed data provided'}), 400
 
-    # Load the template to map room/item names to real IDs
+    pdf_rooms = parsed.get('rooms') or []
+    pdf_fixed = parsed.get('fixedSections') or {}
+
+    # ── Resolve template (create from PDF if none assigned) ───────────────
     template = None
     if inspection.template_id:
         template = Template.query.get(inspection.template_id)
+
     if not template:
-        # Fall back to default template for check_out (or any type)
-        template = Template.query.filter_by(is_default=True).first()
-        if not template:
-            template = Template.query.first()
+        template = _build_template_from_pdf(pdf_rooms, pdf_fixed, inspection)
+        inspection.template_id = template.id
 
-    built = {}
+    # ── Build report_data keyed by real DB section/item IDs ───────────────
+    report_data = {}
 
-    if template and template.content:
-        try:
-            tpl_content = json.loads(template.content)
-        except Exception:
-            tpl_content = {}
-    else:
-        tpl_content = {}
+    db_room_sections = [s for s in template.sections if s.section_type == 'room']
 
-    template_rooms  = [s for s in tpl_content.get('rooms', []) if s.get('enabled', True)]
-    template_fixed  = [s for s in tpl_content.get('fixedSections', []) if s.get('enabled', True)]
-
-    # ── Map imported rooms → template room IDs (fuzzy name match) ────────
-    for imported_room in (parsed.get('rooms') or []):
-        imp_name_norm = imported_room['name'].lower().replace(' ', '').replace('/', '')
-
-        match = None
-        for r in template_rooms:
-            r_name_norm = r['name'].lower().replace(' ', '').replace('/', '')
-            if r_name_norm in imp_name_norm or imp_name_norm in r_name_norm:
-                match = r
-                break
-
-        room_id = str(match['id']) if match else ('imp_rm_' + imported_room['name'].replace(' ', '_').lower())
-        built[room_id] = {}
-
-        t_items = (match.get('sections') or match.get('items') or []) if match else []
-
-        for imp_item in (imported_room.get('items') or []):
-            imp_label_norm = imp_item['label'].lower().replace(' ', '').replace(',', '').replace('&', '')
-
-            matched_item = None
-            for ti in t_items:
-                ti_label_norm = (ti.get('label') or '').lower().replace(' ', '').replace(',', '').replace('&', '')
-                if ti_label_norm and (ti_label_norm in imp_label_norm or imp_label_norm in ti_label_norm):
-                    matched_item = ti
-                    break
-
-            item_id = str(matched_item['id']) if matched_item else (
-                'imp_it_' + imp_item['label'].replace(' ', '_').lower()
-            )
-
-            # Store as Check In source data — description + condition
-            # The report screen reads this via getCI(sectionId, rowId, field)
-            built[room_id][item_id] = {
-                'description': imp_item.get('description') or '',
-                'condition':   imp_item.get('condition')   or '',
+    for pdf_room in pdf_rooms:
+        matched_sec = _fuzzy_match_section(pdf_room['name'], db_room_sections)
+        if not matched_sec:
+            continue
+        sec_key = str(matched_sec.id)
+        report_data[sec_key] = {}
+        for pdf_item in (pdf_room.get('items') or []):
+            matched_item = _fuzzy_match_item(pdf_item.get('label', ''), matched_sec.items)
+            if not matched_item:
+                continue
+            report_data[sec_key][str(matched_item.id)] = {
+                'description': pdf_item.get('description') or '',
+                'condition':   pdf_item.get('condition')   or '',
             }
 
-    # ── Map fixed sections by type ────────────────────────────────────────
-    for sec_type, rows in (parsed.get('fixedSections') or {}).items():
+    # ── Fixed sections — keyed by JSON IDs from template.content ─────────
+    try:
+        tpl_content = json.loads(template.content or '{}')
+    except Exception:
+        tpl_content = {}
+    tpl_fixed = tpl_content.get('fixedSections') or []
+
+    for sec_type, rows in pdf_fixed.items():
         if not isinstance(rows, list):
             continue
-        sec = next((s for s in template_fixed if s.get('type') == sec_type), None)
-        if not sec:
+        tpl_sec = next((s for s in tpl_fixed if s.get('type') == sec_type), None)
+        if not tpl_sec:
             continue
-        built[str(sec['id'])] = {}
-        t_rows = sec.get('rows') or []
+        sec_id = str(tpl_sec['id'])
+        report_data[sec_id] = {}
+        tpl_rows = tpl_sec.get('rows') or []
         for i, row in enumerate(rows):
-            t_row = t_rows[i] if i < len(t_rows) else None
-            row_id = str(t_row['id']) if t_row else ('imp_fx_' + str(i))
-            built[str(sec['id'])][row_id] = {k: v for k, v in row.items() if k != 'name'}
+            tpl_row = tpl_rows[i] if i < len(tpl_rows) else None
+            row_id = str(tpl_row['id']) if tpl_row else ('fx_' + str(i))
+            report_data[sec_id][row_id] = {k: v for k, v in row.items() if k != 'name'}
 
-    # ── Merge into inspection's report_data ───────────────────────────────
-    existing = {}
-    if inspection.report_data:
-        try:
-            existing = json.loads(inspection.report_data)
-        except Exception:
-            existing = {}
+    # ── Also store as _importedSource (check-out comparison fallback) ─────
+    report_data['_importedSource']   = {k: v for k, v in report_data.items() if not k.startswith('_')}
+    report_data['_importedFileName'] = parsed.get('_fileName', '')
 
-    existing['_importedSource']   = built
-    existing['_importedFileName'] = parsed.get('_fileName', '')
-    inspection.report_data = json.dumps(existing)
+    inspection.report_data = json.dumps(report_data)
     db.session.commit()
 
-    room_count = len(parsed.get('rooms') or [])
-    item_count = sum(len(r.get('items') or []) for r in (parsed.get('rooms') or []))
+    room_count = len(pdf_rooms)
+    item_count = sum(len(r.get('items') or []) for r in pdf_rooms)
+    print(f'[apply-pdf-import] inspection {inspection_id}: {room_count} rooms, {item_count} items, template {template.id}')
 
     return jsonify({
         'message': f'PDF imported: {room_count} rooms, {item_count} items',
         'room_count': room_count,
         'item_count': item_count,
-        'importedSource': built,
+        'template_id': template.id,
     }), 200
 
 

@@ -1195,6 +1195,7 @@ const rooms = computed(() => {
   } else {
     templateRooms = template.value.sections
       .filter(s => s.section_type === 'room')
+      .filter(s => !(reportData.value._hiddenRooms || []).includes(String(s.id)))
       .map(s => ({
         ...s,
         // Apply any saved name override from reportData._roomNames
@@ -1273,8 +1274,10 @@ function isItemHidden(roomId, itemId) {
 function hideItem(roomId, itemId) {
   const rid = String(itemId)
   if (!reportData.value[roomId]) reportData.value[roomId] = {}
-  if (!reportData.value[roomId]._hiddenItems) reportData.value[roomId]._hiddenItems = []
-  if (!reportData.value[roomId]._hiddenItems.includes(rid)) reportData.value[roomId]._hiddenItems.push(rid)
+  // Write to _deleted — this is what the rooms computed filters on, and what
+  // the mobile app writes when a clerk swipe-deletes a room item.
+  if (!reportData.value[roomId]._deleted) reportData.value[roomId]._deleted = []
+  if (!reportData.value[roomId]._deleted.includes(rid)) reportData.value[roomId]._deleted.push(rid)
   unsaved.value = true
 }
 

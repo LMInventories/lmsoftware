@@ -352,6 +352,17 @@ def update_inspection(inspection_id):
         inspection.typist_mode = data['typist_mode'] or None  # empty string → null
     if 'report_data' in data:
         inspection.report_data = data['report_data']
+        # ── Extract overview photo from report_data and save to property ──────
+        # The mobile app stores the property overview photo inside report_data
+        # at _overview.items.photo.uri as a base64 data URI.  We lift it out
+        # and persist it on the Property model so the web app can display it.
+        try:
+            rd = json.loads(data['report_data']) if isinstance(data['report_data'], str) else data['report_data']
+            overview_uri = (rd.get('_overview') or {}).get('items', {}).get('photo', {}).get('uri', '')
+            if overview_uri and overview_uri.startswith('data:') and inspection.property:
+                inspection.property.overview_photo = overview_uri
+        except Exception as _ov_err:
+            print(f'[sync] overview photo extraction failed (non-fatal): {_ov_err}')
 
     # ── Commit all field changes first ───────────────────────────────────────
     # Status is saved before PDF generation so a slow/failing PDF never blocks

@@ -4,6 +4,7 @@ from models import db, Inspection, Property, User, Template, Section, Item
 from permissions import get_current_user, require_admin_or_manager, filter_inspections_for_user, is_admin_or_manager
 from datetime import datetime
 import json
+import re
 
 inspections_bp = Blueprint('inspections', __name__)
 
@@ -600,13 +601,12 @@ def share_pdf(inspection_id):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ─────────────────────────────────────────────────────────────────────────────
 # Helpers for apply_pdf_import
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _pdf_norm(s):
     """Normalise a string for fuzzy section/item name matching."""
-    return (s or '').lower().replace(' ', '').replace('/', '').replace(',', '').replace('&', '').replace('-', '').replace('(', '').replace(')', '')
+    return re.sub(r'[\s/,&\-()\[\]]', '', (s or '').lower())
 
 def _fuzzy_match_section(name, sections):
     n = _pdf_norm(name)
@@ -630,52 +630,76 @@ def _fuzzy_match_item(label, items):
             return item
     return None
 
-_FIXED_SECTION_META = {
-    'condition_summary': {'label': 'Condition Summary',  'order': 100},
-    'keys':              {'label': 'Keys & Fobs',        'order': 101},
-    'meter_readings':    {'label': 'Meter Readings',     'order': 102},
-    'cleaning_summary':  {'label': 'Cleaning Summary',   'order': 103},
+
+# ── Global fixed-section helpers (mirrors frontend logic exactly) ─────────────
+
+def _fs_slug(name):
+    """Mirror of frontend: name.toLowerCase().replace(/[^a-z0-9]/g, '_')"""
+    return re.sub(r'[^a-z0-9]', '_', (name or '').lower())
+
+def _infer_fs_type(cols):
+    """Mirror of frontend _inferType — maps a section's columns list to its type string."""
+    c = cols or []
+    if 'reading'                                            in c: return 'meter_readings'
+    if 'cleanliness'                                        in c: return 'cleaning_summary'
+    if 'name' in c and 'answer' in c and 'question' in c       : return 'fire_door_safety'
+    if 'answer' in c and 'question' in c                        : return 'smoke_alarms'
+    if 'answer' in c and 'description' in c                     : return 'health_safety'
+    if 'answer' in c and 'name' in c                            : return 'smoke_alarms'
+    if 'condition'                                          in c: return 'condition_summary'
+    if 'description'                                        in c: return 'keys'
+    return 'condition_summary'
+
+# Same defaults as fixed_sections.py DEFAULT_FIXED_SECTIONS
+_DEFAULT_GLOBAL_FIXED = [
+    {'name': 'Condition Summary',      'enabled': True, 'columns': ['name', 'condition', 'additional_notes'],  'items': []},
+    {'name': 'Cleaning Summary',       'enabled': True, 'columns': ['name', 'cleanliness', 'additional_notes'], 'items': []},
+    {'name': 'Smoke & Carbon Alarms',  'enabled': True, 'columns': ['name', 'answer', 'condition'],             'items': []},
+    {'name': 'Fire Door Safety',       'enabled': True, 'columns': ['name', 'answer', 'condition'],             'items': []},
+    {'name': 'Health & Safety',        'enabled': True, 'columns': ['name', 'answer', 'description'],           'items': []},
+    {'name': 'Keys',                   'enabled': True, 'columns': ['name', 'description'],                     'items': []},
+    {'name': 'Utility Meter Readings', 'enabled': True, 'columns': ['name', 'location_serial', 'reading'],      'items': []},
+]
+
+def _get_global_fixed_sections():
+    """Load the system-wide fixed sections config (mirrors GET /api/fixed-sections)."""
+    from models import SystemSetting
+    s = SystemSetting.query.filter_by(key='fixed_sections').first()
+    if s and s.value:
+        try:
+            return json.loads(s.value)
+        except Exception:
+            pass
+    return _DEFAULT_GLOBAL_FIXED
+
+# Which fields to write into report_data for each fixed section type
+# (mirrors the field names used by the frontend's get/set helpers)
+_FS_FIELD_MAP = {
+    'meter_readings':    ['reading', 'locationSerial'],
+    'cleaning_summary':  ['cleanliness', 'cleanlinessNotes'],
+    'condition_summary': ['condition'],
+    'keys':              ['description'],
+    'smoke_alarms':      ['answer', 'notes'],
+    'health_safety':     ['answer', 'notes'],
+    'fire_door_safety':  ['answer', 'notes'],
 }
 
-def _build_template_from_pdf(pdf_rooms, pdf_fixed, inspection):
+
+def _build_template_from_pdf(pdf_rooms, inspection):
     """
-    Create a new Template with relational Section+Item records for each room,
-    and a fixedSections JSON blob in template.content for fixed section types
-    that have data.  Assigns the new template to the inspection.
+    Create a new Template with relational Section+Item records for each room.
+    Fixed sections are global (not per-template) so we don't need to store
+    them in template.content.
     """
     prop = getattr(inspection, 'property', None)
     tpl_name = 'PDF Import'
     if prop and getattr(prop, 'address', None):
         tpl_name = 'PDF Import \u2013 ' + prop.address
 
-    # Build fixedSections JSON (IDs starting at 10000 to avoid collision with DB ints)
-    next_json_id = [10000]
-    def next_id():
-        nid = next_json_id[0]
-        next_json_id[0] += 1
-        return nid
-
-    fixed_json = []
-    for sec_type, rows in (pdf_fixed or {}).items():
-        if not isinstance(rows, list) or not rows:
-            continue
-        meta  = _FIXED_SECTION_META.get(sec_type, {'label': sec_type, 'order': 200})
-        sec_id = next_id()
-        json_rows = []
-        for row in rows:
-            json_rows.append({'id': next_id(), **{k: v for k, v in row.items()}})
-        fixed_json.append({
-            'id':      sec_id,
-            'type':    sec_type,
-            'label':   meta['label'],
-            'enabled': True,
-            'rows':    json_rows,
-        })
-
     template = Template(
         name=tpl_name,
         inspection_type='check_in',
-        content=json.dumps({'fixedSections': fixed_json}),
+        content='{}',
         is_default=False,
     )
     db.session.add(template)
@@ -701,10 +725,9 @@ def _build_template_from_pdf(pdf_rooms, pdf_fixed, inspection):
             ))
 
     db.session.flush()
-    # Expire only the sections relationship so it's re-fetched from DB on next
-    # access.  SQLAlchemy won't auto-populate the collection when sections are
-    # added via db.session.add rather than template.sections.append(), so we
-    # must force a reload to ensure apply_pdf_import sees them.
+    # Expire the sections relationship so it's re-fetched from DB on next access.
+    # SQLAlchemy won't auto-populate the collection when sections are added via
+    # db.session.add rather than template.sections.append().
     db.session.expire(template, ['sections'])
     return template
 
@@ -737,7 +760,7 @@ def apply_pdf_import(inspection_id):
         template = Template.query.get(inspection.template_id)
 
     if not template:
-        template = _build_template_from_pdf(pdf_rooms, pdf_fixed, inspection)
+        template = _build_template_from_pdf(pdf_rooms, inspection)
         inspection.template_id = template.id
 
     # ── Build report_data keyed by real DB section/item IDs ───────────────
@@ -760,26 +783,40 @@ def apply_pdf_import(inspection_id):
                 'condition':   pdf_item.get('condition')   or '',
             }
 
-    # ── Fixed sections — keyed by JSON IDs from template.content ─────────
-    try:
-        tpl_content = json.loads(template.content or '{}')
-    except Exception:
-        tpl_content = {}
-    tpl_fixed = tpl_content.get('fixedSections') or []
+    # ── Fixed sections — keyed with the same IDs the frontend computes ────
+    #
+    # The frontend computes:
+    #   section ID : f"fs_{secIdx}_{name_slug}"    (secIdx = index among enabled sections)
+    #   row ID     : f"fs_{secIdx}_{rowIdx}"        (rowIdx = item's index within section)
+    # where secIdx counts only enabled sections (enabled !== false).
+    #
+    # We replicate that here so the report view finds the data.
+    global_fixed = _get_global_fixed_sections()
+    enabled_fixed = [s for s in global_fixed if s.get('enabled', True) is not False]
 
-    for sec_type, rows in pdf_fixed.items():
-        if not isinstance(rows, list):
+    # Build lookup: pdf_type → (secIdx, global_section)
+    type_to_global = {}
+    for sec_idx, gsec in enumerate(enabled_fixed):
+        typ = _infer_fs_type(gsec.get('columns') or [])
+        if typ not in type_to_global:
+            type_to_global[typ] = (sec_idx, gsec)
+
+    for pdf_type, pdf_rows in pdf_fixed.items():
+        if not isinstance(pdf_rows, list) or not pdf_rows:
             continue
-        tpl_sec = next((s for s in tpl_fixed if s.get('type') == sec_type), None)
-        if not tpl_sec:
+        match = type_to_global.get(pdf_type)
+        if not match:
             continue
-        sec_id = str(tpl_sec['id'])
+        sec_idx, gsec = match
+        sec_id = f'fs_{sec_idx}_{_fs_slug(gsec["name"])}'
+        fields = _FS_FIELD_MAP.get(pdf_type, ['condition'])
+
         report_data[sec_id] = {}
-        tpl_rows = tpl_sec.get('rows') or []
-        for i, row in enumerate(rows):
-            tpl_row = tpl_rows[i] if i < len(tpl_rows) else None
-            row_id = str(tpl_row['id']) if tpl_row else ('fx_' + str(i))
-            report_data[sec_id][row_id] = {k: v for k, v in row.items() if k != 'name'}
+        for i, pdf_row in enumerate(pdf_rows):
+            # Row ID mirrors the frontend: fs_{secIdx}_{rowIdx}
+            row_id = f'fs_{sec_idx}_{i}'
+            report_data[sec_id][row_id] = {f: pdf_row.get(f, '') for f in fields}
+        print(f'[apply-pdf-import] fixed {pdf_type} → {sec_id}: {len(pdf_rows)} rows')
 
     # ── Also store as _importedSource (check-out comparison fallback) ─────
     report_data['_importedSource']   = {k: v for k, v in report_data.items() if not k.startswith('_')}

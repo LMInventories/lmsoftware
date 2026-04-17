@@ -26,6 +26,11 @@ def create_app():
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
     app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'change-me-in-production')
     app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=24)
+    # Allow large sync payloads (150+ compressed photos + audio).
+    # Photos are compressed on device to ~120KB each; 200 photos ≈ 25MB.
+    # We set 150MB as a generous ceiling — if even this is hit, photos need
+    # separate upload endpoints rather than inline base64.
+    app.config['MAX_CONTENT_LENGTH'] = 150 * 1024 * 1024  # 150 MB
 
     # ── CORS ──────────────────────────────────────────────────────────────────
     # Base origins always allowed (localhost for dev, custom domain for prod)

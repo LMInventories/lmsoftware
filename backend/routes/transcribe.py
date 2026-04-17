@@ -245,11 +245,12 @@ The clerk has dictated:
 "{transcript}"
 
 CRITICAL LANGUAGE RULES:
-- Use the EXACT words and phrases the clerk spoke. Do not substitute synonyms.
+- Use the EXACT words and phrases the clerk spoke. Do not substitute synonyms, paraphrase, or condense.
 - "good order" stays "good order" — never change to "good condition"
 - "fair wear and tear" stays exactly that
 - This is a legal document — preserve all professional terminology exactly
-- Only clean up filler words (um, uh, er) and obvious repetition
+- ONLY remove filler sounds (um, uh, er, errr, umm, erm) — do NOT remove, shorten, or alter any actual content words
+- Do NOT summarise or abbreviate what the clerk said — reproduce their words in full
 - Use British English spelling
 {formatting_rules}
 
@@ -294,7 +295,8 @@ Instructions:
   Example: if the clerk says "fair wear and tear", write exactly that
   Example: if the clerk says "as new" or "as inventory", preserve those exact phrases
 - The clerk's terminology is professional and intentional — this is a legal document
-- Only clean up filler words (um, uh, er) and obvious repetition
+- ONLY remove filler sounds (um, uh, er, errr, umm, erm) — do NOT remove, shorten, or alter any actual content words
+- Do NOT summarise or abbreviate what the clerk said — reproduce their words in full
 - Use British English spelling for any connecting words you add
 - Only fill items that are mentioned in the transcript
 - If an item is not mentioned, omit it from the output entirely
@@ -743,11 +745,11 @@ Transcript:
 RULES:
 1. Match each passage to the closest item name. The clerk may abbreviate (e.g. "Door" for "Door & Frame") — use fuzzy matching.
 2. Extract description and condition separately. If the clerk says a single phrase, put it in description.
-3. CRITICAL: Use the EXACT words the clerk spoke. Do not rephrase or substitute synonyms.
+3. CRITICAL: Use the EXACT words the clerk spoke. Do not rephrase, paraphrase, or substitute synonyms.
    - "good order" → "Good order" (NOT "Good condition")
    - "fair wear and tear" → "Fair wear and tear"
    - "as new" or "as inventory" → preserve exactly
-4. Clean up only: filler words (um, uh, er), obvious repetition, false starts.
+4. ONLY remove filler sounds (um, uh, er, errr, umm, erm) and clear false starts where the clerk immediately restarts the same phrase (e.g. "white — white painted door" → "white painted door"). Do NOT remove, shorten, or paraphrase any actual content — reproduce the clerk's words in full.
 5. Only fill items that are mentioned. Omit unmentioned items entirely from the output.
 6. Use British English spelling for any connecting words.
 7. If only one piece of information is given for an item, put it in description.
@@ -1107,10 +1109,10 @@ Transcript:
 RULES:
 1. Match each passage to the closest item name. The clerk may abbreviate — use fuzzy matching.
 2. {field_instructions}
-3. CRITICAL: Use the EXACT words the clerk spoke. Do not rephrase or substitute synonyms.
+3. CRITICAL: Use the EXACT words the clerk spoke. Do not rephrase, paraphrase, or substitute synonyms.
    - "good order" → "Good order" (NOT "Good condition")
    - "fair wear and tear" → "Fair wear and tear"
-4. Clean up only: filler words (um, uh, er), obvious repetition, false starts.
+4. ONLY remove filler sounds (um, uh, er, errr, umm, erm) and clear false starts where the clerk immediately restarts the same phrase. Do NOT remove, shorten, or paraphrase any actual content — reproduce the clerk's words in full.
 5. Only fill items that are mentioned. Omit unmentioned items entirely from the output.
 6. Use British English spelling for any connecting words.
 7. Capitalise the first word of each line.

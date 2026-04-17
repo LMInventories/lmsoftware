@@ -286,6 +286,142 @@ async function runPdfImport() {
   }
 }
 
+// ── Cloud file pickers (Google Drive + Dropbox) ───────────────────────
+const DROPBOX_KEY      = import.meta.env.VITE_DROPBOX_APP_KEY    || ''
+const GDRIVE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID   || ''
+const GDRIVE_API_KEY   = import.meta.env.VITE_GOOGLE_API_KEY     || ''
+
+let _gdriveAccessToken  = null
+let _gdriveTokenExpiry  = 0
+let _gdrivePickerLoaded = false
+
+function _loadScript(src) {
+  if (document.querySelector(`script[src="${src}"]`)) return Promise.resolve()
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script')
+    s.src = src; s.onload = resolve; s.onerror = () => reject(new Error('Failed to load ' + src))
+    document.head.appendChild(s)
+  })
+}
+
+async function openDropboxPicker() {
+  if (!DROPBOX_KEY) {
+    pdfImport.value.error = 'Dropbox is not configured. Add VITE_DROPBOX_APP_KEY to your frontend .env file.'
+    return
+  }
+  pdfImport.value.error = ''
+  if (!window.Dropbox) {
+    try {
+      await _loadScript('https://www.dropbox.com/static/api/2/dropins.js')
+    } catch {
+      pdfImport.value.error = 'Could not load Dropbox picker. Check your internet connection.'
+      return
+    }
+  }
+  window.Dropbox.choose({
+    appKey:      DROPBOX_KEY,
+    linkType:    'direct',
+    multiselect: false,
+    extensions:  ['.pdf'],
+    success: async (files) => {
+      pdfImport.value.loading  = true
+      pdfImport.value.error    = ''
+      pdfImport.value.preview  = null
+      pdfImport.value.applied  = false
+      try {
+        const res = await fetch(files[0].link)
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const blob    = await res.blob()
+        const fileObj = new File([blob], files[0].name, { type: 'application/pdf' })
+        pdfImport.value.file     = fileObj
+        pdfImport.value.fileName = files[0].name
+      } catch (err) {
+        pdfImport.value.error = 'Could not download from Dropbox: ' + err.message
+      } finally {
+        pdfImport.value.loading = false
+      }
+    },
+    cancel: () => {},
+  })
+}
+
+async function _ensureGdriveToken() {
+  if (_gdriveAccessToken && Date.now() < _gdriveTokenExpiry) return _gdriveAccessToken
+  await _loadScript('https://accounts.google.com/gsi/client')
+  return new Promise((resolve, reject) => {
+    const client = window.google.accounts.oauth2.initTokenClient({
+      client_id: GDRIVE_CLIENT_ID,
+      scope:     'https://www.googleapis.com/auth/drive.readonly',
+      callback:  (resp) => {
+        if (resp.error) { reject(new Error(resp.error_description || resp.error)); return }
+        _gdriveAccessToken = resp.access_token
+        _gdriveTokenExpiry = Date.now() + (resp.expires_in - 60) * 1000
+        resolve(_gdriveAccessToken)
+      },
+    })
+    client.requestAccessToken()
+  })
+}
+
+async function _ensureGdrivePicker() {
+  if (_gdrivePickerLoaded) return
+  await _loadScript('https://apis.google.com/js/api.js')
+  await new Promise(resolve => window.gapi.load('picker', resolve))
+  _gdrivePickerLoaded = true
+}
+
+async function openGoogleDrivePicker() {
+  if (!GDRIVE_CLIENT_ID || !GDRIVE_API_KEY) {
+    pdfImport.value.error = 'Google Drive is not configured. Add VITE_GOOGLE_CLIENT_ID and VITE_GOOGLE_API_KEY to your frontend .env file.'
+    return
+  }
+  pdfImport.value.error = ''
+  try {
+    const [token] = await Promise.all([_ensureGdriveToken(), _ensureGdrivePicker()])
+
+    const view = new window.google.picker.DocsView(window.google.picker.ViewId.DOCS)
+      .setMimeTypes('application/pdf')
+      .setIncludeFolders(true)
+
+    new window.google.picker.PickerBuilder()
+      .addView(view)
+      .setOAuthToken(token)
+      .setDeveloperKey(GDRIVE_API_KEY)
+      .setTitle('Select a PDF report')
+      .setCallback(async (data) => {
+        if (data[window.google.picker.Response.ACTION] !== window.google.picker.Action.PICKED) return
+        const doc = data[window.google.picker.Response.DOCUMENTS][0]
+        pdfImport.value.loading  = true
+        pdfImport.value.error    = ''
+        pdfImport.value.preview  = null
+        pdfImport.value.applied  = false
+        try {
+          const res = await fetch(
+            `https://www.googleapis.com/drive/v3/files/${doc.id}?alt=media`,
+            { headers: { Authorization: `Bearer ${token}` } }
+          )
+          if (!res.ok) throw new Error(`HTTP ${res.status}`)
+          const blob    = await res.blob()
+          const name    = doc[window.google.picker.Document.NAME] || 'report.pdf'
+          const fileObj = new File([blob], name, { type: 'application/pdf' })
+          pdfImport.value.file     = fileObj
+          pdfImport.value.fileName = name
+        } catch (err) {
+          pdfImport.value.error = 'Could not download from Google Drive: ' + err.message
+        } finally {
+          pdfImport.value.loading = false
+        }
+      })
+      .build()
+      .setVisible(true)
+
+  } catch (err) {
+    pdfImport.value.error = err.message.includes('popup')
+      ? 'Sign-in popup was blocked. Please allow popups for this site and try again.'
+      : 'Google Drive error: ' + err.message
+  }
+}
+
 async function applyPdfImport() {
   const parsed = pdfImport.value.preview
   if (!parsed) return
@@ -337,10 +473,19 @@ async function applyPdfImport() {
 
         if (matchItem) {
           // Matched item — store under template item ID
-          sourceBuilt[roomId][String(matchItem.id)] = {
+          const itemEntry = {
             description: imp.description || '',
             condition:   imp.condition   || '',
           }
+          // Handle sub-items returned by PDF import
+          if (Array.isArray(imp._subs) && imp._subs.length > 0) {
+            itemEntry._subs = imp._subs.map(sub => ({
+              _sid:        `sub_${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
+              description: sub.description || '',
+              condition:   sub.condition   || '',
+            }))
+          }
+          sourceBuilt[roomId][String(matchItem.id)] = itemEntry
         } else {
           // Unmatched item within a matched room — add as _extra to source
           if (!sourceBuilt[roomId]._extra) sourceBuilt[roomId]._extra = []
@@ -1771,6 +1916,38 @@ async function moveToReview() {
               <input type="file" accept="application/pdf" style="display:none" @change="onPdfSelected" />
             </label>
 
+            <!-- Cloud pickers -->
+            <div class="pdf-cloud-row">
+              <span class="pdf-cloud-or">or pick from</span>
+
+              <!-- Google Drive -->
+              <button type="button" class="btn-cloud btn-gdrive"
+                :disabled="pdfImport.loading"
+                @click="openGoogleDrivePicker">
+                <!-- Google Drive triangle logo -->
+                <svg width="16" height="14" viewBox="0 0 87.3 78" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                  <path d="M6.6 66.85l3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3l13.75-23.8H0c0 1.55.4 3.1 1.2 4.5z" fill="#0066DA"/>
+                  <path d="M43.65 25L29.9 1.2C28.55.4 27 0 25.4 0H6.9c-1.6 0-3.15.45-4.5 1.2L27.8 45z" fill="#00AC47"/>
+                  <path d="M73.55 76.8c1.35-.8 2.5-1.9 3.3-3.3l1.6-2.75 7.65-13.25c.8-1.4 1.2-2.95 1.2-4.5H59.8l5.85 11.5z" fill="#EA4335"/>
+                  <path d="M43.65 25l13.75-23.8c-1.35-.8-2.9-1.2-4.5-1.2H34.4c-1.6 0-3.15.45-4.5 1.2z" fill="#00832D"/>
+                  <path d="M59.8 53H27.5L13.75 76.8c1.35.8 2.9 1.2 4.5 1.2h50.8c1.6 0 3.15-.45 4.5-1.2z" fill="#2684FC"/>
+                  <path d="M73.4 26.5l-12.7-22c-.8-1.4-1.95-2.5-3.3-3.3L43.65 25l16.15 28H87.25c0-1.55-.4-3.1-1.2-4.5z" fill="#FFBA00"/>
+                </svg>
+                Google Drive
+              </button>
+
+              <!-- Dropbox -->
+              <button type="button" class="btn-cloud btn-dropbox"
+                :disabled="pdfImport.loading"
+                @click="openDropboxPicker">
+                <!-- Dropbox logo -->
+                <svg width="16" height="14" viewBox="0 0 528 444" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                  <path fill="#0061FF" d="M132 0L0 88l132 88 132-88zm264 0L264 88l132 88 132-88zM0 264l132 88 132-88-132-88zm396-88l132 88-132 88-132-88zM132 373l132 71 132-71-132-88z"/>
+                </svg>
+                Dropbox
+              </button>
+            </div>
+
             <!-- Error -->
             <p v-if="pdfImport.error" class="pdf-error">⚠ {{ pdfImport.error }}</p>
 
@@ -1799,7 +1976,8 @@ async function moveToReview() {
                   <ul class="pdf-room-items">
                     <li v-for="item in (room.items || []).slice(0,4)" :key="item.label">
                       <span class="pdf-item-label">{{ item.label }}</span>
-                      <span class="pdf-item-cond">{{ item.condition }}</span>
+                      <span v-if="item._subs && item._subs.length" class="pdf-item-cond">{{ item._subs.length }} sub-item{{ item._subs.length !== 1 ? 's' : '' }}</span>
+                      <span v-else class="pdf-item-cond">{{ item.condition }}</span>
                     </li>
                     <li v-if="(room.items || []).length > 4" class="pdf-more">+ {{ (room.items || []).length - 4 }} more…</li>
                   </ul>
@@ -3523,6 +3701,25 @@ async function moveToReview() {
   font-size:14px;font-weight:700;cursor:pointer;transition:background 0.15s;font-family:inherit;
 }
 .btn-pdf-apply:hover{ background:#15803d }
+
+/* Cloud pickers */
+.pdf-cloud-row{
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  padding:4px 0 2px;
+}
+.pdf-cloud-or{
+  font-size:12px;color:#94a3b8;white-space:nowrap;margin-right:2px;
+}
+.btn-cloud{
+  display:inline-flex;align-items:center;gap:7px;
+  padding:8px 16px;border-radius:8px;border:1px solid #e2e8f0;
+  background:white;font-size:13px;font-weight:600;color:#374151;
+  cursor:pointer;transition:all 0.15s;font-family:inherit;
+  box-shadow:0 1px 2px rgba(0,0,0,0.04);
+}
+.btn-cloud:hover:not(:disabled){ border-color:#6366f1;color:#4f46e5;background:#fafafe; }
+.btn-cloud:active:not(:disabled){ background:#f5f3ff; }
+.btn-cloud:disabled{ opacity:0.45;cursor:not-allowed; }
 
 /* ═══════════════════════════════════════════════════════════════════ */
 /* PHOTO GRID (View All)                                               */

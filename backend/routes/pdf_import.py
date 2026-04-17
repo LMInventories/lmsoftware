@@ -32,18 +32,45 @@ Template structure available to match against:
 __TEMPLATE_STRUCTURE__
 
 Extract ALL rooms and items. For each item:
-- label: the item name
+- label: the item name — use the EXACT label from the template where a match exists
 - description: physical description of the item
 - condition: condition at time of check-in
+- _subs: array of sub-items (only when the PDF contains sub-items beneath this item — see below)
 
 The report format is typically: [Room/Item Name] [Description] [Condition at Check In]
 Some reports use columns: Item | Description | Condition at Check In | Condition at Check Out
 
 IMPORTANT RULES:
 - Extract condition at CHECK IN only (not check out, even if present)
-- Preserve exact wording - this is a legal document
+- Preserve exact wording — this is a legal document
 - If an item has no description or condition, still include it with empty strings
 - Match room names to the template structure where possible
+- Match item labels to the template item labels — do NOT invent new items for things that are sub-items of a template item
+
+SUB-ITEMS — this is critical:
+Many inspection reports list sub-items beneath a parent item. They appear as:
+  • Items indented under a parent heading
+  • Items prefixed with the parent name and a dash or colon, e.g. "Contents - Bedside Table", "Contents: Wardrobe"
+  • A group of individual pieces listed under a heading like "Contents:" followed by a list
+
+When you see this pattern:
+1. Identify the PARENT item and match it to the template (e.g. "Contents" matches template item "Contents")
+2. Place each sub-item inside "_subs" on that parent item — do NOT create a separate top-level item for each sub-item
+3. Set the parent item's "label" to the matched template label
+4. Set the parent item's "description" and "condition" from any overview text for that heading (or leave empty)
+5. Each sub-item entry has only: "description" (what the sub-item is + its description) and "condition"
+
+Example — PDF has:
+  "Contents - Bedside Table: Oak veneer / In good order"
+  "Contents - Wardrobe: White gloss / In good order"
+→ Return ONE item with label "Contents" and _subs:
+  { "label": "Contents", "description": "", "condition": "",
+    "_subs": [
+      { "description": "Oak veneer bedside table", "condition": "In good order" },
+      { "description": "White gloss wardrobe",     "condition": "In good order" }
+    ]
+  }
+NOT as two separate items "Contents - Bedside Table" and "Contents - Wardrobe".
 
 Return ONLY valid JSON - no markdown, no explanation:
 {
@@ -51,7 +78,20 @@ Return ONLY valid JSON - no markdown, no explanation:
     {
       "name": "Lounge",
       "items": [
-        { "label": "Door, Frame & Furniture", "description": "White painted panel door", "condition": "Good condition" }
+        {
+          "label": "Door, Frame & Furniture",
+          "description": "White painted panel door",
+          "condition": "Good condition"
+        },
+        {
+          "label": "Contents",
+          "description": "",
+          "condition": "",
+          "_subs": [
+            { "description": "Oak coffee table", "condition": "Good condition" },
+            { "description": "3-seater grey fabric sofa", "condition": "Good condition" }
+          ]
+        }
       ]
     }
   ],

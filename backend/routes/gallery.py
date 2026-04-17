@@ -36,6 +36,11 @@ from flask import Blueprint, request, abort, make_response
 _RD_CACHE: dict = {}     # {inspection_id: (expires_at, rd, label)}
 _RD_TTL   = 120          # seconds
 
+# Compressed JPEG cache — avoids re-running Pillow on every photo request.
+# Key: (inspection_id, sid, rid, n)  Value: (expires_at, jpeg_bytes)
+_PHOTO_CACHE: dict = {}
+_PHOTO_TTL  = 3600       # 1 hour
+
 gallery_bp = Blueprint('gallery', __name__)
 
 
@@ -294,6 +299,17 @@ def gallery_photo(inspection_id, sid, rid, n):
     if not hmac.compare_digest(token, expected):
         abort(403)
 
+    # ── Check compressed-photo cache first ───────────────────────────────────
+    cache_key = (inspection_id, sid, rid, n)
+    now = time.time()
+    cached = _PHOTO_CACHE.get(cache_key)
+    if cached and now < cached[0]:
+        return make_response(cached[1], 200, {
+            'Content-Type':  'image/jpeg',
+            'Cache-Control': 'private, max-age=3600',
+            'X-Cache':       'HIT',
+        })
+
     rd, _, _ = _load_report_data(inspection_id)
     photos, _ = _extract_photos(rd, sid, rid)
 
@@ -306,13 +322,19 @@ def gallery_photo(inspection_id, sid, rid, n):
         import traceback
         print(f'[gallery] photo {n} error: {e}')
         print(traceback.format_exc())
-        # Return a 1×1 grey JPEG placeholder so the gallery doesn't crash
-        # (the error is logged above for Railway log inspection)
         abort(500)
+
+    # Store in cache; evict stale entries if it grows large
+    _PHOTO_CACHE[cache_key] = (now + _PHOTO_TTL, data)
+    if len(_PHOTO_CACHE) > 500:
+        stale = [k for k, v in _PHOTO_CACHE.items() if v[0] < now]
+        for k in stale:
+            del _PHOTO_CACHE[k]
 
     return make_response(data, 200, {
         'Content-Type':  'image/jpeg',
         'Cache-Control': 'private, max-age=3600',
+        'X-Cache':       'MISS',
     })
 
 

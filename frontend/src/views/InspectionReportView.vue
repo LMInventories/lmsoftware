@@ -137,6 +137,20 @@ async function load() {
         } catch { /* source gone */ }
       }
 
+      // Final fallback: if source load failed or sourceId was null, try the check-out's own template_id
+      if (!template.value) {
+        try {
+          if (inspection.value.template_id) {
+            const tRes = await api.getTemplate(inspection.value.template_id)
+            template.value = tRes.data
+          } else {
+            const allTRes = await api.getTemplates()
+            const fallback = allTRes.data.find(t => t.is_default) || allTRes.data[0]
+            if (fallback) template.value = fallback
+          }
+        } catch { /* no templates available */ }
+      }
+
       // Load this Check Out's own saved data (checkout conditions + actions only)
       if (inspection.value.report_data) {
         try {
@@ -2539,8 +2553,8 @@ async function moveToReview() {
 
                 </div>
 
-                <!-- Sub-items (template items only) -->
-                <div v-if="item._type === 'template' && getSubs(room.id, item.id).length" class="sub-items">
+                <!-- Sub-items (template items only) — Check In / Inventory layout -->
+                <div v-if="!isCheckOut && item._type === 'template' && getSubs(room.id, item.id).length" class="sub-items">
                   <div v-for="sub in getSubs(room.id, item.id)" :key="sub._sid" class="sub-item">
                     <div class="item-fields-row sub-fields-row">
                       <div class="item-fields-main">
@@ -2561,6 +2575,61 @@ async function moveToReview() {
                         
                         <button class="del-item-icon-btn" @click="removeSubItem(room.id,item.id,sub._sid)" title="Remove sub-item">
                           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+                        </button>
+                      </div>
+                    </div>
+                    <!-- Sub-item inline photo panel -->
+                    <div v-if="isPanelOpen(room.id, sub._sid)" class="photo-panel-inline photo-panel-sub">
+                      <div v-for="(ph,pi) in getPhotos(room.id, sub._sid)" :key="pi" class="ph-thumb ph-thumb-lg" style="cursor:pointer" @click="openLightbox(room.id, sub._sid, pi)">
+                        <img :src="ph" class="ph-img-click" />
+                        <button class="ph-del" @click="removePhoto(room.id, sub._sid, pi)">×</button>
+                      </div>
+                      <label class="ph-upload-btn">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                        Upload photos
+                        <input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(room.id, sub._sid, e.target.files)" />
+                      </label>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Sub-items (template items only) — Check Out layout -->
+                <div v-if="isCheckOut && item._type === 'template' && getSubs(room.id, item.id).length" class="sub-items co-sub-items">
+                  <div v-for="sub in getSubs(room.id, item.id)" :key="sub._sid" class="sub-item">
+                    <div class="item-fields-row sub-fields-row">
+                      <div class="item-fields-main">
+                        <!-- Description — read-only -->
+                        <div class="room-field-desc">
+                          <label class="field-lbl">Description</label>
+                          <div class="co-inv-value" :class="{ 'co-inv-empty': !sub.description }">
+                            {{ sub.description || '—' }}
+                          </div>
+                        </div>
+                        <!-- Condition at Check In — read-only -->
+                        <div class="room-field-inv">
+                          <label class="field-lbl co-inv-lbl">
+                            Condition at Check In
+                            <span class="co-inv-badge">Inventory</span>
+                          </label>
+                          <div class="co-inv-value" :class="{ 'co-inv-empty': !(sub.inventoryCondition || sub.condition) }">
+                            {{ sub.inventoryCondition || sub.condition || '—' }}
+                          </div>
+                        </div>
+                        <!-- Condition at Check Out — editable -->
+                        <div class="room-field-cond">
+                          <label class="field-lbl">Condition at Check Out</label>
+                          <textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" rows="2"
+                            placeholder="As Inventory &amp; Check In"
+                            :value="sub.checkOutCondition || ''"
+                            @focus="e => { if (!sub.checkOutCondition) setSubField(room.id, item.id, sub._sid, 'checkOutCondition', 'As Inventory & Check In') }"
+                            @input="setSubField(room.id, item.id, sub._sid, 'checkOutCondition', $event.target.value)">
+                          </textarea>
+                        </div>
+                      </div>
+                      <div class="item-btn-col">
+                        <button class="cam-btn cam-btn-item" :class="{ 'cam-has': getPhotos(room.id, sub._sid).length }" @click="togglePanel(room.id, sub._sid)" title="Photos">
+                          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                          <span v-if="getPhotos(room.id, sub._sid).length" class="cam-count">{{ getPhotos(room.id, sub._sid).length }}</span>
                         </button>
                       </div>
                     </div>

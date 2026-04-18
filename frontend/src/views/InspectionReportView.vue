@@ -1594,6 +1594,19 @@ function cancelRenameRoom() {
   renamingRoomId.value = null
 }
 
+// ── Hide (soft-delete) a room from this report ────────────────────────────
+// Adds the room id to _hiddenRooms in reportData. The room data is preserved
+// so it can be recovered if needed — it's just excluded from rendering and PDF.
+function hideRoom(room) {
+  const label = getRoomName(room)
+  if (!confirm(`Hide "${label}" from this report?\n\nThe room's data is preserved — you can restore it by contacting support.`)) return
+  if (!reportData.value._hiddenRooms) reportData.value._hiddenRooms = []
+  const id = String(room.id)
+  if (!reportData.value._hiddenRooms.includes(id)) {
+    reportData.value._hiddenRooms.push(id)
+  }
+  unsaved.value = true
+}
 
 function getItemActions(roomId, itemId) {
   const key = `_actions_${itemId}`
@@ -2415,6 +2428,14 @@ async function moveToReview() {
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
                   View All Photos
                   <span class="card-photo-count">{{ roomPhotoCount(room) }}</span>
+                </button>
+                <button
+                  v-if="canEdit"
+                  class="room-hide-btn"
+                  @click.stop="hideRoom(room)"
+                  title="Hide this room from the report"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
                 </button>
               </div>
             </div>
@@ -3946,6 +3967,8 @@ async function moveToReview() {
 .card-view-all-btn:hover{background:linear-gradient(135deg,#6366f1,#4f46e5);color:white;border-color:#6366f1;box-shadow:0 2px 12px rgba(99,102,241,0.35);transform:translateY(-1px)}
 .card-view-all-room{border-color:#ddd6fe;background:linear-gradient(135deg,#f5f3ff,#ede9fe);color:#6d28d9;box-shadow:0 1px 4px rgba(124,58,237,0.12)}
 .card-view-all-room:hover{background:linear-gradient(135deg,#7c3aed,#6d28d9);color:white;border-color:#7c3aed;box-shadow:0 2px 12px rgba(124,58,237,0.35);transform:translateY(-1px)}
+.room-hide-btn{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:6px;border:1.5px solid #fecaca;background:white;color:#f87171;cursor:pointer;transition:all 0.15s;flex-shrink:0}
+.room-hide-btn:hover{background:#fee2e2;border-color:#f87171;color:#dc2626;transform:scale(1.08)}
 .card-photo-count{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 5px;font-size:10px;font-weight:800;border-radius:9px;background:#6366f1;color:white;line-height:1}
 .card-view-all-room .card-photo-count{background:#7c3aed}
 .card-view-all-btn:hover .card-photo-count,.card-view-all-room:hover .card-photo-count{background:rgba(255,255,255,0.3)}

@@ -142,6 +142,34 @@ def copy_template(template_id):
 # SECTIONS  (room sections belonging to a template)
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _resolve_insert_order(template_id, insert_after_section_id):
+    """Return the order_index a new section should receive.
+
+    If *insert_after_section_id* is given, all existing sections whose
+    order_index is strictly greater than the target are shifted up by 1
+    to make room, and the returned index is target.order_index + 1.
+    Otherwise (append mode) the returned index is max(order_index) + 1.
+    """
+    if insert_after_section_id:
+        target = Section.query.filter_by(
+            id=insert_after_section_id, template_id=template_id
+        ).first()
+        if target:
+            # Shift every sibling that comes after the target
+            Section.query.filter_by(template_id=template_id).filter(
+                Section.order_index > target.order_index
+            ).update({Section.order_index: Section.order_index + 1},
+                     synchronize_session='fetch')
+            db.session.flush()
+            return target.order_index + 1
+
+    # Default: append after the current last section
+    max_order = db.session.query(
+        db.func.max(Section.order_index)
+    ).filter_by(template_id=template_id).scalar()
+    return (max_order if max_order is not None else -1) + 1
+
+
 @templates_bp.route('/<int:template_id>/sections', methods=['POST'])
 @jwt_required()
 def add_section(template_id):
@@ -151,16 +179,15 @@ def add_section(template_id):
     if not data.get('name', '').strip():
         return jsonify({'error': 'name is required'}), 400
 
-    # Place at end
-    max_order = db.session.query(
-        db.func.max(Section.order_index)
-    ).filter_by(template_id=template_id).scalar() or -1
+    order_index = _resolve_insert_order(
+        template_id, data.get('insert_after_section_id')
+    )
 
     section = Section(
         template_id=template_id,
         name=data['name'].strip(),
         section_type=data.get('section_type', 'room'),
-        order_index=max_order + 1,
+        order_index=order_index,
         is_required=False,
     )
     db.session.add(section)

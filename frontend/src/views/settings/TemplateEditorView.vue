@@ -116,20 +116,24 @@ async function updateTemplateName() {
 }
 
 // ── Add Section — step 1 ──────────────────────────────────────────────────────
-function openAddSectionModal() {
+// insertAfterSection: the section object after which the new one should be placed.
+// null = append at end (default / header button behaviour).
+const insertAfterSection = ref(null)
+
+function openAddSectionModal(afterSection = null) {
   newSectionName.value = ''
+  insertAfterSection.value = afterSection
   showAddSectionModal.value = true
 }
 
 async function handleAddBlankSection() {
   if (!newSectionName.value.trim()) { alert('Section name is required'); return }
   try {
-    const res = await api.addSection(template.value.id, {
-      name: newSectionName.value.trim(),
-      section_type: 'room',
-    })
-    template.value.sections.push(res.data)
+    const payload = { name: newSectionName.value.trim(), section_type: 'room' }
+    if (insertAfterSection.value) payload.insert_after_section_id = insertAfterSection.value.id
+    await api.addSection(template.value.id, payload)
     showAddSectionModal.value = false
+    await fetchTemplate()   // refresh so order_index changes are reflected
   } catch (err) {
     console.error(err)
     alert('Failed to add section')
@@ -139,6 +143,8 @@ async function handleAddBlankSection() {
 // ── Add Section — step 2: preset picker ──────────────────────────────────────
 async function openPresetPicker() {
   showAddSectionModal.value = false
+  // insertAfterSection is intentionally preserved — the preset picker continues
+  // the same insertion-point context chosen when the modal was opened.
   showPresetPicker.value = true
   selectedPresets.value = []
   presetSearch.value = ''
@@ -171,13 +177,17 @@ async function handleAddFromPresets() {
   if (selectedPresets.value.length === 0) return
   addingFromPreset.value = true
   try {
+    // When an insertion point is set, chain the presets: first goes after the
+    // chosen section, each subsequent one goes after the previously-added section.
+    let afterId = insertAfterSection.value?.id ?? null
     for (const { preset, customName } of selectedPresets.value) {
-      const res = await api.addPresetToTemplate(preset.id, template.value.id, {
-        name: customName.trim() || preset.name,
-      })
-      template.value.sections.push(res.data)
+      const payload = { name: customName.trim() || preset.name }
+      if (afterId) payload.insert_after_section_id = afterId
+      const res = await api.addPresetToTemplate(preset.id, template.value.id, payload)
+      afterId = res.data.id   // next preset chains after this one
     }
     showPresetPicker.value = false
+    await fetchTemplate()   // refresh to reflect new order
   } catch (err) {
     console.error(err)
     alert('Failed to add sections from presets')
@@ -476,81 +486,89 @@ onMounted(fetchTemplate)
         <p class="group-description">Customise these sections for different property types.</p>
 
         <div class="sections-list">
-          <div
+          <template
             v-for="(section, index) in roomSections"
             :key="section.id"
-            class="section-card"
-            :class="{ 'drag-over': dragOverInfo?.type === 'section' && dragOverInfo?.sectionIdx === index && dragging?.sectionIdx !== index }"
-            @mouseenter="dragging?.type === 'section' && setDragOver('section', section.id, null, index)"
           >
+            <div
+              class="section-card"
+              :class="{ 'drag-over': dragOverInfo?.type === 'section' && dragOverInfo?.sectionIdx === index && dragging?.sectionIdx !== index }"
+              @mouseenter="dragging?.type === 'section' && setDragOver('section', section.id, null, index)"
+            >
 
-            <div class="section-header">
-              <!-- Drag handle on the LEFT -->
-              <span
-                class="drag-handle"
-                @mousedown.stop="startSectionDrag($event, index)"
-                title="Drag to reorder"
-              >⠿</span>
-
-              <!-- Inline rename -->
-              <template v-if="renamingSection && renamingSection.id === section.id">
-                <input
-                  class="section-name-input"
-                  v-model="renamingSection.name"
-                  @blur="commitRenameSection(section)"
-                  @keyup.enter="commitRenameSection(section)"
-                  @keyup.escape="cancelRenameSection"
-                  v-focus
-                />
-              </template>
-              <span
-                v-else
-                class="section-name section-name-editable"
-                @click="startRenameSection(section)"
-                title="Click to rename"
-              >{{ section.name }} ✎</span>
-              <div class="section-actions">
-                <button @click="openSavePresetModal(section)" class="btn-icon preset-btn" title="Save as Preset">💾</button>
-                <button @click="duplicateSection(section)" class="btn-icon" title="Duplicate">⧉</button>
-                <button @click="deleteSection(section)"   class="btn-icon danger" title="Delete">✕</button>
-              </div>
-            </div>
-
-            <div class="item-count-label">{{ (section.items || []).length }} item{{ (section.items || []).length !== 1 ? 's' : '' }}</div>
-
-            <div class="items-list">
-              <div
-                v-for="(item, itemIndex) in section.items"
-                :key="item.id"
-                class="item-row"
-                :class="{ 'item-drag-over': dragOverInfo?.type === 'item' && dragOverInfo?.sectionId === section.id && dragOverInfo?.itemIdx === itemIndex && !(dragging?.sectionId === section.id && dragging?.itemIdx === itemIndex) }"
-                @mouseenter="dragging?.type === 'item' && setDragOver('item', section.id, itemIndex, null)"
-              >
+              <div class="section-header">
+                <!-- Drag handle on the LEFT -->
                 <span
-                  class="drag-handle drag-handle-sm"
-                  @mousedown.stop="startItemDrag($event, section.id, itemIndex)"
+                  class="drag-handle"
+                  @mousedown.stop="startSectionDrag($event, index)"
                   title="Drag to reorder"
                 >⠿</span>
-                <div class="item-info">
-                  <span class="item-name">{{ item.name }}</span>
-                  <div class="item-meta">
-                    <span v-if="item.requires_photo"     class="meta-badge photo">📷 Photo</span>
-                    <span v-if="item.requires_condition" class="meta-badge cond">✓ Condition</span>
-                  </div>
-                </div>
-                <div class="item-actions">
-                  <button @click="openEditItemModal(item)"         class="btn-icon-sm" title="Edit">✎</button>
-                  <button @click="duplicateItem(item, section)"    class="btn-icon-sm" title="Duplicate">⧉</button>
-                  <button @click="deleteItem(item, section)"       class="btn-icon-sm danger" title="Delete">✕</button>
+
+                <!-- Inline rename -->
+                <template v-if="renamingSection && renamingSection.id === section.id">
+                  <input
+                    class="section-name-input"
+                    v-model="renamingSection.name"
+                    @blur="commitRenameSection(section)"
+                    @keyup.enter="commitRenameSection(section)"
+                    @keyup.escape="cancelRenameSection"
+                    v-focus
+                  />
+                </template>
+                <span
+                  v-else
+                  class="section-name section-name-editable"
+                  @click="startRenameSection(section)"
+                  title="Click to rename"
+                >{{ section.name }} ✎</span>
+                <div class="section-actions">
+                  <button @click="openSavePresetModal(section)" class="btn-icon preset-btn" title="Save as Preset">💾</button>
+                  <button @click="duplicateSection(section)" class="btn-icon" title="Duplicate">⧉</button>
+                  <button @click="deleteSection(section)"   class="btn-icon danger" title="Delete">✕</button>
                 </div>
               </div>
-              <button @click="openAddItemModal(section.id)" class="btn-add-item">＋ Add Item</button>
+
+              <div class="item-count-label">{{ (section.items || []).length }} item{{ (section.items || []).length !== 1 ? 's' : '' }}</div>
+
+              <div class="items-list">
+                <div
+                  v-for="(item, itemIndex) in section.items"
+                  :key="item.id"
+                  class="item-row"
+                  :class="{ 'item-drag-over': dragOverInfo?.type === 'item' && dragOverInfo?.sectionId === section.id && dragOverInfo?.itemIdx === itemIndex && !(dragging?.sectionId === section.id && dragging?.itemIdx === itemIndex) }"
+                  @mouseenter="dragging?.type === 'item' && setDragOver('item', section.id, itemIndex, null)"
+                >
+                  <span
+                    class="drag-handle drag-handle-sm"
+                    @mousedown.stop="startItemDrag($event, section.id, itemIndex)"
+                    title="Drag to reorder"
+                  >⠿</span>
+                  <div class="item-info">
+                    <span class="item-name">{{ item.name }}</span>
+                    <div class="item-meta">
+                      <span v-if="item.requires_photo"     class="meta-badge photo">📷 Photo</span>
+                      <span v-if="item.requires_condition" class="meta-badge cond">✓ Condition</span>
+                    </div>
+                  </div>
+                  <div class="item-actions">
+                    <button @click="openEditItemModal(item)"         class="btn-icon-sm" title="Edit">✎</button>
+                    <button @click="duplicateItem(item, section)"    class="btn-icon-sm" title="Duplicate">⧉</button>
+                    <button @click="deleteItem(item, section)"       class="btn-icon-sm danger" title="Delete">✕</button>
+                  </div>
+                </div>
+                <button @click="openAddItemModal(section.id)" class="btn-add-item">＋ Add Item</button>
+              </div>
             </div>
-          </div>
+
+            <!-- Insert zone — appears between sections on hover -->
+            <div class="section-insert-zone">
+              <button @click="openAddSectionModal(section)" class="btn-insert-here">＋ Insert section here</button>
+            </div>
+          </template>
 
           <div v-if="roomSections.length === 0" class="empty-sections">
             <p>No room sections yet.</p>
-            <button @click="openAddSectionModal" class="btn-primary" style="margin-top:12px">＋ Add Section</button>
+            <button @click="openAddSectionModal()" class="btn-primary" style="margin-top:12px">＋ Add Section</button>
           </div>
         </div>
       </div>
@@ -569,6 +587,13 @@ onMounted(fetchTemplate)
         </div>
 
         <div class="modal-body">
+          <!-- Insertion point indicator -->
+          <div v-if="insertAfterSection" class="insert-after-banner">
+            <span class="insert-after-icon">↓</span>
+            Inserting after <strong>{{ insertAfterSection.name }}</strong>
+            <button class="insert-after-clear" @click="insertAfterSection = null" title="Insert at end instead">✕</button>
+          </div>
+
           <!-- Empty section -->
           <div class="add-section-option" @click="() => {}">
             <div class="option-label">Empty section</div>
@@ -1409,4 +1434,81 @@ onMounted(fetchTemplate)
 /* While dragging, force grab cursor everywhere */
 .template-editor.is-dragging,
 .template-editor.is-dragging * { cursor: grabbing !important; user-select: none !important; }
+
+/* ── Insert zone between sections ─────────────────────────────────────────── */
+.section-insert-zone {
+  position: relative;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: -4px 0;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.sections-list:hover .section-insert-zone,
+.section-insert-zone:focus-within { opacity: 1; }
+
+.section-insert-zone::before {
+  content: '';
+  position: absolute;
+  left: 0; right: 0;
+  top: 50%;
+  height: 1.5px;
+  background: #c7d2fe;
+  border-radius: 1px;
+  pointer-events: none;
+}
+
+.btn-insert-here {
+  position: relative;
+  padding: 3px 12px;
+  background: white;
+  border: 1.5px solid #a5b4fc;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #6366f1;
+  cursor: pointer;
+  letter-spacing: 0.2px;
+  transition: all 0.15s;
+  z-index: 1;
+  white-space: nowrap;
+}
+.btn-insert-here:hover {
+  background: #6366f1;
+  border-color: #6366f1;
+  color: white;
+}
+
+/* ── Insert-after banner (inside Add Section modal) ───────────────────────── */
+.insert-after-banner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 14px;
+  background: #eff6ff;
+  border: 1.5px solid #93c5fd;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #1e40af;
+  margin-bottom: 16px;
+}
+.insert-after-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+.insert-after-banner strong { color: #1e3a8a; }
+.insert-after-clear {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: #60a5fa;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0 2px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.insert-after-clear:hover { color: #1e40af; }
 </style>

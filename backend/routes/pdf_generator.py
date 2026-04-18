@@ -409,9 +409,22 @@ class _PDFBuilder:
         deleted = set(str(d) for d in ((self.rd.get(room_rd_key) or {}).get('_deleted', []) or []))
         tmpl    = [dict(i, _type='template', label=i.get('name','')) for i in (room.get('sections') or [])
                    if str(i.get('id', '')) not in deleted]
-        extras  = [dict(ex, id=ex.get('_eid'), label=ex.get('label') or ex.get('name','New item'), _type='extra')
-                   for ex in ((self.rd.get(room_rd_key) or {}).get('_extra', []) or [])
-                   if str(ex.get('_eid', '')) not in deleted]
+        # Mobile writes field data (description, condition, etc.) to rd[roomKey][_eid]
+        # as a keyed entry, NOT embedded in the _extra array object (which only holds
+        # { _eid, name }).  Merge both so mobile-synced data renders correctly.
+        # The _extra array entry values take precedence so web-side edits are not lost.
+        room_data = self.rd.get(room_rd_key) or {}
+        extras = []
+        for ex in (room_data.get('_extra', []) or []):
+            eid = str(ex.get('_eid', ''))
+            if not eid or eid in deleted:
+                continue
+            indexed = dict(room_data.get(eid) or {})   # mobile-written field data
+            merged  = {**indexed, **ex}                 # _extra entry wins on overlap
+            extras.append(dict(merged,
+                               id=eid,
+                               label=ex.get('label') or ex.get('name', 'New item'),
+                               _type='extra'))
         all_items = tmpl + extras
         if not stored:
             return all_items
@@ -474,8 +487,14 @@ class _PDFBuilder:
 
     def _p(self, text, style=None):
         style = style or self.s_cell
-        text  = str(text or '').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-        # Convert \n line breaks to ReportLab <br/> tags so multi-line conditions render correctly
+        text  = str(text or '')
+        # Normalise line endings (\r\n / \r → \n), trim each line, drop blank lines.
+        # This fixes conditions synced from mobile that may have double-newlines or
+        # Windows-style line endings, making them render as separate lines not paragraphs.
+        text  = text.replace('\r\n', '\n').replace('\r', '\n')
+        text  = '\n'.join(l.strip() for l in text.split('\n') if l.strip())
+        # XML-escape special chars, then convert newlines to ReportLab <br/> tags
+        text  = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
         text  = text.replace('\n', '<br/>')
         return Paragraph(text or '—', style)
 

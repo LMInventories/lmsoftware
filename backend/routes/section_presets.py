@@ -101,9 +101,11 @@ def add_preset_to_template(preset_id, template_id):
     preset = SectionPreset.query.get_or_404(preset_id)
     data = request.get_json(force=True) or {}
 
-    # Work out the next order_index for this template
-    existing = Section.query.filter_by(template_id=template_id).all()
-    next_order = max((s.order_index for s in existing), default=-1) + 1
+    # Work out the insertion order_index — supports insert_after_section_id
+    from routes.templates import _resolve_insert_order
+    next_order = _resolve_insert_order(
+        template_id, data.get('insert_after_section_id')
+    )
 
     # Allow the caller to override the section name
     section_name = data.get('name') or preset.name

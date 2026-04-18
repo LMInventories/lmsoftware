@@ -1412,7 +1412,15 @@ const rooms = computed(() => {
       .map(item => ({ ...item, _type: 'template', _itemKey: String(item.id) }))
     const extraItems  = (reportData.value[room.id]?._extra || [])
       .filter(ex => !deletedIds.has(String(ex._eid)))
-      .map(ex => ({ ...ex, id: ex._eid, label: ex.label || 'New item', _type: 'extra', _itemKey: ex._eid }))
+      .map(ex => {
+        // Mobile writes field data (description, condition, checkOutCondition, etc.) to
+        // reportData[roomId][_eid] as a keyed entry — NOT embedded in the _extra array object.
+        // The _extra entry itself only holds { _eid, name/label }.
+        // Merge both so mobile-synced data is visible; _extra entry values take precedence
+        // so that any web-side edits (which do write into _extra) are not overwritten.
+        const indexed = reportData.value[room.id]?.[ex._eid] || {}
+        return { ...indexed, ...ex, id: ex._eid, label: ex.label || ex.name || 'New item', _type: 'extra', _itemKey: ex._eid }
+      })
     const all = [...tmplItems, ...extraItems]
     if (!storedOrder || storedOrder.length === 0) return { ...room, _orderedItems: all }
     const ordered = []
@@ -1655,6 +1663,45 @@ async function savePhoto() {
   finally { photoUploading.value = false }
 }
 
+// ── Formatting normalisation ──────────────────────────────────────────
+// Strips \r\n / \r endings, trims each line, removes blank lines.
+// Applies to all free-text fields so synced reports with double-newlines
+// or Windows line endings display line-by-line instead of as paragraphs.
+const _TEXT_FIELDS = new Set([
+  'condition', 'checkOutCondition', 'inventoryCondition',
+  'description', 'notes', 'cleanlinessNotes', 'locationSerial',
+])
+
+function normalizeText(v) {
+  if (!v || typeof v !== 'string') return v
+  return v
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .split('\n')
+    .map(l => l.trim())
+    .filter(l => l !== '')
+    .join('\n')
+}
+
+function _normalizeObj(obj) {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return
+  for (const key of Object.keys(obj)) {
+    const val = obj[key]
+    if (_TEXT_FIELDS.has(key) && typeof val === 'string') {
+      obj[key] = normalizeText(val)
+    } else if ((key === '_extra' || key === '_subs') && Array.isArray(val)) {
+      val.forEach(_normalizeObj)
+    } else if (val && typeof val === 'object' && !Array.isArray(val)) {
+      _normalizeObj(val)
+    }
+  }
+}
+
+function fixFormatting() {
+  _normalizeObj(reportData.value)
+  unsaved.value = true
+}
+
 // ── Save report ───────────────────────────────────────────────────────
 async function save(feedback = true) {
   saving.value = true
@@ -1877,6 +1924,7 @@ async function moveToReview() {
         <span v-else-if="unsaved" class="chip chip-unsaved">● Unsaved</span>
         <template v-if="canEdit">
           <button class="pdf-btn" @click="loadClientSettings(); showPdfModal = true">🖨 Export PDF</button>
+          <button class="fmt-btn" @click="fixFormatting" title="Normalise line breaks and trim whitespace in all text fields">⟳ Fix Formatting</button>
           <button class="save-btn" :disabled="saving" @click="save()">Save</button>
         </template>
         <template v-if="canMoveToReview">
@@ -3292,6 +3340,8 @@ async function moveToReview() {
 .spin-icon{animation:spin 1s linear infinite}
 .photo-btn{display:flex;align-items:center;gap:6px;padding:5px 11px;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.1);border-radius:5px;font-size:12px;color:#94a3b8;cursor:pointer;transition:all 0.15s}
 .photo-btn:hover{background:rgba(255,255,255,0.13);color:#e2e8f0}
+.fmt-btn{padding:6px 12px;background:#f1f5f9;color:#64748b;border:1px solid #e2e8f0;border-radius:5px;font-size:12px;font-weight:600;cursor:pointer;transition:all 0.15s;white-space:nowrap}
+.fmt-btn:hover{background:#e2e8f0;color:#334155}
 .save-btn{padding:6px 16px;background:#6366f1;color:white;border:none;border-radius:5px;font-size:13px;font-weight:700;cursor:pointer;transition:background 0.15s}
 .pdf-btn{padding:6px 14px;background:#0f172a;color:white;border:none;border-radius:5px;font-size:13px;font-weight:600;cursor:pointer;transition:background 0.15s;white-space:nowrap}
 .pdf-btn:hover{background:#1e293b}

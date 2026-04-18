@@ -250,6 +250,118 @@ function onPdfImportFileSelected(e) {
   pdfImportFileName.value = file.name
 }
 
+// ── Cloud PDF pickers ────────────────────────────────────────────────────────
+
+const DROPBOX_KEY     = import.meta.env.VITE_DROPBOX_APP_KEY    || ''
+const GDRIVE_CLIENT   = import.meta.env.VITE_GOOGLE_CLIENT_ID   || ''
+const GDRIVE_API_KEY  = import.meta.env.VITE_GOOGLE_API_KEY     || ''
+
+function _loadScript(src) {
+  return new Promise((resolve, reject) => {
+    if (document.querySelector(`script[src="${src}"]`)) { resolve(); return }
+    const s = document.createElement('script')
+    s.src = src; s.onload = resolve; s.onerror = reject
+    document.head.appendChild(s)
+  })
+}
+
+function _setPdfFile(file) {
+  pdfImportFile.value     = file
+  pdfImportFileName.value = file.name
+  pdfImportError.value    = ''
+}
+
+async function openDropboxPicker() {
+  if (!DROPBOX_KEY) { toast.error('Dropbox is not configured'); return }
+  try {
+    await _loadScript('https://www.dropbox.com/static/api/2/dropins.js')
+    window.Dropbox.choose({
+      appKey:     DROPBOX_KEY,
+      linkType:   'direct',
+      multiselect: false,
+      extensions: ['.pdf'],
+      success: async (files) => {
+        const url = files[0].link
+        try {
+          const resp = await fetch(url)
+          if (!resp.ok) throw new Error('Download failed')
+          const blob = await resp.blob()
+          const file = new File([blob], files[0].name, { type: 'application/pdf' })
+          _setPdfFile(file)
+          toast.success('PDF loaded from Dropbox')
+        } catch (e) {
+          toast.error('Failed to download from Dropbox: ' + e.message)
+        }
+      },
+      cancel: () => {},
+    })
+  } catch (e) {
+    toast.error('Could not load Dropbox picker')
+    console.error(e)
+  }
+}
+
+let _gdriveToken = null
+
+async function _ensureGdriveToken() {
+  if (_gdriveToken) return _gdriveToken
+  await _loadScript('https://accounts.google.com/gsi/client')
+  return new Promise((resolve, reject) => {
+    const client = google.accounts.oauth2.initTokenClient({
+      client_id: GDRIVE_CLIENT,
+      scope: 'https://www.googleapis.com/auth/drive.readonly',
+      callback: (resp) => {
+        if (resp.error) { reject(new Error(resp.error)); return }
+        _gdriveToken = resp.access_token
+        resolve(_gdriveToken)
+      },
+    })
+    client.requestAccessToken({ prompt: 'consent' })
+  })
+}
+
+async function openGoogleDrivePicker() {
+  if (!GDRIVE_CLIENT || !GDRIVE_API_KEY) { toast.error('Google Drive is not configured'); return }
+  try {
+    const [token] = await Promise.all([
+      _ensureGdriveToken(),
+      _loadScript('https://apis.google.com/js/api.js'),
+    ])
+    await new Promise((resolve) => gapi.load('picker', resolve))
+
+    const picker = new google.picker.PickerBuilder()
+      .addView(google.picker.ViewId.DOCS)
+      .setMimeTypes('application/pdf')
+      .setOAuthToken(token)
+      .setDeveloperKey(GDRIVE_API_KEY)
+      .setCallback(async (data) => {
+        if (data.action !== google.picker.Action.PICKED) return
+        const fileId   = data.docs[0].id
+        const fileName = data.docs[0].name
+        try {
+          const resp = await fetch(
+            `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
+            { headers: { Authorization: `Bearer ${token}` } }
+          )
+          if (!resp.ok) throw new Error('Drive download failed')
+          const blob = await resp.blob()
+          const file = new File([blob], fileName.endsWith('.pdf') ? fileName : fileName + '.pdf', { type: 'application/pdf' })
+          _setPdfFile(file)
+          toast.success('PDF loaded from Google Drive')
+        } catch (e) {
+          toast.error('Failed to download from Drive: ' + e.message)
+        }
+      })
+      .build()
+    picker.setVisible(true)
+  } catch (e) {
+    toast.error('Could not open Google Drive picker')
+    console.error(e)
+  }
+}
+
+// ── End cloud pickers ─────────────────────────────────────────────────────────
+
 async function runPdfImportParse() {
   if (!pdfImportFile.value) { toast.warning('Please select a PDF file'); return }
   pdfImportParsing.value = true
@@ -1292,6 +1404,29 @@ onMounted(() => {
               </template>
               <input type="file" accept="application/pdf" style="display:none" @change="onPdfImportFileSelected" />
             </label>
+
+            <!-- Cloud pickers -->
+            <div class="pdf-cloud-row">
+              <span class="pdf-cloud-or">or import from</span>
+              <button type="button" class="btn-cloud btn-cloud-gdrive" @click="openGoogleDrivePicker">
+                <svg width="18" height="18" viewBox="0 0 87.3 78" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M6.6 66.85l3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3L27.5 53H0c0 1.55.4 3.1 1.2 4.5z" fill="#0066da"/>
+                  <path d="M43.65 25L29.9 1.2C28.55 2 27.4 3.1 26.6 4.5L1.2 48.5A9.06 9.06 0 000 53h27.5z" fill="#00ac47"/>
+                  <path d="M73.55 76.8c1.35-.8 2.5-1.9 3.3-3.3l1.6-2.75 7.65-13.25c.8-1.4 1.2-2.95 1.2-4.5H59.8L73.55 76.8z" fill="#ea4335"/>
+                  <path d="M43.65 25L57.4 1.2C56.05.4 54.5 0 52.9 0H34.4c-1.6 0-3.15.45-4.5 1.2z" fill="#00832d"/>
+                  <path d="M59.8 53H27.5L13.75 76.8c1.35.8 2.9 1.2 4.5 1.2h50.8c1.6 0 3.15-.4 4.5-1.2z" fill="#2684fc"/>
+                  <path d="M73.4 26.5L60.7 4.5C59.9 3.1 58.75 2 57.4 1.2L43.65 25 59.8 53h27.45c0-1.55-.4-3.1-1.2-4.5z" fill="#ffba00"/>
+                </svg>
+                Google Drive
+              </button>
+              <button type="button" class="btn-cloud btn-cloud-dropbox" @click="openDropboxPicker">
+                <svg width="18" height="18" viewBox="0 0 215 205" xmlns="http://www.w3.org/2000/svg" fill="#0061FF">
+                  <path d="M67.5 0L0 43.8l47.7 38.2L67.5 71l19.8 11L107.5 71l19.8 11 19.8-11 47.7-38.2L127.5 0 107.5 22.5zM107.5 82L87.7 71 47.7 97.8 0 63.8l67.5 43.8 40-27L127.5 108l40-27.2L215 63.8l-47.7 34L127.5 71zM67.5 108.8L0 152.5 67.5 196 107.5 171l40 25L215 152.5l-67.5-43.7-40 27-40-27z"/>
+                </svg>
+                Dropbox
+              </button>
+            </div>
+
             <div v-if="pdfImportError" class="pdf-error">{{ pdfImportError }}</div>
             <div v-if="pdfImportParsing" class="pdf-parsing-status">
               <span class="lc-spinner"></span> Analysing PDF with AI — this may take 30–60 seconds…
@@ -2369,6 +2504,37 @@ onMounted(() => {
 .pdf-dz-title  { font-size: 15px; font-weight: 600; color: #475569; }
 .pdf-dz-hint   { font-size: 12px; color: #94a3b8; }
 .pdf-dz-filename { font-size: 14px; font-weight: 700; color: #4338ca; }
+
+.pdf-cloud-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+.pdf-cloud-or {
+  font-size: 12px;
+  color: #94a3b8;
+  white-space: nowrap;
+}
+.btn-cloud {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 14px;
+  border-radius: 8px;
+  border: 1.5px solid #e2e8f0;
+  background: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  color: #334155;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.btn-cloud:hover {
+  border-color: #6366f1;
+  background: #f5f3ff;
+}
 
 .pdf-error {
   background: #fef2f2;

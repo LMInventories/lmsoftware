@@ -5,6 +5,9 @@ from permissions import get_current_user, require_admin_or_manager, filter_inspe
 from datetime import datetime
 import json
 import re
+import time
+import random
+import string
 
 inspections_bp = Blueprint('inspections', __name__)
 
@@ -789,10 +792,23 @@ def apply_pdf_import(inspection_id):
             matched_item = _fuzzy_match_item(pdf_item.get('label', ''), matched_sec.items)
             if not matched_item:
                 continue
-            report_data[sec_key][str(matched_item.id)] = {
+            item_entry = {
                 'description': pdf_item.get('description') or '',
                 'condition':   pdf_item.get('condition')   or '',
             }
+            # Carry across sub-items (e.g. Contents list)
+            pdf_subs = pdf_item.get('_subs')
+            if isinstance(pdf_subs, list) and pdf_subs:
+                built_subs = []
+                for sub in pdf_subs:
+                    sid = 'sub_' + str(int(time.time() * 1000)) + '_' + ''.join(random.choices(string.ascii_lowercase, k=4))
+                    built_subs.append({
+                        '_sid':        sid,
+                        'description': sub.get('description') or '',
+                        'condition':   sub.get('condition')   or '',
+                    })
+                item_entry['_subs'] = built_subs
+            report_data[sec_key][str(matched_item.id)] = item_entry
 
     # ── Fixed sections — keyed with the same IDs the frontend computes ────
     #

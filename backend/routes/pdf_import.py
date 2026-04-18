@@ -26,53 +26,61 @@ os.makedirs(JOBS_DIR, exist_ok=True)
 
 MIN_TEXT_CHARS = 500
 
-PROMPT_TEMPLATE = """You are parsing a UK property inspection report (inventory or check-in) to extract structured data for a Check Out system.
+PROMPT_TEMPLATE = """You are extracting structured data from a UK property inspection report (inventory or check-in) for a Check Out system.
 
-Template structure available to match against:
+Template structure to match against:
 __TEMPLATE_STRUCTURE__
 
-Extract ALL rooms and items. For each item:
-- label: the item name — use the EXACT label from the template where a match exists
-- description: physical description of the item
-- condition: condition at time of check-in
-- _subs: array of sub-items (only when the PDF contains sub-items beneath this item — see below)
+═══════════════════════════════════════
+GOLDEN RULE — COPY, DO NOT REWRITE
+═══════════════════════════════════════
+Copy text from the PDF VERBATIM into description and condition fields.
+• Do NOT summarise, paraphrase, abbreviate, or reformat anything.
+• Do NOT merge sentences or remove any words.
+• If the PDF spans multiple lines for one item, join them with \\n (a literal newline character in the JSON string).
+• Preserve every detail exactly as written — this is a legal document.
 
-The report format is typically: [Room/Item Name] [Description] [Condition at Check In]
-Some reports use columns: Item | Description | Condition at Check In | Condition at Check Out
+═══════════════════════════════════════
+MATCHING ALGORITHM — READ THIS CAREFULLY
+═══════════════════════════════════════
+Process the PDF line by line, for each room section:
 
-IMPORTANT RULES:
-- Extract condition at CHECK IN only (not check out, even if present)
-- Preserve exact wording — this is a legal document
-- If an item has no description or condition, still include it with empty strings
-- Match room names to the template structure where possible
-- Match item labels to the template item labels — do NOT invent new items for things that are sub-items of a template item
+1. Try to match the line to a template item label (case-insensitive, partial match OK).
+   → If it matches: this line's data goes into that template item (label, description, condition).
+      Remember this as the "current parent item".
 
-SUB-ITEMS — this is critical:
-Many inspection reports list sub-items beneath a parent item. They appear as:
-  • Items indented under a parent heading
-  • Items prefixed with the parent name and a dash or colon, e.g. "Contents - Bedside Table", "Contents: Wardrobe"
-  • A group of individual pieces listed under a heading like "Contents:" followed by a list
+2. If the line does NOT match any template item label:
+   → It is a SUB-ITEM of the current parent item.
+   → Add it to "_subs" on the current parent item.
+   → Do NOT create a new top-level item for it.
 
-When you see this pattern:
-1. Identify the PARENT item and match it to the template (e.g. "Contents" matches template item "Contents")
-2. Place each sub-item inside "_subs" on that parent item — do NOT create a separate top-level item for each sub-item
-3. Set the parent item's "label" to the matched template label
-4. Set the parent item's "description" and "condition" from any overview text for that heading (or leave empty)
-5. Each sub-item entry has only: "description" (what the sub-item is + its description) and "condition"
+3. Common sub-item patterns — these are ALWAYS sub-items, never top-level items:
+   • "Contents - Bedside Table: Oak veneer / In good order"
+     → parent = "Contents", sub = { description: "Bedside Table: Oak veneer", condition: "In good order" }
+   • "Contents: Wardrobe — white gloss" followed by "In good order"
+     → parent = "Contents", sub = { description: "Wardrobe — white gloss", condition: "In good order" }
+   • Any line prefixed with the parent item name and a dash, colon, or slash
 
-Example — PDF has:
-  "Contents - Bedside Table: Oak veneer / In good order"
-  "Contents - Wardrobe: White gloss / In good order"
-→ Return ONE item with label "Contents" and _subs:
-  { "label": "Contents", "description": "", "condition": "",
-    "_subs": [
-      { "description": "Oak veneer bedside table", "condition": "In good order" },
-      { "description": "White gloss wardrobe",     "condition": "In good order" }
-    ]
-  }
-NOT as two separate items "Contents - Bedside Table" and "Contents - Wardrobe".
+4. If NO template is provided (template says "No template"), infer structure from the PDF rooms/items directly — but still apply the sub-item rules above.
 
-Return ONLY valid JSON - no markdown, no explanation:
+═══════════════════════════════════════
+FIELD RULES
+═══════════════════════════════════════
+- label: EXACT label from the template where matched; otherwise use the PDF heading text as-is
+- description: Copy verbatim from PDF. Multi-line → join with \\n. Empty string if not present.
+- condition: Copy verbatim from PDF (CHECK IN column only — ignore Check Out). Empty string if not present.
+- _subs: Array present only when the item has sub-items. Each sub-item has only "description" and "condition" (both verbatim).
+
+═══════════════════════════════════════
+FIXED SECTIONS
+═══════════════════════════════════════
+Extract these if present in the PDF. Copy all text verbatim.
+- condition_summary: overall condition notes
+- keys: key types and quantities handed over
+- meter_readings: gas/electric/water meter readings with location/serial
+- cleaning_summary: cleanliness notes
+
+Return ONLY valid JSON — no markdown, no explanation:
 {
   "rooms": [
     {
@@ -80,25 +88,25 @@ Return ONLY valid JSON - no markdown, no explanation:
       "items": [
         {
           "label": "Door, Frame & Furniture",
-          "description": "White painted panel door",
-          "condition": "Good condition"
+          "description": "White painted solid panel door with chrome lever handle\\nDoor frame painted white",
+          "condition": "Good clean condition throughout"
         },
         {
           "label": "Contents",
           "description": "",
           "condition": "",
           "_subs": [
-            { "description": "Oak coffee table", "condition": "Good condition" },
-            { "description": "3-seater grey fabric sofa", "condition": "Good condition" }
+            { "description": "Bedside Table — oak veneer with single drawer", "condition": "Good order, minor surface scratch to top" },
+            { "description": "Wardrobe — white gloss, double door with hanging rail", "condition": "Good clean condition" }
           ]
         }
       ]
     }
   ],
   "fixedSections": {
-    "condition_summary": [{ "name": "General Condition", "condition": "Good overall" }],
+    "condition_summary": [{ "name": "General Condition", "condition": "Good overall condition throughout" }],
     "keys": [{ "name": "Front Door Key", "description": "2 x Yale, 1 x Deadlock" }],
-    "meter_readings": [{ "name": "Gas Meter", "locationSerial": "Under stairs", "reading": "12345.6" }],
+    "meter_readings": [{ "name": "Gas Meter", "locationSerial": "Under stairs / Serial 12345", "reading": "12345.6" }],
     "cleaning_summary": [{ "name": "General Cleanliness", "cleanliness": "Professionally Cleaned", "cleanlinessNotes": "" }]
   }
 }"""

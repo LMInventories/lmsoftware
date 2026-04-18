@@ -62,6 +62,25 @@ def create_app():
     def health():
         return {'status': 'ok'}, 200
 
+    # ── Global error handlers ─────────────────────────────────────────────────
+    import traceback
+    import logging
+
+    @app.errorhandler(Exception)
+    def handle_unhandled_exception(e):
+        # Let Flask's built-in HTTP exceptions (404, 405, etc.) pass through
+        from werkzeug.exceptions import HTTPException
+        if isinstance(e, HTTPException):
+            return e
+        tb = traceback.format_exc()
+        logging.error('Unhandled exception:\n%s', tb)
+        return {'error': 'Internal server error', 'detail': str(e)}, 500
+
+    @app.errorhandler(500)
+    def handle_500(e):
+        tb = traceback.format_exc()
+        logging.error('500 error:\n%s', tb)
+        return {'error': 'Internal server error', 'detail': str(e)}, 500
 
     db.init_app(app)
     JWTManager(app)
@@ -171,6 +190,16 @@ def _setup_database():
         )
         db.session.commit()
         print("✅ inspections.typist_mode added.")
+
+    # templates.is_transient — PDF-import templates are hidden from the Templates UI
+    if not column_exists('templates', 'is_transient'):
+        print("Migrating: adding templates.is_transient column...")
+        default = "0" if _is_sqlite() else "FALSE"
+        db.session.execute(
+            text(f"ALTER TABLE templates ADD COLUMN is_transient BOOLEAN DEFAULT {default}")
+        )
+        db.session.commit()
+        print("✅ templates.is_transient added.")
 
     # ── Seed (only on a completely empty database) ───────────────────────────
     if User.query.count() == 0:

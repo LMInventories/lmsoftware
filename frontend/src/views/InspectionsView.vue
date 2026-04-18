@@ -727,8 +727,9 @@ async function fetchInspections() {
     const response = await api.getInspections()
     inspections.value = response.data
   } catch (error) {
-    console.error('Failed to fetch inspections:', error)
-    toast.error('Failed to load inspections')
+    const msg = error._friendlyMessage || 'Could not load inspections — please try again.'
+    console.error('fetchInspections error:', error)
+    toast.error(msg)
   } finally {
     loading.value = false
   }

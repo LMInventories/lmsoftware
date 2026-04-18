@@ -31,11 +31,25 @@ http.interceptors.request.use(
 http.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
+    const status = error.response?.status
+
+    if (status === 401) {
+      // Token expired or invalid — clear session and redirect to login
       localStorage.removeItem('token')
       localStorage.removeItem('user')
       if (window.location.pathname !== '/login') window.location.href = '/login'
+    } else if (!error.response) {
+      // Network error or timeout — no HTTP response received at all
+      error._friendlyMessage = 'Network error — check your connection or try again.'
+    } else if (status >= 500) {
+      // Server-side error — log detail if the backend sent one
+      const detail = error.response?.data?.detail || error.response?.data?.error || ''
+      console.error(`Server error ${status}${detail ? ': ' + detail : ''}`, error)
+      error._friendlyMessage = `Server error (${status}) — please try again.`
+    } else if (status === 403) {
+      error._friendlyMessage = 'You do not have permission to do that.'
     }
+
     return Promise.reject(error)
   }
 )

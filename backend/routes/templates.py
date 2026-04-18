@@ -29,7 +29,12 @@ def handle_options(**kwargs):
 @templates_bp.route('', methods=['GET'])
 @jwt_required()
 def get_templates():
-    templates = Template.query.order_by(Template.name).all()
+    # Exclude transient templates (auto-generated PDF-import skeletons).
+    # They still exist in the DB so inspections can reference them, but they
+    # should not appear in the Templates management UI.
+    templates = Template.query.filter(
+        (Template.is_transient == False) | (Template.is_transient == None)
+    ).order_by(Template.name).all()
     return jsonify([t.to_dict() for t in templates])
 
 

@@ -2,6 +2,7 @@ from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from models import db, Inspection, Property, User, Template, Section, Item
 from permissions import get_current_user, require_admin_or_manager, filter_inspections_for_user, is_admin_or_manager
+from sqlalchemy.orm import joinedload
 from datetime import datetime
 import json
 import re
@@ -113,7 +114,15 @@ def inspection_detail(inspection):
 @jwt_required()
 def get_inspections():
     user = get_current_user()
-    query = filter_inspections_for_user(Inspection.query, user)
+    # Eager-load all relationships accessed in the list serialiser in a single
+    # query (4 JOINs) instead of issuing 4 lazy-load queries per inspection.
+    # Without this, 50 inspections → 200+ round trips → intermittent timeouts.
+    eager = Inspection.query.options(
+        joinedload(Inspection.property).joinedload(Property.client),
+        joinedload(Inspection.inspector),
+        joinedload(Inspection.typist),
+    )
+    query = filter_inspections_for_user(eager, user)
     inspections = query.all()
     return jsonify([{
         'id': i.id,
@@ -715,6 +724,7 @@ def _build_template_from_pdf(pdf_rooms, inspection):
         inspection_type='check_in',
         content='{}',
         is_default=False,
+        is_transient=True,   # hidden from Templates UI; functional for this inspection only
     )
     db.session.add(template)
     db.session.flush()  # get template.id

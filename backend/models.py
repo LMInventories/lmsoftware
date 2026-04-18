@@ -229,6 +229,10 @@ class Template(db.Model):
     inspection_type = db.Column(db.String(50), nullable=False)
     content         = db.Column(db.Text, nullable=False, default='{}')  # legacy JSON fallback
     is_default      = db.Column(db.Boolean, default=False)
+    # is_transient: True for auto-generated PDF-import templates.
+    # These are functional (inspections reference them) but are hidden from the
+    # Templates management UI so they don't clutter the list.
+    is_transient    = db.Column(db.Boolean, default=False)
     created_at      = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at      = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -245,6 +249,7 @@ class Template(db.Model):
             'inspection_type': self.inspection_type,
             'content':         self.content,
             'is_default':      self.is_default,
+            'is_transient':    self.is_transient,
             'sections':        [s.to_dict() for s in self.sections],
             'created_at':      self.created_at.isoformat() if self.created_at else None,
             'updated_at':      self.updated_at.isoformat() if self.updated_at else None,

@@ -1376,8 +1376,35 @@ const rooms = computed(() => {
     sections:    [],   // items are stored as _extra in reportData
   }))
 
+  // Append rooms added by the clerk during mobile inspection (_customRooms)
+  const hiddenRooms = reportData.value._hiddenRooms || []
+  const roomNames   = reportData.value._roomNames   || {}
+  const customRooms = (reportData.value._customRooms || [])
+    .filter(r => !hiddenRooms.includes(String(r.key)))
+    .map(r => ({
+      id:           r.key,
+      name:         roomNames[r.key] ?? r.name,
+      _isCustom:    true,
+      section_type: 'room',
+      sections:     [],   // items are stored as _extra in reportData
+    }))
+
+  // Merge all room sources and sort by _roomOrder if the mobile app recorded one
+  let allRooms = [...templateRooms, ...importedRooms, ...customRooms]
+  const roomOrder = reportData.value._roomOrder
+  if (roomOrder && roomOrder.length) {
+    allRooms = allRooms.slice().sort((a, b) => {
+      const ai = roomOrder.indexOf(String(a.id))
+      const bi = roomOrder.indexOf(String(b.id))
+      if (ai === -1 && bi === -1) return 0
+      if (ai === -1) return 1
+      if (bi === -1) return -1
+      return ai - bi
+    })
+  }
+
   // Pre-compute ordered items once per room so template lookups are O(1)
-  return [...templateRooms, ...importedRooms].map(room => {
+  return allRooms.map(room => {
     const storedOrder = reportData.value[room.id]?._itemOrder
     const deletedIds  = new Set((reportData.value[room.id]?._deleted || []).map(String))
     const tmplItems   = (room.sections || [])

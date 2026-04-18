@@ -286,9 +286,9 @@ class _PDFBuilder:
         # Items use item.id as the row key, and item.name as the label.
         self.rooms = []
         tmpl = inspection.template
+        room_names   = self.rd.get('_roomNames', {})
+        hidden_rooms = set(str(x) for x in (self.rd.get('_hiddenRooms') or []))
         if tmpl:
-            room_names   = self.rd.get('_roomNames', {})
-            hidden_rooms = set(str(x) for x in (self.rd.get('_hiddenRooms') or []))
             for s in sorted(tmpl.sections or [], key=lambda x: x.order_index):
                 if s.section_type == 'room':
                     if str(s.id) in hidden_rooms:
@@ -308,6 +308,34 @@ class _PDFBuilder:
                             for item in sorted(s.items or [], key=lambda i: i.order_index)
                         ],
                     })
+
+        # ── Custom rooms added by clerk during mobile inspection ─────────────
+        # Stored as _customRooms: [{ key, name }] in report_data.
+        # Room data lives at rd[key] (same as template rooms but keyed by string).
+        for cr in (self.rd.get('_customRooms') or []):
+            key = str(cr.get('key') or '')
+            if not key:
+                continue
+            if key in hidden_rooms:
+                continue      # clerk deleted this room before syncing
+            name = room_names.get(key, cr.get('name') or 'Room')
+            self.rooms.append({
+                'id':       key,
+                'name':     name,
+                'sections': [],   # all items stored as _extra in report_data
+                '_isCustom': True,
+            })
+
+        # ── Apply _roomOrder if the mobile app recorded one ──────────────────
+        room_order = [str(x) for x in (self.rd.get('_roomOrder') or [])]
+        if room_order:
+            def _room_pos(r):
+                key = str(r['id'])
+                try:
+                    return room_order.index(key)
+                except ValueError:
+                    return len(room_order)
+            self.rooms.sort(key=_room_pos)
 
         # ── Action catalogue — not used in current schema, empty list ────────
         self.action_catalogue = []

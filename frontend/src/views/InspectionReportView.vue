@@ -769,7 +769,8 @@ const actionSummaryGroups = computed(() => {
           itemLabel:      itemLabel,
           ref:            refNum,
           responsibility: a.responsibility || '',
-          condition:      a.condition      || '',
+          // Normalise: support both legacy condition string and new conditions array
+          condition: (a.conditions && a.conditions.length ? a.conditions.join('\n') : a.condition || ''),
         })
       }
     }

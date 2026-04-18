@@ -146,6 +146,8 @@ watch(
           form.value.source_inspection_id = source.id
         } else {
           noCheckInFound.value = true
+          // Auto-switch to Damage Report — standalone type used when no Check In exists
+          form.value.inspection_type = 'damage_report'
         }
       } else if (iType === 'check_in') {
         // Seed from most recent check_out with report data
@@ -1276,16 +1278,18 @@ onMounted(() => {
             </div>
           </div>
 
-          <!-- ── No Check In found warning for Check Out ─────────────── -->
+          <!-- ── No Check In found — auto-switched to Damage Report ─── -->
           <div
             v-else-if="noCheckInFound && !historyLoading"
-            class="lc-warning-banner"
+            class="lc-warning-banner lc-info-banner"
           >
-            <div class="lc-banner-icon">⚠️</div>
+            <div class="lc-banner-icon">ℹ️</div>
             <div class="lc-banner-body">
-              <strong class="lc-banner-title lc-warn-title">No previous Check In found for this property</strong>
-              <p class="lc-banner-desc lc-warn-desc">
-                An empty report will be assigned. To create a backdated Check In from an existing PDF, use the
+              <strong class="lc-banner-title">No previous Check In found — switched to Damage Report</strong>
+              <p class="lc-banner-desc">
+                No Check In exists for this property, so the inspection type has been set to
+                <strong>Damage Report</strong> automatically. To use a Check Out instead, select it
+                manually above, or create a backdated Check In via the
                 <strong>Create from PDF</strong> button on the Inspections page.
               </p>
             </div>
@@ -2415,6 +2419,14 @@ onMounted(() => {
 }
 .lc-warn-title { color: #92400e !important; }
 .lc-warn-desc  { color: #78350f !important; }
+
+/* Info variant (blue) — for auto-switch notification */
+.lc-info-banner {
+  background: #eff6ff;
+  border-color: #93c5fd;
+}
+.lc-info-banner .lc-banner-title { color: #1e40af; }
+.lc-info-banner .lc-banner-desc  { color: #1d4ed8; }
 
 /* ── Create from PDF modal steps ────────────────────────────────────────── */
 .pdf-steps {

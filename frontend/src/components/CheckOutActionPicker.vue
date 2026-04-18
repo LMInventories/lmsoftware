@@ -7,7 +7,7 @@
  * dropdown to add/remove tags and set a responsibility party.
  *
  * Props:
- *   actions  — array of assigned action objects: [{ actionId, responsibility, condition }]
+ *   actions  — array of assigned action objects: [{ actionId, responsibility, conditions }]
  *   roomId   — string (for keying)
  *   itemId   — string (for keying)
  *
@@ -15,7 +15,8 @@
  *   update:actions — new array of action objects
  *
  * Action object shape (stored in reportData):
- *   { actionId: string, responsibility: string, condition: string }
+ *   { actionId: string, responsibility: string, conditions: string[] }
+ *   (backward compat: legacy `condition: string` is read as `[condition]`)
  */
 
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
@@ -125,27 +126,40 @@ function getAssigned(actionId) {
   return assigned.value.find(a => a.actionId === actionId)
 }
 
+// Normalise an action object: ensure it has conditions[] (migrate legacy condition string)
+function normaliseAction(a) {
+  if (a.conditions) return a
+  return { ...a, conditions: a.condition ? [a.condition] : [] }
+}
+
+function getConditions(a) {
+  return (normaliseAction(a)).conditions
+}
+
 function toggleAction(actionId) {
   if (isAssigned(actionId)) {
     emit('update:actions', assigned.value.filter(a => a.actionId !== actionId))
   } else {
     emit('update:actions', [
       ...assigned.value,
-      { actionId, responsibility: responsibilities.value[0] || '', condition: '' }
+      { actionId, responsibility: responsibilities.value[0] || '', conditions: [] }
     ])
   }
 }
 
 function setResponsibility(actionId, value) {
   emit('update:actions', assigned.value.map(a =>
-    a.actionId === actionId ? { ...a, responsibility: value } : a
+    a.actionId === actionId ? { ...normaliseAction(a), responsibility: value } : a
   ))
 }
 
-function setCondition(actionId, value) {
-  emit('update:actions', assigned.value.map(a =>
-    a.actionId === actionId ? { ...a, condition: value } : a
-  ))
+function toggleCondition(actionId, line) {
+  emit('update:actions', assigned.value.map(a => {
+    if (a.actionId !== actionId) return a
+    const norm = normaliseAction(a)
+    const has = norm.conditions.includes(line)
+    return { ...norm, conditions: has ? norm.conditions.filter(c => c !== line) : [...norm.conditions, line] }
+  }))
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -173,6 +187,7 @@ function getCatalogueItem(actionId) {
           <span class="cap-pill-dot" :style="{ background: getCatalogueItem(a.actionId)?.color || '#64748b' }"></span>
           <span class="cap-pill-name">{{ getCatalogueItem(a.actionId)?.name || a.actionId }}</span>
           <span v-if="a.responsibility" class="cap-pill-resp">· {{ a.responsibility }}</span>
+          <span v-if="getConditions(a).length" class="cap-pill-resp">· {{ getConditions(a).length > 1 ? getConditions(a).length + ' conditions' : getConditions(a)[0] }}</span>
           <button class="cap-pill-x" @click.stop="toggleAction(a.actionId)">×</button>
         </div>
       </template>
@@ -254,41 +269,38 @@ function getCatalogueItem(actionId) {
                 </select>
               </div>
 
-              <!-- Condition — dropdown from checkOutCondition lines, or free text -->
+              <!-- Condition — multi-select checkboxes from checkOutCondition lines -->
               <div class="cap-detail-field">
-                <label class="cap-field-lbl">Condition</label>
+                <label class="cap-field-lbl">Condition <span class="cap-opt">(select all that apply)</span></label>
 
-                <!-- Lines available: show dropdown -->
+                <!-- Lines available: multi-select checkbox list -->
                 <template v-if="conditionLines.length">
-                  <select
-                    class="cap-select"
-                    :value="conditionLines.includes(a.condition) ? a.condition : (a.condition ? '__custom__' : '')"
-                    @change="setCondition(a.actionId, $event.target.value)"
-                  >
-                    <option value="">— Select condition —</option>
-                    <option v-for="line in conditionLines" :key="line" :value="line">{{ line }}</option>
-                    <option value="__custom__">— Enter manually —</option>
-                  </select>
-                  <input
-                    v-if="a.condition && !conditionLines.includes(a.condition)"
-                    class="cap-note-input"
-                    style="margin-top:6px"
-                    type="text"
-                    placeholder="Describe the condition…"
-                    :value="a.condition"
-                    @input="setCondition(a.actionId, $event.target.value)"
-                    maxlength="200"
-                  />
+                  <div class="cap-cond-list">
+                    <label
+                      v-for="line in conditionLines"
+                      :key="line"
+                      class="cap-cond-item"
+                      :class="{ 'cap-cond-checked': getConditions(a).includes(line) }"
+                    >
+                      <input
+                        type="checkbox"
+                        class="cap-cond-cb"
+                        :checked="getConditions(a).includes(line)"
+                        @change="toggleCondition(a.actionId, line)"
+                      />
+                      <span class="cap-cond-text">{{ line }}</span>
+                    </label>
+                  </div>
                 </template>
 
-                <!-- No lines yet: plain text input -->
+                <!-- No lines yet: plain text input (each line = one condition) -->
                 <template v-else>
                   <input
                     class="cap-note-input"
                     type="text"
                     placeholder="e.g. Heavy marks to low level door…"
-                    :value="a.condition"
-                    @input="setCondition(a.actionId, $event.target.value)"
+                    :value="getConditions(a).join(', ')"
+                    @change="toggleCondition(a.actionId, $event.target.value.trim())"
                     maxlength="200"
                   />
                 </template>
@@ -524,6 +536,48 @@ function getCatalogueItem(actionId) {
   outline: none;
   border-color: #6366f1;
   box-shadow: 0 0 0 2px rgba(99,102,241,0.1);
+}
+
+/* Condition multi-select checkboxes */
+.cap-cond-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.cap-cond-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: white;
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s;
+  font-size: 13px;
+  line-height: 1.4;
+  user-select: none;
+}
+.cap-cond-item:hover {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+}
+.cap-cond-item.cap-cond-checked {
+  background: #eff6ff;
+  border-color: #93c5fd;
+}
+.cap-cond-cb {
+  flex-shrink: 0;
+  margin-top: 2px;
+  accent-color: #6366f1;
+  cursor: pointer;
+}
+.cap-cond-text {
+  color: #374151;
+}
+.cap-cond-checked .cap-cond-text {
+  color: #1d4ed8;
+  font-weight: 600;
 }
 
 /* Footer */

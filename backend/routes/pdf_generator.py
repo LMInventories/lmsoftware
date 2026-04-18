@@ -996,7 +996,7 @@ class _PDFBuilder:
                     Paragraph(str(i+1), self.s_ref),
                     self._p(f"{a.get('room','')} \u203a {a.get('item','')}"),
                     self._badge(a.get('responsibility') or '—', c_lt, c),
-                    self._p(a.get('condition') or '—'),
+                    self._p('\n'.join(a.get('conditions') or ([a['condition']] if a.get('condition') else [])) or '—'),
                 ])
             tbl = Table(tbl_data, colWidths=widths, repeatRows=1)
             tbl.setStyle(self._table_style(brand=c, hdr_c=_WHITE))

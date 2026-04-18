@@ -937,6 +937,35 @@ def _transform_report_data(source_type, target_type, raw, include_photos=False):
                         new_row[field] = row_data[field]
                 if include_photos and 'photos' in row_data:
                     new_row['photos'] = row_data['photos']
+                # Carry sub-items — promote condition → inventoryCondition
+                if '_subs' in row_data and isinstance(row_data['_subs'], list):
+                    new_row['_subs'] = [
+                        {
+                            '_sid':               sub.get('_sid', ''),
+                            'description':        sub.get('description', ''),
+                            'inventoryCondition': sub.get('condition', ''),
+                            'checkOutCondition':  '',
+                        }
+                        for sub in row_data['_subs']
+                    ]
+
+            elif source_type == 'check_out' and target_type in ('check_in', 'inventory'):
+                new_row['description'] = row_data.get('description', '')
+                new_row['condition'] = row_data.get('checkOutCondition') or row_data.get('inventoryCondition') or row_data.get('condition', '')
+                for field in ('cleanliness', 'cleanlinessNotes', 'locationSerial',
+                              'reading', 'answer', 'notes', 'name'):
+                    if field in row_data:
+                        new_row[field] = row_data[field]
+                # Carry sub-items — flatten back to condition
+                if '_subs' in row_data and isinstance(row_data['_subs'], list):
+                    new_row['_subs'] = [
+                        {
+                            '_sid':        sub.get('_sid', ''),
+                            'description': sub.get('description', ''),
+                            'condition':   sub.get('checkOutCondition') or sub.get('inventoryCondition') or sub.get('condition', ''),
+                        }
+                        for sub in row_data['_subs']
+                    ]
 
             new_section[row_id] = new_row
 

@@ -353,6 +353,9 @@ class _PDFBuilder:
     def _get(self, sid, rid, field):
         return (self.rd.get(str(sid)) or {}).get(str(rid), {}).get(field, '') or ''
 
+    def _get_subs(self, sid, rid):
+        return (self.rd.get(str(sid)) or {}).get(str(rid), {}).get('_subs') or []
+
     def _hidden(self, sid, rid):
         return str(rid) in ((self.rd.get(str(sid)) or {}).get('_hidden', []) or [])
 
@@ -925,6 +928,20 @@ class _PDFBuilder:
                     act_txt = ', '.join(self._action_name(a['actionId']) for a in acts if a.get('actionId'))
                     acts_cell = [self._p(act_txt or '—', self.s_cell_sm)] + link_p
                     tbl_data.append([Paragraph(ref,self.s_ref), self._p(label,self.s_bold), self._p(desc or '—'), self._p(inv or '—'), self._p(co_c), acts_cell])
+                    # Sub-items
+                    if not is_ex:
+                        for sub in self._get_subs(room['id'], item['id']):
+                            sub_desc = sub.get('description') or ''
+                            sub_inv  = sub.get('inventoryCondition') or sub.get('condition') or ''
+                            sub_co   = sub.get('checkOutCondition') or ''
+                            tbl_data.append([
+                                Paragraph('↳', self.s_ref),
+                                self._p(sub_desc, self.s_cell_sm),
+                                Paragraph('', self.s_cell),
+                                self._p(sub_inv or '—', self.s_cell_sm),
+                                self._p(sub_co  or '—', self.s_cell_sm),
+                                Paragraph('', self.s_cell),
+                            ])
                 elif dmg:
                     cond = (item.get('condition') or '') if is_ex else self._get(room['id'],item['id'],'condition')
                     cond_cell = [self._p(cond or '—')] + link_p
@@ -933,6 +950,17 @@ class _PDFBuilder:
                     cond = (item.get('condition') or '') if is_ex else self._get(room['id'],item['id'],'condition')
                     cond_cell = [self._p(cond or '—')] + link_p
                     tbl_data.append([Paragraph(ref,self.s_ref), self._p(label,self.s_bold), self._p(desc or '—'), cond_cell])
+                    # Sub-items
+                    if not is_ex:
+                        for sub in self._get_subs(room['id'], item['id']):
+                            sub_desc = sub.get('description') or ''
+                            sub_cond = sub.get('condition') or ''
+                            tbl_data.append([
+                                Paragraph('↳', self.s_ref),
+                                self._p(sub_desc, self.s_cell_sm),
+                                Paragraph('', self.s_cell),
+                                self._p(sub_cond or '—', self.s_cell_sm),
+                            ])
 
             room_tbl = Table(tbl_data, colWidths=widths, repeatRows=1)
             room_tbl.setStyle(self._table_style())

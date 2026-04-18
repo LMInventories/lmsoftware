@@ -116,7 +116,7 @@ def _whisper_transcribe(audio_bytes: bytes, mime_type: str) -> str:
         os.unlink(tmp_path)
 
 
-def _claude_fill_item(transcript: str, item_label: str, room_name: str, section_type: str = 'room', edit_mode: str = 'normal') -> dict:
+def _claude_fill_item(transcript: str, item_label: str, room_name: str, section_type: str = 'room', edit_mode: str = 'normal', is_check_out: bool = False) -> dict:
     """
     Given a short transcript for a single item, return the appropriate fields
     based on section type. Uses claude-haiku-4-5.
@@ -131,6 +131,39 @@ def _claude_fill_item(transcript: str, item_label: str, room_name: str, section_
     - meter_readings:        { locationSerial, reading }
     """
     client = anthropic.Anthropic(api_key=os.environ.get('ANTHROPIC_API_KEY'))
+
+    # ── Check-out per-item mode — verbatim, no splitting ───────────────────────
+    # The mobile side handles the "As Inventory+" prefix; we just need the
+    # clerk's exact words returned in "condition" with fillers removed.
+    if is_check_out and section_type == 'room':
+        co_prompt = f"""You are processing a UK property CHECK-OUT inspection dictation.
+The clerk is describing the condition of a single item at the END of the tenancy.
+
+Item: {item_label}
+Room: {room_name}
+
+The clerk said:
+"{transcript}"
+
+VERBATIM RULES — absolute, no exceptions:
+- Return the COMPLETE transcript in "condition", exactly as spoken
+- ONLY remove filler sounds: um, uh, er, errr, umm, erm, and clear false starts (e.g. "white — white door" → "white door")
+- Do NOT interpret, condense, split, or restructure anything
+- Do NOT apply description/condition splitting — everything goes into "condition"
+- Convert spoken numbers to numerals: "two" → "2", "three" → "3"
+- Format quantities as "N x item": "two bulbs" → "2 x bulbs"
+- Capitalise the first word
+
+Return ONLY valid JSON, no markdown:
+{{"condition": "..."}}"""
+        message = client.messages.create(
+            model='claude-haiku-4-5',
+            max_tokens=200,
+            messages=[{'role': 'user', 'content': co_prompt}]
+        )
+        raw = message.content[0].text.strip()
+        raw = raw.replace('```json', '').replace('```', '').strip()
+        return json.loads(raw), message
 
     # Shared formatting rules applied to all section types
     formatting_rules = """
@@ -375,6 +408,7 @@ def transcribe_item():
     section_id   = data.get('sectionId')
     row_id       = data.get('rowId')
     section_type = data.get('sectionType', 'room')  # room|condition_summary|cleaning_summary|keys|meter_readings|fire_door_safety|health_safety
+    is_check_out = bool(data.get('isCheckOut', False))
 
     if not audio_b64:
         return jsonify({'error': 'No audio data'}), 400
@@ -415,7 +449,7 @@ def transcribe_item():
                 'sectionType': section_type,
             })
 
-        filled, filled_msg = _claude_fill_item(transcript, item_label, room_name, section_type, edit_mode)
+        filled, filled_msg = _claude_fill_item(transcript, item_label, room_name, section_type, edit_mode, is_check_out)
 
         # Log usage
         try:
@@ -990,6 +1024,84 @@ The "_delete" flag is only included when the clerk says "Not Applicable" for tha
         return {}
 
 
+def _claude_fill_room_checkout(transcript: str, section_name: str, items: list) -> dict:
+    """
+    Check-out version of _claude_fill_room.
+    Items may include existing sub-items (with _sid + description) for routing.
+    The clerk names an item (or sub-item) then states the check-out condition verbatim.
+
+    Returns: { itemId: { "checkOutCondition": "..." } }
+          or { itemId: { "_subs": [{ "_sid": "...", "checkOutCondition": "..." }] } }
+    """
+    client = anthropic.Anthropic(api_key=os.environ.get('ANTHROPIC_API_KEY'))
+
+    # Build items list with sub-items for the prompt
+    lines = []
+    for item in items:
+        lines.append(f'  - ID: "{item["id"]}", Name: "{item["name"]}"')
+        subs = item.get('subs', [])
+        for sub in subs:
+            desc = (sub.get('description') or '').strip()
+            if desc:
+                lines.append(f'    Sub-item: _sid="{sub["_sid"]}", Description: "{desc}"')
+    items_list = '\n'.join(lines)
+
+    prompt = f"""You are processing a UK property CHECK-OUT inspection dictation for a single room.
+
+The clerk walks through the room describing each item's condition at the END of the tenancy.
+Item names act as CHAPTER HEADINGS — everything said after an item name fills that item's check-out condition.
+If an item has sub-items listed below it (indented), the clerk may name a sub-item by its description to target it specifically.
+
+Room: {section_name}
+
+Items to fill (sub-items are indented below their parent):
+{items_list}
+
+Transcript:
+"{transcript}"
+
+VERBATIM RULES — absolute, no exceptions:
+1. Use the EXACT words the clerk spoke for check-out conditions. Do NOT interpret, condense, or paraphrase.
+   - "2 x bulbs expired" → "2 x bulbs expired"  (NOT just "expired")
+   - ONLY remove filler sounds: um, uh, er, errr, umm, erm
+   - Clear false starts only (e.g. "white — white door" → "white door")
+2. Convert spoken numbers to numerals: "two" → "2", "three" → "3"
+3. Format quantities as "N x item": "two bulbs" → "2 x bulbs"
+4. If the clerk names an item directly: fill its "checkOutCondition" field.
+5. If the clerk names a sub-item (matching its Description): fill that sub-item's "checkOutCondition"
+   and include it under the parent item's "_subs" array, using the exact _sid shown above.
+6. Capitalise the first word.
+7. Only fill items/sub-items that are mentioned. Omit everything else.
+
+Return ONLY valid JSON — no markdown, no extra text.
+Use "checkOutCondition" (not "condition") for all fields.
+Example output:
+{{
+  "<itemId>": {{
+    "checkOutCondition": "clerk's exact words"
+  }},
+  "<itemIdWithSubs>": {{
+    "_subs": [
+      {{ "_sid": "exact_sid_from_above", "checkOutCondition": "clerk's exact words" }}
+    ]
+  }}
+}}"""
+
+    message = client.messages.create(
+        model='claude-haiku-4-5',
+        max_tokens=2000,
+        messages=[{'role': 'user', 'content': prompt}]
+    )
+
+    raw = message.content[0].text.strip()
+    raw = raw.replace('```json', '').replace('```', '').strip()
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        print(f'[_claude_fill_room_checkout] JSON parse error: {raw[:200]}')
+        return {}
+
+
 def _claude_fill_fixed_section(transcript: str, section_name: str, section_type: str, items: list) -> dict:
     """
     Fill a fixed section's items from a continuous dictation transcript.
@@ -1179,6 +1291,7 @@ def transcribe_room():
     section_name = data.get('sectionName', 'Room')
     section_type = data.get('sectionType', 'room')   # 'room' | fixed-section types
     items        = data.get('items', [])
+    is_check_out = bool(data.get('isCheckOut', False))
 
     if not clips:
         return jsonify({'error': 'No audio clips provided'}), 400
@@ -1211,7 +1324,10 @@ def transcribe_room():
 
     try:
         if section_type == 'room':
-            filled = _claude_fill_room(full_transcript, section_name, items)
+            if is_check_out:
+                filled = _claude_fill_room_checkout(full_transcript, section_name, items)
+            else:
+                filled = _claude_fill_room(full_transcript, section_name, items)
         else:
             filled = _claude_fill_fixed_section(full_transcript, section_name, section_type, items)
     except Exception as e:

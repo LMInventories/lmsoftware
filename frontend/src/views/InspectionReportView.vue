@@ -3333,7 +3333,7 @@ async function moveToReview() {
 *{box-sizing:border-box}
 
 /* Layout */
-.shell{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:#f1f5f9}
+.shell{display:flex;flex-direction:column;height:100%;overflow:hidden;background:#f1f5f9}
 .loading-screen{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:14px;background:#f8fafc}
 .loading-screen p{font-size:14px;color:#64748b}
 .ring{width:36px;height:36px;border:3px solid #e2e8f0;border-top-color:#6366f1;border-radius:50%;animation:spin 0.7s linear infinite}

@@ -1,11 +1,17 @@
 <script setup>
-import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, computed } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import api from '../services/api'
 
 const router    = useRouter()
+const route     = useRoute()
 const authStore = useAuthStore()
+
+// Routes that need to fill the viewport and manage their own internal scroll.
+// These get zero padding and overflow:hidden so their shell layout takes over.
+const fullscreenRoutes = new Set(['InspectionReport'])
+const isFullscreen = computed(() => fullscreenRoutes.has(route.name))
 
 // ── Sidebar collapse ──────────────────────────────────────────────────────
 const sidebarCollapsed = ref(false)
@@ -155,7 +161,7 @@ function navigate(path) {
     </header>
 
     <!-- ══ MAIN CONTENT ══════════════════════════════════════════════ -->
-    <main class="main-content">
+    <main class="main-content" :class="{ 'main-fullscreen': isFullscreen }">
       <router-view />
     </main>
 
@@ -402,6 +408,17 @@ function navigate(path) {
 }
 .sidebar-is-collapsed .main-content { margin-left: 64px; }
 
+/* Fullscreen mode: the child view manages its own scroll internally */
+.main-content.main-fullscreen {
+  padding: 0;
+  overflow: hidden;
+  height: 100vh;
+  min-height: unset;
+  display: flex;
+  flex-direction: column;
+}
+.sidebar-is-collapsed .main-content.main-fullscreen { margin-left: 64px; }
+
 /* ── Mobile elements — hidden on desktop ── */
 .mobile-topbar,
 .mobile-bottom-nav,
@@ -503,6 +520,13 @@ function navigate(path) {
     padding: 14px 14px 80px;
     padding-top: calc(52px + 14px);
     min-height: 100vh;
+  }
+  .main-content.main-fullscreen {
+    padding: 0;
+    padding-top: 52px; /* leave room for mobile topbar */
+    overflow: hidden;
+    height: calc(100vh - 52px);
+    min-height: unset;
   }
 
   .mobile-topbar {

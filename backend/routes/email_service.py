@@ -47,8 +47,17 @@ def _send(from_addr, to_addrs, subject, html_body, attachments=None):
     if not RESEND_API_KEY:
         return False, 'RESEND_API_KEY not configured'
 
+    # Normalise: accept a bare string, a list of strings, or a list where an
+    # element is itself a comma-separated string (e.g. ['a@b.com, c@d.com']).
     if isinstance(to_addrs, str):
-        to_addrs = [a.strip() for a in to_addrs.split(',') if a.strip()]
+        to_addrs = [to_addrs]
+    flat = []
+    for addr in to_addrs:
+        for a in str(addr).split(','):
+            a = a.strip()
+            if a:
+                flat.append(a)
+    to_addrs = flat
     if not to_addrs:
         return False, 'No recipients'
 

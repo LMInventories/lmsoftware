@@ -983,10 +983,10 @@ class _PDFBuilder:
                             sub_co   = sub.get('checkOutCondition') or ''
                             tbl_data.append([
                                 Paragraph('↳', self.s_ref),
-                                self._p('—', self.s_cell_sm),
-                                self._p(sub_desc, self.s_cell_sm),
-                                self._p(sub_inv or '—', self.s_cell_sm),
-                                self._p(sub_co  or '—', self.s_cell_sm),
+                                self._p('—'),
+                                self._p(sub_desc),
+                                self._p(sub_inv or '—'),
+                                self._p(sub_co  or '—'),
                                 Paragraph('', self.s_cell),
                             ])
                 elif dmg:
@@ -1004,9 +1004,9 @@ class _PDFBuilder:
                             sub_cond = sub.get('condition') or ''
                             tbl_data.append([
                                 Paragraph('↳', self.s_ref),
-                                self._p('—', self.s_cell_sm),
-                                self._p(sub_desc, self.s_cell_sm),
-                                self._p(sub_cond or '—', self.s_cell_sm),
+                                self._p('—'),
+                                self._p(sub_desc),
+                                self._p(sub_cond or '—'),
                             ])
 
             room_tbl = Table(tbl_data, colWidths=widths, repeatRows=1)
@@ -1264,8 +1264,11 @@ def _get_report_recipients(inspection) -> list:
         primary = inspection.client_email_override.strip()
     elif inspection.property and inspection.property.client:
         primary = (inspection.property.client.email or '').strip()
-    if primary:
-        recipients.append(primary.lower())
+    # primary may itself be comma-separated (e.g. "a@b.com, c@d.com")
+    for addr in primary.split(','):
+        addr = addr.strip().lower()
+        if addr and addr not in recipients:
+            recipients.append(addr)
     if inspection.tenant_email:
         tenant = inspection.tenant_email.strip().lower()
         if tenant and tenant not in recipients:

@@ -388,17 +388,30 @@ async function previewServerPdf() {
   if (pdfPreviewing.value) return
   pdfPreviewing.value = true
   try {
-    // Use the api instance so the Authorization header is sent automatically
     const resp = await api.get(`/inspections/${inspection.value.id}/preview-pdf`, {
       responseType: 'blob',
     })
-    const blob = new Blob([resp.data], { type: 'application/pdf' })
-    const blobUrl = URL.createObjectURL(blob)
-    const win = window.open(blobUrl, '_blank')
-    // Revoke after a short delay so the opened tab has time to load
-    if (win) setTimeout(() => URL.revokeObjectURL(blobUrl), 10_000)
+    // Check if the response is actually a PDF (not a JSON error wrapped in a blob)
+    if (resp.data.type === 'application/json') {
+      const text = await resp.data.text()
+      const parsed = JSON.parse(text)
+      throw new Error(parsed.error || 'Server error')
+    }
+    const blob   = new Blob([resp.data], { type: 'application/pdf' })
+    const url    = URL.createObjectURL(blob)
+    // Use a programmatic anchor click — not blocked by popup blockers the way
+    // window.open() is when called from an async function.
+    const a      = document.createElement('a')
+    a.href       = url
+    a.target     = '_blank'
+    a.rel        = 'noopener'
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    setTimeout(() => URL.revokeObjectURL(url), 10_000)
   } catch (err) {
-    toast.error('PDF preview failed — check the browser console for details')
+    console.error('PDF preview error:', err)
+    toast.error(err.message || 'PDF generation failed — check console for details')
   } finally {
     pdfPreviewing.value = false
   }

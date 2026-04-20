@@ -1,0 +1,36 @@
+# Fly.io deployment config for InspectPro backend
+# Primary region: lhr (London Heathrow) — minimises latency for UK users
+# Deploy with: fly deploy
+
+app            = "inspectpro-backend"
+primary_region = "lhr"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT     = "5000"
+  LOG_LEVEL = "info"
+  # GUNICORN_WORKERS defaults to 4 in gunicorn.conf.py
+  # Set RAILWAY_PUBLIC_DOMAIN to your Fly app URL so keep-alive ping works:
+  # e.g.  RAILWAY_PUBLIC_DOMAIN = "inspectpro-backend.fly.dev"
+  # (Yes it says RAILWAY_ — it's just a variable name in the codebase, works anywhere)
+
+[http_service]
+  internal_port       = 5000
+  force_https         = true
+  auto_stop_machines  = false   # never sleep — eliminates cold starts
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type       = "requests"
+    soft_limit = 50
+    hard_limit = 100
+
+[[vm]]
+  # shared-cpu-1x (256MB RAM) handles this workload comfortably.
+  # Upgrade to performance-1x if you see memory pressure with large sync payloads.
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus     = 1

@@ -1,11 +1,49 @@
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from models import db, Inspection, Client, Property, User
 from datetime import datetime, date
 from sqlalchemy import or_, func
 from sqlalchemy.orm import joinedload, selectinload
+import time
 
 dashboard_bp = Blueprint('dashboard', __name__)
+
+# ── Dashboard response cache ──────────────────────────────────────────────────
+# Dashboard data (counts, recent activity, upcoming) changes only when someone
+# creates or updates an inspection — not on every page view. Caching per user
+# for 30 seconds means:
+#   • First load: normal DB query (~200–500ms)
+#   • Every subsequent load within 30 s: instant response from memory
+# The cache is keyed by user_id so each user sees their own scoped data.
+# Note: each gunicorn worker has its own cache dict; data can be up to
+# 30 s stale in the rare case two workers are used back-to-back. Acceptable.
+_CACHE: dict = {}
+_CACHE_TTL = 30  # seconds
+
+
+def _cache_get(key: str):
+    entry = _CACHE.get(key)
+    if entry and time.monotonic() - entry['ts'] < _CACHE_TTL:
+        return entry['data']
+    return None
+
+
+def _cache_set(key: str, data):
+    _CACHE[key] = {'data': data, 'ts': time.monotonic()}
+    # Evict old entries to prevent unbounded growth (keep most recent 500 users)
+    if len(_CACHE) > 500:
+        oldest = sorted(_CACHE, key=lambda k: _CACHE[k]['ts'])
+        for k in oldest[:100]:
+            _CACHE.pop(k, None)
+
+
+def invalidate_dashboard_cache(user_id: int | str | None = None):
+    """Call this after any write that changes dashboard data."""
+    if user_id is not None:
+        _CACHE.pop(f'dash:{user_id}', None)
+    else:
+        _CACHE.clear()
+
 
 @dashboard_bp.route('/stats', methods=['GET'])
 @jwt_required()
@@ -13,6 +51,12 @@ def get_dashboard_stats():
     user_id = get_jwt_identity()
     current_user = User.query.get(int(user_id))
     role = current_user.role if current_user else None
+
+    # Return cached response if fresh
+    cache_key = f'dash:{user_id}'
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return jsonify(cached)
 
     def _base_inspection_query():
         """Return an Inspection query pre-filtered for the current user's role."""
@@ -148,7 +192,7 @@ def get_dashboard_stats():
             'typist_name':      i.typist.name if i.typist else None,
         })
 
-    return jsonify({
+    payload = {
         'status_counts': {
             'created':    sc.get('created',    0),
             'assigned':   sc.get('assigned',   0),
@@ -166,4 +210,6 @@ def get_dashboard_stats():
         'activity':           activity_list,
         'upcoming':           upcoming_list,
         'recent_inspections': recent_list,
-    })
+    }
+    _cache_set(cache_key, payload)
+    return jsonify(payload)

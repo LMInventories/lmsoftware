@@ -10,6 +10,14 @@ import time
 import random
 import string
 
+# Bust dashboard cache after any write so counts/activity stay accurate
+def _bust_dashboard():
+    try:
+        from routes.dashboard import invalidate_dashboard_cache
+        invalidate_dashboard_cache()
+    except Exception:
+        pass
+
 inspections_bp = Blueprint('inspections', __name__)
 
 
@@ -289,7 +297,7 @@ def create_inspection():
 
     db.session.add(inspection)
     db.session.commit()
-
+    _bust_dashboard()
     return jsonify(inspection_detail(inspection)), 201
 
 
@@ -395,6 +403,7 @@ def update_inspection(inspection_id):
     # Status is saved before PDF generation so a slow/failing PDF never blocks
     # or rolls back the status update.
     db.session.commit()
+    _bust_dashboard()
 
     # ── Generate PDF and email in a background thread ────────────────────────
     # Runs after commit and completely outside the HTTP request so the client
@@ -492,6 +501,7 @@ def delete_inspection(inspection_id):
     inspection = Inspection.query.get_or_404(inspection_id)
     db.session.delete(inspection)
     db.session.commit()
+    _bust_dashboard()
     return '', 204
 
 

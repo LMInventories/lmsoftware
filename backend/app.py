@@ -27,18 +27,25 @@ def create_app():
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
     # ── Connection pool ───────────────────────────────────────────────────────
-    # Without pooling, SQLAlchemy opens a new TCP+SSL connection to PostgreSQL
-    # on every request — adding 50-200ms per call on Railway.
-    # pool_pre_ping validates idle connections before use so stale sockets
-    # (dropped by Railway's network after idle periods) don't cause errors.
-    # pool_recycle forces connections to be replaced after 5 minutes so we never
-    # hand out a connection that the server has silently closed.
+    # pool_pre_ping    — test each connection before use; discards stale sockets
+    # pool_recycle     — replace connections after 5 min (before Railway kills them)
+    # pool_use_lifo    — prefer freshest connections; cold connections are more
+    #                    likely to have been silently closed by the server
+    # connect_args     — TCP keepalives every 60s so the SSL session survives
+    #                    Railway's idle timeout without an unexpected EOF
     app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-        'pool_size':         10,
-        'max_overflow':       5,
-        'pool_recycle':     300,   # seconds
-        'pool_pre_ping':   True,
-        'pool_timeout':      30,
+        'pool_size':       10,
+        'max_overflow':     5,
+        'pool_recycle':   300,   # seconds
+        'pool_pre_ping':  True,
+        'pool_timeout':    30,
+        'pool_use_lifo':  True,
+        'connect_args': {
+            'keepalives':          1,
+            'keepalives_idle':    60,
+            'keepalives_interval': 10,
+            'keepalives_count':    5,
+        },
     }
 
     app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'change-me-in-production')

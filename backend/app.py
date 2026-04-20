@@ -25,7 +25,7 @@ def create_app():
 
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
     app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'change-me-in-production')
-    app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=24)
+    app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=30)
     # Allow large sync payloads (150+ compressed photos + audio).
     # Photos are compressed on device to ~120KB each; 200 photos ≈ 25MB.
     # We set 150MB as a generous ceiling — if even this is hit, photos need

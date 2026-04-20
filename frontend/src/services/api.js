@@ -19,6 +19,23 @@ const http = axios.create({
   timeout: 30000,
 })
 
+// ── TOKEN REFRESH STATE ───────────────────────────────────────────────────────
+// Ensures that when multiple requests fail with 401 simultaneously, only one
+// refresh call is made — the rest queue up and replay with the new token.
+let _isRefreshing = false
+let _failedQueue = []
+
+function _processQueue(error, token = null) {
+  _failedQueue.forEach(({ resolve, reject }) => error ? reject(error) : resolve(token))
+  _failedQueue = []
+}
+
+function _clearSession() {
+  localStorage.removeItem('token')
+  localStorage.removeItem('user')
+  if (window.location.pathname !== '/login') window.location.href = '/login'
+}
+
 http.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('token')
@@ -32,12 +49,50 @@ http.interceptors.response.use(
   (response) => response,
   (error) => {
     const status = error.response?.status
+    const originalRequest = error.config
 
     if (status === 401) {
-      // Token expired or invalid — clear session and redirect to login
-      localStorage.removeItem('token')
-      localStorage.removeItem('user')
-      if (window.location.pathname !== '/login') window.location.href = '/login'
+      // Never retry the refresh endpoint itself — that would loop infinitely.
+      if (originalRequest.url?.includes('/api/auth/refresh')) {
+        _processQueue(error, null)
+        _clearSession()
+        return Promise.reject(error)
+      }
+
+      // If a refresh is already in flight, queue this request and replay later.
+      if (_isRefreshing) {
+        return new Promise((resolve, reject) => {
+          _failedQueue.push({ resolve, reject })
+        }).then((token) => {
+          originalRequest.headers.Authorization = `Bearer ${token}`
+          return http(originalRequest)
+        }).catch((err) => Promise.reject(err))
+      }
+
+      _isRefreshing = true
+
+      return new Promise((resolve, reject) => {
+        const currentToken = localStorage.getItem('token')
+        http.post('/api/auth/refresh', {}, {
+          headers: { Authorization: `Bearer ${currentToken}` },
+        })
+          .then(({ data }) => {
+            const newToken = data.token
+            localStorage.setItem('token', newToken)
+            http.defaults.headers.common.Authorization = `Bearer ${newToken}`
+            originalRequest.headers.Authorization = `Bearer ${newToken}`
+            _processQueue(null, newToken)
+            resolve(http(originalRequest))
+          })
+          .catch((refreshError) => {
+            _processQueue(refreshError, null)
+            _clearSession()
+            reject(refreshError)
+          })
+          .finally(() => {
+            _isRefreshing = false
+          })
+      })
     } else if (!error.response) {
       // Network error or timeout — no HTTP response received at all
       error._friendlyMessage = 'Network error — check your connection or try again.'

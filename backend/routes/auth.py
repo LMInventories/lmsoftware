@@ -45,10 +45,10 @@ def get_current_user():
     user_id = get_jwt_identity()
     print(f"Getting current user: {user_id}")
     user = User.query.get(int(user_id))
-    
+
     if not user:
         return jsonify({'error': 'User not found'}), 404
-    
+
     return jsonify({
         'id':          user.id,
         'name':        user.name,
@@ -59,3 +59,21 @@ def get_current_user():
         'typist_mode': user.typist_mode,
         'client_id':   user.client_id,
     })
+
+
+@auth_bp.route('/refresh', methods=['POST'])
+@jwt_required()
+def refresh_token():
+    """Issue a fresh token for a still-valid token.
+
+    Called automatically by the frontend when a 401 is received so users are
+    never kicked out due to a transient network blip or an imminent expiry.
+    """
+    user_id = get_jwt_identity()
+    user = User.query.get(int(user_id))
+
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    new_token = create_access_token(identity=str(user.id))
+    return jsonify({'token': new_token})

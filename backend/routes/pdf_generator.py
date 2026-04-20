@@ -121,6 +121,23 @@ def _compress_image(data: bytes, max_px: int = 1200, quality: int = 72) -> bytes
         return data
 
 
+def _load_image_bytes(url_or_data: str) -> bytes:
+    """
+    Load image bytes from either:
+    - an http/https URL  (fetched with urllib)
+    - a data URI          (base64-decoded in-process)
+    Returns raw bytes, or raises on failure.
+    """
+    if url_or_data.startswith('data:'):
+        # data:image/png;base64,<payload>
+        header, encoded = url_or_data.split(',', 1)
+        import base64 as _b64
+        return _b64.b64decode(encoded)
+    else:
+        req = urllib.request.Request(url_or_data, headers={'User-Agent': 'InspectPro/1.0'})
+        return urllib.request.urlopen(req, timeout=8).read()
+
+
 def _fetch_image(url: str, max_w_mm: float, max_h_mm: float, link_url: str = None):
     if not url:
         return None
@@ -269,6 +286,15 @@ class _PDFBuilder:
         self.item_pos = ps.get('photo_room_item',         'below')
         self.add_ts   = ps.get('show_photo_timestamp',    False) is True
         self.act_pos  = ps.get('action_summary_position', 'bottom')
+
+        # ── System settings (branding, AIIC logo) ────────────────────────────
+        self.sys_settings = {}
+        try:
+            from models import SystemSetting
+            rows = SystemSetting.query.all()
+            self.sys_settings = {r.key: r.value for r in rows if r.value}
+        except Exception:
+            pass
 
         # ── Fixed sections — from system_settings or DEFAULT_FIXED_SECTIONS ──
         self.fixed_sections = _load_fixed_sections()
@@ -614,12 +640,13 @@ class _PDFBuilder:
 
     def _draw_cover(self, canvas, doc):
         """onPage callback — draws the full-bleed cover page directly on canvas.
-        Layout matches PdfExportModal.vue exactly:
-          - Brand header bar, logo left-aligned with padding
+        Layout:
+          - Brand header bar (client logo centred)
           - Full-width property photo
           - Type label centred below photo
-          - Info rows (ADDRESS / DATE / CLIENT) centred with dividers
-          - Brand footer bar pinned to very bottom
+          - Info rows (ADDRESS / DATE / CLIENT / CLERK / TENANT) centred with dividers
+            (rows with no value are omitted automatically)
+          - Brand footer bar: left = company logo + email, right = AIIC logo (if set)
         """
         from reportlab.lib.utils import ImageReader
         canvas.saveState()
@@ -641,8 +668,7 @@ class _PDFBuilder:
         logo_drawn = False
         if logo_url:
             try:
-                req  = urllib.request.Request(logo_url, headers={'User-Agent': 'InspectPro/1.0'})
-                data = urllib.request.urlopen(req, timeout=8).read()
+                data = _load_image_bytes(logo_url)
                 img  = ImageReader(io.BytesIO(data))
                 iw, ih = img.getSize()
                 max_h = hdr_h - 12*mm
@@ -691,21 +717,36 @@ class _PDFBuilder:
         canvas.drawCentredString(pw/2, type_y, self.type_label)
 
         # ── Info rows — centred, divider between every row ───────────────────
-        footer_h = 10 * mm
+        footer_h = 26 * mm   # taller footer to accommodate branding logos
         row_h    = 12 * mm
+
+        # Build tenant display string (name and/or email)
+        tenant_name_val  = getattr(insp, 'tenant_name',  None) or ''
+        tenant_email_val = getattr(insp, 'tenant_email', None) or ''
+        if tenant_name_val and tenant_email_val:
+            tenant_val = f'{tenant_name_val}  {tenant_email_val}'
+        else:
+            tenant_val = tenant_name_val or tenant_email_val
+
+        # Build clerk display string
+        clerk_val = (insp.inspector.name if insp.inspector else '') or ''
+
         info_rows = [
             ('ADDRESS', self.prop.get('address') or ''),
             ('DATE',    self._fmt_date(insp.conduct_date or insp.scheduled_date)),
             ('CLIENT',  cl.get('company') or cl.get('name') or ''),
+            ('CLERK',   clerk_val),
+            ('TENANT',  tenant_val),
         ]
+        # Drop rows with no value so the cover doesn't have blank entries
+        info_rows = [(lbl, val) for (lbl, val) in info_rows if val]
+
         info_top = type_y - 7*mm
 
         for i, (lbl, val) in enumerate(info_rows):
-            # top of this row
             row_top = info_top - i * row_h
-            # label sits near top of row, value below it
-            lbl_y = row_top - 3.5*mm
-            val_y = lbl_y   - 4.5*mm
+            lbl_y   = row_top  - 3.5*mm
+            val_y   = lbl_y    - 4.5*mm
             # divider above every row
             canvas.setStrokeColor(_SLATE_100)
             canvas.setLineWidth(0.5)
@@ -724,15 +765,62 @@ class _PDFBuilder:
         canvas.setLineWidth(0.5)
         canvas.line(margin, close_y, pw - margin, close_y)
 
-        # ── Footer bar — edge to edge, pinned to very bottom ─────────────────
+        # ── Footer bar — two-column branding area ─────────────────────────────
+        # Brand-coloured background, same as header
         canvas.setFillColor(brand)
         canvas.rect(0, 0, pw, footer_h, fill=1, stroke=0)
-        footer_name = cl.get('company') or cl.get('name') or 'InspectPro'
-        canvas.setFillColor(hdr_c)
-        canvas.setFont('Helvetica-Bold', 9)
-        canvas.drawString(margin, footer_h * 0.38, footer_name)
-        canvas.setFont('Helvetica', 9)
-        canvas.drawRightString(pw - margin, footer_h * 0.38, 'Confidential')
+
+        logo_max_h = footer_h - 8*mm      # max logo height within bar
+        logo_max_w = pw / 2 - 2*margin    # max logo width per column
+
+        # ── Left column: company logo (from system settings) + company email ──
+        company_logo_url = self.sys_settings.get('logo', '')
+        company_email    = self.sys_settings.get('email', '')
+        left_logo_drawn  = False
+
+        if company_logo_url:
+            try:
+                data = _load_image_bytes(company_logo_url)
+                img  = ImageReader(io.BytesIO(data))
+                iw, ih = img.getSize()
+                email_reserve = 5*mm if company_email else 0
+                lh_max = logo_max_h - email_reserve
+                scale  = min(logo_max_w/iw, lh_max/ih)
+                dw, dh = iw*scale, ih*scale
+                x = margin
+                y = email_reserve + (footer_h - email_reserve - dh) / 2
+                canvas.drawImage(img, x, y, dw, dh, mask='auto')
+                left_logo_drawn = True
+            except Exception:
+                pass
+
+        if not left_logo_drawn:
+            # Fall back to company name text
+            footer_name = cl.get('company') or cl.get('name') or ''
+            if footer_name:
+                canvas.setFillColor(hdr_c)
+                canvas.setFont('Helvetica-Bold', 9)
+                canvas.drawString(margin, footer_h * 0.55, footer_name[:40])
+
+        if company_email:
+            canvas.setFillColor(hdr_c)
+            canvas.setFont('Helvetica', 7)
+            canvas.drawString(margin, 2.5*mm, company_email[:60])
+
+        # ── Right column: AIIC logo (if configured, else invisible) ──────────
+        aiic_logo_url = self.sys_settings.get('aiic_logo', '')
+        if aiic_logo_url:
+            try:
+                data = _load_image_bytes(aiic_logo_url)
+                img  = ImageReader(io.BytesIO(data))
+                iw, ih = img.getSize()
+                scale  = min(logo_max_w/iw, logo_max_h/ih)
+                dw, dh = iw*scale, ih*scale
+                x = pw - margin - dw
+                y = (footer_h - dh) / 2
+                canvas.drawImage(img, x, y, dw, dh, mask='auto')
+            except Exception:
+                pass
 
         canvas.restoreState()
 

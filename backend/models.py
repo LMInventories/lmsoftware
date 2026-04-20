@@ -171,6 +171,7 @@ class Inspection(db.Model):
     # 'ai_instant' | 'ai_room' | 'human' | null (null = inherit from clerk profile)
     typist_mode             = db.Column(db.String(20), nullable=True)
 
+    tenant_name             = db.Column(db.String(255))
     tenant_email            = db.Column(db.String(255))
     client_email_override   = db.Column(db.String(255))
     conduct_date            = db.Column(db.DateTime)
@@ -206,6 +207,7 @@ class Inspection(db.Model):
             'typist_is_ai':            self.typist.is_ai if self.typist else False,
             'typist_mode':             self.typist_mode,
             'template_id':             self.template_id,
+            'tenant_name':             self.tenant_name,
             'tenant_email':            self.tenant_email,
             'client_email_override':   self.client_email_override,
             'conduct_date':            self.conduct_date.isoformat() if self.conduct_date else None,

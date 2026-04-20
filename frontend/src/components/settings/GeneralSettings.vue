@@ -8,6 +8,9 @@ const loading = ref(true)
 const logoPreview = ref(null)
 const logoFile = ref(null)
 const logoInputRef = ref(null)
+const aiicLogoPreview = ref(null)
+const aiicLogoFile = ref(null)
+const aiicLogoInputRef = ref(null)
 
 const form = ref({
   company_name: '',
@@ -18,7 +21,8 @@ const form = ref({
   email: '',
   phone: '',
   website: '',
-  logo: ''
+  logo: '',
+  aiic_logo: ''
 })
 
 async function fetchSettings() {
@@ -35,7 +39,9 @@ async function fetchSettings() {
     form.value.phone         = s.phone         || ''
     form.value.website       = s.website       || ''
     form.value.logo          = s.logo          || ''
+    form.value.aiic_logo = s.aiic_logo || ''
     if (s.logo) logoPreview.value = s.logo
+    if (s.aiic_logo) aiicLogoPreview.value = s.aiic_logo
   } catch (err) {
     console.error('Failed to load system settings:', err)
   } finally {
@@ -62,6 +68,25 @@ function removeLogo() {
   if (logoInputRef.value) logoInputRef.value.value = ''
 }
 
+function onAiicLogoChange(e) {
+  const file = e.target.files?.[0]
+  if (!file) return
+  aiicLogoFile.value = file
+  const reader = new FileReader()
+  reader.onload = () => {
+    aiicLogoPreview.value = reader.result
+    form.value.aiic_logo = reader.result
+  }
+  reader.readAsDataURL(file)
+}
+
+function removeAiicLogo() {
+  aiicLogoPreview.value = null
+  aiicLogoFile.value = null
+  form.value.aiic_logo = ''
+  if (aiicLogoInputRef.value) aiicLogoInputRef.value.value = ''
+}
+
 async function save() {
   saving.value = true
   try {
@@ -75,6 +100,7 @@ async function save() {
       phone:         form.value.phone,
       website:       form.value.website,
       logo:          form.value.logo,
+      aiic_logo:     form.value.aiic_logo,
     })
     saved.value = true
     setTimeout(() => saved.value = false, 2500)
@@ -143,6 +169,43 @@ onMounted(fetchSettings)
                 <input ref="logoInputRef" type="file" accept="image/*" style="display:none" @change="onLogoChange" />
               </label>
               <button v-if="logoPreview" class="btn-remove-logo" @click="removeLogo">Remove</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- AIIC Logo -->
+        <div class="panel">
+          <div class="panel-title">
+            <span class="panel-icon">🏅</span>
+            AIIC Membership Logo
+          </div>
+          <p class="panel-desc">Displayed on the bottom-right of the PDF cover page alongside your company branding. Leave blank if not an AIIC member. PNG recommended.</p>
+
+          <div class="logo-zone">
+            <div class="logo-preview-wrap">
+              <div class="logo-preview" :class="{ 'logo-preview--empty': !aiicLogoPreview }">
+                <img v-if="aiicLogoPreview" :src="aiicLogoPreview" alt="AIIC logo" class="logo-img" />
+                <div v-else class="logo-placeholder">
+                  <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="1.5">
+                    <rect x="3" y="3" width="18" height="18" rx="2"/>
+                    <circle cx="8.5" cy="8.5" r="1.5"/>
+                    <polyline points="21 15 16 10 5 21"/>
+                  </svg>
+                  <span>No AIIC logo uploaded</span>
+                </div>
+              </div>
+            </div>
+            <div class="logo-actions">
+              <label class="btn-upload">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                  <polyline points="17 8 12 3 7 8"/>
+                  <line x1="12" y1="3" x2="12" y2="15"/>
+                </svg>
+                {{ aiicLogoPreview ? 'Replace Logo' : 'Upload Logo' }}
+                <input ref="aiicLogoInputRef" type="file" accept="image/*" style="display:none" @change="onAiicLogoChange" />
+              </label>
+              <button v-if="aiicLogoPreview" class="btn-remove-logo" @click="removeAiicLogo">Remove</button>
             </div>
           </div>
         </div>

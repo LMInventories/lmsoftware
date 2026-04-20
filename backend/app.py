@@ -221,6 +221,15 @@ def _setup_database():
         db.session.commit()
         print("✅ inspections.typist_mode added.")
 
+    # inspections.tenant_name — tenant's full name for AIIC-compliant cover page
+    if not column_exists('inspections', 'tenant_name'):
+        print("Migrating: adding inspections.tenant_name column...")
+        db.session.execute(
+            text("ALTER TABLE inspections ADD COLUMN tenant_name VARCHAR(255)")
+        )
+        db.session.commit()
+        print("✅ inspections.tenant_name added.")
+
     # templates.is_transient — PDF-import templates are hidden from the Templates UI
     if not column_exists('templates', 'is_transient'):
         print("Migrating: adding templates.is_transient column...")

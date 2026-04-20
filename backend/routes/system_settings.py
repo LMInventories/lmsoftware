@@ -17,6 +17,8 @@ ALLOWED_KEYS = {
     # Company info
     'company_name', 'address_line1', 'address_line2',
     'city', 'postcode', 'email', 'phone', 'website', 'logo',
+    # AIIC membership branding
+    'aiic_logo',
     # Report style (global)
     'report_header_text_color',
     'report_body_text_color',

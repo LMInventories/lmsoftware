@@ -51,6 +51,7 @@ const editForms = ref({
   key_location: '',
   key_return: '',
   internal_notes: '',
+  tenant_name: '',
   tenant_email: '',
   landlord_email: '',
   client_email_override: ''
@@ -216,6 +217,7 @@ async function fetchInspection() {
     editForms.value.key_location = inspection.value.key_location || ''
     editForms.value.key_return = inspection.value.key_return || ''
     editForms.value.internal_notes = inspection.value.internal_notes || ''
+    editForms.value.tenant_name     = inspection.value.tenant_name  || ''
     editForms.value.tenant_email    = inspection.value.tenant_email || ''
     editForms.value.landlord_email  = inspection.value.landlord_email || ''
     editForms.value.client_email_override = inspection.value.client_email_override || inspection.value.client?.email || ''
@@ -268,6 +270,21 @@ async function updateField(field, value) {
     showEditClientEmail.value   = false
   } catch (error) {
     console.error('Failed to update:', error)
+    toast.error('Failed to update')
+  }
+}
+
+async function updateTenantDetails() {
+  try {
+    await api.updateInspection(inspection.value.id, {
+      tenant_name:  editForms.value.tenant_name,
+      tenant_email: editForms.value.tenant_email,
+    })
+    toast.success('Tenant details updated')
+    fetchInspection()
+    showEditTenantEmail.value = false
+  } catch (error) {
+    console.error('Failed to update tenant details:', error)
     toast.error('Failed to update')
   }
 }
@@ -681,8 +698,13 @@ onMounted(() => {
               </div>
               <div class="contact-row">
                 <strong>Tenant:</strong>
-                <span :style="!inspection.tenant_email ? 'color:#94a3b8' : ''">
-                  {{ inspection.tenant_email || 'Not set' }}
+                <span :style="!inspection.tenant_name && !inspection.tenant_email ? 'color:#94a3b8' : ''">
+                  <template v-if="inspection.tenant_name || inspection.tenant_email">
+                    <span v-if="inspection.tenant_name">{{ inspection.tenant_name }}</span>
+                    <span v-if="inspection.tenant_name && inspection.tenant_email" style="color:#94a3b8"> · </span>
+                    <span v-if="inspection.tenant_email" style="font-size:13px;color:#64748b">{{ inspection.tenant_email }}</span>
+                  </template>
+                  <template v-else>Not set</template>
                 </span>
                 <button v-if="canEdit" @click="showEditTenantEmail = true" class="btn-edit-inline">✎</button>
               </div>
@@ -963,19 +985,26 @@ onMounted(() => {
         </div>
       </div>
 
-      <!-- Edit Tenant Email -->
+      <!-- Edit Tenant Details -->
       <div v-if="showEditTenantEmail" class="modal-overlay" @click.self="showEditTenantEmail = false">
         <div class="modal">
           <div class="modal-header">
-            <h2>Tenant Email</h2>
+            <h2>Tenant Details</h2>
             <button @click="showEditTenantEmail = false" class="btn-close">✕</button>
           </div>
-          <div class="modal-body">
-            <input v-model="editForms.tenant_email" type="email" class="input-field" placeholder="tenant@example.com" />
+          <div class="modal-body" style="display:flex;flex-direction:column;gap:12px;">
+            <div>
+              <label style="font-size:13px;font-weight:600;color:#374151;display:block;margin-bottom:6px;">Full Name</label>
+              <input v-model="editForms.tenant_name" type="text" class="input-field" placeholder="e.g. John Smith" />
+            </div>
+            <div>
+              <label style="font-size:13px;font-weight:600;color:#374151;display:block;margin-bottom:6px;">Email Address</label>
+              <input v-model="editForms.tenant_email" type="email" class="input-field" placeholder="tenant@example.com" />
+            </div>
           </div>
           <div class="modal-footer">
             <button @click="showEditTenantEmail = false" class="btn-secondary">Cancel</button>
-            <button @click="updateField('tenant_email', editForms.tenant_email)" class="btn-primary">Save</button>
+            <button @click="updateTenantDetails" class="btn-primary">Save</button>
           </div>
         </div>
       </div>

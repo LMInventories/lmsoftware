@@ -151,7 +151,21 @@ def get_inspections():
 @jwt_required()
 def get_inspection(inspection_id):
     user = get_current_user()
-    inspection = Inspection.query.get_or_404(inspection_id)
+    # Eager-load every relationship accessed by inspection_detail() in a single
+    # query (6 JOINs) to avoid the N+1 cascade through template.sections.items.
+    inspection = (
+        Inspection.query
+        .options(
+            joinedload(Inspection.property).joinedload(Property.client),
+            joinedload(Inspection.inspector),
+            joinedload(Inspection.typist),
+            joinedload(Inspection.template)
+                .joinedload(Template.sections)
+                .joinedload(Section.items),
+        )
+        .filter_by(id=inspection_id)
+        .first_or_404()
+    )
     # Clerks can only view their own inspections
     if user.role == 'clerk' and inspection.inspector_id != user.id:
         return jsonify({'error': 'Forbidden'}), 403
@@ -171,6 +185,7 @@ def get_inspection(inspection_id):
 def get_property_history(property_id):
     inspections = (
         Inspection.query
+        .options(joinedload(Inspection.template))
         .filter_by(property_id=property_id)
         .order_by(Inspection.created_at.desc())
         .all()

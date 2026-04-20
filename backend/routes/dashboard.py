@@ -2,7 +2,8 @@ from flask import Blueprint, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from models import db, Inspection, Client, Property, User
 from datetime import datetime, date
-from sqlalchemy import or_
+from sqlalchemy import or_, func
+from sqlalchemy.orm import joinedload, selectinload
 
 dashboard_bp = Blueprint('dashboard', __name__)
 
@@ -26,8 +27,16 @@ def get_dashboard_stats():
                   .filter(Property.client_id == current_user.client_id))
         return q
 
-    def count_status(status):
-        return _base_inspection_query().filter(Inspection.status == status).count()
+    # ── Status counts — one aggregation query instead of 6 separate COUNTs ──
+    # with_entities() replaces the SELECT * with SELECT status, COUNT(id)
+    # while keeping all the same WHERE / JOIN filters from _base_inspection_query().
+    status_rows = (
+        _base_inspection_query()
+        .with_entities(Inspection.status, func.count(Inspection.id))
+        .group_by(Inspection.status)
+        .all()
+    )
+    sc = {s: c for s, c in status_rows}  # e.g. {'created': 3, 'active': 12, ...}
 
     # ── Totals — scoped to role ──────────────────────────────────────────────
     if role in ('admin', 'manager'):
@@ -47,9 +56,21 @@ def get_dashboard_stats():
         total_users       = None
         total_inspections = _base_inspection_query().count()
 
+    # Shared eager-load options for the 3 list queries below.
+    # Without this, accessing i.property / i.property.client / i.inspector / i.typist
+    # triggers a lazy-load query per inspection — 4 × N extra round trips.
+    # selectinload (SELECT…IN) is used instead of joinedload to avoid a conflict
+    # with the explicit Property JOIN that the 'client' role filter already adds.
+    _eager = [
+        selectinload(Inspection.property).selectinload(Property.client),
+        selectinload(Inspection.inspector),
+        selectinload(Inspection.typist),
+    ]
+
     # ── Activity: last 20 inspections, role-filtered ─────────────────────────
     activity_q = (
         _base_inspection_query()
+        .options(*_eager)
         .order_by(
             Inspection.updated_at.desc() if hasattr(Inspection, 'updated_at')
             else Inspection.created_at.desc()
@@ -76,6 +97,7 @@ def get_dashboard_stats():
     today = datetime.combine(date.today(), datetime.min.time())
     upcoming_q = (
         _base_inspection_query()
+        .options(*_eager)
         .filter(Inspection.conduct_date >= today)
         .filter(Inspection.status.notin_(['complete']))
         .order_by(Inspection.conduct_date.asc())
@@ -102,6 +124,7 @@ def get_dashboard_stats():
     # ── Recent inspections (backwards compat) — role-filtered ────────────────
     recent_q = (
         _base_inspection_query()
+        .options(*_eager)
         .order_by(Inspection.created_at.desc())
         .limit(10)
         .all()
@@ -127,12 +150,12 @@ def get_dashboard_stats():
 
     return jsonify({
         'status_counts': {
-            'created':    count_status('created'),
-            'assigned':   count_status('assigned'),
-            'active':     count_status('active'),
-            'processing': count_status('processing'),
-            'review':     count_status('review'),
-            'complete':   count_status('complete'),
+            'created':    sc.get('created',    0),
+            'assigned':   sc.get('assigned',   0),
+            'active':     sc.get('active',     0),
+            'processing': sc.get('processing', 0),
+            'review':     sc.get('review',     0),
+            'complete':   sc.get('complete',   0),
         },
         'totals': {
             'clients':     total_clients,

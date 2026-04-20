@@ -2,14 +2,22 @@ from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required
 from models import db, Property
 from permissions import get_current_user, filter_properties_for_user, is_admin_or_manager, is_client
+from sqlalchemy.orm import joinedload
 
 properties_bp = Blueprint('properties', __name__)
+
+def _property_query_eager():
+    """Return a Property query that eager-loads client + inspections in one SQL pass."""
+    return Property.query.options(
+        joinedload(Property.client),
+        joinedload(Property.inspections),
+    )
 
 @properties_bp.route('', methods=['GET'])
 @jwt_required()
 def get_properties():
     user = get_current_user()
-    query = filter_properties_for_user(Property.query, user)
+    query = filter_properties_for_user(_property_query_eager(), user)
     properties = query.all()
     return jsonify([p.to_dict() for p in properties])
 
@@ -17,7 +25,7 @@ def get_properties():
 @jwt_required()
 def get_property(property_id):
     user = get_current_user()
-    prop = Property.query.get_or_404(property_id)
+    prop = _property_query_eager().filter_by(id=property_id).first_or_404()
     # Clients can only view properties belonging to their client
     if user.role == 'client':
         if prop.client_id != user.client_id:

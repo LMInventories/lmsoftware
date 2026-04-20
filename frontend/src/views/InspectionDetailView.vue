@@ -385,14 +385,23 @@ function _adaptFsItem(item, type, idx, secIdx) {
 
 async function openPdfExport() {
   try {
+    // Step 1: fetch the latest inspection state (need template_id + client_id)
     const iRes  = await api.getInspection(inspection.value.id)
     const fresh = iRes.data
     const rd    = fresh.report_data ? JSON.parse(fresh.report_data) : {}
+    const clientId = fresh.client?.id || inspection.value?.client?.id
+
+    // Step 2: client settings, template, fixed sections, and action catalogue
+    //         are all independent — fire them in parallel.
+    const [cRes, tRes, fsRes, aRes] = await Promise.all([
+      clientId ? api.getClient(clientId).catch(() => null) : Promise.resolve(null),
+      fresh.template_id ? api.getTemplate(fresh.template_id).catch(() => null) : Promise.resolve(null),
+      api.getFixedSections().catch(() => null),
+      api.getActions().catch(() => null),
+    ])
 
     // ── Client settings + photo settings ──────────────────────────────
-    const clientId = fresh.client?.id || inspection.value?.client?.id
-    if (clientId) {
-      const cRes = await api.getClient(clientId)
+    if (cRes) {
       pdfClientSettings.value = cRes.data || {}
       try { pdfPhotoSettings.value = JSON.parse(cRes.data.report_photo_settings || '{}') } catch { pdfPhotoSettings.value = {} }
     } else {
@@ -401,11 +410,7 @@ async function openPdfExport() {
     }
 
     // ── Template ───────────────────────────────────────────────────────
-    let tpl = null
-    if (fresh.template_id) {
-      const tRes = await api.getTemplate(fresh.template_id)
-      tpl = tRes.data
-    }
+    const tpl = tRes?.data || null
     pdfTemplate.value = tpl
 
     // ── Rooms (from template relational sections) ───────────────────────
@@ -425,22 +430,16 @@ async function openPdfExport() {
     pdfRooms.value = [...templateRooms, ...importedRooms]
 
     // ── Fixed sections (from system-wide config) ────────────────────────
-    try {
-      const fsRes = await api.getFixedSections()
-      pdfFixedSections.value = (fsRes.data || [])
-        .filter(s => s.enabled !== false)
-        .map((s, si) => {
-          const type = _inferFsType(s.columns)
-          const rows = (s.items || []).map((item, i) => _adaptFsItem(item, type, i, si))
-          return { id: `fs_${si}_${s.name.toLowerCase().replace(/[^a-z0-9]/g,'_')}`, name: s.name, type, rows }
-        })
-    } catch { pdfFixedSections.value = [] }
+    pdfFixedSections.value = (fsRes?.data || [])
+      .filter(s => s.enabled !== false)
+      .map((s, si) => {
+        const type = _inferFsType(s.columns)
+        const rows = (s.items || []).map((item, i) => _adaptFsItem(item, type, i, si))
+        return { id: `fs_${si}_${s.name.toLowerCase().replace(/[^a-z0-9]/g,'_')}`, name: s.name, type, rows }
+      })
 
     // ── Action catalogue ────────────────────────────────────────────────
-    try {
-      const aRes = await api.getActions()
-      pdfActionCatalogue.value = aRes.data.actions || []
-    } catch { pdfActionCatalogue.value = [] }
+    pdfActionCatalogue.value = aRes?.data?.actions || []
 
     pdfReportData.value = rd
     showPdfExport.value = true

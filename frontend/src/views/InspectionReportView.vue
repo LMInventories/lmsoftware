@@ -190,26 +190,26 @@ async function load() {
       }
     }
 
-    if (inspection.value.property_id) {
-      try {
-        const pRes = await api.getProperty(inspection.value.property_id)
-        currentPhoto.value = pRes.data.overview_photo || null
-        if (pRes.data.client_id) inspection.value.client_id = pRes.data.client_id
-      } catch {}
+    // ── Final batch: property, actions, and fixed sections are independent ──
+    // Fire them in parallel so we don't wait 3 × RTT for sequential fetches.
+    const [pRes, aRes, fsRes] = await Promise.all([
+      inspection.value.property_id
+        ? api.getProperty(inspection.value.property_id).catch(() => null)
+        : Promise.resolve(null),
+      api.getActions().catch(() => null),
+      api.getFixedSections().catch(() => null),
+    ])
+
+    if (pRes) {
+      currentPhoto.value = pRes.data.overview_photo || null
+      if (pRes.data.client_id) inspection.value.client_id = pRes.data.client_id
     }
 
-    // Load client photo settings (for timestamp overlay etc.) and action catalogue
-    await loadClientSettings()
-    try {
-      const aRes = await api.getActions()
-      actionCatalogue.value = aRes.data.actions || []
-    } catch { actionCatalogue.value = [] }
+    actionCatalogue.value   = aRes?.data?.actions || []
+    fixedSectionsRaw.value  = fsRes?.data || []
 
-    // Load system-wide fixed sections (configured in Settings → Fixed Sections)
-    try {
-      const fsRes = await api.getFixedSections()
-      fixedSectionsRaw.value = fsRes.data || []
-    } catch { fixedSectionsRaw.value = [] }
+    // Load client photo settings (needs client_id, which is now set from pRes above)
+    await loadClientSettings()
 
   } catch {
     toast.error('Failed to load inspection')

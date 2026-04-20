@@ -201,6 +201,26 @@ def _setup_database():
         db.session.commit()
         print("✅ templates.is_transient added.")
 
+    # ── Performance indexes ──────────────────────────────────────────────────
+    # CREATE INDEX IF NOT EXISTS is safe to run on every boot — a no-op when the
+    # index already exists. These cover the most frequent filter/join columns so
+    # that list queries and dashboard aggregations don't do full table scans.
+    _indexes = [
+        'CREATE INDEX IF NOT EXISTS idx_inspections_property_id  ON inspections(property_id)',
+        'CREATE INDEX IF NOT EXISTS idx_inspections_inspector_id ON inspections(inspector_id)',
+        'CREATE INDEX IF NOT EXISTS idx_inspections_typist_id    ON inspections(typist_id)',
+        'CREATE INDEX IF NOT EXISTS idx_inspections_status       ON inspections(status)',
+        'CREATE INDEX IF NOT EXISTS idx_inspections_conduct_date ON inspections(conduct_date)',
+        'CREATE INDEX IF NOT EXISTS idx_inspections_created_at   ON inspections(created_at)',
+        'CREATE INDEX IF NOT EXISTS idx_properties_client_id     ON properties(client_id)',
+    ]
+    for idx_sql in _indexes:
+        try:
+            db.session.execute(text(idx_sql))
+        except Exception:
+            db.session.rollback()
+    db.session.commit()
+
     # ── Seed (only on a completely empty database) ───────────────────────────
     if User.query.count() == 0:
         print("Fresh database — seeding demo data...")

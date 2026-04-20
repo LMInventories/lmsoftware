@@ -65,13 +65,16 @@ def public_url(key: str) -> str:
 def _make_client():
     """Create a boto3 S3 client from environment variables."""
     import boto3
+    endpoint = os.environ.get('S3_ENDPOINT_URL')
+    # R2 and other S3-compatible stores use their own region names.
+    # When a custom endpoint is set, default to 'auto' unless explicitly overridden.
+    default_region = 'auto' if endpoint else 'eu-west-2'
     kwargs = dict(
         aws_access_key_id     = os.environ.get('AWS_ACCESS_KEY_ID'),
         aws_secret_access_key = os.environ.get('AWS_SECRET_ACCESS_KEY'),
-        region_name           = os.environ.get('AWS_REGION', 'eu-west-2'),
+        region_name           = os.environ.get('AWS_REGION', default_region),
         config                = Config(signature_version='s3v4'),
     )
-    endpoint = os.environ.get('S3_ENDPOINT_URL')
     if endpoint:
         kwargs['endpoint_url'] = endpoint
     return boto3.client('s3', **kwargs)

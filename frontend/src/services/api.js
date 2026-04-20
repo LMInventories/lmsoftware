@@ -96,6 +96,16 @@ http.interceptors.response.use(
     } else if (!error.response) {
       // Network error or timeout — no HTTP response received at all
       error._friendlyMessage = 'Network error — check your connection or try again.'
+    } else if (status === 502 || status === 503) {
+      // Gateway / service unavailable — most likely a deploy in progress.
+      // Retry once after a short delay before surfacing the error.
+      const retryCount = originalRequest._retryCount || 0
+      if (retryCount < 2 && !originalRequest._noRetry) {
+        originalRequest._retryCount = retryCount + 1
+        return new Promise((resolve) => setTimeout(resolve, 800 * (retryCount + 1)))
+          .then(() => http(originalRequest))
+      }
+      error._friendlyMessage = 'Server temporarily unavailable — please try again in a moment.'
     } else if (status >= 500) {
       // Server-side error — log detail if the backend sent one
       const detail = error.response?.data?.detail || error.response?.data?.error || ''

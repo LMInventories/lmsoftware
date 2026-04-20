@@ -248,6 +248,9 @@ const api = {
   sendTestEmail(to)                    { return http.post('/api/email/test', { to }) },
   triggerClerkSummaries()              { return http.post('/api/email/clerk-summary/run') },
   triggerConfirmationEmails()          { return http.post('/api/email/confirmation/run') },
+
+  // ── PDF ───────────────────────────────────────────────────────────────────
+  previewPdf(inspectionId)             { return http.get(`/api/inspections/${inspectionId}/preview-pdf`, { responseType: 'blob', timeout: 120_000 }) },
 }
 
 export default api

@@ -388,9 +388,7 @@ async function previewServerPdf() {
   if (pdfPreviewing.value) return
   pdfPreviewing.value = true
   try {
-    const resp = await api.get(`/inspections/${inspection.value.id}/preview-pdf`, {
-      responseType: 'blob',
-    })
+    const resp = await api.previewPdf(inspection.value.id)
     // Check if the response is actually a PDF (not a JSON error wrapped in a blob)
     if (resp.data.type === 'application/json') {
       const text = await resp.data.text()

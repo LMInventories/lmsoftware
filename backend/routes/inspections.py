@@ -2,7 +2,7 @@ from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from models import db, Inspection, Property, User, Template, Section, Item
 from permissions import get_current_user, require_admin_or_manager, filter_inspections_for_user, is_admin_or_manager
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
 from datetime import datetime
 import json
 import re
@@ -167,9 +167,13 @@ def get_inspection(inspection_id):
             joinedload(Inspection.property).joinedload(Property.client),
             joinedload(Inspection.inspector),
             joinedload(Inspection.typist),
-            joinedload(Inspection.template)
-                .joinedload(Template.sections)
-                .joinedload(Section.items),
+            # selectinload for template chain: joinedload would multiply report_data
+            # (a large column) by the number of template items in the JOIN result,
+            # potentially sending gigabytes to SQLAlchemy for a full inspection.
+            # selectinload fires 3 small follow-up queries instead.
+            selectinload(Inspection.template)
+                .selectinload(Template.sections)
+                .selectinload(Section.items),
         )
         .filter_by(id=inspection_id)
         .first_or_404()

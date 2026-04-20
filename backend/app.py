@@ -1,6 +1,7 @@
 from flask import Flask
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager
+from flask_compress import Compress
 from models import db
 from datetime import timedelta
 import os
@@ -24,6 +25,22 @@ def create_app():
         app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
 
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+    # ── Connection pool ───────────────────────────────────────────────────────
+    # Without pooling, SQLAlchemy opens a new TCP+SSL connection to PostgreSQL
+    # on every request — adding 50-200ms per call on Railway.
+    # pool_pre_ping validates idle connections before use so stale sockets
+    # (dropped by Railway's network after idle periods) don't cause errors.
+    # pool_recycle forces connections to be replaced after 5 minutes so we never
+    # hand out a connection that the server has silently closed.
+    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+        'pool_size':         10,
+        'max_overflow':       5,
+        'pool_recycle':     300,   # seconds
+        'pool_pre_ping':   True,
+        'pool_timeout':      30,
+    }
+
     app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'change-me-in-production')
     app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=30)
     # Allow large sync payloads (150+ compressed photos + audio).
@@ -84,6 +101,17 @@ def create_app():
 
     db.init_app(app)
     JWTManager(app)
+
+    # ── Gzip compression ──────────────────────────────────────────────────────
+    # Compresses JSON API responses before sending to the client.
+    # Inspection reports embed base64 photos so payloads can be 500KB–5MB.
+    # Gzip typically achieves 60-80% reduction on JSON/base64 text, meaning a
+    # 2MB inspection download becomes 400-800KB — a 2-4× speed improvement on
+    # the wire, especially noticeable on mobile or slower connections.
+    app.config['COMPRESS_REGISTER'] = True
+    app.config['COMPRESS_LEVEL'] = 6        # good balance of speed vs ratio
+    app.config['COMPRESS_MIN_SIZE'] = 1000  # only compress responses > 1KB
+    Compress(app)
 
     # ── Blueprints ────────────────────────────────────────────────────────────
     from routes.auth            import auth_bp

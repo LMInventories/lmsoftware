@@ -386,9 +386,33 @@ def schedule_clerk_summaries(app):
 
         scheduler.add_job(confirmation_job, CronTrigger(hour=8, minute=0, timezone='Europe/London'))
 
+        # ── Keep-alive ping ───────────────────────────────────────────────────
+        # Railway (and similar PaaS platforms) will sleep the container after
+        # ~15 minutes of inactivity on lower-tier plans. The first request after
+        # sleep triggers a cold start that can take 10-30 seconds — exactly the
+        # "takes forever to load" symptom. Pinging /health every 8 minutes keeps
+        # the process warm at all times.
+        import requests as _req
+        import os as _os
+
+        def _keepalive_job():
+            url = _os.environ.get('RAILWAY_PUBLIC_DOMAIN', '')
+            if not url:
+                return   # skip in local dev / environments without a public URL
+            if not url.startswith('http'):
+                url = 'https://' + url
+            try:
+                _req.get(f'{url}/health', timeout=10)
+            except Exception:
+                pass  # silent — this is best-effort only
+
+        from apscheduler.triggers.interval import IntervalTrigger
+        scheduler.add_job(_keepalive_job, IntervalTrigger(minutes=8))
+
         scheduler.start()
         print(f'[email] clerk summary scheduler started — fires at {hour:02d}:{minute:02d} Europe/London')
         print(f'[email] confirmation email scheduler started — fires at 08:00 Europe/London')
+        print('[email] keep-alive ping scheduled every 8 minutes')
         return scheduler
     except ImportError:
         print('[email] APScheduler not installed — scheduled emails disabled. Run: pip install apscheduler')

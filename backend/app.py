@@ -130,6 +130,7 @@ def create_app():
     from routes.address_lookup  import address_lookup_bp
     from routes.email_notifications  import email_bp
     from routes.gallery              import gallery_bp
+    from routes.photos               import photos_bp
 
     app.register_blueprint(auth_bp,            url_prefix='/api/auth')
     app.register_blueprint(auth_reset_bp,      url_prefix='/api/auth')
@@ -147,6 +148,7 @@ def create_app():
     app.register_blueprint(address_lookup_bp,  url_prefix='/api/address')
     app.register_blueprint(email_bp,           url_prefix='/api/email')
     app.register_blueprint(gallery_bp,         url_prefix='/api')
+    app.register_blueprint(photos_bp,          url_prefix='/api/photos')
 
     # Optional blueprints — register only if the file exists
     _optional = [

@@ -538,13 +538,18 @@ def seed_preview(inspection_id):
 def preview_pdf(inspection_id):
     from flask import make_response
     from routes.pdf_generator import generate_inspection_pdf
-    from permissions import is_admin_or_manager
 
-    user = get_current_user()
-    if not is_admin_or_manager(user):
-        return jsonify({'error': 'Forbidden — only admins and managers may preview PDFs'}), 403
-
+    user       = get_current_user()
     inspection = Inspection.query.get_or_404(inspection_id)
+
+    # Apply the same access rules as the GET single-inspection endpoint.
+    # Clerks may only export their own inspections.
+    # Typists may only export inspections assigned to them.
+    if user.role == 'clerk' and inspection.inspector_id != user.id:
+        return jsonify({'error': 'Forbidden'}), 403
+    if user.role == 'typist' and inspection.typist_id != user.id:
+        return jsonify({'error': 'Forbidden'}), 403
+
     if not inspection.report_data:
         return jsonify({'error': 'No report data — inspection has not been filled in yet'}), 400
 
@@ -558,7 +563,7 @@ def preview_pdf(inspection_id):
     # Build a descriptive filename
     addr  = (inspection.property.address if inspection.property else 'inspection').replace(',', '').replace(' ', '_')[:40]
     itype = inspection.inspection_type or 'report'
-    fname = f'preview_{itype}_{addr}_{inspection_id}.pdf'
+    fname = f'{itype}_{addr}_{inspection_id}.pdf'
 
     resp = make_response(pdf_bytes)
     resp.headers['Content-Type']        = 'application/pdf'

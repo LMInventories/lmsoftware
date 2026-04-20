@@ -5,7 +5,6 @@ import { useAuthStore } from '../stores/auth'
 import { useToast } from '../composables/useToast'
 import api from '../services/api'
 import TemplatePreviewModal from '../components/settings/TemplatePreviewModal.vue'
-import PdfExportModal from '../components/PdfExportModal.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -34,14 +33,6 @@ const photoUploading = ref(false)
 const localPhoto = ref(null)
 
 // PDF export
-const showPdfExport        = ref(false)
-const pdfTemplate          = ref(null)
-const pdfReportData        = ref({})
-const pdfFixedSections     = ref([])
-const pdfRooms             = ref([])
-const pdfActionCatalogue   = ref([])
-const pdfPhotoSettings     = ref({})
-const pdfClientSettings    = ref({})
 
 // Share PDF modal
 const showSharePdf      = ref(false)
@@ -354,99 +345,6 @@ async function savePhoto() {
   }
 }
 
-// ── PDF export ──────────────────────────────────────────────────────
-
-// Mirrors InspectionReportView helpers for building fixed-section rows
-function _inferFsType(cols) {
-  const c = cols || []
-  if (c.includes('reading'))                                                 return 'meter_readings'
-  if (c.includes('cleanliness'))                                             return 'cleaning_summary'
-  if (c.includes('name') && c.includes('answer') && c.includes('question')) return 'fire_door_safety'
-  if (c.includes('answer') && c.includes('question'))                       return 'smoke_alarms'
-  if (c.includes('answer') && c.includes('description'))                    return 'health_safety'
-  if (c.includes('answer') && c.includes('name'))                           return 'smoke_alarms'
-  if (c.includes('condition'))                                               return 'condition_summary'
-  if (c.includes('description'))                                             return 'keys'
-  return 'condition_summary'
-}
-function _adaptFsItem(item, type, idx, secIdx) {
-  const id = `fs_${secIdx}_${idx}`
-  switch (type) {
-    case 'meter_readings':    return { id, name: item.name || '', locationSerial: item.location_serial || '', reading: item.reading || '' }
-    case 'cleaning_summary':  return { id, name: item.name || '', cleanliness: '', cleanlinessNotes: item.additional_notes || '' }
-    case 'condition_summary': return { id, name: item.name || '', condition: item.condition || item.description || '' }
-    case 'keys':              return { id, name: item.name || '', description: item.description || '' }
-    case 'smoke_alarms':      return { id, question: item.name || '', answer: '', location: '' }
-    case 'fire_door_safety':  return { id, name: item.name || '', question: '', answer: '' }
-    case 'health_safety':     return { id, question: item.name || '', answer: '', description: '' }
-    default:                  return { id, name: item.name || '', condition: '' }
-  }
-}
-
-async function openPdfExport() {
-  try {
-    // Step 1: fetch the latest inspection state (need template_id + client_id)
-    const iRes  = await api.getInspection(inspection.value.id)
-    const fresh = iRes.data
-    const rd    = fresh.report_data ? JSON.parse(fresh.report_data) : {}
-    const clientId = fresh.client?.id || inspection.value?.client?.id
-
-    // Step 2: client settings, template, fixed sections, and action catalogue
-    //         are all independent — fire them in parallel.
-    const [cRes, tRes, fsRes, aRes] = await Promise.all([
-      clientId ? api.getClient(clientId).catch(() => null) : Promise.resolve(null),
-      fresh.template_id ? api.getTemplate(fresh.template_id).catch(() => null) : Promise.resolve(null),
-      api.getFixedSections().catch(() => null),
-      api.getActions().catch(() => null),
-    ])
-
-    // ── Client settings + photo settings ──────────────────────────────
-    if (cRes) {
-      pdfClientSettings.value = cRes.data || {}
-      try { pdfPhotoSettings.value = JSON.parse(cRes.data.report_photo_settings || '{}') } catch { pdfPhotoSettings.value = {} }
-    } else {
-      pdfClientSettings.value = fresh.client || {}
-      pdfPhotoSettings.value  = {}
-    }
-
-    // ── Template ───────────────────────────────────────────────────────
-    const tpl = tRes?.data || null
-    pdfTemplate.value = tpl
-
-    // ── Rooms (from template relational sections) ───────────────────────
-    const templateRooms = (tpl?.sections || [])
-      .filter(s => s.section_type === 'room')
-      .map(s => ({
-        ...s,
-        name:     rd._roomNames?.[String(s.id)] ?? s.name,
-        sections: (s.items || []).map(item => ({
-          ...item,
-          label:          item.name || item.label || '',
-          hasDescription: true,
-          hasCondition:   item.requires_condition !== false,
-        })),
-      }))
-    const importedRooms = (rd._importedRooms || []).map(r => ({ ...r, _isImported: true, sections: [] }))
-    pdfRooms.value = [...templateRooms, ...importedRooms]
-
-    // ── Fixed sections (from system-wide config) ────────────────────────
-    pdfFixedSections.value = (fsRes?.data || [])
-      .filter(s => s.enabled !== false)
-      .map((s, si) => {
-        const type = _inferFsType(s.columns)
-        const rows = (s.items || []).map((item, i) => _adaptFsItem(item, type, i, si))
-        return { id: `fs_${si}_${s.name.toLowerCase().replace(/[^a-z0-9]/g,'_')}`, name: s.name, type, rows }
-      })
-
-    // ── Action catalogue ────────────────────────────────────────────────
-    pdfActionCatalogue.value = aRes?.data?.actions || []
-
-    pdfReportData.value = rd
-    showPdfExport.value = true
-  } catch {
-    toast.error('Failed to load report data for export')
-  }
-}
 
 // ── Share PDF — send to user-supplied addresses ─────────────────────
 async function sendSharedPdf() {
@@ -600,15 +498,6 @@ onMounted(() => {
             Advance to {{ nextStep?.label }} →
           </button>
 
-          <!-- Preview button — always visible when template assigned -->
-          <button
-            v-if="inspection.template_id && previewTemplate"
-            @click="showPreview = true"
-            class="btn-preview-report"
-          >
-            Preview Report
-          </button>
-
           <!-- Edit Report button — visible when Active, Processing or Review -->
           <button
             v-if="['active', 'processing', 'review'].includes(inspection.status)"
@@ -623,13 +512,14 @@ onMounted(() => {
             Inspection Complete
           </div>
 
-          <!-- Export PDF (JS/browser renderer) — available when complete -->
+          <!-- Export PDF — server-generated, opens in new tab (same output as Share PDF) -->
           <button
             v-if="inspection.status === 'complete'"
-            @click="openPdfExport"
+            @click="previewServerPdf"
+            :disabled="pdfPreviewing"
             class="btn-export-pdf"
           >
-            📄 Export PDF
+            {{ pdfPreviewing ? 'Generating…' : '📄 Export PDF' }}
           </button>
 
           <!-- Share PDF — email to specified addresses -->
@@ -1194,19 +1084,6 @@ onMounted(() => {
         </div>
       </div>
 
-      <!-- PDF Export Modal -->
-      <PdfExportModal
-        v-if="showPdfExport"
-        :inspection="inspection"
-        :template="pdfTemplate"
-        :report-data="pdfReportData"
-        :client-settings="pdfClientSettings"
-        :fixed-sections="pdfFixedSections"
-        :rooms="pdfRooms"
-        :action-catalogue="pdfActionCatalogue"
-        :photo-settings="pdfPhotoSettings"
-        @close="showPdfExport = false"
-      />
 
     </div>
   </div>

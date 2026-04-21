@@ -26,9 +26,9 @@ onMounted(() => {
   background: #f8fafc;
 }
 
-.page { max-width: 1400px; margin: 0 auto; position: relative; }
-/* Float action buttons to the absolute top-right corner of the page */
-.page-header { position: absolute !important; top: 0; right: 0; display: flex !important; align-items: center; gap: 8px; z-index: 10; }
+.page { max-width: 1400px; margin: 0 auto; }
+/* Collapse header to just the action buttons, pushed to the right */
+.page-header { display: flex !important; justify-content: flex-end; align-items: center; gap: 8px; margin-bottom: 16px; }
 /* Hide all title/subtitle text */
 .page-header h1,
 .page-header .subtitle,

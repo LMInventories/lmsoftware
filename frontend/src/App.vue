@@ -27,8 +27,7 @@ onMounted(() => {
 }
 
 .page { max-width: 1400px; margin: 0 auto; }
-.page-header { margin-bottom: 32px; }
-.page-header h1 { font-size: 32px; font-weight: 700; color: #1e293b; margin-bottom: 8px; }
+.page-header { display: none; }
 .page-description { color: #64748b; font-size: 16px; }
 
 .form-group { margin-bottom: 20px; }

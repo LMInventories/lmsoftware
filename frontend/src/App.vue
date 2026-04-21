@@ -26,14 +26,15 @@ onMounted(() => {
   background: #f8fafc;
 }
 
-.page { max-width: 1400px; margin: 0 auto; }
-.page-header { display: flex !important; align-items: center; justify-content: flex-end; margin-bottom: 20px; }
-/* Hide the title text — keep action buttons visible */
+.page { max-width: 1400px; margin: 0 auto; position: relative; }
+/* Float action buttons to the absolute top-right corner of the page */
+.page-header { position: absolute !important; top: 0; right: 0; display: flex !important; align-items: center; gap: 8px; z-index: 10; }
+/* Hide all title/subtitle text */
 .page-header h1,
 .page-header .subtitle,
 .page-header .page-title,
 .page-header .page-sub { display: none !important; }
-/* Hide the text wrapper div (the one that holds h1+subtitle, not the actions div) */
+/* Hide the text wrapper div */
 .page-header > div:has(h1) { display: none !important; }
 .page-description { color: #64748b; font-size: 16px; }
 

@@ -1070,7 +1070,7 @@ class _PDFBuilder:
                             sub_inv  = sub.get('inventoryCondition') or sub.get('condition') or ''
                             sub_co   = sub.get('checkOutCondition') or ''
                             tbl_data.append([
-                                Paragraph('↳', self.s_ref),
+                                Paragraph('-', self.s_ref),
                                 self._p('—'),
                                 self._p(sub_desc),
                                 self._p(sub_inv or '—'),
@@ -1091,7 +1091,7 @@ class _PDFBuilder:
                             sub_desc = sub.get('description') or ''
                             sub_cond = sub.get('condition') or ''
                             tbl_data.append([
-                                Paragraph('↳', self.s_ref),
+                                Paragraph('-', self.s_ref),
                                 self._p('—'),
                                 self._p(sub_desc),
                                 self._p(sub_cond or '—'),

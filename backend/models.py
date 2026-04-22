@@ -174,6 +174,13 @@ class Inspection(db.Model):
     tenant_name             = db.Column(db.String(255))
     tenant_email            = db.Column(db.String(255))
     client_email_override   = db.Column(db.String(255))
+
+    # ── Deposit / Depositary fields ───────────────────────────────────────────
+    deposit_amount          = db.Column(db.Numeric(10, 2))   # GBP, e.g. 1250.00
+    deposit_scheme          = db.Column(db.String(50))       # 'TDS' | 'mydeposits' | 'DPS'
+    deposit_ref             = db.Column(db.String(255))      # scheme certificate / registration number
+    depositary_tenancy_id   = db.Column(db.String(255))      # ID returned by The Depositary API after push
+    depositary_pushed_at    = db.Column(db.DateTime)
     conduct_date            = db.Column(db.DateTime)
     conduct_time_preference = db.Column(db.String(50))
     scheduled_date          = db.Column(db.DateTime)
@@ -209,6 +216,11 @@ class Inspection(db.Model):
             'template_id':             self.template_id,
             'tenant_name':             self.tenant_name,
             'tenant_email':            self.tenant_email,
+            'deposit_amount':          float(self.deposit_amount) if self.deposit_amount is not None else None,
+            'deposit_scheme':          self.deposit_scheme,
+            'deposit_ref':             self.deposit_ref,
+            'depositary_tenancy_id':   self.depositary_tenancy_id,
+            'depositary_pushed_at':    self.depositary_pushed_at.isoformat() if self.depositary_pushed_at else None,
             'client_email_override':   self.client_email_override,
             'conduct_date':            self.conduct_date.isoformat() if self.conduct_date else None,
             'conduct_time_preference': self.conduct_time_preference,

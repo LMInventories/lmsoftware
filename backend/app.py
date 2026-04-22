@@ -161,6 +161,7 @@ def create_app():
     _optional = [
         ('routes.system_settings', 'system_settings_bp', '/api/system-settings'),
         ('routes.actions',         'actions_bp',          '/api/actions'),
+        ('routes.google',          'google_bp',           '/api/google'),
     ]
     for module_name, bp_name, prefix in _optional:
         try:
@@ -236,6 +237,20 @@ def _setup_database():
         )
         db.session.commit()
         print("✅ inspections.tenant_name added.")
+
+    # ── Deposit / Depositary fields ───────────────────────────────────────────
+    for _col, _ddl in [
+        ('deposit_amount',        'NUMERIC(10,2)'),
+        ('deposit_scheme',        'VARCHAR(50)'),
+        ('deposit_ref',           'VARCHAR(255)'),
+        ('depositary_tenancy_id', 'VARCHAR(255)'),
+        ('depositary_pushed_at',  'TIMESTAMP'),
+    ]:
+        if not column_exists('inspections', _col):
+            print(f'Migrating: adding inspections.{_col} column...')
+            db.session.execute(text(f'ALTER TABLE inspections ADD COLUMN {_col} {_ddl}'))
+            db.session.commit()
+            print(f'✅ inspections.{_col} added.')
 
     # templates.is_transient — PDF-import templates are hidden from the Templates UI
     if not column_exists('templates', 'is_transient'):

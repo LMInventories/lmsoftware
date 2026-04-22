@@ -19,6 +19,8 @@ ALLOWED_KEYS = {
     'city', 'postcode', 'email', 'phone', 'website', 'logo',
     # AIIC membership branding
     'aiic_logo',
+    # The Depositary integration
+    'depositary_api_url', 'depositary_api_key',
     # Report style (global)
     'report_header_text_color',
     'report_body_text_color',

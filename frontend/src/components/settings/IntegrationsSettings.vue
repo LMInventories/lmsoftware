@@ -1,16 +1,123 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
+import api from '../../services/api'
 
 const connectingId = ref(null)
-const connectedModal = ref(false)
 const comingSoonModal = ref(false)
 const comingSoonName  = ref('')
 
+// ── The Depositary config panel ───────────────────────────────────────────────
+const showDepositaryPanel = ref(false)
+const depositary = ref({ api_url: '', api_key: '' })
+const depositorySaving = ref(false)
+const depositorySaved  = ref(false)
+const depositaryStatus = ref(null)  // null | 'configured' | 'not_configured'
+
+async function loadDepositarySettings() {
+  try {
+    const res = await api.getSystemSettings()
+    const s   = res.data || {}
+    depositary.value.api_url = s.depositary_api_url || ''
+    depositary.value.api_key = s.depositary_api_key || ''
+    depositaryStatus.value   = (s.depositary_api_url && s.depositary_api_key) ? 'configured' : 'not_configured'
+  } catch (e) {
+    console.error('Failed to load Depositary settings:', e)
+  }
+}
+
+async function saveDepositarySettings() {
+  depositorySaving.value = true
+  try {
+    await api.updateSystemSettings({
+      depositary_api_url: depositary.value.api_url,
+      depositary_api_key: depositary.value.api_key,
+    })
+    depositaryStatus.value = (depositary.value.api_url && depositary.value.api_key) ? 'configured' : 'not_configured'
+    depositorySaved.value  = true
+    setTimeout(() => depositorySaved.value = false, 2500)
+  } catch (e) {
+    alert('Failed to save — please try again.')
+  } finally {
+    depositorySaving.value = false
+  }
+}
+
+// ── Google OAuth ──────────────────────────────────────────────────────────────
+// Status shared by both Drive and Calendar cards
+const googleStatus = ref({
+  connected:    false,
+  email:        '',
+  has_drive:    false,
+  has_calendar: false,
+})
+const googleDisconnecting = ref(false)
+
+async function loadGoogleStatus() {
+  try {
+    const res = await api.http.get('/api/google/status')
+    googleStatus.value = res.data
+  } catch (e) {
+    // Not connected yet — keep defaults
+  }
+}
+
+function connectGoogle() {
+  // Redirect the browser to the backend OAuth start — it will redirect to
+  // Google's consent screen and eventually back to
+  // /settings?tab=integrations&google=connected
+  const base = api.http.defaults.baseURL || ''
+  window.location.href = `${base}/api/google/auth`
+}
+
+async function disconnectGoogle() {
+  if (!confirm('Disconnect Google? Drive uploads and Calendar sync will stop.')) return
+  googleDisconnecting.value = true
+  try {
+    await api.http.delete('/api/google/disconnect')
+    googleStatus.value = { connected: false, email: '', has_drive: false, has_calendar: false }
+  } catch (e) {
+    alert('Failed to disconnect — please try again.')
+  } finally {
+    googleDisconnecting.value = false
+  }
+}
+
+onMounted(async () => {
+  await loadDepositarySettings()
+  await loadGoogleStatus()
+
+  // Handle redirect-back from Google OAuth
+  const params = new URLSearchParams(window.location.search)
+  const googleResult = params.get('google')
+  if (googleResult === 'connected') {
+    await loadGoogleStatus()
+    // Clean up the URL
+    const clean = window.location.pathname + '?tab=integrations'
+    window.history.replaceState({}, '', clean)
+  } else if (googleResult === 'error') {
+    alert('Google authorisation failed — please try again.')
+    const clean = window.location.pathname + '?tab=integrations'
+    window.history.replaceState({}, '', clean)
+  }
+})
+
 // ── Integration catalogue ─────────────────────────────────────────────────────
-// status: 'available' | 'coming_soon'
-// available = shows a Connect button (placeholder flow)
-// coming_soon = shows a "Coming Soon" badge
+// status: 'available' | 'configured' | 'coming_soon'
 const integrations = [
+  // ─ Deposit Management ─────────────────────────────────────────────────────
+  {
+    id: 'depositary',
+    category: 'Deposit Management',
+    name: 'The Depositary',
+    logoText: 'TD',
+    description: 'Automatically push completed Check Out reports to The Depositary. Tenant details, dilapidations, and the PDF report are sent the moment the inspection is marked complete — no manual data entry.',
+    color: '#0f766e',
+    status: 'available',
+    badge: 'UK Deposit Platform',
+    benefit: 'Saves ~3–4 hours per checkout',
+    configurable: true,
+  },
+
   // ─ Calendars ──────────────────────────────────────────────────────────────
   {
     id: 'google_calendar',
@@ -22,6 +129,8 @@ const integrations = [
     status: 'available',
     badge: 'Free',
     benefit: 'Saves ~15 min/day per clerk',
+    googleOAuth: true,
+    scopeKey: 'has_calendar',
   },
   {
     id: 'outlook_calendar',
@@ -143,10 +252,13 @@ const integrations = [
     category: 'Document Management',
     name: 'Google Drive',
     logo: 'https://cdn.simpleicons.org/googledrive',
-    description: 'Automatically upload completed PDF reports to a designated Google Drive folder, organised by client or property.',
+    description: 'Automatically upload completed PDF reports to Google Drive, organised by client and property. Reports land in InspectPro Reports / {Client} / {Property} the moment an inspection is marked complete.',
     color: '#4285F4',
-    status: 'coming_soon',
+    status: 'available',
     badge: 'Free',
+    benefit: 'Reports backed up automatically',
+    googleOAuth: true,
+    scopeKey: 'has_drive',
   },
   {
     id: 'dropbox',
@@ -234,12 +346,20 @@ function handleConnect(integration) {
     comingSoonModal.value = true
     return
   }
-  // Placeholder: Google Calendar OAuth flow would launch here
-  connectingId.value = integration.id
-  setTimeout(() => {
-    connectingId.value = null
-    connectedModal.value = true
-  }, 800)
+  if (integration.configurable) {
+    if (integration.id === 'depositary') { showDepositaryPanel.value = true }
+    return
+  }
+  if (integration.googleOAuth) {
+    // Both Drive and Calendar share the same Google OAuth connection
+    if (googleStatus.value.connected) {
+      // Already connected — clicking again opens disconnect confirmation
+      disconnectGoogle()
+    } else {
+      connectGoogle()
+    }
+    return
+  }
 }
 </script>
 
@@ -285,28 +405,34 @@ function handleConnect(integration) {
             <span>💡</span> {{ integration.benefit }}
           </div>
 
+          <!-- Google connected badge (shown under description for connected Google cards) -->
+          <div
+            v-if="integration.googleOAuth && googleStatus.connected && googleStatus[integration.scopeKey]"
+            class="int-connected-badge"
+          >
+            ✓ Connected as {{ googleStatus.email }}
+          </div>
+
           <!-- CTA -->
           <button
             class="int-btn"
-            :class="integration.status === 'available' ? 'int-btn--connect' : 'int-btn--soon'"
+            :class="[
+              integration.status !== 'available' ? 'int-btn--soon' :
+              (integration.id === 'depositary' && depositaryStatus === 'configured') ? 'int-btn--configured' :
+              (integration.googleOAuth && googleStatus.connected) ? 'int-btn--configured' :
+              'int-btn--connect'
+            ]"
             @click="handleConnect(integration)"
-            :disabled="connectingId === integration.id"
+            :disabled="connectingId === integration.id || googleDisconnecting"
           >
             <span v-if="connectingId === integration.id">Connecting…</span>
+            <span v-else-if="integration.id === 'depositary' && depositaryStatus === 'configured'">⚙ Configured →</span>
+            <span v-else-if="integration.googleOAuth && googleStatus.connected && googleStatus[integration.scopeKey]">✓ Connected — Disconnect</span>
+            <span v-else-if="integration.googleOAuth && googleStatus.connected && !googleStatus[integration.scopeKey]">Re-authorise →</span>
             <span v-else-if="integration.status === 'available'">Connect →</span>
             <span v-else>Notify Me</span>
           </button>
         </div>
-      </div>
-    </div>
-
-    <!-- Google Calendar "Connected" placeholder modal -->
-    <div v-if="connectedModal" class="modal-overlay" @click.self="connectedModal = false">
-      <div class="modal">
-        <div class="modal-icon">✅</div>
-        <h3>Google Calendar</h3>
-        <p>This is a placeholder for the Google Calendar OAuth flow. When implemented, clerks will be able to authorise InspectPro to read &amp; write their Google Calendar.</p>
-        <button class="btn-primary" @click="connectedModal = false">Got it</button>
       </div>
     </div>
 
@@ -317,6 +443,63 @@ function handleConnect(integration) {
         <h3>{{ comingSoonName }}</h3>
         <p>This integration is on the roadmap. We'll notify admins as soon as it's available.</p>
         <button class="btn-primary" @click="comingSoonModal = false">OK</button>
+      </div>
+    </div>
+
+    <!-- The Depositary config panel -->
+    <div v-if="showDepositaryPanel" class="modal-overlay" @click.self="showDepositaryPanel = false">
+      <div class="modal modal--wide">
+        <div class="modal-icon">🏦</div>
+        <h3>The Depositary</h3>
+        <p class="modal-sub">
+          Once configured, completed Check Out inspections will be automatically pushed to The Depositary —
+          including tenant details, dilapidations and the PDF report.
+        </p>
+
+        <div class="config-notice">
+          <strong>API credentials required.</strong>
+          Contact <a href="https://www.thedepositary.com/integrations" target="_blank" rel="noopener">thedepositary.com/integrations</a>
+          to request API access. They will supply the URL and key below.
+        </div>
+
+        <div class="config-fields">
+          <div class="config-field">
+            <label>API Base URL</label>
+            <!-- TODO: replace placeholder once confirmed by The Depositary -->
+            <input
+              v-model="depositary.api_url"
+              type="url"
+              class="config-input"
+              placeholder="https://api.thedepositary.com  (supplied by The Depositary)"
+            />
+          </div>
+          <div class="config-field">
+            <label>API Key</label>
+            <input
+              v-model="depositary.api_key"
+              type="password"
+              class="config-input"
+              placeholder="Your API key (supplied by The Depositary)"
+            />
+          </div>
+        </div>
+
+        <div class="config-status" v-if="depositaryStatus === 'configured'">
+          ✅ Configured — Check Out completions will push automatically.
+        </div>
+        <div class="config-status config-status--warn" v-else-if="depositaryStatus === 'not_configured'">
+          ⚠ Not configured — enter both fields above to enable.
+        </div>
+
+        <div class="modal-actions">
+          <button class="btn-secondary" @click="showDepositaryPanel = false">Close</button>
+          <transition name="fade">
+            <span v-if="depositorySaved" class="saved-badge">✓ Saved</span>
+          </transition>
+          <button class="btn-primary" :disabled="depositorySaving" @click="saveDepositarySettings">
+            {{ depositorySaving ? 'Saving…' : 'Save Credentials' }}
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -393,6 +576,12 @@ h2 { font-size: 18px; font-weight: 700; color: #0f172a; margin: 0 0 6px; }
   display: flex; align-items: center; gap: 5px;
 }
 
+.int-connected-badge {
+  font-size: 11px; font-weight: 600; color: #166534;
+  background: #dcfce7; border: 1px solid #bbf7d0;
+  border-radius: 6px; padding: 5px 9px;
+}
+
 .int-btn {
   margin-top: 4px; padding: 7px 14px;
   border-radius: 7px; border: none;
@@ -429,6 +618,41 @@ h2 { font-size: 18px; font-weight: 700; color: #0f172a; margin: 0 0 6px; }
   font-size: 13px; font-weight: 700; cursor: pointer;
 }
 .btn-primary:hover { background: #4f46e5; }
+.btn-secondary {
+  padding: 9px 18px; background: white; color: #374151;
+  border: 1px solid #d1d5db; border-radius: 8px;
+  font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.btn-secondary:hover { background: #f9fafb; }
+
+/* Depositary / config modal */
+.modal--wide { max-width: 520px; text-align: left; align-items: stretch; }
+.modal-sub { font-size: 13px; color: #64748b; line-height: 1.6; margin: 0; }
+.config-notice {
+  background: #fffbeb; border: 1px solid #fde68a;
+  border-radius: 8px; padding: 12px 14px;
+  font-size: 12px; color: #92400e; line-height: 1.5;
+}
+.config-notice a { color: #0369a1; }
+.config-fields { display: flex; flex-direction: column; gap: 12px; width: 100%; }
+.config-field { display: flex; flex-direction: column; gap: 5px; }
+.config-field label { font-size: 12px; font-weight: 700; color: #374151; }
+.config-input {
+  padding: 9px 12px; border: 1px solid #d1d5db; border-radius: 8px;
+  font-size: 13px; font-family: inherit; color: #1e293b; width: 100%; box-sizing: border-box;
+}
+.config-input:focus { outline: none; border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99,102,241,.1); }
+.config-status {
+  font-size: 12px; font-weight: 600; color: #166534;
+  background: #dcfce7; border-radius: 7px; padding: 8px 12px; width: 100%; box-sizing: border-box;
+}
+.config-status--warn { color: #92400e; background: #fffbeb; }
+.modal-actions { display: flex; align-items: center; gap: 10px; justify-content: flex-end; width: 100%; }
+.saved-badge { font-size: 13px; font-weight: 600; color: #16a34a; }
+.int-btn--configured { background: #dcfce7; color: #166534; border: 1px solid #bbf7d0; }
+.int-btn--configured:hover { background: #bbf7d0; }
+.fade-enter-active, .fade-leave-active { transition: opacity 0.3s; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
 
 /* ─ Responsive ─────────────────────────────────────────────────────────── */
 @media (max-width: 768px) {

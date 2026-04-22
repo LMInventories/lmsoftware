@@ -26,6 +26,7 @@ const showEditKeyReturn = ref(false)
 const showEditNotes = ref(false)
 const showEditTenantEmail   = ref(false)
 const showEditLandlordEmail = ref(false)
+const showEditDeposit       = ref(false)
 const showEditClientEmail   = ref(false)
 const showPreview = ref(false)
 const showPhotoModal = ref(false)
@@ -54,7 +55,10 @@ const editForms = ref({
   tenant_name: '',
   tenant_email: '',
   landlord_email: '',
-  client_email_override: ''
+  client_email_override: '',
+  deposit_amount: '',
+  deposit_scheme: '',
+  deposit_ref: ''
 })
 
 // Key location options
@@ -217,8 +221,11 @@ async function fetchInspection() {
     editForms.value.key_location = inspection.value.key_location || ''
     editForms.value.key_return = inspection.value.key_return || ''
     editForms.value.internal_notes = inspection.value.internal_notes || ''
-    editForms.value.tenant_name     = inspection.value.tenant_name  || ''
-    editForms.value.tenant_email    = inspection.value.tenant_email || ''
+    editForms.value.tenant_name     = inspection.value.tenant_name   || ''
+    editForms.value.tenant_email    = inspection.value.tenant_email  || ''
+    editForms.value.deposit_amount  = inspection.value.deposit_amount != null ? String(inspection.value.deposit_amount) : ''
+    editForms.value.deposit_scheme  = inspection.value.deposit_scheme || ''
+    editForms.value.deposit_ref     = inspection.value.deposit_ref    || ''
     editForms.value.landlord_email  = inspection.value.landlord_email || ''
     editForms.value.client_email_override = inspection.value.client_email_override || inspection.value.client?.email || ''
     localPhoto.value = inspection.value.property?.overview_photo || null
@@ -270,6 +277,22 @@ async function updateField(field, value) {
     showEditClientEmail.value   = false
   } catch (error) {
     console.error('Failed to update:', error)
+    toast.error('Failed to update')
+  }
+}
+
+async function updateDepositDetails() {
+  try {
+    await api.updateInspection(inspection.value.id, {
+      deposit_amount: editForms.value.deposit_amount ? parseFloat(editForms.value.deposit_amount) : null,
+      deposit_scheme: editForms.value.deposit_scheme || null,
+      deposit_ref:    editForms.value.deposit_ref    || null,
+    })
+    toast.success('Deposit details updated')
+    fetchInspection()
+    showEditDeposit.value = false
+  } catch (error) {
+    console.error('Failed to update deposit details:', error)
     toast.error('Failed to update')
   }
 }
@@ -729,6 +752,42 @@ onMounted(() => {
             </div>
           </div>
 
+          <!-- Deposit Details (check_out inspections only) -->
+          <div class="info-card" v-if="inspection.inspection_type === 'check_out'">
+            <div class="card-header">
+              <h3>Deposit</h3>
+            </div>
+            <div class="card-content">
+              <div class="contact-row">
+                <strong>Amount:</strong>
+                <span :style="!inspection.deposit_amount ? 'color:#94a3b8' : ''">
+                  {{ inspection.deposit_amount ? '£' + Number(inspection.deposit_amount).toFixed(2) : 'Not set' }}
+                </span>
+                <button v-if="canEdit" @click="showEditDeposit = true" class="btn-edit-inline">✎</button>
+              </div>
+              <div class="contact-row">
+                <strong>Scheme:</strong>
+                <span :style="!inspection.deposit_scheme ? 'color:#94a3b8' : ''">
+                  {{ inspection.deposit_scheme || 'Not set' }}
+                </span>
+              </div>
+              <div class="contact-row">
+                <strong>Ref:</strong>
+                <span :style="!inspection.deposit_ref ? 'color:#94a3b8' : ''">
+                  {{ inspection.deposit_ref || 'Not set' }}
+                </span>
+              </div>
+              <div class="contact-row" v-if="inspection.depositary_tenancy_id">
+                <strong>Depositary ID:</strong>
+                <span style="font-size:12px;color:#0369a1;font-family:monospace">{{ inspection.depositary_tenancy_id }}</span>
+              </div>
+              <div class="contact-row" v-if="inspection.depositary_pushed_at">
+                <strong>Pushed:</strong>
+                <span style="font-size:12px;color:#64748b">{{ new Date(inspection.depositary_pushed_at).toLocaleString('en-GB') }}</span>
+              </div>
+            </div>
+          </div>
+
           <!-- Property Details -->
           <div class="info-card" v-if="inspection.property">
             <div class="card-header">
@@ -1033,6 +1092,39 @@ onMounted(() => {
           <div class="modal-footer">
             <button @click="showEditLandlordEmail = false" class="btn-secondary">Cancel</button>
             <button @click="updateField('landlord_email', editForms.landlord_email)" class="btn-primary">Save</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Edit Deposit Details -->
+      <div v-if="showEditDeposit" class="modal-overlay" @click.self="showEditDeposit = false">
+        <div class="modal">
+          <div class="modal-header">
+            <h2>Deposit Details</h2>
+            <button @click="showEditDeposit = false" class="btn-close">✕</button>
+          </div>
+          <div class="modal-body" style="display:flex;flex-direction:column;gap:12px;">
+            <div>
+              <label style="font-size:13px;font-weight:600;color:#374151;display:block;margin-bottom:6px;">Deposit Amount (£)</label>
+              <input v-model="editForms.deposit_amount" type="number" step="0.01" min="0" class="input-field" placeholder="e.g. 1250.00" />
+            </div>
+            <div>
+              <label style="font-size:13px;font-weight:600;color:#374151;display:block;margin-bottom:6px;">Protection Scheme</label>
+              <select v-model="editForms.deposit_scheme" class="input-field">
+                <option value="">— Not set —</option>
+                <option value="TDS">TDS (Tenancy Deposit Scheme)</option>
+                <option value="mydeposits">mydeposits</option>
+                <option value="DPS">DPS (Deposit Protection Service)</option>
+              </select>
+            </div>
+            <div>
+              <label style="font-size:13px;font-weight:600;color:#374151;display:block;margin-bottom:6px;">Certificate / Registration Ref</label>
+              <input v-model="editForms.deposit_ref" type="text" class="input-field" placeholder="e.g. TDS123456789" />
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button @click="showEditDeposit = false" class="btn-secondary">Cancel</button>
+            <button @click="updateDepositDetails" class="btn-primary">Save</button>
           </div>
         </div>
       </div>

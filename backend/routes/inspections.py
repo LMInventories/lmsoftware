@@ -383,8 +383,16 @@ def update_inspection(inspection_id):
         inspection.key_return = data['key_return']
     if 'internal_notes' in data:
         inspection.internal_notes = data['internal_notes']
+    if 'tenant_name' in data:
+        inspection.tenant_name = data['tenant_name']
     if 'tenant_email' in data:
         inspection.tenant_email = data['tenant_email']
+    if 'deposit_amount' in data:
+        inspection.deposit_amount = data['deposit_amount'] or None
+    if 'deposit_scheme' in data:
+        inspection.deposit_scheme = data['deposit_scheme'] or None
+    if 'deposit_ref' in data:
+        inspection.deposit_ref = data['deposit_ref'] or None
     if 'client_email_override' in data:
         inspection.client_email_override = data['client_email_override']
     if 'typist_mode' in data:
@@ -481,6 +489,37 @@ def update_inspection(inspection_id):
                         print(f'[pdf] email FAILED: {err}')
                         if 'credentials not configured' in str(err):
                             print(f'[pdf] ACTION REQUIRED: set SMTP_USER and SMTP_PASSWORD in Railway environment variables')
+
+                    # ── Push to The Depositary (check_out inspections only) ────
+                    if insp.inspection_type == 'check_out':
+                        try:
+                            from services.depositary import push_checkout, is_configured
+                            if is_configured():
+                                print(f'[depositary] pushing checkout for inspection {_insp_id}...')
+                                dep_ok, dep_result = push_checkout(insp, pdf_bytes)
+                                if dep_ok:
+                                    print(f'[depositary] push OK — tenancy_id={dep_result}')
+                                else:
+                                    print(f'[depositary] push FAILED: {dep_result}')
+                            else:
+                                print(f'[depositary] not configured — skipping push (set depositary_api_url + depositary_api_key in Settings → Integrations to enable)')
+                        except Exception as dep_err:
+                            print(f'[depositary] push error (non-fatal): {dep_err}')
+
+                    # ── Upload PDF to Google Drive (all inspection types) ─────
+                    try:
+                        from services.google_drive import upload_report, is_drive_connected
+                        if is_drive_connected():
+                            print(f'[google_drive] uploading PDF for inspection {_insp_id}...')
+                            drive_ok, drive_result = upload_report(insp, pdf_bytes)
+                            if drive_ok:
+                                print(f'[google_drive] upload OK — {drive_result}')
+                            else:
+                                print(f'[google_drive] upload FAILED: {drive_result}')
+                        else:
+                            print(f'[google_drive] not connected — skipping upload')
+                    except Exception as drive_err:
+                        print(f'[google_drive] upload error (non-fatal): {drive_err}')
 
                 except Exception:
                     import traceback

@@ -121,6 +121,9 @@ http.interceptors.response.use(
 
 // ── API ───────────────────────────────────────────────────────────────────────
 const api = {
+  // Expose the raw axios instance for one-off calls (e.g. Google OAuth status/disconnect)
+  http,
+
   // Token management
   getToken()    { return localStorage.getItem('token') },
   setToken(t)   { localStorage.setItem('token', t) },

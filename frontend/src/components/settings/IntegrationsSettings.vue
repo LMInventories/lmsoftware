@@ -65,7 +65,7 @@ function connectGoogle() {
   // Redirect the browser to the backend OAuth start — it will redirect to
   // Google's consent screen and eventually back to
   // /settings?tab=integrations&google=connected
-  const base = api.http.defaults.baseURL || ''
+  const base = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
   window.location.href = `${base}/api/google/auth`
 }
 

@@ -23,6 +23,7 @@ RESEND_API_KEY     = os.environ.get('RESEND_API_KEY', '')
 SMTP_FROM          = os.environ.get('SMTP_FROM',          'no-reply@lminventories.co.uk')
 SMTP_FROM_REPORTS  = os.environ.get('SMTP_FROM_REPORTS',  'no-reply@lminventories.co.uk')
 SMTP_FROM_NAME     = os.environ.get('SMTP_FROM_NAME',     'L&M Inventories')
+SMTP_REPLY_TO      = os.environ.get('SMTP_REPLY_TO',      'info@lminventories.co.uk')
 APP_BASE_URL       = os.environ.get('APP_BASE_URL', 'https://app.lminventories.co.uk/')
 
 resend.api_key = RESEND_API_KEY
@@ -62,10 +63,11 @@ def _send(from_addr, to_addrs, subject, html_body, attachments=None):
         return False, 'No recipients'
 
     params: resend.Emails.SendParams = {
-        'from':    _with_name(from_addr),
-        'to':      to_addrs,
-        'subject': subject,
-        'html':    html_body,
+        'from':     _with_name(from_addr),
+        'to':       to_addrs,
+        'subject':  subject,
+        'html':     html_body,
+        'reply_to': SMTP_REPLY_TO,
     }
 
     if attachments:

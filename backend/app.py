@@ -163,13 +163,14 @@ def create_app():
         ('routes.actions',         'actions_bp',          '/api/actions'),
         ('routes.google',          'google_bp',           '/api/google'),
     ]
+    import importlib
     for module_name, bp_name, prefix in _optional:
         try:
-            import importlib
             mod = importlib.import_module(module_name)
             app.register_blueprint(getattr(mod, bp_name), url_prefix=prefix)
-        except (ImportError, AttributeError):
-            pass
+            print(f'✅ Optional blueprint registered: {module_name} → {prefix}')
+        except Exception as e:
+            print(f'⚠️  Optional blueprint FAILED: {module_name} — {type(e).__name__}: {e}')
 
     # ── DB setup: tables + column migrations + seed ───────────────────────────
     # Runs every boot — all operations are safe/idempotent on an existing DB.

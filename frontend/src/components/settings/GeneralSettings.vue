@@ -22,7 +22,8 @@ const form = ref({
   phone: '',
   website: '',
   logo: '',
-  aiic_logo: ''
+  aiic_logo: '',
+  report_disclaimer: '',
 })
 
 async function fetchSettings() {
@@ -38,8 +39,9 @@ async function fetchSettings() {
     form.value.email         = s.email         || ''
     form.value.phone         = s.phone         || ''
     form.value.website       = s.website       || ''
-    form.value.logo          = s.logo          || ''
-    form.value.aiic_logo = s.aiic_logo || ''
+    form.value.logo              = s.logo              || ''
+    form.value.aiic_logo         = s.aiic_logo         || ''
+    form.value.report_disclaimer = s.report_disclaimer || ''
     if (s.logo) logoPreview.value = s.logo
     if (s.aiic_logo) aiicLogoPreview.value = s.aiic_logo
   } catch (err) {
@@ -99,8 +101,9 @@ async function save() {
       email:         form.value.email,
       phone:         form.value.phone,
       website:       form.value.website,
-      logo:          form.value.logo,
-      aiic_logo:     form.value.aiic_logo,
+      logo:               form.value.logo,
+      aiic_logo:          form.value.aiic_logo,
+      report_disclaimer:  form.value.report_disclaimer,
     })
     saved.value = true
     setTimeout(() => saved.value = false, 2500)
@@ -272,6 +275,24 @@ onMounted(fetchSettings)
               <input v-model="form.website" class="field-input" type="url" placeholder="e.g. https://yourcompany.com" />
             </div>
           </div>
+        </div>
+
+        <!-- Report Disclaimer -->
+        <div class="panel">
+          <div class="panel-title">
+            <span class="panel-icon">📄</span>
+            Report Disclaimer
+          </div>
+          <p class="panel-desc">
+            This text will appear on the Disclaimers page of every exported PDF report.
+            Leave blank to omit the disclaimer page entirely.
+          </p>
+          <textarea
+            v-model="form.report_disclaimer"
+            class="field-input disclaimer-textarea"
+            rows="6"
+            placeholder="e.g. This report has been prepared with reasonable care and skill. The contents are confidential to the instructing parties. All measurements are approximate."
+          ></textarea>
         </div>
 
         <!-- Save -->
@@ -519,6 +540,13 @@ onMounted(fetchSettings)
   font-size: 12px;
   color: #94a3b8;
   line-height: 1.4;
+}
+
+.disclaimer-textarea {
+  width: 100%;
+  resize: vertical;
+  line-height: 1.6;
+  box-sizing: border-box;
 }
 
 /* Save row */

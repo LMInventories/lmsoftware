@@ -25,6 +25,8 @@ ALLOWED_KEYS = {
     'report_header_text_color',
     'report_body_text_color',
     'report_orientation',
+    # Report disclaimer (shown on every report)
+    'report_disclaimer',
 }
 
 

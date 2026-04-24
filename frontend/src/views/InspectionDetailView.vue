@@ -549,9 +549,9 @@ onMounted(() => {
             Advance to {{ nextStep?.label }} →
           </button>
 
-          <!-- Edit Report button — visible when Active, Processing or Review -->
+          <!-- Edit Report button — always visible to admin/manager; for others only in active/processing/review -->
           <button
-            v-if="['active', 'processing', 'review'].includes(inspection.status)"
+            v-if="authStore.isAdmin || authStore.isManager || ['active', 'processing', 'review'].includes(inspection.status)"
             @click="router.push(`/inspections/${inspection.id}/report`)"
             class="btn-edit-report"
           >

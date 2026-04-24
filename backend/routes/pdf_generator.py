@@ -6,7 +6,7 @@ with any Python version including 3.14).
 
 Renders the same sections as PdfExportModal.vue:
   Cover → Contents → Disclaimer → Fixed Sections → Rooms →
-  Action Summary (check-out) → Declaration
+  Action Summary (check-out)
 
 Usage:
     from routes.pdf_generator import generate_inspection_pdf
@@ -363,8 +363,26 @@ class _PDFBuilder:
                     return len(room_order)
             self.rooms.sort(key=_room_pos)
 
-        # ── Action catalogue — not used in current schema, empty list ────────
+        # ── Action catalogue — loaded from SystemSetting 'actions_config' ──
         self.action_catalogue = []
+        try:
+            from models import SystemSetting
+            row = SystemSetting.query.filter_by(key='actions_config').first()
+            if row and row.value:
+                import json as _json
+                cfg = _json.loads(row.value)
+                self.action_catalogue = cfg.get('actions', [])
+        except Exception:
+            pass
+        if not self.action_catalogue:
+            # Fallback to built-in defaults so action names always resolve
+            self.action_catalogue = [
+                {'id': 'act_1', 'name': 'Review',               'color': '#3b82f6'},
+                {'id': 'act_2', 'name': 'Maintenance Required',  'color': '#f59e0b'},
+                {'id': 'act_3', 'name': 'Cleaning Required',     'color': '#8b5cf6'},
+                {'id': 'act_4', 'name': 'Missing Item',          'color': '#ef4444'},
+                {'id': 'act_5', 'name': 'Fair Wear & Tear',      'color': '#10b981'},
+            ]
 
         itype = inspection.inspection_type or ''
         self.is_check_out    = itype == 'check_out'
@@ -598,31 +616,29 @@ class _PDFBuilder:
     # Build
     # ─────────────────────────────────────────────────────────────────────────
 
-    def build(self) -> bytes:
-        buf = io.BytesIO()
+    def _make_doc(self, output_buf):
+        """Create a configured BaseDocTemplate writing to output_buf."""
         uw  = self._uw()
-        doc = BaseDocTemplate(buf, pagesize=self.pagesize,
+        doc = BaseDocTemplate(output_buf, pagesize=self.pagesize,
                               leftMargin=self.margin, rightMargin=self.margin,
                               topMargin=self.margin,  bottomMargin=self.margin)
-
-        # Cover page template — full-bleed, tiny frame just to hold the PageBreak
         cover_frame = Frame(0, 0, self.pw, self.ph,
                             leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0)
         cover_template = PageTemplate(id='cover', frames=[cover_frame],
                                       onPage=self._draw_cover)
-
-        # Main content template — margin-constrained
         main_frame = Frame(self.margin, self.margin, uw, self.ph - 2*self.margin,
                            leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0)
         main_template = PageTemplate(id='main', frames=[main_frame])
-
         doc.addPageTemplates([cover_template, main_template])
+        return doc
 
-        story = []
+    def _build_story(self, page_map=None):
+        """Assemble the full story list. page_map is passed to _contents() for page numbers."""
         from reportlab.platypus import NextPageTemplate
-        story += [NextPageTemplate('cover')]   # first page uses cover template
-        story += self._cover()                  # emits NextPageTemplate('main') + PageBreak
-        story += self._contents()
+        story = []
+        story += [NextPageTemplate('cover')]
+        story += self._cover()
+        story += self._contents(page_map=page_map)
         story += self._disclaimer()
         if self.is_check_out and self.act_pos == 'top':
             story += self._action_summary()
@@ -630,9 +646,40 @@ class _PDFBuilder:
         story += self._rooms()
         if self.is_check_out and self.act_pos == 'bottom':
             story += self._action_summary()
-        story += self._declaration()
+        return story
 
-        doc.build(story)
+    def build(self) -> bytes:
+        # ── Pass 1: collect anchor → page number via afterFlowable ──────────────
+        page_map = {}
+
+        class _Tracker(BaseDocTemplate):
+            def afterFlowable(self_, flowable):  # noqa: N805
+                if isinstance(flowable, _HeaderBar) and flowable.anchor:
+                    page_map[flowable.anchor] = self_.page
+                elif isinstance(flowable, _Anchor):
+                    page_map[flowable.name] = self_.page
+
+        import io as _io
+        tmp = _io.BytesIO()
+        doc1 = _Tracker(tmp, pagesize=self.pagesize,
+                        leftMargin=self.margin, rightMargin=self.margin,
+                        topMargin=self.margin,  bottomMargin=self.margin)
+        uw = self._uw()
+        cover_frame1 = Frame(0, 0, self.pw, self.ph,
+                             leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0)
+        main_frame1  = Frame(self.margin, self.margin, uw, self.ph - 2*self.margin,
+                             leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0)
+        from reportlab.platypus import PageTemplate as _PT
+        doc1.addPageTemplates([
+            _PT(id='cover', frames=[cover_frame1], onPage=self._draw_cover),
+            _PT(id='main',  frames=[main_frame1]),
+        ])
+        doc1.build(self._build_story(page_map=None))
+
+        # ── Pass 2: build final PDF with real page numbers in Contents ───────────
+        buf = io.BytesIO()
+        doc2 = self._make_doc(buf)
+        doc2.build(self._build_story(page_map=page_map))
         return buf.getvalue()
 
     # ── Cover ─────────────────────────────────────────────────────────────────
@@ -831,22 +878,26 @@ class _PDFBuilder:
 
     # ── Contents ──────────────────────────────────────────────────────────────
 
-    def _contents(self):
-        import re, html as _html_mod
-
-        def _anchor_id(prefix, name=''):
-            slug = re.sub(r'[^a-z0-9]', '_', name.lower()).strip('_') if name else ''
-            return f'{prefix}_{slug}' if slug else prefix
+    def _contents(self, page_map=None):
+        import html as _html_mod
 
         rows = []
+        s_pg = ParagraphStyle('toc_pg', fontName='Helvetica', fontSize=9.5, leading=14,
+                               textColor=self.brand, alignment=TA_RIGHT)
 
         def add(title, anchor):
-            safe = _html_mod.escape(title)
-            rows.append([Paragraph(f'<a href="#{anchor}">{safe}</a>', self.s_toc_link)])
+            safe  = _html_mod.escape(title)
+            title_p = Paragraph(f'<a href="#{anchor}">{safe}</a>', self.s_toc_link)
+            if page_map is not None:
+                pg = page_map.get(anchor)
+                pg_p = Paragraph(str(pg) if pg else '', s_pg)
+                rows.append([title_p, pg_p])
+            else:
+                rows.append([title_p])
 
         add('Cover Page',  'anchor_cover')
         add('Contents',    'anchor_contents')
-        if self.cl.get('report_disclaimer'):
+        if self.sys_settings.get('report_disclaimer') or self.cl.get('report_disclaimer'):
             add('Disclaimers', 'anchor_disclaimers')
         if self.is_check_out and self.act_pos == 'top' and self.actions_summary:
             add('Action Summary', 'anchor_action_summary')
@@ -856,14 +907,19 @@ class _PDFBuilder:
             add(r.get('name', ''), f'anchor_room_{r["id"]}')
         if self.is_check_out and self.act_pos == 'bottom' and self.actions_summary:
             add('Action Summary', 'anchor_action_summary')
-        add('Declaration', 'anchor_declaration')
 
         uw  = self._uw()
-        tbl = Table(rows, colWidths=[uw])
+        if page_map is not None:
+            col_widths = [uw - 14*mm, 14*mm]
+        else:
+            col_widths = [uw]
+
+        tbl = Table(rows, colWidths=col_widths)
         tbl.setStyle(TableStyle([
             ('TOPPADDING',    (0,0),(-1,-1), 5),
             ('BOTTOMPADDING', (0,0),(-1,-1), 5),
             ('LEFTPADDING',   (0,0),(-1,-1), 4),
+            ('RIGHTPADDING',  (0,0),(-1,-1), 4),
             ('LINEBELOW',     (0,0),(-1,-2), 0.5, _SLATE_100),
             ('VALIGN',        (0,0),(-1,-1), 'MIDDLE'),
         ]))
@@ -873,7 +929,8 @@ class _PDFBuilder:
     # ── Disclaimer ────────────────────────────────────────────────────────────
 
     def _disclaimer(self):
-        disc = self.cl.get('report_disclaimer') or ''
+        # Prefer system-wide disclaimer; fall back to per-client value for backward compat
+        disc = self.sys_settings.get('report_disclaimer') or self.cl.get('report_disclaimer') or ''
         if not disc:
             return []
         text = disc.replace('&','&amp;').replace('<','&lt;').replace('>','&gt;').replace('\n','<br/>')
@@ -1119,7 +1176,8 @@ class _PDFBuilder:
         story = [_Anchor('anchor_action_summary')]
         uw    = self._uw()
 
-        for group in self.action_groups.values():
+        groups = list(self.action_groups.values())
+        for gi, group in enumerate(groups):
             c      = _hex(group['color'])
             c_lt   = _lighten(c, 0.85)
             hdr_p  = ParagraphStyle('ah', fontName='Helvetica-Bold', fontSize=7.5, leading=10, textColor=c)
@@ -1135,7 +1193,9 @@ class _PDFBuilder:
                 ])
             tbl = Table(tbl_data, colWidths=widths, repeatRows=1)
             tbl.setStyle(self._table_style(brand=c, hdr_c=_WHITE))
-            story += [_HeaderBar(group['name'], c, _WHITE), Spacer(1,2*mm), tbl, PageBreak()]
+            is_last = (gi == len(groups) - 1)
+            story += [_HeaderBar(group['name'], c, _WHITE), Spacer(1,2*mm), tbl]
+            story += [PageBreak()] if is_last else [Spacer(1, 6*mm)]
 
         return story
 

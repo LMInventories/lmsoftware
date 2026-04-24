@@ -75,8 +75,10 @@ def _redirect_uri() -> str:
     The URI Google calls after the user grants permission.
     Must match exactly what is registered in Google Cloud Console.
     """
-    backend = os.environ.get('BACKEND_URL', 'https://app.lminventories.co.uk').rstrip('/')
-    return f'{backend}/api/google/callback'
+    backend = os.environ.get('BACKEND_URL', 'https://app.lminventories.co.uk').strip().rstrip('/')
+    uri = f'{backend}/api/google/callback'
+    print(f'[google] redirect_uri = {uri}')  # visible in Railway runtime logs
+    return uri
 
 
 def _frontend_url(path: str = '') -> str:

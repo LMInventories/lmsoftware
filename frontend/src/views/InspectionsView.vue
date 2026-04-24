@@ -951,8 +951,19 @@ onMounted(() => {
       </div>
 
 
-    <!-- Mobile FAB -->
-    <button class="mobile-fab-add" @click="openCreateModal" style="display:none">+</button>
+    <!-- Mobile FABs (shown on small screens only via media query) -->
+    <button
+      v-if="authStore.isAdmin || authStore.isManager"
+      class="mobile-fab mobile-fab-pdf"
+      @click="openPdfImportModal"
+      title="Import from PDF"
+    >📄</button>
+    <button
+      v-if="authStore.isAdmin || authStore.isManager || authStore.isClient"
+      class="mobile-fab mobile-fab-add"
+      @click="openModal"
+      title="Add Inspection"
+    >+</button>
 
     <div v-if="loading" class="loading">Loading...</div>
 
@@ -2154,11 +2165,12 @@ onMounted(() => {
 @media (max-width: 768px) {
 
   /* FAB replaces the header Add button */
-  .page-header .btn-primary {
+  .page-header .btn-primary,
+  .page-header .btn-secondary.btn-pdf-import {
     display: none;
   }
 
-  .mobile-fab-add {
+  .mobile-fab {
     display: flex !important;
   }
 
@@ -2233,27 +2245,38 @@ onMounted(() => {
 }
 
 
-.mobile-fab-add {
+.mobile-fab {
   display: none;
   position: fixed;
-  bottom: 76px;
   right: 18px;
   width: 52px;
   height: 52px;
-  background: #6366f1;
   color: white;
   border: none;
   border-radius: 50%;
-  font-size: 26px;
+  font-size: 24px;
   line-height: 1;
-  box-shadow: 0 4px 14px rgba(99,102,241,0.4);
   cursor: pointer;
   z-index: 150;
   align-items: center;
   justify-content: center;
   transition: transform 0.15s;
 }
-.mobile-fab-add:hover { transform: scale(1.07); }
+.mobile-fab:hover { transform: scale(1.07); }
+
+.mobile-fab-add {
+  bottom: 76px;
+  background: #6366f1;
+  box-shadow: 0 4px 14px rgba(99,102,241,0.4);
+  font-size: 28px;
+}
+
+.mobile-fab-pdf {
+  bottom: 138px;
+  background: #0ea5e9;
+  box-shadow: 0 4px 14px rgba(14,165,233,0.35);
+  font-size: 20px;
+}
 
 
 /* ── Multi-select dropdown filters ─────────────────────────────────────── */

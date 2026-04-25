@@ -182,7 +182,12 @@ onMounted(() => {
     </div>
 
     
-    <button class="mobile-fab-add" @click="openCreateModal" style="display:none">+</button>
+    <button
+      v-if="authStore.isAdmin || authStore.isManager"
+      class="mobile-fab-add"
+      @click="openCreateModal"
+      title="Add Client"
+    >+</button>
     <div v-if="loading" class="loading">Loading clients...</div>
 
     <div v-else-if="clients.length === 0" class="empty-state">

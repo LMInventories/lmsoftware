@@ -25,6 +25,11 @@ const currentUser = ref(null)
 const isAdminOrManager = computed(() =>
   currentUser.value?.role === 'admin' || currentUser.value?.role === 'manager'
 )
+const isAdmin = computed(() => currentUser.value?.role === 'admin')
+
+// Speed-dial FAB open/close
+const fabExpanded = ref(false)
+function closeFab() { fabExpanded.value = false }
 
 onMounted(async () => {
   await checkNetwork()
@@ -111,6 +116,99 @@ async function removeLocal(id) {
 const dirtyCount = computed(() => localInspections.value.filter(i => i._is_dirty).length)
 
 // ─────────────────────────────────────────────────────────────────────
+// CREATE PROPERTY SHEET  (admin only)
+// ─────────────────────────────────────────────────────────────────────
+const showPropertySheet   = ref(false)
+const creatingProp        = ref(false)
+const propError           = ref('')
+const propSheetLoading    = ref(false)
+const propClients         = ref([])
+
+const propForm = ref({
+  client_id:         null,
+  address:           '',
+  property_type:     '',
+  bedrooms:          '',
+  bathrooms:         '',
+  furnished:         '',
+  detachment_type:   '',
+  elevation:         '',
+  parking:           false,
+  garden:            false,
+  elevator:          false,
+  meter_electricity: '',
+  meter_gas:         '',
+  meter_heat:        '',
+  meter_water:       '',
+  notes:             '',
+})
+
+const PROPERTY_TYPES    = ['House', 'Flat', 'Studio', 'Bungalow', 'Maisonette', 'Cottage', 'Commercial', 'Other']
+const FURNISHED_OPTS    = ['Furnished', 'Part Furnished', 'Unfurnished']
+const DETACHMENT_OPTS   = ['Terraced', 'End Terrace', 'Semi-Detached', 'Detached', 'Purpose Built']
+const ELEVATION_OPTS    = ['Ground Floor', '1st Floor', '2nd Floor', '3rd Floor', '4th Floor', '5th Floor+', 'Top Floor', 'Penthouse']
+
+async function openPropertySheet() {
+  propForm.value = {
+    client_id: null, address: '', property_type: '', bedrooms: '', bathrooms: '',
+    furnished: '', detachment_type: '', elevation: '',
+    parking: false, garden: false, elevator: false,
+    meter_electricity: '', meter_gas: '', meter_heat: '', meter_water: '',
+    notes: '',
+  }
+  propError.value       = ''
+  showPropertySheet.value = true
+  propSheetLoading.value  = true
+  closeFab()
+  try {
+    const res = await api.getClients()
+    propClients.value = res.data || []
+  } catch {
+    propError.value = 'Failed to load clients — check connection'
+  } finally {
+    propSheetLoading.value = false
+  }
+}
+
+async function submitProperty() {
+  if (!propForm.value.client_id) { propError.value = 'Please select a client'; return }
+  if (!propForm.value.address.trim()) { propError.value = 'Address is required'; return }
+  creatingProp.value = true
+  propError.value    = ''
+  const payload = {
+    client_id:         propForm.value.client_id,
+    address:           propForm.value.address.trim(),
+    property_type:     propForm.value.property_type     || null,
+    bedrooms:          propForm.value.bedrooms !== ''   ? Number(propForm.value.bedrooms)   : null,
+    bathrooms:         propForm.value.bathrooms !== ''  ? Number(propForm.value.bathrooms)  : null,
+    furnished:         propForm.value.furnished         || null,
+    detachment_type:   propForm.value.detachment_type   || null,
+    elevation:         propForm.value.elevation         || null,
+    parking:           propForm.value.parking,
+    garden:            propForm.value.garden,
+    elevator:          propForm.value.elevator,
+    meter_electricity: propForm.value.meter_electricity || null,
+    meter_gas:         propForm.value.meter_gas         || null,
+    meter_heat:        propForm.value.meter_heat        || null,
+    meter_water:       propForm.value.meter_water       || null,
+    notes:             propForm.value.notes             || null,
+  }
+  try {
+    await api.createProperty(payload)
+    showPropertySheet.value = false
+    // Refresh property list for any open create-inspection sheet
+    if (createProperties.value.length) {
+      const res = await api.getProperties()
+      createProperties.value = res.data || []
+    }
+  } catch (e) {
+    propError.value = e.response?.data?.error || 'Failed to create property'
+  } finally {
+    creatingProp.value = false
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // CREATE INSPECTION SHEET  (admin / manager only)
 // ─────────────────────────────────────────────────────────────────────
 const showCreateSheet   = ref(false)
@@ -170,6 +268,7 @@ const selectedPropertyLabel = computed(() => {
 })
 
 async function openCreateSheet() {
+  closeFab()
   // Reset form
   createForm.value = {
     property_id:          null,
@@ -359,15 +458,43 @@ function fmtDate(d) {
       <p v-if="syncMessage" class="mh-sync-msg">{{ syncMessage }}</p>
     </header>
 
-    <!-- Admin/Manager: Create Inspection FAB -->
-    <button
-      v-if="isAdminOrManager"
-      class="mh-fab"
-      @click="openCreateSheet"
-      title="Create Inspection"
-    >
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-    </button>
+    <!-- Speed-dial FAB (admin / manager) -->
+    <div v-if="isAdminOrManager" class="mh-fab-wrap">
+
+      <!-- Backdrop: tap outside to close -->
+      <div v-if="fabExpanded" class="mh-fab-backdrop" @click="closeFab"></div>
+
+      <!-- Expanded action items -->
+      <transition name="fab-actions">
+        <div v-if="fabExpanded" class="mh-fab-actions">
+
+          <!-- Create Property (admin only) -->
+          <div v-if="isAdmin" class="mh-fab-action-row">
+            <span class="mh-fab-action-label">Create Property</span>
+            <button class="mh-fab-action-btn mh-fab-btn-property" @click="openPropertySheet">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+            </button>
+          </div>
+
+          <!-- Create Inspection -->
+          <div class="mh-fab-action-row">
+            <span class="mh-fab-action-label">Create Inspection</span>
+            <button class="mh-fab-action-btn mh-fab-btn-inspection" @click="openCreateSheet">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+            </button>
+          </div>
+
+        </div>
+      </transition>
+
+      <!-- Main FAB toggle -->
+      <button class="mh-fab" :class="{ 'mh-fab--open': fabExpanded }" @click="fabExpanded = !fabExpanded">
+        <svg class="mh-fab-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round">
+          <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+        </svg>
+      </button>
+
+    </div>
 
     <!-- List -->
     <div class="mh-list">
@@ -407,7 +534,152 @@ function fmtDate(d) {
 
   </div>
 
-  <!-- ══ CREATE INSPECTION SHEET ════════════════════════════════════════ -->
+  <!-- ══ CREATE PROPERTY SHEET ═════════════════════════════════════════ -->
+  <div v-if="showPropertySheet" class="mh-overlay" @click.self="showPropertySheet = false">
+    <div class="mh-sheet">
+
+      <div class="mh-sheet-header">
+        <h2 class="mh-sheet-title">New Property</h2>
+        <button class="mh-sheet-close" @click="showPropertySheet = false">✕</button>
+      </div>
+
+      <div v-if="propSheetLoading" class="mh-sheet-loading">
+        <svg class="spin" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2.5"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>
+        Loading…
+      </div>
+
+      <div v-else class="mh-sheet-body">
+
+        <!-- ── Client ────────────���────────────────────── -->
+        <div class="mh-field-group">
+          <label class="mh-field-label">Client *</label>
+          <select class="mh-input" v-model="propForm.client_id">
+            <option :value="null">— Select client —</option>
+            <option v-for="c in propClients" :key="c.id" :value="c.id">{{ c.name }}{{ c.company ? ` · ${c.company}` : '' }}</option>
+          </select>
+        </div>
+
+        <!-- ── Address ────────────────────────────────── -->
+        <div class="mh-field-group">
+          <label class="mh-field-label">Address *</label>
+          <textarea class="mh-input mh-textarea" rows="3" placeholder="Full address including postcode…" v-model="propForm.address"></textarea>
+        </div>
+
+        <!-- ── Property Type ──────────────────────────── -->
+        <div class="mh-field-group">
+          <label class="mh-field-label">Property Type</label>
+          <select class="mh-input" v-model="propForm.property_type">
+            <option value="">— Select type —</option>
+            <option v-for="t in PROPERTY_TYPES" :key="t" :value="t">{{ t }}</option>
+          </select>
+        </div>
+
+        <!-- ── Bedrooms / Bathrooms ───────────────────── -->
+        <div class="mh-field-row">
+          <div class="mh-field-group mh-field-half">
+            <label class="mh-field-label">Bedrooms</label>
+            <input class="mh-input" type="number" min="0" max="20" placeholder="0" v-model="propForm.bedrooms" />
+          </div>
+          <div class="mh-field-group mh-field-half">
+            <label class="mh-field-label">Bathrooms</label>
+            <input class="mh-input" type="number" min="0" max="20" placeholder="0" v-model="propForm.bathrooms" />
+          </div>
+        </div>
+
+        <!-- ── Furnished ──────────────���───────────────── -->
+        <div class="mh-field-group">
+          <label class="mh-field-label">Furnished</label>
+          <select class="mh-input" v-model="propForm.furnished">
+            <option value="">— Select —</option>
+            <option v-for="f in FURNISHED_OPTS" :key="f" :value="f">{{ f }}</option>
+          </select>
+        </div>
+
+        <!-- ── Detachment / Elevation ───────���─────────── -->
+        <div class="mh-field-row">
+          <div class="mh-field-group mh-field-half">
+            <label class="mh-field-label">Detachment</label>
+            <select class="mh-input" v-model="propForm.detachment_type">
+              <option value="">— Select —</option>
+              <option v-for="d in DETACHMENT_OPTS" :key="d" :value="d">{{ d }}</option>
+            </select>
+          </div>
+          <div class="mh-field-group mh-field-half">
+            <label class="mh-field-label">Elevation</label>
+            <select class="mh-input" v-model="propForm.elevation">
+              <option value="">— Select —</option>
+              <option v-for="e in ELEVATION_OPTS" :key="e" :value="e">{{ e }}</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- ── Feature toggles ───────────────────────── -->
+        <div class="mh-field-group">
+          <label class="mh-field-label">Features</label>
+          <div class="mh-toggles">
+            <label class="mh-toggle-chip" :class="{ active: propForm.parking }">
+              <input type="checkbox" v-model="propForm.parking" />
+              🚗 Parking
+            </label>
+            <label class="mh-toggle-chip" :class="{ active: propForm.garden }">
+              <input type="checkbox" v-model="propForm.garden" />
+              🌿 Garden
+            </label>
+            <label class="mh-toggle-chip" :class="{ active: propForm.elevator }">
+              <input type="checkbox" v-model="propForm.elevator" />
+              🛗 Elevator
+            </label>
+          </div>
+        </div>
+
+        <!-- ── Meter Readings ──────────��──────────────── -->
+        <div class="mh-field-group">
+          <label class="mh-field-label">Meter Readings</label>
+          <div class="mh-meter-grid">
+            <div class="mh-meter-row">
+              <span class="mh-meter-label">⚡ Electricity</span>
+              <input class="mh-input mh-meter-input" type="text" placeholder="Location / Serial" v-model="propForm.meter_electricity" />
+            </div>
+            <div class="mh-meter-row">
+              <span class="mh-meter-label">🔥 Gas</span>
+              <input class="mh-input mh-meter-input" type="text" placeholder="Location / Serial" v-model="propForm.meter_gas" />
+            </div>
+            <div class="mh-meter-row">
+              <span class="mh-meter-label">♨️ Heat</span>
+              <input class="mh-input mh-meter-input" type="text" placeholder="Location / Serial" v-model="propForm.meter_heat" />
+            </div>
+            <div class="mh-meter-row">
+              <span class="mh-meter-label">💧 Water</span>
+              <input class="mh-input mh-meter-input" type="text" placeholder="Location / Serial" v-model="propForm.meter_water" />
+            </div>
+          </div>
+        </div>
+
+        <!-- ── Notes ──────────────��──────────────────── -->
+        <div class="mh-field-group">
+          <label class="mh-field-label">Notes</label>
+          <textarea class="mh-input mh-textarea" rows="3" placeholder="Any notes about this property…" v-model="propForm.notes"></textarea>
+        </div>
+
+        <!-- Error -->
+        <p v-if="propError" class="mh-create-error">{{ propError }}</p>
+
+        <!-- Submit -->
+        <button
+          class="mh-submit-btn mh-submit-btn--green"
+          :disabled="creatingProp || !propForm.client_id || !propForm.address.trim()"
+          @click="submitProperty"
+        >
+          <svg v-if="!creatingProp" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+          <svg v-else class="spin" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>
+          {{ creatingProp ? 'Creating…' : 'Create Property' }}
+        </button>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ CREATE INSPECTION SHEET ════════════════════════════════��═══════ -->
   <div v-if="showCreateSheet" class="mh-overlay" @click.self="showCreateSheet = false">
     <div class="mh-sheet">
 
@@ -720,11 +992,64 @@ function fmtDate(d) {
 @keyframes spin { to { transform: rotate(360deg); } }
 .spin { animation: spin 0.8s linear infinite; }
 
-/* ── Create Inspection FAB ── */
-.mh-fab {
+/* ── Speed-dial FAB ── */
+.mh-fab-wrap {
   position: fixed;
   bottom: 32px;
   right: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 14px;
+  z-index: 40;
+}
+.mh-fab-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 38;
+}
+.mh-fab-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 12px;
+  z-index: 39;
+}
+.mh-fab-action-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.mh-fab-action-label {
+  background: rgba(15,23,42,0.92);
+  color: #f1f5f9;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 6px 12px;
+  border-radius: 20px;
+  white-space: nowrap;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+}
+.mh-fab-action-btn {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 3px 14px rgba(0,0,0,0.35);
+  transition: transform 0.12s;
+  color: white;
+}
+.mh-fab-action-btn:active { transform: scale(0.9); }
+.mh-fab-btn-property  { background: #10b981; }
+.mh-fab-btn-inspection { background: #6366f1; }
+
+/* Main FAB */
+.mh-fab {
   width: 56px;
   height: 56px;
   border-radius: 50%;
@@ -736,10 +1061,21 @@ function fmtDate(d) {
   justify-content: center;
   cursor: pointer;
   box-shadow: 0 4px 20px rgba(99,102,241,0.5);
-  z-index: 20;
-  transition: transform 0.15s, box-shadow 0.15s;
+  z-index: 40;
+  transition: transform 0.2s, box-shadow 0.15s, background 0.2s;
 }
-.mh-fab:active { transform: scale(0.93); box-shadow: 0 2px 10px rgba(99,102,241,0.4); }
+.mh-fab:active { transform: scale(0.93); }
+.mh-fab--open { background: #475569; }
+.mh-fab-icon {
+  transition: transform 0.25s cubic-bezier(0.34,1.56,0.64,1);
+}
+.mh-fab--open .mh-fab-icon { transform: rotate(45deg); }
+
+/* Speed-dial transition */
+.fab-actions-enter-active { transition: opacity 0.18s, transform 0.18s; }
+.fab-actions-leave-active { transition: opacity 0.14s, transform 0.14s; }
+.fab-actions-enter-from  { opacity: 0; transform: translateY(12px) scale(0.95); }
+.fab-actions-leave-to    { opacity: 0; transform: translateY(8px)  scale(0.95); }
 
 /* ── Sheet overlay ── */
 .mh-overlay {
@@ -954,4 +1290,72 @@ function fmtDate(d) {
   margin-top: 4px;
 }
 .mh-submit-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.mh-submit-btn--green { background: #10b981; }
+
+/* Side-by-side field pairs */
+.mh-field-row {
+  display: flex;
+  gap: 10px;
+}
+.mh-field-half { flex: 1; min-width: 0; }
+
+/* Feature toggle chips */
+.mh-toggles {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.mh-toggle-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 1.5px solid #334155;
+  border-radius: 20px;
+  background: #0f172a;
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.12s, color 0.12s, background 0.12s;
+  user-select: none;
+}
+.mh-toggle-chip input[type="checkbox"] { display: none; }
+.mh-toggle-chip.active {
+  border-color: #10b981;
+  color: #34d399;
+  background: rgba(16,185,129,0.08);
+}
+
+/* Meter readings */
+.mh-meter-grid {
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.mh-meter-row {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid #1e293b;
+  padding: 0 14px;
+  gap: 10px;
+}
+.mh-meter-row:last-child { border-bottom: none; }
+.mh-meter-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+  white-space: nowrap;
+  width: 96px;
+  flex-shrink: 0;
+}
+.mh-meter-input {
+  flex: 1;
+  border: none !important;
+  border-radius: 0 !important;
+  padding: 11px 0 !important;
+  background: transparent !important;
+  font-size: 13px;
+}
 </style>

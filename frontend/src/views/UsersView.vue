@@ -170,7 +170,12 @@ onMounted(() => {
     </div>
 
     
-    <button class="mobile-fab-add" @click="openModal" style="display:none">+</button>
+    <button
+      v-if="authStore.isAdmin || authStore.isManager"
+      class="mobile-fab-add"
+      @click="openModal"
+      title="New User"
+    >+</button>
     <div v-if="loading" class="loading">Loading...</div>
 
     <div v-else class="users-grid">

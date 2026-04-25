@@ -309,7 +309,12 @@ onMounted(() => { fetchProperties(); fetchClients() })
     </div>
 
     
-    <button class="mobile-fab-add" @click="openCreateModal" style="display:none">+</button>
+    <button
+      v-if="authStore.isAdmin || authStore.isManager || authStore.isClient"
+      class="mobile-fab-add"
+      @click="openCreateModal"
+      title="Add Property"
+    >+</button>
     <div v-if="loading" class="loading">Loading properties...</div>
 
     <!-- Grid view -->
@@ -805,6 +810,7 @@ h1 { font-size: 21px; font-weight: 700; color: #0f172a; margin: 0 0 2px; }
 .mobile-fab-add {
   display: none;
   position: fixed;
+  z-index: 100;
   bottom: 76px; right: 18px;
   width: 52px; height: 52px;
   background: #6366f1; color: white;

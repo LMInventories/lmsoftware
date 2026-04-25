@@ -13,6 +13,10 @@ import {
 } from '../services/offline'
 import { syncInspection, savePhotoToFilesystem } from '../services/sync'
 
+// Determine admin/manager from stored user token
+const _storedUser = (() => { try { return JSON.parse(localStorage.getItem('user') || 'null') } catch { return null } })()
+const isAdminOrManager = _storedUser?.role === 'admin' || _storedUser?.role === 'manager'
+
 const route  = useRoute()
 const router = useRouter()
 
@@ -121,6 +125,65 @@ async function doSync(markFinished = false) {
 
   setTimeout(() => { syncMsg.value = '' }, 5000)
 }
+
+// ── Change Template ───────────────────────────────────────────────────
+const showTemplateSheet    = ref(false)
+const templateSheetList    = ref([])
+const selectedTemplateId   = ref(null)
+const templateChanging     = ref(false)
+const templateSheetError   = ref('')
+const templateSheetLoading = ref(false)
+
+async function openTemplateSheet() {
+  templateSheetError.value   = ''
+  selectedTemplateId.value   = inspection.value?.template_id || null
+  showTemplateSheet.value    = true
+  templateSheetLoading.value = true
+  try {
+    const res = await api.getTemplates()
+    const type = inspection.value?.inspection_type
+    templateSheetList.value = (res.data || []).filter(t => t.inspection_type === type)
+  } catch {
+    templateSheetError.value = 'Failed to load templates — check connection'
+  } finally {
+    templateSheetLoading.value = false
+  }
+}
+
+async function applyTemplateChange() {
+  if (!selectedTemplateId.value) {
+    templateSheetError.value = 'Please select a template'
+    return
+  }
+  if (selectedTemplateId.value === inspection.value?.template_id) {
+    showTemplateSheet.value = false
+    return
+  }
+  templateChanging.value   = true
+  templateSheetError.value = ''
+  try {
+    // Clear report_data and set new template
+    await api.updateInspection(id, {
+      template_id: selectedTemplateId.value,
+      report_data: null,
+    })
+    // Reload full detail so we get the embedded template
+    const res = await api.getInspection(id)
+    inspection.value = res.data
+    await saveInspection({
+      ...res.data,
+      property_address: res.data.property?.address || null,
+      client_name:      res.data.client?.name      || null,
+      inspector_name:   res.data.inspector?.name   || null,
+      typist_name:      res.data.typist?.name       || null,
+    })
+    showTemplateSheet.value = false
+  } catch (e) {
+    templateSheetError.value = e.response?.data?.error || 'Failed to change template'
+  } finally {
+    templateChanging.value = false
+  }
+}
 </script>
 
 <template>
@@ -188,6 +251,11 @@ async function doSync(markFinished = false) {
           <span class="mpv-detail-label">Time</span>
           <span class="mpv-detail-value">{{ inspection.conduct_time_preference }}</span>
         </div>
+        <div class="mpv-detail" v-if="inspection.template_name || isAdminOrManager">
+          <span class="mpv-detail-label">Template</span>
+          <span class="mpv-detail-value">{{ inspection.template_name || 'None' }}</span>
+          <button v-if="isAdminOrManager" class="mpv-edit-inline" @click="openTemplateSheet">✎</button>
+        </div>
       </div>
 
       <!-- Sync message -->
@@ -252,6 +320,61 @@ async function doSync(markFinished = false) {
   <div v-else class="mpv-loading">
     <svg class="spin" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2.5"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>
   </div>
+
+  <!-- ══ CHANGE TEMPLATE SHEET ══════════════════════════════════════════ -->
+  <div v-if="showTemplateSheet" class="mpv-overlay" @click.self="showTemplateSheet = false">
+    <div class="mpv-sheet">
+      <div class="mpv-sheet-header">
+        <h3 class="mpv-sheet-title">Change Template</h3>
+        <button class="mpv-sheet-close" @click="showTemplateSheet = false">✕</button>
+      </div>
+
+      <!-- Loading -->
+      <div v-if="templateSheetLoading" class="mpv-sheet-loading">
+        <svg class="spin" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2.5"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>
+        Loading templates…
+      </div>
+
+      <div v-else class="mpv-sheet-body">
+        <!-- Warning -->
+        <div class="mpv-tpl-warning">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          <span>Changing the template will <strong>clear all saved report data</strong> for this inspection.</span>
+        </div>
+
+        <!-- Template list -->
+        <div v-if="templateSheetList.length" class="mpv-tpl-list">
+          <button
+            v-for="t in templateSheetList"
+            :key="t.id"
+            class="mpv-tpl-item"
+            :class="{ active: selectedTemplateId === t.id }"
+            @click="selectedTemplateId = t.id"
+          >
+            <span class="mpv-tpl-name">{{ t.name }}</span>
+            <svg v-if="selectedTemplateId === t.id" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+          </button>
+        </div>
+        <p v-else class="mpv-tpl-empty">No templates available for this inspection type</p>
+
+        <p v-if="templateSheetError" class="mpv-tpl-error">{{ templateSheetError }}</p>
+
+        <div class="mpv-sheet-btns">
+          <button class="mpv-confirm-cancel" @click="showTemplateSheet = false">Cancel</button>
+          <button
+            class="mpv-tpl-apply-btn"
+            :disabled="templateChanging || !selectedTemplateId || selectedTemplateId === inspection?.template_id"
+            @click="applyTemplateChange"
+          >
+            <svg v-if="!templateChanging" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            <svg v-else class="spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>
+            {{ templateChanging ? 'Applying…' : 'Apply Template' }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
 </template>
 
 <style scoped>
@@ -492,4 +615,143 @@ async function doSync(markFinished = false) {
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 .spin { animation: spin 0.8s linear infinite; }
+
+/* ── Inline edit button for template row ── */
+.mpv-edit-inline {
+  background: none;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  color: #64748b;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 3px 8px;
+  margin-left: 4px;
+  flex-shrink: 0;
+}
+.mpv-edit-inline:active { background: #334155; color: #a5b4fc; }
+
+/* ── Template sheet ── */
+.mpv-sheet {
+  width: 100%;
+  max-height: 85vh;
+  background: #1e293b;
+  border-radius: 20px 20px 0 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.mpv-sheet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 20px 16px;
+  border-bottom: 1px solid #334155;
+  flex-shrink: 0;
+}
+.mpv-sheet-title {
+  font-size: 17px;
+  font-weight: 800;
+  color: #f1f5f9;
+  margin: 0;
+}
+.mpv-sheet-close {
+  background: #334155;
+  border: none;
+  color: #94a3b8;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  font-size: 13px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.mpv-sheet-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 36px;
+  color: #64748b;
+  font-size: 14px;
+}
+.mpv-sheet-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.mpv-tpl-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: rgba(245,158,11,0.08);
+  border: 1px solid rgba(245,158,11,0.25);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 13px;
+  color: #fcd34d;
+  line-height: 1.4;
+}
+.mpv-tpl-warning svg { flex-shrink: 0; margin-top: 1px; }
+.mpv-tpl-warning strong { color: #fbbf24; }
+.mpv-tpl-list {
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  overflow: hidden;
+}
+.mpv-tpl-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-bottom: 1px solid #1e293b;
+  padding: 14px 16px;
+  font-size: 14px;
+  color: #e2e8f0;
+  cursor: pointer;
+  font-family: inherit;
+}
+.mpv-tpl-item:last-child { border-bottom: none; }
+.mpv-tpl-item.active { color: #a5b4fc; background: rgba(99,102,241,0.06); }
+.mpv-tpl-item:active { background: #1e293b; }
+.mpv-tpl-name { flex: 1; }
+.mpv-tpl-empty { font-size: 13px; color: #64748b; text-align: center; margin: 8px 0; }
+.mpv-tpl-error {
+  font-size: 13px;
+  color: #f87171;
+  background: rgba(239,68,68,0.08);
+  border: 1px solid rgba(239,68,68,0.2);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin: 0;
+}
+.mpv-sheet-btns {
+  display: flex;
+  gap: 10px;
+}
+.mpv-tpl-apply-btn {
+  flex: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 14px;
+  background: #6366f1;
+  color: white;
+  border: none;
+  border-radius: 12px;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+}
+.mpv-tpl-apply-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 </style>

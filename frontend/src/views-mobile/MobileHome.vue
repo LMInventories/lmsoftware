@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { Network } from '@capacitor/network'
 import api from '../services/api'
@@ -22,6 +22,9 @@ const fetchError       = ref('')
 
 // Track which user is logged in for "my inspections" filtering
 const currentUser = ref(null)
+const isAdminOrManager = computed(() =>
+  currentUser.value?.role === 'admin' || currentUser.value?.role === 'manager'
+)
 
 onMounted(async () => {
   await checkNetwork()
@@ -55,13 +58,15 @@ async function fetchInspections() {
     const res  = await api.getInspections()
     const all  = res.data || []
 
-    // Filter to inspections assigned to the current user (clerk or typist)
-    const mine = currentUser.value
-      ? all.filter(i =>
+    // Admin/manager see all; clerks and typists see only their own
+    const role  = currentUser.value?.role
+    const isAM  = role === 'admin' || role === 'manager'
+    const mine  = (isAM || !currentUser.value)
+      ? all
+      : all.filter(i =>
           i.inspector_id === currentUser.value.id ||
           i.typist_id    === currentUser.value.id
         )
-      : all
 
     // Save each to local DB
     for (const insp of mine) {
@@ -104,6 +109,194 @@ async function removeLocal(id) {
 
 // ── Computed ──────────────────────────────────────────────────────────
 const dirtyCount = computed(() => localInspections.value.filter(i => i._is_dirty).length)
+
+// ─────────────────────────────────────────────────────────────────────
+// CREATE INSPECTION SHEET  (admin / manager only)
+// ─────────────────────────────────────────────────────────────────────
+const showCreateSheet   = ref(false)
+const creating          = ref(false)
+const createError       = ref('')
+const createLoading     = ref(false)   // loading properties/templates/users
+
+// Form state
+const createForm = ref({
+  property_id:          null,
+  inspection_type:      'check_in',
+  template_id:          null,
+  conduct_date:         '',
+  inspector_id:         null,
+  source_inspection_id: null,
+  include_photos:       false,
+  tenant_email:         '',
+  key_location:         '',
+  internal_notes:       '',
+})
+
+// Data lists loaded when sheet opens
+const createProperties    = ref([])
+const createTemplates     = ref([])
+const createClerks        = ref([])
+const createPropertySearch = ref('')
+const createLifecycle     = ref(null)   // { sourceId, label, dateStr }
+const historyLoading      = ref(false)
+
+const KEY_LOCATION_OPTS = [
+  'With Agent', 'With Landlord', 'With Tenant',
+  'At Property', 'At Concierge', 'In Key Safe',
+]
+
+const INSPECTION_TYPES = [
+  { value: 'check_in',      label: 'Check In' },
+  { value: 'check_out',     label: 'Check Out' },
+  { value: 'inventory',     label: 'Inventory' },
+  { value: 'damage_report', label: 'Damage Report' },
+]
+
+const filteredCreateProperties = computed(() => {
+  const q = createPropertySearch.value.toLowerCase().trim()
+  if (!q) return createProperties.value
+  return createProperties.value.filter(p =>
+    p.address?.toLowerCase().includes(q)
+  )
+})
+
+const filteredCreateTemplates = computed(() =>
+  createTemplates.value.filter(t => t.inspection_type === createForm.value.inspection_type)
+)
+
+const selectedPropertyLabel = computed(() => {
+  const p = createProperties.value.find(p => p.id === createForm.value.property_id)
+  return p?.address || null
+})
+
+async function openCreateSheet() {
+  // Reset form
+  createForm.value = {
+    property_id:          null,
+    inspection_type:      'check_in',
+    template_id:          null,
+    conduct_date:         '',
+    inspector_id:         null,
+    source_inspection_id: null,
+    include_photos:       false,
+    tenant_email:         '',
+    key_location:         '',
+    internal_notes:       '',
+  }
+  createPropertySearch.value = ''
+  createLifecycle.value      = null
+  createError.value          = ''
+  showCreateSheet.value      = true
+  createLoading.value        = true
+
+  try {
+    const [pRes, tRes, uRes] = await Promise.all([
+      api.getProperties(),
+      api.getTemplates(),
+      api.getUsers(),
+    ])
+    createProperties.value = pRes.data  || []
+    createTemplates.value  = tRes.data  || []
+    createClerks.value     = (uRes.data || []).filter(u => u.role === 'clerk')
+  } catch {
+    createError.value = 'Failed to load properties / templates — check connection'
+  } finally {
+    createLoading.value = false
+  }
+}
+
+function selectCreateProperty(propId) {
+  createForm.value.property_id          = propId
+  createForm.value.source_inspection_id = null
+  createLifecycle.value                 = null
+  createPropertySearch.value            = ''
+  loadCreateLifecycle()
+}
+
+async function loadCreateLifecycle() {
+  const { property_id, inspection_type } = createForm.value
+  if (!property_id) return
+  historyLoading.value = true
+  try {
+    const res = await api.getPropertyHistory(property_id)
+    const history = res.data || []
+
+    if (inspection_type === 'check_out') {
+      const src = history.find(h => h.inspection_type === 'check_in')
+      if (src) {
+        createLifecycle.value = _lifecycleEntry(src, 'Check In')
+        createForm.value.source_inspection_id = src.id
+      }
+    } else if (inspection_type === 'check_in') {
+      const src = history.find(h => h.inspection_type === 'check_out' && h.has_report_data)
+      if (src) {
+        createLifecycle.value = _lifecycleEntry(src, 'Check Out')
+        createForm.value.source_inspection_id = src.id
+      }
+    }
+  } catch { /* offline — silently skip */ }
+  historyLoading.value = false
+}
+
+function _lifecycleEntry(src, label) {
+  const d = src.conduct_date || src.created_at
+  const dateStr = d
+    ? new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+    : ''
+  return { sourceId: src.id, label, dateStr }
+}
+
+// When type changes, reset template + lifecycle suggestion
+watch(() => createForm.value.inspection_type, () => {
+  createForm.value.template_id          = null
+  createForm.value.source_inspection_id = null
+  createLifecycle.value                 = null
+  loadCreateLifecycle()
+})
+
+async function submitCreate() {
+  if (!createForm.value.property_id) {
+    createError.value = 'Please select a property'
+    return
+  }
+  creating.value    = true
+  createError.value = ''
+
+  const payload = {
+    property_id:          createForm.value.property_id,
+    inspection_type:      createForm.value.inspection_type,
+    template_id:          createForm.value.template_id  || null,
+    conduct_date:         createForm.value.conduct_date || null,
+    inspector_id:         createForm.value.inspector_id || null,
+    source_inspection_id: createForm.value.source_inspection_id || null,
+    include_photos:       createForm.value.include_photos || false,
+    tenant_email:         createForm.value.tenant_email  || null,
+    key_location:         createForm.value.key_location  || null,
+    internal_notes:       createForm.value.internal_notes || null,
+  }
+
+  try {
+    const res    = await api.createInspection(payload)
+    const detail = res.data
+
+    // Normalise detail response → flat format expected by the home list
+    const flat = {
+      ...detail,
+      property_address: detail.property?.address || null,
+      client_name:      detail.client?.name      || null,
+      inspector_name:   detail.inspector?.name   || null,
+      typist_name:      detail.typist?.name      || null,
+    }
+    await saveInspection(flat)
+    await loadLocal()
+    showCreateSheet.value = false
+    router.push(`/mobile/inspection/${detail.id}`)
+  } catch (e) {
+    createError.value = e.response?.data?.error || 'Failed to create inspection — check connection'
+  } finally {
+    creating.value = false
+  }
+}
 
 const typeLabel = (t) => ({
   check_in:  'Check In',
@@ -166,6 +359,16 @@ function fmtDate(d) {
       <p v-if="syncMessage" class="mh-sync-msg">{{ syncMessage }}</p>
     </header>
 
+    <!-- Admin/Manager: Create Inspection FAB -->
+    <button
+      v-if="isAdminOrManager"
+      class="mh-fab"
+      @click="openCreateSheet"
+      title="Create Inspection"
+    >
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    </button>
+
     <!-- List -->
     <div class="mh-list">
       <div v-if="localInspections.length === 0" class="mh-empty">
@@ -203,6 +406,160 @@ function fmtDate(d) {
     </div>
 
   </div>
+
+  <!-- ══ CREATE INSPECTION SHEET ════════════════════════════════════════ -->
+  <div v-if="showCreateSheet" class="mh-overlay" @click.self="showCreateSheet = false">
+    <div class="mh-sheet">
+
+      <!-- Sheet header -->
+      <div class="mh-sheet-header">
+        <h2 class="mh-sheet-title">New Inspection</h2>
+        <button class="mh-sheet-close" @click="showCreateSheet = false">✕</button>
+      </div>
+
+      <!-- Loading skeleton -->
+      <div v-if="createLoading" class="mh-sheet-loading">
+        <svg class="spin" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2.5"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>
+        Loading…
+      </div>
+
+      <div v-else class="mh-sheet-body">
+
+        <!-- ── Property ────────────────────────────────── -->
+        <div class="mh-field-group">
+          <label class="mh-field-label">Property *</label>
+
+          <!-- Selected property chip -->
+          <div v-if="selectedPropertyLabel" class="mh-selected-prop">
+            <span class="mh-selected-prop-text">{{ selectedPropertyLabel }}</span>
+            <button class="mh-selected-prop-clear" @click="createForm.property_id = null; createLifecycle = null">✕</button>
+          </div>
+
+          <!-- Search when none selected -->
+          <template v-else>
+            <input
+              v-model="createPropertySearch"
+              class="mh-input"
+              type="text"
+              placeholder="Search by address or postcode…"
+            />
+            <div v-if="filteredCreateProperties.length" class="mh-prop-list">
+              <button
+                v-for="p in filteredCreateProperties.slice(0, 20)"
+                :key="p.id"
+                class="mh-prop-item"
+                @click="selectCreateProperty(p.id)"
+              >
+                {{ p.address }}
+              </button>
+            </div>
+            <p v-else-if="createPropertySearch" class="mh-hint">No properties match</p>
+          </template>
+        </div>
+
+        <!-- ── Inspection Type ────────────────────────── -->
+        <div class="mh-field-group">
+          <label class="mh-field-label">Inspection Type</label>
+          <div class="mh-type-grid">
+            <button
+              v-for="t in INSPECTION_TYPES"
+              :key="t.value"
+              class="mh-type-btn"
+              :class="{ active: createForm.inspection_type === t.value }"
+              @click="createForm.inspection_type = t.value"
+            >{{ t.label }}</button>
+          </div>
+        </div>
+
+        <!-- ── Lifecycle suggestion ───────────────────── -->
+        <div v-if="historyLoading" class="mh-lifecycle-loading">
+          <svg class="spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2.5"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>
+          Checking property history…
+        </div>
+        <div v-else-if="createLifecycle" class="mh-lifecycle-banner">
+          <div class="mh-lifecycle-icon">🔗</div>
+          <div class="mh-lifecycle-body">
+            <strong>{{ createLifecycle.label }} found — {{ createLifecycle.dateStr }}</strong>
+            <p>Pre-fill this {{ INSPECTION_TYPES.find(t=>t.value===createForm.inspection_type)?.label }} with conditions from the previous report.</p>
+            <label class="mh-check-row">
+              <input
+                type="checkbox"
+                :checked="createForm.source_inspection_id === createLifecycle.sourceId"
+                @change="createForm.source_inspection_id = $event.target.checked ? createLifecycle.sourceId : null"
+              />
+              <span>Work from {{ createLifecycle.label }} report</span>
+            </label>
+            <label v-if="createForm.source_inspection_id" class="mh-check-row">
+              <input type="checkbox" v-model="createForm.include_photos" />
+              <span>Include photos from {{ createLifecycle.label }}</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- ── Template ───────────────────────────────── -->
+        <div class="mh-field-group">
+          <label class="mh-field-label">Template</label>
+          <select class="mh-input" v-model="createForm.template_id">
+            <option :value="null">— No template —</option>
+            <option v-for="t in filteredCreateTemplates" :key="t.id" :value="t.id">{{ t.name }}</option>
+          </select>
+          <p v-if="!filteredCreateTemplates.length" class="mh-hint">No templates for this type</p>
+        </div>
+
+        <!-- ── Conduct Date ────────────────────────────── -->
+        <div class="mh-field-group">
+          <label class="mh-field-label">Conduct Date</label>
+          <input class="mh-input" type="date" v-model="createForm.conduct_date" />
+        </div>
+
+        <!-- ── Assign Clerk ───────────────────────────── -->
+        <div class="mh-field-group">
+          <label class="mh-field-label">Assign Clerk</label>
+          <select class="mh-input" v-model="createForm.inspector_id">
+            <option :value="null">— Not assigned —</option>
+            <option v-for="c in createClerks" :key="c.id" :value="c.id">{{ c.name }}</option>
+          </select>
+        </div>
+
+        <!-- ── Key Location ───────────────────────────── -->
+        <div class="mh-field-group">
+          <label class="mh-field-label">Key Location</label>
+          <select class="mh-input" v-model="createForm.key_location">
+            <option value="">— Not specified —</option>
+            <option v-for="opt in KEY_LOCATION_OPTS" :key="opt" :value="opt">{{ opt }}</option>
+          </select>
+        </div>
+
+        <!-- ── Tenant Email ───────────────────────────── -->
+        <div class="mh-field-group">
+          <label class="mh-field-label">Tenant Email</label>
+          <input class="mh-input" type="email" placeholder="tenant@example.com" v-model="createForm.tenant_email" />
+        </div>
+
+        <!-- ── Internal Notes ─────────────────────────── -->
+        <div class="mh-field-group">
+          <label class="mh-field-label">Internal Notes</label>
+          <textarea class="mh-input mh-textarea" rows="3" placeholder="Any notes for the clerk…" v-model="createForm.internal_notes"></textarea>
+        </div>
+
+        <!-- Error -->
+        <p v-if="createError" class="mh-create-error">{{ createError }}</p>
+
+        <!-- Submit -->
+        <button
+          class="mh-submit-btn"
+          :disabled="creating || !createForm.property_id"
+          @click="submitCreate"
+        >
+          <svg v-if="!creating" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          <svg v-else class="spin" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>
+          {{ creating ? 'Creating…' : 'Create Inspection' }}
+        </button>
+
+      </div>
+    </div>
+  </div>
+
 </template>
 
 <style scoped>
@@ -362,4 +719,239 @@ function fmtDate(d) {
 
 @keyframes spin { to { transform: rotate(360deg); } }
 .spin { animation: spin 0.8s linear infinite; }
+
+/* ── Create Inspection FAB ── */
+.mh-fab {
+  position: fixed;
+  bottom: 32px;
+  right: 24px;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: #6366f1;
+  color: white;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 4px 20px rgba(99,102,241,0.5);
+  z-index: 20;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+.mh-fab:active { transform: scale(0.93); box-shadow: 0 2px 10px rgba(99,102,241,0.4); }
+
+/* ── Sheet overlay ── */
+.mh-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.7);
+  display: flex;
+  align-items: flex-end;
+  z-index: 50;
+}
+.mh-sheet {
+  width: 100%;
+  max-height: 92vh;
+  background: #1e293b;
+  border-radius: 20px 20px 0 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.mh-sheet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 20px 16px;
+  border-bottom: 1px solid #334155;
+  flex-shrink: 0;
+}
+.mh-sheet-title {
+  font-size: 18px;
+  font-weight: 800;
+  color: #f1f5f9;
+  margin: 0;
+}
+.mh-sheet-close {
+  background: #334155;
+  border: none;
+  color: #94a3b8;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.mh-sheet-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 40px;
+  color: #64748b;
+  font-size: 14px;
+}
+.mh-sheet-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+/* ── Form fields ── */
+.mh-field-group { display: flex; flex-direction: column; gap: 6px; }
+.mh-field-label {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #64748b;
+}
+.mh-input {
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  color: #f1f5f9;
+  font-size: 14px;
+  padding: 11px 14px;
+  font-family: inherit;
+  width: 100%;
+  box-sizing: border-box;
+  outline: none;
+  -webkit-appearance: none;
+}
+.mh-input:focus { border-color: #6366f1; }
+.mh-textarea { resize: vertical; min-height: 70px; }
+.mh-hint { font-size: 12px; color: #64748b; margin: 0; }
+
+/* Property picker */
+.mh-selected-prop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #0f172a;
+  border: 1px solid #6366f1;
+  border-radius: 10px;
+  padding: 10px 14px;
+  gap: 10px;
+}
+.mh-selected-prop-text { font-size: 14px; color: #a5b4fc; flex: 1; line-height: 1.3; }
+.mh-selected-prop-clear {
+  background: none; border: none; color: #64748b; cursor: pointer;
+  font-size: 16px; padding: 2px 4px; flex-shrink: 0;
+}
+.mh-prop-list {
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.mh-prop-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-bottom: 1px solid #1e293b;
+  padding: 12px 14px;
+  font-size: 14px;
+  color: #e2e8f0;
+  cursor: pointer;
+  font-family: inherit;
+}
+.mh-prop-item:last-child { border-bottom: none; }
+.mh-prop-item:active { background: #1e293b; color: #a5b4fc; }
+
+/* Inspection type grid */
+.mh-type-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.mh-type-btn {
+  padding: 10px 6px;
+  border: 1.5px solid #334155;
+  border-radius: 10px;
+  background: #0f172a;
+  color: #94a3b8;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: border-color 0.12s, color 0.12s;
+  text-align: center;
+}
+.mh-type-btn.active {
+  border-color: #6366f1;
+  color: #a5b4fc;
+  background: rgba(99,102,241,0.08);
+}
+
+/* Lifecycle banner */
+.mh-lifecycle-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #64748b;
+  padding: 4px 0;
+}
+.mh-lifecycle-banner {
+  display: flex;
+  gap: 12px;
+  background: rgba(99,102,241,0.08);
+  border: 1px solid rgba(99,102,241,0.3);
+  border-radius: 12px;
+  padding: 14px;
+}
+.mh-lifecycle-icon { font-size: 20px; flex-shrink: 0; margin-top: 1px; }
+.mh-lifecycle-body { flex: 1; display: flex; flex-direction: column; gap: 6px; }
+.mh-lifecycle-body strong { font-size: 13px; color: #a5b4fc; }
+.mh-lifecycle-body p { font-size: 12px; color: #94a3b8; margin: 0; line-height: 1.4; }
+.mh-check-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  color: #e2e8f0;
+  cursor: pointer;
+}
+.mh-check-row input[type="checkbox"] { margin-top: 2px; flex-shrink: 0; accent-color: #6366f1; }
+
+/* Error + Submit */
+.mh-create-error {
+  font-size: 13px;
+  color: #f87171;
+  background: rgba(239,68,68,0.08);
+  border: 1px solid rgba(239,68,68,0.2);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin: 0;
+}
+.mh-submit-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 16px;
+  background: #6366f1;
+  color: white;
+  border: none;
+  border-radius: 14px;
+  font-size: 16px;
+  font-weight: 800;
+  cursor: pointer;
+  font-family: inherit;
+  transition: opacity 0.15s;
+  margin-top: 4px;
+}
+.mh-submit-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 </style>

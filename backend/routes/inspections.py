@@ -961,6 +961,26 @@ def apply_pdf_import(inspection_id):
 #   Copy checkOutCondition (or inventoryCondition) → condition for the new CI.
 #   Fixed sections are passed through as-is.
 # ─────────────────────────────────────────────────────────────────────────────
+def _combine_conditions(inv_cond, co_cond, fallback=''):
+    """
+    Build a combined condition string for a new Check In seeded from a Check Out.
+    Shows both the original Check In condition and the Check Out condition, labelled,
+    so the new clerk can see the full history in one field.
+    """
+    inv = (inv_cond or '').strip()
+    co  = (co_cond  or '').strip()
+    parts = []
+    if inv:
+        parts.append(f'Check In: {inv}')
+    if co:
+        parts.append(f'Check Out: {co}')
+    if not parts:
+        fb = (fallback or '').strip()
+        if fb:
+            return fb
+    return '\n'.join(parts)
+
+
 def _transform_report_data(source_type, target_type, raw, include_photos=False):
     try:
         src = json.loads(raw) if isinstance(raw, str) else raw
@@ -990,15 +1010,26 @@ def _transform_report_data(source_type, target_type, raw, include_photos=False):
             extras = []
             for ex in section_data['_extra']:
                 new_ex = dict(ex)
+                # Strip action fields from extras
+                new_ex = {k: v for k, v in new_ex.items() if not k.startswith('_actions_')}
                 if source_type in ('check_in', 'inventory') and target_type == 'check_out':
                     new_ex['inventoryCondition'] = ex.get('condition', '')
                     new_ex['checkOutCondition'] = ''
+                    new_ex.pop('condition', None)
+                    if not include_photos:
+                        new_ex.pop('_photos', None)
+                        new_ex.pop('_photoTs', None)
                 elif source_type == 'check_out' and target_type in ('check_in', 'inventory'):
-                    new_ex['condition'] = ex.get('checkOutCondition') or ex.get('inventoryCondition') or ex.get('condition', '')
+                    new_ex['description'] = ex.get('description', '')
+                    new_ex['condition'] = _combine_conditions(
+                        ex.get('inventoryCondition'), ex.get('checkOutCondition'),
+                        fallback=ex.get('condition', '')
+                    )
                     new_ex.pop('checkOutCondition', None)
                     new_ex.pop('inventoryCondition', None)
-                # Strip actions
-                new_ex = {k: v for k, v in new_ex.items() if not k.startswith('_actions_')}
+                    if not include_photos:
+                        new_ex.pop('_photos', None)
+                        new_ex.pop('_photoTs', None)
                 extras.append(new_ex)
             new_section['_extra'] = extras
 
@@ -1019,8 +1050,11 @@ def _transform_report_data(source_type, target_type, raw, include_photos=False):
                               'reading', 'answer', 'notes', 'name'):
                     if field in row_data:
                         new_row[field] = row_data[field]
-                if include_photos and 'photos' in row_data:
-                    new_row['photos'] = row_data['photos']
+                # Photos — stored as _photos (underscore prefix) in modern sync
+                if include_photos:
+                    for photo_field in ('_photos', '_photoTs'):
+                        if photo_field in row_data:
+                            new_row[photo_field] = row_data[photo_field]
                 # Carry sub-items — promote condition → inventoryCondition
                 if '_subs' in row_data and isinstance(row_data['_subs'], list):
                     new_row['_subs'] = [
@@ -1035,18 +1069,29 @@ def _transform_report_data(source_type, target_type, raw, include_photos=False):
 
             elif source_type == 'check_out' and target_type in ('check_in', 'inventory'):
                 new_row['description'] = row_data.get('description', '')
-                new_row['condition'] = row_data.get('checkOutCondition') or row_data.get('inventoryCondition') or row_data.get('condition', '')
+                new_row['condition'] = _combine_conditions(
+                    row_data.get('inventoryCondition'), row_data.get('checkOutCondition'),
+                    fallback=row_data.get('condition', '')
+                )
                 for field in ('cleanliness', 'cleanlinessNotes', 'locationSerial',
                               'reading', 'answer', 'notes', 'name'):
                     if field in row_data:
                         new_row[field] = row_data[field]
-                # Carry sub-items — flatten back to condition
+                # Photos
+                if include_photos:
+                    for photo_field in ('_photos', '_photoTs'):
+                        if photo_field in row_data:
+                            new_row[photo_field] = row_data[photo_field]
+                # Carry sub-items — combine conditions
                 if '_subs' in row_data and isinstance(row_data['_subs'], list):
                     new_row['_subs'] = [
                         {
                             '_sid':        sub.get('_sid', ''),
                             'description': sub.get('description', ''),
-                            'condition':   sub.get('checkOutCondition') or sub.get('inventoryCondition') or sub.get('condition', ''),
+                            'condition':   _combine_conditions(
+                                sub.get('inventoryCondition'), sub.get('checkOutCondition'),
+                                fallback=sub.get('condition', '')
+                            ),
                         }
                         for sub in row_data['_subs']
                     ]

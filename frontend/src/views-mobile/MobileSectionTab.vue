@@ -23,11 +23,12 @@ import {
 import { saveAudioToFilesystem, savePhotoToFilesystem } from '../services/sync'
 
 const props = defineProps({
-  tab:           { type: Object, required: true },
-  inspectionId:  { type: Number, required: true },
-  inspection:    { type: Object, default: null },
-  reportData:    { type: Object, required: true },
-  template:      { type: Object, default: null },
+  tab:              { type: Object, required: true },
+  inspectionId:     { type: Number, required: true },
+  inspection:       { type: Object, default: null },
+  reportData:       { type: Object, required: true },
+  sourceReportData: { type: Object, default: null },  // read-only reference photos from previous inspection
+  template:         { type: Object, default: null },
 })
 
 const emit = defineEmits(['set', 'save'])
@@ -143,9 +144,24 @@ function removePhoto(sectionId, rowId, idx) {
 }
 
 // Lightbox
-const lightbox = ref({ open: false, photos: [], idx: 0 })
-function openLightbox(photos, idx) { lightbox.value = { open: true, photos, idx } }
+const lightbox = ref({ open: false, photos: [], idx: 0, isSource: false })
+function openLightbox(photos, idx, isSource = false) { lightbox.value = { open: true, photos, idx, isSource } }
 function closeLightbox() { lightbox.value.open = false }
+
+// ── Source (previous inspection) photo helpers ────────────────────────
+// Returns the previous inspection's photos for a given section+row, or [].
+function getSourcePhotos(sid, rid) {
+  if (!props.sourceReportData) return []
+  return props.sourceReportData[sid]?.[String(rid)]?._photos || []
+}
+// Per-item toggle: which "Previous Photos" rows are expanded
+const sourceExpanded = ref({})
+function toggleSourceExpanded(key) {
+  sourceExpanded.value[key] = !sourceExpanded.value[key]
+}
+function isSourceExpanded(key) {
+  return !!sourceExpanded.value[key]
+}
 
 // ── Audio recording ───────────────────────────────────────────────────
 const activeRecorder   = ref(null)
@@ -248,6 +264,20 @@ const cleanlinessOpts = [
         </div>
       </div>
 
+      <!-- Previous inspection overview photos (read-only reference) -->
+      <div v-if="getSourcePhotos(sec.id, '_overview').length" class="mst-source-strip">
+        <button class="mst-source-toggle" @click="toggleSourceExpanded(`${sec.id}:_overview`)">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+          Previous Overview Photos ({{ getSourcePhotos(sec.id, '_overview').length }})
+          <svg class="mst-chevron" :class="{ 'mst-chevron--open': isSourceExpanded(`${sec.id}:_overview`) }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        <div v-if="isSourceExpanded(`${sec.id}:_overview`)" class="mst-source-photos">
+          <div v-for="(ph,pi) in getSourcePhotos(sec.id, '_overview')" :key="pi" class="mst-thumb mst-thumb--source" @click="openLightbox(getSourcePhotos(sec.id, '_overview'), pi, true)">
+            <img :src="ph" />
+          </div>
+        </div>
+      </div>
+
       <!-- Room items -->
       <div
         v-for="item in (sec.sections || sec.items || [])"
@@ -272,11 +302,25 @@ const cleanlinessOpts = [
           </div>
         </div>
 
-        <!-- Photo strip -->
+        <!-- Photo strip (current inspection) -->
         <div v-if="getPhotoArr(sec.id,item.id).length" class="mst-thumbs">
           <div v-for="(ph,pi) in getPhotoArr(sec.id,item.id)" :key="pi" class="mst-thumb" @click="openLightbox(getPhotoArr(sec.id,item.id),pi)">
             <img :src="ph" />
             <button class="mst-thumb-del" @click.stop="removePhoto(sec.id,item.id,pi)">×</button>
+          </div>
+        </div>
+
+        <!-- Previous inspection photos (read-only reference) -->
+        <div v-if="getSourcePhotos(sec.id, item.id).length" class="mst-source-strip">
+          <button class="mst-source-toggle" @click="toggleSourceExpanded(`${sec.id}:${item.id}`)">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+            Previous Photos ({{ getSourcePhotos(sec.id, item.id).length }})
+            <svg class="mst-chevron" :class="{ 'mst-chevron--open': isSourceExpanded(`${sec.id}:${item.id}`) }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+          <div v-if="isSourceExpanded(`${sec.id}:${item.id}`)" class="mst-source-photos">
+            <div v-for="(ph,pi) in getSourcePhotos(sec.id, item.id)" :key="pi" class="mst-thumb mst-thumb--source" @click="openLightbox(getSourcePhotos(sec.id, item.id), pi, true)">
+              <img :src="ph" />
+            </div>
           </div>
         </div>
 
@@ -478,6 +522,7 @@ const cleanlinessOpts = [
     <!-- Lightbox -->
     <div v-if="lightbox.open" class="mst-lightbox" @click.self="closeLightbox">
       <button class="mst-lb-close" @click="closeLightbox">✕</button>
+      <div v-if="lightbox.isSource" class="mst-lb-source-badge">Previous Inspection Photo</div>
       <img :src="lightbox.photos[lightbox.idx]" class="mst-lb-img" />
       <div class="mst-lb-nav">
         <button v-if="lightbox.idx > 0" @click="lightbox.idx--" class="mst-lb-arrow">‹</button>
@@ -738,4 +783,70 @@ const cleanlinessOpts = [
   justify-content: center;
 }
 .mst-lb-counter { color: rgba(255,255,255,0.6); font-size: 14px; }
+
+/* Previous-inspection source photo badge in lightbox */
+.mst-lb-source-badge {
+  position: absolute;
+  top: 64px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(245, 158, 11, 0.9);
+  color: white;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 12px;
+  border-radius: 20px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+/* ── Source (previous inspection) photo reference ── */
+.mst-source-strip {
+  margin: 4px 0 8px;
+}
+
+.mst-source-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  color: #fbbf24;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 5px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+}
+
+.mst-chevron {
+  margin-left: auto;
+  flex-shrink: 0;
+  transition: transform 0.2s;
+}
+.mst-chevron--open { transform: rotate(180deg); }
+
+.mst-source-photos {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 0 4px;
+}
+
+/* Source thumbs — amber border, no delete button */
+.mst-thumb--source {
+  border: 2px solid rgba(245, 158, 11, 0.6);
+  cursor: pointer;
+  position: relative;
+}
+.mst-thumb--source::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 5px;
+  background: rgba(245, 158, 11, 0.08);
+  pointer-events: none;
+}
 </style>

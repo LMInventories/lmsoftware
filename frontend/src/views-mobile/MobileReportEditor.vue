@@ -19,13 +19,16 @@ import MobileSectionTab from './MobileSectionTab.vue'
 const route  = useRoute()
 const router = useRouter()
 
-const id          = Number(route.params.id)
-const inspection  = ref(null)
-const template    = ref(null)
-const reportData  = ref({})
-const activeTab   = ref(0)
-const saving      = ref(false)
-const saved       = ref(false)
+const id               = Number(route.params.id)
+const inspection       = ref(null)
+const template         = ref(null)
+const reportData       = ref({})
+const activeTab        = ref(0)
+const saving           = ref(false)
+const saved            = ref(false)
+// Source inspection report_data — loaded when inspection has source_inspection_id.
+// Used to show previous-inspection photos as a read-only comparison reference.
+const sourceReportData = ref(null)
 
 // Touch/swipe state
 let touchStartX = 0
@@ -35,13 +38,26 @@ onMounted(async () => {
   inspection.value = await getInspection(id)
   reportData.value = await getReportData(id)
 
-  // Load template
+  // Load template + source reference data
   try {
     const iRes = await api.getInspection(id)
     inspection.value = iRes.data
     if (iRes.data.template_id) {
       const tRes = await api.getTemplate(iRes.data.template_id)
       template.value = tRes.data
+    }
+    // If this inspection was seeded from a previous one, load its report_data so
+    // we can display source photos as a read-only comparison reference on mobile.
+    const srcId = iRes.data.source_inspection_id
+    if (srcId) {
+      try {
+        const srcRes = await api.getInspection(srcId)
+        if (srcRes.data?.report_data) {
+          sourceReportData.value = typeof srcRes.data.report_data === 'string'
+            ? JSON.parse(srcRes.data.report_data)
+            : srcRes.data.report_data
+        }
+      } catch { /* source gone or offline — silently skip */ }
     }
   } catch { /* offline — no template update */ }
 
@@ -159,6 +175,7 @@ function onTouchEnd(e) {
         :inspection-id="id"
         :inspection="inspection"
         :report-data="reportData"
+        :source-report-data="sourceReportData"
         :template="template"
         @set="(sid, rid, field, val) => set(sid, rid, field, val)"
         @save="doSave"

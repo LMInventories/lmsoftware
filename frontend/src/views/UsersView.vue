@@ -2,6 +2,8 @@
 import { ref, onMounted, computed } from 'vue'
 import api from '../services/api'
 import { useToast } from '../composables/useToast'
+import { useAuthStore } from '../stores/auth'
+const authStore = useAuthStore()
 const toast = useToast()
 
 const users = ref([])

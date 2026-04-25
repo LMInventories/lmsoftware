@@ -21,7 +21,11 @@ const syncMessage      = ref('')
 const fetchError       = ref('')
 
 // Track which user is logged in for "my inspections" filtering
-const currentUser = ref(null)
+// Seed from localStorage immediately so role-gated UI (FAB etc.) renders on first paint,
+// even before the async getCurrentUser() call completes or when offline.
+const currentUser = ref(
+  (() => { try { return JSON.parse(localStorage.getItem('user') || 'null') } catch { return null } })()
+)
 const isAdminOrManager = computed(() =>
   currentUser.value?.role === 'admin' || currentUser.value?.role === 'manager'
 )

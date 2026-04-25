@@ -1,6 +1,8 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import api from '../services/api'
+import { useAuthStore } from '../stores/auth'
+const authStore = useAuthStore()
 
 const clients = ref([])
 const loading = ref(true)

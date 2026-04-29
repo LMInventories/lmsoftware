@@ -239,6 +239,15 @@ def _setup_database():
         db.session.commit()
         print("✅ inspections.tenant_name added.")
 
+    # inspections.reference_number — links inspection to an invoice/billing reference
+    if not column_exists('inspections', 'reference_number'):
+        print("Migrating: adding inspections.reference_number column...")
+        db.session.execute(
+            text("ALTER TABLE inspections ADD COLUMN reference_number VARCHAR(100)")
+        )
+        db.session.commit()
+        print("✅ inspections.reference_number added.")
+
     # ── Deposit / Depositary fields ───────────────────────────────────────────
     for _col, _ddl in [
         ('deposit_amount',        'NUMERIC(10,2)'),

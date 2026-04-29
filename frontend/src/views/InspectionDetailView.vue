@@ -24,7 +24,6 @@ const showEditTypistMode = ref(false)
 const showEditKeyLocation = ref(false)
 const showEditKeyReturn = ref(false)
 const showEditNotes = ref(false)
-const showEditRefNumber     = ref(false)
 const showEditTenantEmail   = ref(false)
 const showEditLandlordEmail = ref(false)
 const showEditDeposit       = ref(false)
@@ -284,6 +283,21 @@ async function updateField(field, value) {
   }
 }
 
+async function saveRefNumber() {
+  const newVal = (editForms.value.reference_number || '').trim() || null
+  const oldVal = inspection.value.reference_number || null
+  if (newVal === oldVal) return
+  try {
+    await api.updateInspection(inspection.value.id, { reference_number: newVal })
+    inspection.value.reference_number = newVal
+    toast.success('Reference number saved')
+  } catch (e) {
+    console.error('Failed to save reference number:', e)
+    toast.error('Failed to save reference number')
+    editForms.value.reference_number = oldVal || ''
+  }
+}
+
 async function updateDepositDetails() {
   try {
     await api.updateInspection(inspection.value.id, {
@@ -485,10 +499,20 @@ onMounted(() => {
           <div class="header-address">{{ inspection.property_address }}</div>
         </div>
         <div class="header-branding">
-          <!-- Reference number — editable, lives to the left of the logo -->
-          <div class="ref-number-box" @click="canEdit && (showEditRefNumber = true)" :class="{ 'ref-editable': canEdit }">
-            <div class="ref-number-label">REF</div>
-            <div class="ref-number-value">{{ inspection.reference_number || '— Add reference' }}</div>
+          <!-- Reference number — inline editable, saves on blur / Enter -->
+          <div class="ref-number-box">
+            <span class="ref-pencil">✎</span>
+            <input
+              v-if="canEdit"
+              type="text"
+              class="ref-number-input"
+              v-model="editForms.reference_number"
+              placeholder="Reference"
+              maxlength="100"
+              @blur="saveRefNumber"
+              @keyup.enter="$event.target.blur()"
+            />
+            <span v-else class="ref-number-display">{{ inspection.reference_number || '' }}</span>
           </div>
 
           <!-- Logo + client name stacked -->
@@ -852,32 +876,6 @@ onMounted(() => {
       <!-- ═══════════ MODALS ═══════════ -->
 
       <!-- Edit Reference Number -->
-      <div v-if="showEditRefNumber" class="modal-overlay" @click.self="showEditRefNumber = false">
-        <div class="modal">
-          <div class="modal-header">
-            <h2>Reference Number</h2>
-            <button @click="showEditRefNumber = false" class="btn-close">✕</button>
-          </div>
-          <div class="modal-body">
-            <div class="form-group">
-              <label>Reference Number</label>
-              <input
-                v-model="editForms.reference_number"
-                type="text"
-                class="input-field"
-                placeholder="e.g. INV-2024-001"
-                maxlength="100"
-              />
-              <p class="field-hint">Links this inspection to an invoice or billing reference.</p>
-            </div>
-            <div class="modal-actions">
-              <button @click="showEditRefNumber = false" class="btn-secondary">Cancel</button>
-              <button @click="updateField('reference_number', editForms.reference_number); showEditRefNumber = false" class="btn-primary">Save</button>
-            </div>
-          </div>
-        </div>
-      </div>
-
       <!-- Edit Conduct Date & Time -->
       <div v-if="showEditConductDate" class="modal-overlay" @click.self="showEditConductDate = false">
         <div class="modal modal-large">
@@ -1924,46 +1922,47 @@ textarea.input-field { resize: vertical; }
 .header-address { font-size: 12px; color: #64748b; font-weight: 500; }
 .header-branding { display: flex; flex-direction: row; align-items: center; gap: 16px; flex-shrink: 0; }
 
-/* Reference number box — sits to the left of the client logo */
+/* Reference number box — inline editable, sits to the left of the client logo */
 .ref-number-box {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
-  gap: 2px;
+  gap: 6px;
   background: #f8fafc;
   border: 1.5px solid #e2e8f0;
   border-radius: 8px;
-  padding: 6px 12px;
-  min-width: 90px;
-}
-.ref-number-box.ref-editable {
-  cursor: pointer;
+  padding: 6px 10px;
+  min-width: 110px;
   transition: border-color 0.15s, background 0.15s;
 }
-.ref-number-box.ref-editable:hover {
+.ref-number-box:focus-within {
   border-color: #6366f1;
   background: #eef2ff;
 }
-.ref-number-label {
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  color: #94a3b8;
-  text-transform: uppercase;
-}
-.ref-number-value {
+.ref-pencil {
   font-size: 13px;
-  font-weight: 600;
-  color: #1e293b;
-  white-space: nowrap;
-  max-width: 140px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.ref-number-value:empty::after,
-.ref-number-box[data-empty] .ref-number-value {
   color: #94a3b8;
-  font-style: italic;
+  flex-shrink: 0;
+  user-select: none;
+}
+.ref-number-input {
+  border: none;
+  background: transparent;
+  outline: none;
+  font-size: 13px;
+  font-weight: 500;
+  color: #1e293b;
+  width: 100px;
+  min-width: 0;
+}
+.ref-number-input::placeholder {
+  color: #94a3b8;
+  font-weight: 400;
+}
+.ref-number-display {
+  font-size: 13px;
+  font-weight: 500;
+  color: #1e293b;
 }
 
 /* Logo + name: keep stacked as before */

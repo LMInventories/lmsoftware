@@ -239,6 +239,15 @@ def _setup_database():
         db.session.commit()
         print("✅ inspections.tenant_name added.")
 
+    # inspections.landlord_email — landlord email for report distribution
+    if not column_exists('inspections', 'landlord_email'):
+        print("Migrating: adding inspections.landlord_email column...")
+        db.session.execute(
+            text("ALTER TABLE inspections ADD COLUMN landlord_email VARCHAR(255)")
+        )
+        db.session.commit()
+        print("✅ inspections.landlord_email added.")
+
     # inspections.reference_number — links inspection to an invoice/billing reference
     if not column_exists('inspections', 'reference_number'):
         print("Migrating: adding inspections.reference_number column...")

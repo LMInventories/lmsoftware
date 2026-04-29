@@ -41,8 +41,16 @@ def inspection_detail(inspection):
         'key_location': inspection.key_location,
         'key_return': inspection.key_return,
         'internal_notes': inspection.internal_notes,
+        'reference_number': inspection.reference_number,
+        'tenant_name': inspection.tenant_name,
         'tenant_email': inspection.tenant_email,
+        'landlord_email': inspection.landlord_email,
         'client_email_override': inspection.client_email_override,
+        'deposit_amount': float(inspection.deposit_amount) if inspection.deposit_amount is not None else None,
+        'deposit_scheme': inspection.deposit_scheme,
+        'deposit_ref': inspection.deposit_ref,
+        'depositary_tenancy_id': inspection.depositary_tenancy_id,
+        'depositary_pushed_at': inspection.depositary_pushed_at.isoformat() if inspection.depositary_pushed_at else None,
         'created_at': inspection.created_at.isoformat() if inspection.created_at else None,
         'property': None,
         'client': None,
@@ -389,6 +397,8 @@ def update_inspection(inspection_id):
         inspection.tenant_name = data['tenant_name']
     if 'tenant_email' in data:
         inspection.tenant_email = data['tenant_email']
+    if 'landlord_email' in data:
+        inspection.landlord_email = data['landlord_email'] or None
     if 'deposit_amount' in data:
         inspection.deposit_amount = data['deposit_amount'] or None
     if 'deposit_scheme' in data:

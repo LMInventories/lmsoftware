@@ -175,6 +175,7 @@ class Inspection(db.Model):
 
     tenant_name             = db.Column(db.String(255))
     tenant_email            = db.Column(db.String(255))
+    landlord_email          = db.Column(db.String(255))
     client_email_override   = db.Column(db.String(255))
 
     # ── Deposit / Depositary fields ───────────────────────────────────────────
@@ -219,6 +220,7 @@ class Inspection(db.Model):
             'reference_number':        self.reference_number,
             'tenant_name':             self.tenant_name,
             'tenant_email':            self.tenant_email,
+            'landlord_email':          self.landlord_email,
             'deposit_amount':          float(self.deposit_amount) if self.deposit_amount is not None else None,
             'deposit_scheme':          self.deposit_scheme,
             'deposit_ref':             self.deposit_ref,

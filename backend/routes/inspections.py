@@ -377,6 +377,8 @@ def update_inspection(inspection_id):
             inspection.scheduled_date = datetime.fromisoformat(data['scheduled_date']) if data['scheduled_date'] else None
         except (ValueError, TypeError):
             inspection.scheduled_date = None
+    if 'reference_number' in data:
+        inspection.reference_number = data['reference_number'] or None
     if 'key_location' in data:
         inspection.key_location = data['key_location']
     if 'key_return' in data:

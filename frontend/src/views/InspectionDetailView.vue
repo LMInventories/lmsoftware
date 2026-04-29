@@ -1597,71 +1597,70 @@ onMounted(() => {
 .content-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 24px;
+  gap: 16px;
   align-items: start;
 }
-
-/* Desktop: explicit 2-column placement */
-.card-overview    { grid-column: 1; grid-row: 1; }
-.card-conduct     { grid-column: 2; grid-row: 1; }
-.card-property    { grid-column: 1; grid-row: 2; }
-.card-keys        { grid-column: 2; grid-row: 2; }
-.card-client      { grid-column: 1; grid-row: 3; }
-.card-contact     { grid-column: 2; grid-row: 3; }
-.card-template    { grid-column: 1; grid-row: 4; }
-.card-assignments { grid-column: 2; grid-row: 4; }
-.card-notes       { grid-column: 1; grid-row: 5; }
-.card-deposit     { grid-column: 2; grid-row: 5; }
+/* Cards auto-flow in DOM order — no explicit placement needed */
 
 /* Info Cards */
 .info-card {
   background: white;
   border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  border: 1px solid #e8ecf1;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
   overflow: hidden;
+  transition: box-shadow 0.2s;
+}
+.info-card:hover {
+  box-shadow: 0 4px 14px rgba(0,0,0,0.08);
 }
 
 .card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 20px 24px;
-  border-bottom: 1px solid #e5e7eb;
-  background: #f8fafc;
+  padding: 14px 20px;
+  border-bottom: 1px solid #f1f5f9;
 }
 
 .card-header h3 {
-  font-size: 16px;
-  font-weight: 600;
-  color: #1e293b;
+  font-size: 11px;
+  font-weight: 700;
+  color: #94a3b8;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
 }
 
 .btn-edit {
-  padding: 6px 12px;
-  background: #6366f1;
-  color: white;
-  border: none;
+  padding: 4px 10px;
+  background: transparent;
+  color: #6366f1;
+  border: 1px solid #e0e7ff;
   border-radius: 6px;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.15s;
 }
-.btn-edit:hover { background: #4f46e5; }
+.btn-edit:hover {
+  background: #eef2ff;
+  border-color: #a5b4fc;
+}
 
 .btn-edit-inline {
-  padding: 4px 8px;
-  background: #e0e7ff;
-  color: #4338ca;
-  border: none;
+  flex-shrink: 0;
+  padding: 2px 6px;
+  background: transparent;
+  color: #cbd5e1;
+  border: 1px solid #e2e8f0;
   border-radius: 4px;
   font-size: 11px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.15s;
 }
-.btn-edit-inline:hover { background: #c7d2fe; }
+.btn-edit-inline:hover { color: #6366f1; border-color: #a5b4fc; background: #eef2ff; }
 
-.card-content { padding: 24px; }
+.card-content { padding: 16px 20px; }
 
 /* Photo Card */
 .photo-card .card-content { padding: 0; }
@@ -1676,18 +1675,18 @@ onMounted(() => {
 }
 
 .photo-placeholder {
-  height: 200px;
-  background: linear-gradient(135deg, #1e3a5f 0%, #1e293b 100%);
+  height: 180px;
+  background: linear-gradient(135deg, #1e3a5f 0%, #0f172a 100%);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  color: white;
+  color: rgba(255,255,255,0.7);
   gap: 6px;
 }
 
-.photo-icon { font-size: 48px; }
-.photo-placeholder p { font-size: 14px; font-weight: 600; }
+.photo-icon { font-size: 32px; opacity: 0.5; }
+.photo-placeholder p { font-size: 13px; font-weight: 500; }
 
 .photo-modal {
   background: white;
@@ -1703,8 +1702,8 @@ onMounted(() => {
 .photo-remove-btn:hover { background: #fecaca; }
 
 /* Date & time */
-.date-display { font-size: 20px; font-weight: 600; color: #1e293b; margin-bottom: 8px; }
-.time-display { font-size: 14px; color: #64748b; }
+.date-display { font-size: 18px; font-weight: 600; color: #1e293b; margin-bottom: 4px; }
+.time-display { font-size: 13px; color: #64748b; }
 
 /* Badge */
 .badge {
@@ -1722,68 +1721,68 @@ onMounted(() => {
 .assignment-row {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 0;
-  border-bottom: 1px solid #f1f5f9;
-  font-size: 14px;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid #f8fafc;
+  font-size: 13.5px;
 }
 .assignment-row:last-of-type { border-bottom: none; }
-.assignment-row strong { color: #64748b; min-width: 60px; }
+.assignment-row strong { color: #94a3b8; min-width: 52px; font-weight: 500; }
 .assignment-row span { flex: 1; color: #1e293b; }
 
 /* Key */
-.key-section { margin-bottom: 16px; }
+.key-section { margin-bottom: 14px; }
 .key-section:last-child { margin-bottom: 0; }
-.key-header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
-.key-header strong { font-size: 14px; color: #1e293b; }
-.key-section p { font-size: 14px; color: #64748b; margin-top: 4px; }
+.key-header { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }
+.key-header strong { font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.06em; }
+.key-section p { font-size: 14px; color: #334155; margin-top: 4px; }
 
 /* Client */
-.info-card .card-content h4 { font-size: 18px; font-weight: 600; color: #1e293b; margin-bottom: 4px; }
-.company { font-size: 14px; color: #64748b; margin-top: 4px; }
+.info-card .card-content h4 { font-size: 17px; font-weight: 600; color: #1e293b; margin-bottom: 2px; }
+.company { font-size: 13px; color: #64748b; margin-top: 2px; }
 
 /* Contact Row */
 .contact-row {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 0;
-  border-bottom: 1px solid #f1f5f9;
-  font-size: 14px;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid #f8fafc;
+  font-size: 13.5px;
 }
 .contact-row:last-child { border-bottom: none; }
-.contact-row strong { color: #64748b; min-width: 80px; }
+.contact-row strong { color: #94a3b8; min-width: 68px; font-weight: 500; flex-shrink: 0; }
 .contact-row span { flex: 1; color: #1e293b; word-break: break-word; }
 .contact-row a { color: #6366f1; text-decoration: none; flex: 1; }
 .contact-row a:hover { text-decoration: underline; }
 
 /* Address */
-.address-container { display: flex; align-items: flex-start; gap: 12px; }
+.address-container { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 10px; }
 .map-button {
   flex-shrink: 0;
-  width: 40px; height: 40px;
+  width: 34px; height: 34px;
   display: flex; align-items: center; justify-content: center;
   background: #eff6ff; border-radius: 8px; color: #2563eb;
   transition: all 0.2s; text-decoration: none;
 }
 .map-button:hover { background: #dbeafe; transform: scale(1.05); }
 .address-container .address-text { flex: 1; margin: 0; }
-.address-text { font-size: 16px; line-height: 1.6; color: #1e293b; }
+.address-text { font-size: 14px; line-height: 1.6; color: #1e293b; font-weight: 500; }
 
 /* Detail Row */
 .detail-row {
   display: flex;
-  gap: 12px;
-  padding: 10px 0;
-  border-bottom: 1px solid #f1f5f9;
-  font-size: 14px;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid #f8fafc;
+  font-size: 13.5px;
 }
 .detail-row:last-child { border-bottom: none; }
-.detail-row strong { color: #64748b; min-width: 100px; }
+.detail-row strong { color: #94a3b8; min-width: 90px; font-weight: 500; }
 .detail-row span { color: #1e293b; text-transform: capitalize; }
 
 /* Notes */
-.notes-text { font-size: 14px; line-height: 1.7; color: #475569; white-space: pre-wrap; }
+.notes-text { font-size: 13.5px; line-height: 1.7; color: #475569; white-space: pre-wrap; }
 
 /* Modals */
 .modal-overlay {
@@ -1994,30 +1993,7 @@ textarea.input-field { resize: vertical; }
   .content-grid {
     grid-template-columns: 1fr;
   }
-  /* Single-column: override explicit placement and use order for stacking */
-  .card-overview,
-  .card-conduct,
-  .card-property,
-  .card-keys,
-  .card-client,
-  .card-contact,
-  .card-template,
-  .card-assignments,
-  .card-notes,
-  .card-deposit {
-    grid-column: 1;
-    grid-row: auto;
-  }
-  .card-overview    { order: 1; }
-  .card-conduct     { order: 2; }
-  .card-property    { order: 3; }
-  .card-keys        { order: 4; }
-  .card-client      { order: 5; }
-  .card-contact     { order: 6; }
-  .card-template    { order: 7; }
-  .card-assignments { order: 8; }
-  .card-notes       { order: 9; }
-  .card-deposit     { order: 10; }
+  /* Single-column: cards stack in DOM order (matches desktop left-to-right reading order) */
   .workflow-bar { overflow-x: auto; }
 }
 

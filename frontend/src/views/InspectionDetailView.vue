@@ -1596,11 +1596,10 @@ onMounted(() => {
 /* Content Grid */
 .content-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
   gap: 16px;
   align-items: start;
 }
-/* Cards auto-flow in DOM order — no explicit placement needed */
 
 /* Info Cards */
 .info-card {
@@ -1990,10 +1989,6 @@ textarea.input-field { resize: vertical; }
 
 /* Responsive */
 @media (max-width: 1024px) {
-  .content-grid {
-    grid-template-columns: 1fr;
-  }
-  /* Single-column: cards stack in DOM order (matches desktop left-to-right reading order) */
   .workflow-bar { overflow-x: auto; }
 }
 

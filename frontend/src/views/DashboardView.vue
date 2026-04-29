@@ -344,16 +344,16 @@ h1 { font-size: 21px; font-weight: 700; color: #0f172a; margin: 0 0 2px; }
 /* Panels */
 .panel {
   background: white; border-radius: 11px;
-  border: 1px solid #e9ecef; overflow: hidden;
+  border: 1px solid #e8ecf1; overflow: hidden;
   display: flex; flex-direction: column;
 }
 
 .panel-header {
   display: flex; justify-content: space-between; align-items: center;
-  padding: 12px 16px; border-bottom: 1px solid #f1f5f9;
-  background: #fafbfc; flex-shrink: 0;
+  padding: 14px 20px; border-bottom: 1px solid #f1f5f9;
+  background: transparent; flex-shrink: 0;
 }
-.panel-title { font-size: 11px; font-weight: 700; color: #374151; text-transform: uppercase; letter-spacing: 0.5px; }
+.panel-title { font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.07em; }
 .panel-meta { font-size: 11px; color: #94a3b8; }
 .panel-link { font-size: 11px; color: #6366f1; font-weight: 600; background: none; border: none; cursor: pointer; padding: 0; }
 .panel-link:hover { text-decoration: underline; }

@@ -1706,8 +1706,8 @@ onMounted(() => {
 
 .inspection-card {
   background: white;
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
+  border: 1px solid #e8ecf1;
+  border-radius: 12px;
   overflow: hidden;
   transition: box-shadow 0.15s, transform 0.12s;
   cursor: pointer;
@@ -1911,9 +1911,9 @@ onMounted(() => {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.6px;
-  color: #6366f1;
+  color: #94a3b8;
   padding-bottom: 6px;
-  border-bottom: 2px solid #e0e7ff;
+  border-bottom: 1px solid #f1f5f9;
   margin-bottom: 2px;
 }
 

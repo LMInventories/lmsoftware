@@ -633,7 +633,7 @@ h1 { font-size: 21px; font-weight: 700; color: #0f172a; margin: 0 0 2px; }
 .loading { text-align: center; padding: 60px; color: #94a3b8; }
 
 .properties-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
-.property-card { background: white; border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden; transition: box-shadow 0.15s, transform 0.12s; display: flex; flex-direction: column; }
+.property-card { background: white; border: 1px solid #e8ecf1; border-radius: 12px; overflow: hidden; transition: box-shadow 0.15s, transform 0.12s; display: flex; flex-direction: column; }
 .property-card:hover { box-shadow: 0 4px 14px rgba(0,0,0,0.08); transform: translateY(-1px); }
 .card-photo { position: relative; height: 120px; background: linear-gradient(135deg, #e0e7ff 0%, #ede9fe 100%); overflow: hidden; }
 .prop-img { width: 100%; height: 100%; object-fit: cover; display: block; }

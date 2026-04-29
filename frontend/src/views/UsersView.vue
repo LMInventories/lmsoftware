@@ -335,7 +335,7 @@ h1 { font-size: 21px; font-weight: 700; color: #0f172a; margin: 0 0 1px; }
 .users-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
 
 /* Card */
-.user-card { background: white; border: 1px solid #e2e8f0; border-radius: 9px; overflow: hidden; transition: box-shadow 0.15s, transform 0.12s; display: flex; flex-direction: column; }
+.user-card { background: white; border: 1px solid #e8ecf1; border-radius: 12px; overflow: hidden; transition: box-shadow 0.15s, transform 0.12s; display: flex; flex-direction: column; }
 .user-card:hover { box-shadow: 0 3px 10px rgba(0,0,0,0.07); transform: translateY(-1px); }
 
 .card-top-bar { height: 3px; flex-shrink: 0; }

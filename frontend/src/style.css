@@ -14,6 +14,22 @@ body {
   color: #1e293b;
 }
 
+:root {
+  --card-bg: #ffffff;
+  --card-border: 1px solid #e8ecf1;
+  --card-radius: 12px;
+  --card-shadow: 0 1px 3px rgba(0,0,0,0.05);
+  --card-shadow-hover: 0 4px 14px rgba(0,0,0,0.08);
+  --card-header-bg: transparent;
+  --card-header-border: 1px solid #f1f5f9;
+  --card-header-padding: 14px 20px;
+  --label-color: #94a3b8;
+  --label-size: 11px;
+  --row-divider: 1px solid #f8fafc;
+  --btn-edit-color: #6366f1;
+  --btn-edit-border: #e0e7ff;
+}
+
 #app {
   min-height: 100vh;
 }

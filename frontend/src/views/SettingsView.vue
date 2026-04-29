@@ -78,7 +78,8 @@ const tabs = [
 .settings-shell {
   background: white;
   border-radius: 12px;
-  box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+  border: 1px solid #e8ecf1;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -90,7 +91,7 @@ const tabs = [
   gap: 2px;
   padding: 8px 10px;
   border-bottom: 1px solid #f1f5f9;
-  background: #fafbfc;
+  background: transparent;
   flex-wrap: wrap;
 }
 

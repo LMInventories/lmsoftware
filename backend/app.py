@@ -289,6 +289,22 @@ def _setup_database():
         db.session.commit()
         print("✅ templates.is_transient added.")
 
+    # ── Reset midterm_sections to v2 defaults if still on old v1 schema ───────
+    # The original defaults used "Property Condition Overview" / "Safety & Alarms";
+    # the v2 defaults match the industry-standard midterm format (Overview, Keys,
+    # Smoke & CO). Reset only if the stored data still has the old first section name.
+    _ms = SystemSetting.query.filter_by(key='midterm_sections').first()
+    if _ms and _ms.value:
+        try:
+            _ms_data = json.loads(_ms.value)
+            if _ms_data and _ms_data[0].get('name') in ('Property Condition Overview', 'Safety & Alarms'):
+                from routes.fixed_sections import DEFAULT_MIDTERM_SECTIONS as _DMS
+                _ms.value = json.dumps(_DMS)
+                db.session.commit()
+                print('✅ Migrated midterm_sections to v2 defaults.')
+        except Exception:
+            pass
+
     # ── Performance indexes ──────────────────────────────────────────────────
     # CREATE INDEX IF NOT EXISTS is safe to run on every boot — a no-op when the
     # index already exists. These cover the most frequent filter/join columns so
@@ -307,6 +323,78 @@ def _setup_database():
             db.session.execute(text(idx_sql))
         except Exception:
             db.session.rollback()
+    db.session.commit()
+
+    # ── Seed standard midterm room section presets ───────────────────────────
+    # These presets appear in the template editor "From Preset" picker and give
+    # clerks a one-click starting point for each midterm room section.
+    _MIDTERM_PRESETS = [
+        {
+            'name': 'Standard Midterm Room',
+            'description': 'Core condition checks for any room — walls, furnishings, flooring, decorative standard, cleanliness.',
+            'items': [
+                {'name': 'Overview Photos',          'description': 'Room overview', 'requires_photo': True,  'requires_condition': False, 'answer_options': ''},
+                {'name': 'Any damage to walls?',     'description': '',              'requires_photo': True,  'requires_condition': True,  'answer_options': ''},
+                {'name': 'Any damage to furnishings?','description': '',             'requires_photo': True,  'requires_condition': True,  'answer_options': ''},
+                {'name': 'Any damage to flooring?',  'description': '',              'requires_photo': True,  'requires_condition': True,  'answer_options': ''},
+                {'name': 'Decorative standard',      'description': '',              'requires_photo': False, 'requires_condition': True,  'answer_options': ''},
+                {'name': 'Cleanliness & Tidiness',   'description': '',              'requires_photo': False, 'requires_condition': True,  'answer_options': ''},
+            ],
+        },
+        {
+            'name': 'Midterm Bathroom / Ensuite',
+            'description': 'Standard midterm room items plus sanitary ware check.',
+            'items': [
+                {'name': 'Overview Photos',             'description': 'Room overview', 'requires_photo': True,  'requires_condition': False, 'answer_options': ''},
+                {'name': 'Any damage to walls?',        'description': '',              'requires_photo': True,  'requires_condition': True,  'answer_options': ''},
+                {'name': 'Any damage to furnishings?',  'description': '',              'requires_photo': True,  'requires_condition': True,  'answer_options': ''},
+                {'name': 'Any damage to flooring?',     'description': '',              'requires_photo': True,  'requires_condition': True,  'answer_options': ''},
+                {'name': 'Any issues with sanitary ware?', 'description': '',           'requires_photo': True,  'requires_condition': True,  'answer_options': ''},
+                {'name': 'Decorative standard',         'description': '',              'requires_photo': False, 'requires_condition': True,  'answer_options': ''},
+                {'name': 'Cleanliness & Tidiness',      'description': '',              'requires_photo': False, 'requires_condition': True,  'answer_options': ''},
+            ],
+        },
+        {
+            'name': 'Midterm Kitchen',
+            'description': 'Standard midterm room items plus appliances and sanitary ware checks.',
+            'items': [
+                {'name': 'Overview Photos',             'description': 'Room overview', 'requires_photo': True,  'requires_condition': False, 'answer_options': ''},
+                {'name': 'Any damage to walls?',        'description': '',              'requires_photo': True,  'requires_condition': True,  'answer_options': ''},
+                {'name': 'Any damage to furnishings?',  'description': '',              'requires_photo': True,  'requires_condition': True,  'answer_options': ''},
+                {'name': 'Any damage to flooring?',     'description': '',              'requires_photo': True,  'requires_condition': True,  'answer_options': ''},
+                {'name': 'Any issues with sanitary ware?', 'description': '',           'requires_photo': True,  'requires_condition': True,  'answer_options': ''},
+                {'name': 'Appliances',                  'description': '',              'requires_photo': True,  'requires_condition': True,  'answer_options': ''},
+                {'name': 'Decorative standard',         'description': '',              'requires_photo': False, 'requires_condition': True,  'answer_options': ''},
+                {'name': 'Cleanliness & Tidiness',      'description': '',              'requires_photo': False, 'requires_condition': True,  'answer_options': ''},
+            ],
+        },
+        {
+            'name': 'Midterm Balcony / Terrace',
+            'description': 'Outdoor area checks — walls, furnishings, flooring, decorative standard, cleanliness.',
+            'items': [
+                {'name': 'Overview Photos',             'description': 'Area overview', 'requires_photo': True,  'requires_condition': False, 'answer_options': ''},
+                {'name': 'Any damage to walls?',        'description': '',              'requires_photo': True,  'requires_condition': True,  'answer_options': ''},
+                {'name': 'Any damage to furnishings?',  'description': '',              'requires_photo': True,  'requires_condition': True,  'answer_options': ''},
+                {'name': 'Any damage to flooring?',     'description': '',              'requires_photo': True,  'requires_condition': True,  'answer_options': ''},
+                {'name': 'Decorative standard',         'description': '',              'requires_photo': False, 'requires_condition': True,  'answer_options': ''},
+                {'name': 'Cleanliness & Tidiness',      'description': '',              'requires_photo': False, 'requires_condition': True,  'answer_options': ''},
+            ],
+        },
+    ]
+
+    from models import SectionPreset
+    import json as _json
+    for _preset_data in _MIDTERM_PRESETS:
+        exists = SectionPreset.query.filter_by(name=_preset_data['name']).first()
+        if not exists:
+            _preset = SectionPreset(
+                name=_preset_data['name'],
+                description=_preset_data['description'],
+                category='room',
+                items_json=_json.dumps(_preset_data['items']),
+            )
+            db.session.add(_preset)
+            print(f"Seeded section preset: {_preset_data['name']}")
     db.session.commit()
 
     # ── Seed (only on a completely empty database) ───────────────────────────

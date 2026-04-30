@@ -128,6 +128,7 @@ def add_preset_to_template(preset_id, template_id):
             description=item_data.get('description', ''),
             requires_photo=item_data.get('requires_photo', True),
             requires_condition=item_data.get('requires_condition', True),
+            answer_options=item_data.get('answer_options', '') or '',
             order_index=idx,
         )
         db.session.add(item)

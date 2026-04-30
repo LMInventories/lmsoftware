@@ -1332,8 +1332,8 @@ function _adaptItem(item, type, idx, secIdx) {
       return { id, name: item.name || '', question: item.question || '', answer: '', notes: item.additional_notes || '' }
     case 'smoke_alarms':
     case 'health_safety':
-      // question is the row label
-      return { id, question: item.name || item.question || '', answer: '', notes: item.additional_notes || '' }
+      // question is the row label; additional_notes shows as static guidance hint (not pre-filled textarea)
+      return { id, question: item.name || item.question || '', answer: '', notes: '', guidance: item.additional_notes || '' }
     case 'keys':
       return { id, name: item.name || '', description: item.description || '' }
     default:

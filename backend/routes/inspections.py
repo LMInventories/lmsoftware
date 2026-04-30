@@ -783,11 +783,10 @@ def _get_global_fixed_sections():
 
 
 _DEFAULT_MIDTERM_FIXED = [
-    {'name': 'Property Condition Overview', 'enabled': True, 'columns': ['name', 'condition', 'additional_notes'], 'items': []},
-    {'name': 'Safety & Alarms',             'enabled': True, 'columns': ['name', 'answer', 'condition'],           'items': []},
-    {'name': 'Health & Safety',             'enabled': True, 'columns': ['name', 'answer', 'description'],         'items': []},
-    {'name': 'Utility Meter Readings',      'enabled': True, 'columns': ['name', 'location_serial', 'reading'],    'items': []},
-    {'name': 'Keys',                        'enabled': True, 'columns': ['name', 'description'],                   'items': []},
+    {'name': 'Overview',                                    'enabled': True, 'columns': ['name', 'answer', 'additional_notes'], 'items': []},
+    {'name': 'Keys',                                        'enabled': True, 'columns': ['name', 'description'],                'items': []},
+    {'name': 'Smoke & Carbon Monoxide Detector Summary',    'enabled': True, 'columns': ['name', 'answer', 'additional_notes'], 'items': []},
+    {'name': 'Utility Meter Readings',                      'enabled': True, 'columns': ['name', 'location_serial', 'reading'], 'items': []},
 ]
 
 

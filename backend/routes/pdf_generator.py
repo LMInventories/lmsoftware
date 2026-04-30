@@ -296,8 +296,12 @@ class _PDFBuilder:
         except Exception:
             pass
 
-        # ── Fixed sections — from system_settings or DEFAULT_FIXED_SECTIONS ──
-        self.fixed_sections = _load_fixed_sections()
+        # ── Fixed sections — midterm uses its own section set ──────────────
+        itype = getattr(inspection, 'inspection_type', '') or ''
+        if itype == 'midterm':
+            self.fixed_sections = _load_midterm_sections()
+        else:
+            self.fixed_sections = _load_fixed_sections()
 
         # ── Report data — loaded early so rooms can use _roomNames override ──
         self.rd = {}
@@ -1317,7 +1321,8 @@ def _adapt_item(item: dict, sec_type: str, sec_idx: int, row_idx: int) -> dict:
     if sec_type == 'fire_door_safety':
         return {'id': rid, 'name': item.get('name',''), 'question': item.get('question',''), 'answer': '', 'notes': item.get('additional_notes','')}
     if sec_type in ('smoke_alarms', 'health_safety'):
-        return {'id': rid, 'question': item.get('name', item.get('question','')), 'answer': '', 'notes': item.get('additional_notes','')}
+        # additional_notes is guidance/hint text — not a pre-filled answer
+        return {'id': rid, 'question': item.get('name', item.get('question','')), 'answer': '', 'notes': '', 'guidance': item.get('additional_notes','')}
     if sec_type == 'keys':
         return {'id': rid, 'name': item.get('name',''), 'description': item.get('description','')}
     return {'id': rid, 'name': item.get('name',''), 'condition': ''}
@@ -1348,6 +1353,46 @@ def _load_fixed_sections() -> list:
         slug   = re.sub(r'[^a-z0-9]', '_', raw['name'].lower())
         rd_key = f'fs_{sec_idx}_{slug}'
         rows    = [_adapt_item(item, sec_type, sec_idx, ri) for ri, item in enumerate(raw.get('items') or [])]
+        result.append({
+            'id':      rd_key,
+            'name':    raw['name'],
+            'type':    sec_type,
+            'columns': cols,
+            'rows':    rows,
+        })
+        sec_idx += 1
+    return result
+
+
+def _load_midterm_sections() -> list:
+    """
+    Load midterm fixed sections from system_settings (key='midterm_sections').
+    Uses the same id / row-id scheme as _load_fixed_sections so that report_data
+    keyed by fs_{secIdx}_{slug} matches correctly.
+    """
+    try:
+        from models import SystemSetting
+        from routes.fixed_sections import DEFAULT_MIDTERM_SECTIONS
+        s = SystemSetting.query.filter_by(key='midterm_sections').first()
+        sections = json.loads(s.value) if (s and s.value) else DEFAULT_MIDTERM_SECTIONS
+    except Exception:
+        try:
+            from routes.fixed_sections import DEFAULT_MIDTERM_SECTIONS
+            sections = DEFAULT_MIDTERM_SECTIONS
+        except Exception:
+            sections = []
+
+    result = []
+    sec_idx = 0
+    import re
+    for raw in sections:
+        if not raw.get('enabled', True):
+            continue
+        cols     = raw.get('columns', [])
+        sec_type = _infer_type(cols, raw.get('name', ''))
+        slug     = re.sub(r'[^a-z0-9]', '_', raw['name'].lower())
+        rd_key   = f'fs_{sec_idx}_{slug}'
+        rows     = [_adapt_item(item, sec_type, sec_idx, ri) for ri, item in enumerate(raw.get('items') or [])]
         result.append({
             'id':      rd_key,
             'name':    raw['name'],

@@ -147,31 +147,41 @@ def update_fixed_sections():
 midterm_sections_bp = Blueprint('midterm_sections', __name__)
 
 DEFAULT_MIDTERM_SECTIONS = [
+    # ── 1. Overview ─────────────────────────────────────────────────────────
+    # Yes / No / N/A questions assessed at a glance before entering rooms.
     {
-        "name": "Property Condition Overview",
+        "name": "Overview",
         "enabled": True,
-        "columns": ["name", "condition", "additional_notes"],
-        "items": []
-    },
-    {
-        "name": "Safety & Alarms",
-        "enabled": True,
-        "columns": ["name", "answer", "condition"],
+        "columns": ["name", "answer", "additional_notes"],
         "items": [
-            {"name": "Smoke Alarm — Hallway",    "answer": "Yes", "condition": ""},
-            {"name": "Carbon Monoxide Detector", "answer": "Yes", "condition": ""},
-            {"name": "Heat Alarm — Kitchen",     "answer": "Yes", "condition": ""},
+            {"name": "Evidence of sub-letting?",                     "answer": "", "additional_notes": ""},
+            {"name": "Evidence of pets?",                            "answer": "", "additional_notes": ""},
+            {"name": "Evidence of smoking?",                         "answer": "", "additional_notes": ""},
+            {"name": "Any tenant feedback or maintenance requests?",  "answer": "", "additional_notes": ""},
         ]
     },
+    # ── 2. Keys ─────────────────────────────────────────────────────────────
     {
-        "name": "Health & Safety",
+        "name": "Keys",
         "enabled": True,
-        "columns": ["name", "answer", "description"],
+        "columns": ["name", "description"],
         "items": [
-            {"name": "Electrical Consumer Unit", "answer": "Yes", "description": ""},
-            {"name": "Water Stop Tap Location",  "answer": "Yes", "description": ""},
+            {"name": "Access",  "description": ""},
+            {"name": "Return",  "description": ""},
         ]
     },
+    # ── 3. Smoke & CO Detector Summary ───────────────────────────────────────
+    {
+        "name": "Smoke & Carbon Monoxide Detector Summary",
+        "enabled": True,
+        "columns": ["name", "answer", "additional_notes"],
+        "items": [
+            {"name": "Working smoke alarm present to each floor?", "answer": "", "additional_notes": "One functioning smoke alarm required on each habitable floor."},
+            {"name": "Fixed combustion appliance at property?",    "answer": "", "additional_notes": ""},
+            {"name": "Is there a working carbon monoxide alarm?",  "answer": "", "additional_notes": "One alarm required in any room with a fixed combustion appliance (boilers, fires, water heaters — excludes gas cookers)."},
+        ]
+    },
+    # ── 4. Utility Meter Readings ─────────────────────────────────────────────
     {
         "name": "Utility Meter Readings",
         "enabled": True,
@@ -180,15 +190,6 @@ DEFAULT_MIDTERM_SECTIONS = [
             {"name": "Gas Meter",      "location_serial": "", "reading": ""},
             {"name": "Electric Meter", "location_serial": "", "reading": ""},
             {"name": "Water Meter",    "location_serial": "", "reading": ""},
-        ]
-    },
-    {
-        "name": "Keys",
-        "enabled": True,
-        "columns": ["name", "description"],
-        "items": [
-            {"name": "Full Sets",    "description": ""},
-            {"name": "Access Notes", "description": ""},
         ]
     },
 ]

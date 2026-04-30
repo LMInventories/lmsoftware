@@ -175,10 +175,19 @@ async function load() {
       }
 
     } else {
-      // ── CHECK IN / INVENTORY / INTERIM: normal template-based flow ─────
+      // ── CHECK IN / INVENTORY / MIDTERM / DAMAGE REPORT: normal template-based flow ─────
       if (inspection.value.template_id) {
         const tRes = await api.getTemplate(inspection.value.template_id)
         template.value = tRes.data
+      } else {
+        // No template assigned — try to find one matching this inspection type
+        try {
+          const allTRes = await api.getTemplates()
+          const itype = inspection.value.inspection_type
+          const byType = allTRes.data.filter(t => t.inspection_type === itype)
+          const fallback = byType.find(t => t.is_default) || byType[0]
+          if (fallback) template.value = fallback
+        } catch { /* no templates available */ }
       }
       if (inspection.value.report_data) {
         try {
@@ -2009,7 +2018,7 @@ async function moveToReview() {
       </nav>
 
       <main class="main" @scroll="onScroll">
-        <div v-if="!template && inspection.inspection_type !== 'check_out'" class="empty-state">
+        <div v-if="!template && !['check_out', 'midterm', 'damage_report'].includes(inspection.inspection_type)" class="empty-state">
           <h3>No template assigned</h3>
           <p>This inspection has no template assigned. Go back and assign one.</p>
           <button class="btn-ghost" @click="router.push(`/inspections/${inspection.id}`)">← Back to Overview</button>

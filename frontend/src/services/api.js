@@ -240,9 +240,10 @@ const api = {
   },
   checkAiStatus() { return http.get('/api/ai/status') },
   // POST: upload PDF, returns {job_id} immediately (background thread does the work)
-  pdfImport(file) {
+  pdfImport(file, templateStructure) {
     const form = new FormData()
     form.append('file', file, file.name || 'report.pdf')
+    if (templateStructure) form.append('templateStructure', templateStructure)
     return http.post('/api/ai/pdf-import', form, {
       headers: { 'Content-Type': 'multipart/form-data' },
       timeout: 30000,

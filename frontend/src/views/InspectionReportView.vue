@@ -273,13 +273,6 @@ async function runPdfImport() {
   pdfImport.value.preview = null
 
   try {
-    const base64 = await new Promise((resolve, reject) => {
-      const reader = new FileReader()
-      reader.onload  = e => resolve(e.target.result.split(',')[1])
-      reader.onerror = reject
-      reader.readAsDataURL(pdfImport.value.file)
-    })
-
     const templateStructure = template.value ? JSON.stringify({
       fixedSections: (template.value.sections || [])
         .filter(s => !s.is_room)
@@ -289,12 +282,26 @@ async function runPdfImport() {
         .map(r => ({ id: r.id, name: r.name, items: (r.sections || r.items || []).map(i => ({ id: i.id, label: i.label })) }))
     }, null, 2) : 'No template — infer structure from PDF'
 
-    const response = await api.pdfImport({ pdf: base64, templateStructure })
-    const parsed = response.data
+    // Start the background job — backend returns {job_id} immediately
+    const startRes = await api.pdfImport(pdfImport.value.file, templateStructure)
+    const jobId = startRes.data?.job_id
+    if (!jobId) throw new Error('Server did not return a job ID')
+
+    // Poll until the job finishes (3-second intervals, 3-minute timeout)
+    let parsed = null
+    for (let attempt = 0; attempt < 60; attempt++) {
+      await new Promise(r => setTimeout(r, 3000))
+      const statusRes = await api.pdfImportStatus(jobId)
+      const { status, result, error } = statusRes.data
+      if (status === 'done')  { parsed = result; break }
+      if (status === 'error') throw new Error(error || 'AI parsing failed on server')
+    }
+    if (!parsed) throw new Error('Import timed out — please try again')
+
     pdfImport.value.preview = parsed
   } catch (err) {
     console.error('PDF import error:', err)
-    pdfImport.value.error = 'Import failed: ' + err.message
+    pdfImport.value.error = 'Import failed: ' + (err.response?.data?.error || err.message)
   } finally {
     pdfImport.value.loading = false
   }

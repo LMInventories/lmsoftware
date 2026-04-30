@@ -175,20 +175,38 @@ async function load() {
       }
 
     } else {
-      // ── CHECK IN / INVENTORY / MIDTERM / DAMAGE REPORT: normal template-based flow ─────
-      if (inspection.value.template_id) {
-        const tRes = await api.getTemplate(inspection.value.template_id)
-        template.value = tRes.data
-      } else {
-        // No template assigned — try to find one matching this inspection type
-        try {
+      // ── CHECK IN / INVENTORY / MIDTERM / DAMAGE REPORT ────────────────
+      // Standalone types (midterm, damage_report) are NOT part of the
+      // check_in → check_out lifecycle and never inherit a source inspection.
+      // They load their own template directly and use their own fixed sections.
+
+      // Step 1: load the template — wrapped in try/catch so a missing/deleted
+      //         template doesn't abort the whole load.
+      // For midterm inspections we also validate the loaded template is the correct
+      // type — it may have been inherited from a check_in/check_out source inspection
+      // in older data, which would cause check_out-style room rendering.
+      const itype = inspection.value.inspection_type
+      try {
+        if (inspection.value.template_id) {
+          const tRes = await api.getTemplate(inspection.value.template_id)
+          const loaded = tRes.data
+          // For standalone types, reject a template that belongs to a different lifecycle type
+          if (itype === 'midterm' && loaded?.inspection_type !== 'midterm') {
+            // Wrong template (e.g. inherited check_in template) — fall through to type search
+          } else {
+            template.value = loaded
+          }
+        }
+        // If no template loaded yet (none assigned, or wrong type), find one by inspection type
+        if (!template.value) {
           const allTRes = await api.getTemplates()
-          const itype = inspection.value.inspection_type
-          const byType = allTRes.data.filter(t => t.inspection_type === itype)
-          const fallback = byType.find(t => t.is_default) || byType[0]
-          if (fallback) template.value = fallback
-        } catch { /* no templates available */ }
-      }
+          const byType  = (allTRes.data || []).filter(t => t.inspection_type === itype)
+          const match   = byType.find(t => t.is_default) || byType[0]
+          if (match) template.value = match
+        }
+      } catch { /* template unavailable — inspection still opens, rooms will be empty */ }
+
+      // Step 2: restore saved report data
       if (inspection.value.report_data) {
         try {
           reportData.value = JSON.parse(inspection.value.report_data)
@@ -1786,7 +1804,7 @@ const cleanlinessOpts = [
   'Not Clean'
 ]
 
-const typeLabel       = computed(() => ({ check_in:'Check In', check_out:'Check Out', interim:'Interim Inspection', inventory:'Inventory', damage_report:'Damage Report' })[inspection.value?.inspection_type] ?? '')
+const typeLabel       = computed(() => ({ check_in:'Check In', check_out:'Check Out', interim:'Interim Inspection', inventory:'Inventory', damage_report:'Damage Report', midterm:'Midterm Inspection' })[inspection.value?.inspection_type] ?? (inspection.value?.inspection_type?.replace(/_/g,' ') ?? ''))
 const isCheckOut      = computed(() => inspection.value?.inspection_type === 'check_out')
 const isDamageReport  = computed(() => inspection.value?.inspection_type === 'damage_report')
 const savedTime  = computed(() => lastSaved.value ? lastSaved.value.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' }) : null)

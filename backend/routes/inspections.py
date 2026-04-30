@@ -239,17 +239,24 @@ def create_inspection():
     data = request.json
 
     # ── Template resolution ──────────────────────────────────────────────
+    inspection_type = data.get('inspection_type', 'check_in')
+
+    # Standalone types (midterm, damage_report) are not part of the
+    # check_in → check_out lifecycle and must never inherit a source
+    # inspection's template — that would silently assign the wrong template type.
+    STANDALONE_TYPES = {'midterm', 'damage_report'}
+    is_standalone = inspection_type in STANDALONE_TYPES
+
     template_id = data.get('template_id')
     if not template_id:
-        inspection_type = data.get('inspection_type', 'check_in')
         default_template = Template.query.filter_by(
             inspection_type=inspection_type,
             is_default=True
         ).first()
         template_id = default_template.id if default_template else None
 
-        # If still no template, inherit from source inspection's template
-        if not template_id and data.get('source_inspection_id'):
+        # Inherit from source inspection's template ONLY for lifecycle types
+        if not template_id and not is_standalone and data.get('source_inspection_id'):
             source_insp = Inspection.query.get(data['source_inspection_id'])
             if source_insp and source_insp.template_id:
                 template_id = source_insp.template_id
@@ -262,22 +269,19 @@ def create_inspection():
         except (ValueError, TypeError):
             pass
 
-    source_id = data.get('source_inspection_id')
+    # Standalone inspections have no source lifecycle link
+    source_id = None if is_standalone else data.get('source_inspection_id')
     include_photos = bool(data.get('include_photos', False))
     seeded_report_data = None
 
-    # ── Seed from source inspection ──────────────────────────────────────
+    # ── Seed from source inspection (lifecycle types only) ───────────────
     # Only attempt transform when the source has actual report_data saved.
-    # If source exists but has no data yet, we store source_inspection_id
-    # and leave report_data null — the report screen fetches the source
-    # inspection live and displays it as read-only reference (sourceReportData).
     if source_id:
         source = Inspection.query.get(source_id)
         if source and source.report_data:
-            new_type = data.get('inspection_type', 'check_in')
             transformed = _transform_report_data(
                 source_type=source.inspection_type,
-                target_type=new_type,
+                target_type=inspection_type,
                 raw=source.report_data,
                 include_photos=include_photos,
             )
@@ -297,7 +301,7 @@ def create_inspection():
         typist_id=data.get('typist_id'),
         typist_mode=data.get('typist_mode'),  # per-inspection mode; None → falls back to clerk default
         template_id=template_id,
-        inspection_type=data.get('inspection_type', 'check_in'),
+        inspection_type=inspection_type,
         status=initial_status,
         source_inspection_id=source_id,
         tenant_email=data.get('tenant_email'),

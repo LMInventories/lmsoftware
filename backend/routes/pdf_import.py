@@ -8,10 +8,16 @@ Architecture: background thread + polling.
 
 The daemon thread calls Anthropic (no time pressure) and writes the result to a temp file.
 Both gunicorn workers share the same filesystem, so any worker can serve the status poll.
+
+Large PDF strategy:
+  - Under CHUNK_THRESHOLD chars → single call with max_tokens=8192
+  - Over threshold → split at room boundaries into chunks, process each separately,
+    merge results server-side. This avoids JSON truncation for large inventories.
 """
 
 import os
 import io
+import re
 import json
 import uuid
 import base64
@@ -24,7 +30,22 @@ pdf_import_bp = Blueprint('pdf_import', __name__)
 JOBS_DIR = '/tmp/pdf_import_jobs'
 os.makedirs(JOBS_DIR, exist_ok=True)
 
-MIN_TEXT_CHARS = 500
+MIN_TEXT_CHARS   = 500
+CHUNK_THRESHOLD  = 12_000   # chars — above this we chunk
+MAX_CHUNK_CHARS  = 9_000    # target chars per chunk
+MAX_TOKENS_SINGLE = 8192
+MAX_TOKENS_CHUNK  = 4096    # smaller chunks → smaller responses
+
+# Room-like headings used to detect section boundaries in UK inventory reports
+_ROOM_HEADER_RE = re.compile(
+    r'^(?:HALLWAY|HALL|ENTRANCE|RECEPTION|LOUNGE|LIVING\s*ROOM|SITTING\s*ROOM|'
+    r'KITCHEN|KITCHEN[/ ]*DINER|DINING\s*ROOM|BEDROOM|MASTER\s*BEDROOM|SPARE\s*BEDROOM|'
+    r'BATHROOM|BATHROOM\s*\d|EN[- ]?SUITE|WC|TOILET|CLOAKROOM|LANDING|STAIRS?|'
+    r'STAIRCASE|GARAGE|UTILITY\s*ROOM|STUDY|OFFICE|CONSERVATORY|GARDEN|LOFT|'
+    r'CELLAR|BASEMENT|STORAGE|CUPBOARD|PORCH|LOBBY)[\s\d]*$',
+    re.IGNORECASE,
+)
+
 
 PROMPT_TEMPLATE = """You are extracting structured data from a UK property inspection report (inventory or check-in) for a Check Out system.
 
@@ -111,6 +132,36 @@ Return ONLY valid JSON — no markdown, no explanation:
   }
 }"""
 
+CHUNK_PROMPT_TEMPLATE = """You are extracting structured data from a section of a UK property inspection report.
+
+Template structure:
+__TEMPLATE_STRUCTURE__
+
+GOLDEN RULE: Copy text VERBATIM. Do NOT summarise or paraphrase. Multi-line → join with \\n.
+
+For each room section found in the text below:
+- label: match template item label where possible; otherwise use PDF heading as-is
+- description: verbatim from PDF, empty string if absent
+- condition: verbatim from PDF (CHECK IN column only), empty string if absent
+- _subs: array of { description, condition } for sub-items (items prefixed with parent label)
+
+Also extract any of these fixed sections if present in this chunk:
+- condition_summary, keys, meter_readings, cleaning_summary
+
+Return ONLY valid JSON, no markdown:
+{
+  "rooms": [ { "name": "...", "items": [ { "label": "...", "description": "...", "condition": "..." } ] } ],
+  "fixedSections": {
+    "condition_summary": [],
+    "keys": [],
+    "meter_readings": [],
+    "cleaning_summary": []
+  }
+}
+
+PDF TEXT SECTION:
+__CHUNK_TEXT__"""
+
 
 # ── Job file helpers ──────────────────────────────────────────────────────────
 
@@ -151,28 +202,158 @@ def _extract_pdf_text(raw_bytes):
         print('[pdf-import] pdfplumber failed: ' + str(e))
         return ''
 
-def _build_prompt(template_structure):
-    return PROMPT_TEMPLATE.replace('__TEMPLATE_STRUCTURE__', template_structure)
+
+# ── Text chunking ─────────────────────────────────────────────────────────────
+
+def _split_into_chunks(text, max_chars=MAX_CHUNK_CHARS):
+    """
+    Split extracted PDF text into chunks, trying to break at room/section
+    boundaries so each chunk is self-contained. Falls back to hard splits
+    at paragraph breaks if no room header is found within a window.
+    """
+    lines = text.split('\n')
+    chunks = []
+    current_lines = []
+    current_size = 0
+
+    for line in lines:
+        line_size = len(line) + 1
+
+        # If we're over the limit, try to cut here if this line looks like a room heading
+        if current_size + line_size > max_chars and current_lines:
+            is_boundary = (
+                _ROOM_HEADER_RE.match(line.strip())
+                or (line.strip() == '' and current_size > max_chars * 0.6)
+            )
+            if is_boundary:
+                chunks.append('\n'.join(current_lines))
+                current_lines = [line] if line.strip() else []
+                current_size = line_size if line.strip() else 0
+                continue
+
+        # Hard split if we're way over
+        if current_size + line_size > max_chars * 1.5 and current_lines:
+            chunks.append('\n'.join(current_lines))
+            current_lines = [line]
+            current_size = line_size
+            continue
+
+        current_lines.append(line)
+        current_size += line_size
+
+    if current_lines:
+        chunks.append('\n'.join(current_lines))
+
+    # Filter out trivially small chunks (page headers/footers only)
+    return [c for c in chunks if len(c.strip()) > 100]
+
+
+# ── Claude call helpers ───────────────────────────────────────────────────────
+
+def _call_claude(client, messages, max_tokens):
+    """Single Claude call, returns parsed JSON dict or raises."""
+    response = client.messages.create(
+        model='claude-sonnet-4-6',
+        max_tokens=max_tokens,
+        messages=messages,
+    )
+    raw = response.content[0].text.strip()
+    raw = raw.replace('```json', '').replace('```', '').strip()
+    return json.loads(raw)
+
+
+def _merge_results(results):
+    """Merge a list of {rooms, fixedSections} dicts into one."""
+    merged_rooms = []
+    merged_fixed = {
+        'condition_summary': [],
+        'keys': [],
+        'meter_readings': [],
+        'cleaning_summary': [],
+    }
+
+    seen_room_names = {}  # name.lower() → index in merged_rooms
+
+    for result in results:
+        for room in result.get('rooms', []):
+            name_key = room.get('name', '').lower().strip()
+            if name_key in seen_room_names:
+                # Merge items into the existing room entry
+                idx = seen_room_names[name_key]
+                merged_rooms[idx]['items'].extend(room.get('items', []))
+            else:
+                seen_room_names[name_key] = len(merged_rooms)
+                merged_rooms.append({
+                    'name': room.get('name', ''),
+                    'items': list(room.get('items', [])),
+                })
+
+        fs = result.get('fixedSections', {})
+        for key in merged_fixed:
+            items = fs.get(key, [])
+            if items:
+                merged_fixed[key].extend(items)
+
+    return {'rooms': merged_rooms, 'fixedSections': merged_fixed}
 
 
 # ── Background worker ─────────────────────────────────────────────────────────
 
-def _run_import_job(job_id, api_key, messages, use_text_mode):
+def _run_import_job(job_id, api_key, extracted_text, pdf_b64, template_structure, use_text_mode):
     """Runs in a daemon thread. Writes result to a temp file when complete."""
     try:
         from anthropic import Anthropic
         client = Anthropic(api_key=api_key)
-        print('[pdf-import] job ' + job_id + ' calling Anthropic (non-streaming)')
 
-        message = client.messages.create(
-            model='claude-sonnet-4-6',
-            max_tokens=8192,
-            messages=messages,
-        )
-        full_text = message.content[0].text.strip()
-        full_text = full_text.replace('```json', '').replace('```', '').strip()
+        if not use_text_mode:
+            # Document mode: send raw PDF — no chunking possible
+            print('[pdf-import] job ' + job_id + ' document mode (single call)')
+            prompt = PROMPT_TEMPLATE.replace('__TEMPLATE_STRUCTURE__', template_structure)
+            messages = [
+                {
+                    'role': 'user',
+                    'content': [
+                        {'type': 'document', 'source': {'type': 'base64', 'media_type': 'application/pdf', 'data': pdf_b64}},
+                        {'type': 'text', 'text': prompt},
+                    ],
+                }
+            ]
+            parsed = _call_claude(client, messages, MAX_TOKENS_SINGLE)
 
-        parsed = json.loads(full_text)
+        elif len(extracted_text) <= CHUNK_THRESHOLD:
+            # Small PDF — single call
+            print('[pdf-import] job ' + job_id + ' text mode, single call (' + str(len(extracted_text)) + ' chars)')
+            prompt = PROMPT_TEMPLATE.replace('__TEMPLATE_STRUCTURE__', template_structure)
+            messages = [{'role': 'user', 'content': prompt + '\n\n---\nPDF TEXT CONTENT:\n' + extracted_text}]
+            parsed = _call_claude(client, messages, MAX_TOKENS_SINGLE)
+
+        else:
+            # Large PDF — split into chunks and merge
+            chunks = _split_into_chunks(extracted_text)
+            print('[pdf-import] job ' + job_id + ' text mode, chunked: ' + str(len(chunks)) + ' chunks from ' + str(len(extracted_text)) + ' chars')
+
+            results = []
+            for i, chunk in enumerate(chunks):
+                print('[pdf-import] job ' + job_id + ' chunk ' + str(i + 1) + '/' + str(len(chunks)) + ' (' + str(len(chunk)) + ' chars)')
+                chunk_prompt = (
+                    CHUNK_PROMPT_TEMPLATE
+                    .replace('__TEMPLATE_STRUCTURE__', template_structure)
+                    .replace('__CHUNK_TEXT__', chunk)
+                )
+                messages = [{'role': 'user', 'content': chunk_prompt}]
+                try:
+                    chunk_result = _call_claude(client, messages, MAX_TOKENS_CHUNK)
+                    results.append(chunk_result)
+                except json.JSONDecodeError as e:
+                    print('[pdf-import] job ' + job_id + ' chunk ' + str(i + 1) + ' JSON error (skipping): ' + str(e))
+                    # Skip bad chunks rather than failing the whole job
+                    continue
+
+            if not results:
+                raise ValueError('All chunks failed to parse — no usable data extracted')
+
+            parsed = _merge_results(results)
+
         room_count = len(parsed.get('rooms', []))
         item_count = sum(len(r.get('items', [])) for r in parsed.get('rooms', []))
         mode = 'text' if use_text_mode else 'document'
@@ -226,24 +407,9 @@ def pdf_import():
     # Text extraction
     extracted_text = _extract_pdf_text(raw_bytes)
     use_text_mode = len(extracted_text) >= MIN_TEXT_CHARS
-    prompt = _build_prompt(template_structure)
 
-    if use_text_mode:
-        print('[pdf-import] text extraction OK: ' + str(len(extracted_text)) + ' chars - text mode')
-        messages = [{'role': 'user', 'content': prompt + '\n\n---\nPDF TEXT CONTENT:\n' + extracted_text}]
-    else:
-        print('[pdf-import] text extraction insufficient - document mode')
-        if pdf_b64 is None:
-            pdf_b64 = base64.b64encode(raw_bytes).decode('utf-8')
-        messages = [
-            {
-                'role': 'user',
-                'content': [
-                    {'type': 'document', 'source': {'type': 'base64', 'media_type': 'application/pdf', 'data': pdf_b64}},
-                    {'type': 'text', 'text': prompt},
-                ],
-            }
-        ]
+    if not use_text_mode and pdf_b64 is None:
+        pdf_b64 = base64.b64encode(raw_bytes).decode('utf-8')
 
     # Start background job and return immediately
     job_id = str(uuid.uuid4())
@@ -251,12 +417,12 @@ def pdf_import():
 
     thread = threading.Thread(
         target=_run_import_job,
-        args=(job_id, api_key, messages, use_text_mode),
+        args=(job_id, api_key, extracted_text, pdf_b64, template_structure, use_text_mode),
         daemon=True,
     )
     thread.start()
 
-    print('[pdf-import] started job ' + job_id)
+    print('[pdf-import] started job ' + job_id + ' (text_len=' + str(len(extracted_text)) + ', chunked=' + str(len(extracted_text) > CHUNK_THRESHOLD) + ')')
     return jsonify({'job_id': job_id})
 
 

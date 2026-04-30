@@ -936,6 +936,9 @@ def apply_pdf_import(inspection_id):
 
         report_data[sec_id] = {}
         for i, pdf_row in enumerate(pdf_rows):
+            # Guard: AI sometimes returns plain strings instead of dicts
+            if not isinstance(pdf_row, dict):
+                pdf_row = {fields[0]: str(pdf_row)} if fields else {}
             # Row ID mirrors the frontend: fs_{secIdx}_{rowIdx}
             row_id = f'fs_{sec_idx}_{i}'
             report_data[sec_id][row_id] = {f: pdf_row.get(f, '') for f in fields}

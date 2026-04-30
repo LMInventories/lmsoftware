@@ -5,6 +5,7 @@ from flask_compress import Compress
 from models import db
 from datetime import timedelta
 import os
+import json
 
 
 def create_app():
@@ -183,7 +184,7 @@ def create_app():
 
 def _setup_database():
     """Create tables, run column migrations, and seed a fresh database."""
-    from models import User, Client, Property
+    from models import User, Client, Property, SystemSetting
     from sqlalchemy import text
 
     db.create_all()

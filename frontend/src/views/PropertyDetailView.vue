@@ -223,7 +223,7 @@ onMounted(fetchProperty)
 
     <!-- Main content -->
     <main class="main">
-      <div class="page-header">
+      <div class="nav-row">
         <button class="back-btn" @click="router.push('/properties')">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg>
           Properties
@@ -572,7 +572,7 @@ onMounted(fetchProperty)
 /* Main */
 .main { padding: 24px 32px 60px; }
 
-.page-header { display: flex; align-items: center; margin-bottom: 20px; }
+.nav-row { display: flex; align-items: center; margin-bottom: 20px; }
 .back-btn { display: inline-flex; align-items: center; gap: 5px; padding: 5px 12px; background: white; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 12px; font-weight: 500; color: #64748b; cursor: pointer; transition: all 0.15s; }
 .back-btn:hover { background: #f8fafc; color: #1e293b; border-color: #cbd5e1; }
 

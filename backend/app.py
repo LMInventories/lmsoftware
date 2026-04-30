@@ -272,6 +272,13 @@ def _setup_database():
             db.session.commit()
             print(f'✅ inspections.{_col} added.')
 
+    # items.answer_options — JSON array of selectable answers for question-type template items
+    if not column_exists('items', 'answer_options'):
+        print("Migrating: adding items.answer_options column...")
+        db.session.execute(text("ALTER TABLE items ADD COLUMN answer_options TEXT DEFAULT ''"))
+        db.session.commit()
+        print("✅ items.answer_options added.")
+
     # templates.is_transient — PDF-import templates are hidden from the Templates UI
     if not column_exists('templates', 'is_transient'):
         print("Migrating: adding templates.is_transient column...")

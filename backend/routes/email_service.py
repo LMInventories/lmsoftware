@@ -353,6 +353,18 @@ def send_clerk_daily_summary(clerk, inspections_tomorrow):
         key_ret    = getattr(inspection, 'key_return', '') or '—'
         notes      = getattr(inspection, 'internal_notes', '') or ''
 
+        # Meter locations from the property
+        meter_elec  = getattr(prop, 'meter_electricity', '') or ''
+        meter_gas   = getattr(prop, 'meter_gas', '') or ''
+        meter_heat  = getattr(prop, 'meter_heat', '') or ''
+        meter_water = getattr(prop, 'meter_water', '') or ''
+        meter_parts = []
+        if meter_elec:  meter_parts.append(f'<strong>Electricity:</strong> {meter_elec}')
+        if meter_gas:   meter_parts.append(f'<strong>Gas:</strong> {meter_gas}')
+        if meter_heat:  meter_parts.append(f'<strong>Heat:</strong> {meter_heat}')
+        if meter_water: meter_parts.append(f'<strong>Water:</strong> {meter_water}')
+        meter_html = '<br/>'.join(meter_parts) if meter_parts else ''
+
         # Build row list so we can mark the last one correctly
         card_rows = [
             ('Property',        prop_addr),
@@ -363,6 +375,8 @@ def send_clerk_daily_summary(clerk, inspections_tomorrow):
             card_rows.append(('Client Address', client_addr))
         card_rows.append(('Key Collect', key_loc))
         card_rows.append(('Key Return',  key_ret))
+        if meter_html:
+            card_rows.append(('Meter Locations', meter_html))
         if notes:
             card_rows.append(('Internal Notes', f'<span style="color:#92400e;font-weight:bold;">{notes}</span>'))
 

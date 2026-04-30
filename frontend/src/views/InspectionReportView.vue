@@ -275,10 +275,10 @@ async function runPdfImport() {
   try {
     const templateStructure = template.value ? JSON.stringify({
       fixedSections: (template.value.sections || [])
-        .filter(s => !s.is_room)
+        .filter(s => s.section_type !== 'room')
         .map(s => ({ id: s.id, name: s.name, type: s.type, rows: (s.rows || []).map(r => ({ id: r.id, name: r.name || r.question })) })),
       rooms: (template.value.sections || [])
-        .filter(s => s.is_room)
+        .filter(s => s.section_type === 'room')
         .map(r => ({ id: r.id, name: r.name, items: (r.sections || r.items || []).map(i => ({ id: i.id, label: i.label })) }))
     }, null, 2) : 'No template — infer structure from PDF'
 

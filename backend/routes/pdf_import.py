@@ -30,11 +30,11 @@ pdf_import_bp = Blueprint('pdf_import', __name__)
 JOBS_DIR = '/tmp/pdf_import_jobs'
 os.makedirs(JOBS_DIR, exist_ok=True)
 
-MIN_TEXT_CHARS   = 500
-CHUNK_THRESHOLD  = 12_000   # chars — above this we chunk
-MAX_CHUNK_CHARS  = 9_000    # target chars per chunk
-MAX_TOKENS_SINGLE = 8192
-MAX_TOKENS_CHUNK  = 4096    # smaller chunks → smaller responses
+MIN_TEXT_CHARS    = 500
+CHUNK_THRESHOLD   = 14_000  # chars — above this we chunk
+MAX_CHUNK_CHARS   = 10_000  # target chars per chunk
+MAX_TOKENS_SINGLE = 16384   # generous ceiling for single calls
+MAX_TOKENS_CHUNK  = 6144    # per-chunk ceiling
 
 # Room-like headings used to detect section boundaries in UK inventory reports
 _ROOM_HEADER_RE = re.compile(
@@ -132,25 +132,63 @@ Return ONLY valid JSON — no markdown, no explanation:
   }
 }"""
 
-CHUNK_PROMPT_TEMPLATE = """You are extracting structured data from a section of a UK property inspection report.
+CHUNK_PROMPT_TEMPLATE = """You are extracting structured data from a SECTION of a UK property inspection report (inventory or check-in).
+This is one chunk of a larger document — extract every room and item you can find in this section.
 
-Template structure:
+Template structure (for label matching):
 __TEMPLATE_STRUCTURE__
 
-GOLDEN RULE: Copy text VERBATIM. Do NOT summarise or paraphrase. Multi-line → join with \\n.
+═══════════════════════════════════════
+GOLDEN RULE — COPY, DO NOT REWRITE
+═══════════════════════════════════════
+Copy text from the PDF VERBATIM into description and condition fields.
+• Do NOT summarise, paraphrase, abbreviate, or reformat anything.
+• Do NOT merge sentences or remove any words.
+• If the PDF spans multiple lines for one item, join them with \\n.
+• Preserve every detail exactly as written — this is a legal document.
 
-For each room section found in the text below:
-- label: match template item label where possible; otherwise use PDF heading as-is
-- description: verbatim from PDF, empty string if absent
-- condition: verbatim from PDF (CHECK IN column only), empty string if absent
-- _subs: array of { description, condition } for sub-items (items prefixed with parent label)
+═══════════════════════════════════════
+HOW TO IDENTIFY ROOMS AND ITEMS
+═══════════════════════════════════════
+Room headings are typically short, standalone lines like:
+  ENTRANCE HALL, LOUNGE, KITCHEN, BEDROOM 1, BATHROOM, EN-SUITE, LANDING, etc.
+After a room heading, each distinct line or pair of lines is an ITEM within that room.
 
-Also extract any of these fixed sections if present in this chunk:
-- condition_summary, keys, meter_readings, cleaning_summary
+For each item:
+- label: the item heading (e.g. "Door, Frame & Furniture", "Walls & Ceiling", "Floor", "Contents")
+- description: the text describing the item (e.g. material, colour, type) — copy verbatim
+- condition: condition text from the CHECK IN column — copy verbatim (ignore Check Out column if present)
+- _subs: if the item has sub-entries listed beneath it (e.g. individual contents items), put each as { description, condition }
 
-Return ONLY valid JSON, no markdown:
+If a line starts with the parent item name followed by a dash, colon, or slash, it is a sub-item:
+  "Contents - Bedside Table: Oak veneer / In good order"
+  → parent = "Contents", sub = { description: "Bedside Table: Oak veneer", condition: "In good order" }
+
+═══════════════════════════════════════
+FIXED SECTIONS
+═══════════════════════════════════════
+If you see any of these sections in the text, extract them too:
+- Keys handed over → fixedSections.keys
+- Meter readings (gas/electric/water) → fixedSections.meter_readings
+- Overall condition notes → fixedSections.condition_summary
+- Cleanliness notes → fixedSections.cleaning_summary
+
+Return ONLY valid JSON — no markdown, no explanation, no trailing text:
 {
-  "rooms": [ { "name": "...", "items": [ { "label": "...", "description": "...", "condition": "..." } ] } ],
+  "rooms": [
+    {
+      "name": "Entrance Hall",
+      "items": [
+        { "label": "Door, Frame & Furniture", "description": "White painted solid panel door with chrome handle", "condition": "Good clean condition" },
+        { "label": "Walls & Ceiling", "description": "Painted white throughout", "condition": "Good order, minor scuff to wall near door" },
+        { "label": "Contents", "description": "", "condition": "",
+          "_subs": [
+            { "description": "Coat hooks x4 — chrome", "condition": "Good order" }
+          ]
+        }
+      ]
+    }
+  ],
   "fixedSections": {
     "condition_summary": [],
     "keys": [],
@@ -343,6 +381,9 @@ def _run_import_job(job_id, api_key, extracted_text, pdf_b64, template_structure
                 messages = [{'role': 'user', 'content': chunk_prompt}]
                 try:
                     chunk_result = _call_claude(client, messages, MAX_TOKENS_CHUNK)
+                    chunk_rooms = len(chunk_result.get('rooms', []))
+                    chunk_items = sum(len(r.get('items', [])) for r in chunk_result.get('rooms', []))
+                    print('[pdf-import] job ' + job_id + ' chunk ' + str(i + 1) + ' → ' + str(chunk_rooms) + ' rooms, ' + str(chunk_items) + ' items')
                     results.append(chunk_result)
                 except json.JSONDecodeError as e:
                     print('[pdf-import] job ' + job_id + ' chunk ' + str(i + 1) + ' JSON error (skipping): ' + str(e))

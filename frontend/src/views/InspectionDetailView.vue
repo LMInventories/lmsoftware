@@ -621,255 +621,265 @@ onMounted(() => {
         </div>
       </div>
 
-      <!-- Main Content Grid -->
+      <!-- Main Content -->
       <div class="content-grid">
 
-        <!-- OVERVIEW — col 1, row 1 -->
-        <div class="info-card photo-card card-overview">
-          <div class="card-header" style="padding: 14px 20px;">
-            <h3>Property Overview</h3>
-            <button class="btn-edit" @click="showPhotoModal = true">
-              {{ localPhoto ? 'Edit Photo' : '+ Add Photo' }}
-            </button>
-          </div>
-          <div class="photo-card-body">
-            <img v-if="localPhoto" :src="localPhoto" alt="Property overview" class="property-photo-img" />
-            <div v-else class="photo-placeholder">
-              <span class="photo-icon">◻</span>
-              <p>No overview photo yet</p>
-              <p style="font-size:12px;opacity:0.7;">Appears on the report cover page</p>
-            </div>
-          </div>
-        </div>
+        <!-- ── Left column ── -->
+        <div class="left-col">
 
-        <!-- CONDUCT DATE & TIME — col 2, row 1 -->
-        <div class="info-card card-conduct">
-          <div class="card-header">
-            <h3>Conduct Date & Time</h3>
-            <button v-if="canEdit" @click="showEditConductDate = true" class="btn-edit">Edit</button>
-          </div>
-          <div class="card-content">
-            <p class="date-display">{{ formatDate(inspection.conduct_date) }}</p>
-            <p class="time-display">🕐 {{ displayTimePreference }}</p>
-          </div>
-        </div>
-
-        <!-- PROPERTY INFO — col 1, row 2 -->
-        <div class="info-card card-property" v-if="inspection.property">
-          <div class="card-header">
-            <h3>Property Information</h3>
-          </div>
-          <div class="card-content">
-            <div class="address-container">
-              <a
-                :href="`https://maps.google.com/?q=${encodeURIComponent(inspection.property.address)}`"
-                target="_blank"
-                class="map-button"
-                title="Open in Google Maps"
-              >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
-              </a>
-              <p class="address-text">{{ inspection.property.address }}</p>
+          <!-- OVERVIEW -->
+          <div class="info-card photo-card">
+            <div class="card-header">
+              <h3>Property Overview</h3>
+              <button class="btn-edit" @click="showPhotoModal = true">
+                {{ localPhoto ? 'Edit Photo' : '+ Add Photo' }}
+              </button>
             </div>
-            <div class="detail-row" v-if="inspection.property.property_type">
-              <strong>Type:</strong>
-              <span>{{ inspection.property.property_type }}</span>
-            </div>
-            <div class="detail-row" v-if="inspection.property.bedrooms">
-              <strong>Bedrooms:</strong>
-              <span>{{ inspection.property.bedrooms }}</span>
-            </div>
-            <div class="detail-row" v-if="inspection.property.bathrooms">
-              <strong>Bathrooms:</strong>
-              <span>{{ inspection.property.bathrooms }}</span>
-            </div>
-            <div class="detail-row" v-if="inspection.property.furnished">
-              <strong>Furnished:</strong>
-              <span>{{ inspection.property.furnished }}</span>
-            </div>
-            <div class="detail-row" v-if="inspection.property.parking">
-              <strong>Parking:</strong>
-              <span>{{ inspection.property.parking }}</span>
-            </div>
-            <div class="detail-row" v-if="inspection.property.garden">
-              <strong>Garden:</strong>
-              <span>{{ inspection.property.garden }}</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- KEY INFORMATION — col 2, row 2 -->
-        <div class="info-card card-keys">
-          <div class="card-header">
-            <h3>Key Information</h3>
-          </div>
-          <div class="card-content">
-            <div class="key-section">
-              <div class="key-header">
-                <strong>Key Location</strong>
-                <button v-if="canEdit" @click="showEditKeyLocation = true" class="btn-edit-inline">✎</button>
+            <div class="photo-card-body">
+              <img v-if="localPhoto" :src="localPhoto" alt="Property overview" class="property-photo-img" />
+              <div v-else class="photo-placeholder">
+                <span class="photo-icon">◻</span>
+                <p>No overview photo yet</p>
+                <p style="font-size:12px;opacity:0.7;">Appears on the report cover page</p>
               </div>
-              <p>{{ inspection.key_location || 'Not specified' }}</p>
             </div>
-            <div class="key-section">
-              <div class="key-header">
-                <strong>Key Return</strong>
-                <button v-if="canEdit" @click="showEditKeyReturn = true" class="btn-edit-inline">✎</button>
+          </div>
+
+          <!-- PROPERTY INFO -->
+          <div class="info-card" v-if="inspection.property">
+            <div class="card-header">
+              <h3>Property Information</h3>
+            </div>
+            <div class="card-content">
+              <div class="address-container">
+                <a
+                  :href="`https://maps.google.com/?q=${encodeURIComponent(inspection.property.address)}`"
+                  target="_blank"
+                  class="map-button"
+                  title="Open in Google Maps"
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                </a>
+                <p class="address-text">{{ inspection.property.address }}</p>
               </div>
-              <p>{{ inspection.key_return || 'Not specified' }}</p>
+              <div class="detail-row" v-if="inspection.property.property_type">
+                <strong>Type:</strong>
+                <span>{{ inspection.property.property_type }}</span>
+              </div>
+              <div class="detail-row" v-if="inspection.property.bedrooms">
+                <strong>Bedrooms:</strong>
+                <span>{{ inspection.property.bedrooms }}</span>
+              </div>
+              <div class="detail-row" v-if="inspection.property.bathrooms">
+                <strong>Bathrooms:</strong>
+                <span>{{ inspection.property.bathrooms }}</span>
+              </div>
+              <div class="detail-row" v-if="inspection.property.furnished">
+                <strong>Furnished:</strong>
+                <span>{{ inspection.property.furnished }}</span>
+              </div>
+              <div class="detail-row" v-if="inspection.property.parking">
+                <strong>Parking:</strong>
+                <span>{{ inspection.property.parking }}</span>
+              </div>
+              <div class="detail-row" v-if="inspection.property.garden">
+                <strong>Garden:</strong>
+                <span>{{ inspection.property.garden }}</span>
+              </div>
             </div>
           </div>
-        </div>
 
-        <!-- CLIENT — col 1, row 3 -->
-        <div class="info-card card-client" v-if="inspection.client">
-          <div class="card-header">
-            <h3>Client</h3>
+          <!-- CLIENT -->
+          <div class="info-card" v-if="inspection.client">
+            <div class="card-header">
+              <h3>Client</h3>
+            </div>
+            <div class="card-content">
+              <h4>{{ inspection.client.name }}</h4>
+              <p v-if="inspection.client.company" class="company">{{ inspection.client.company }}</p>
+            </div>
           </div>
-          <div class="card-content">
-            <h4>{{ inspection.client.name }}</h4>
-            <p v-if="inspection.client.company" class="company">{{ inspection.client.company }}</p>
-          </div>
-        </div>
 
-        <!-- CONTACT INFORMATION — col 2, row 3 -->
-        <div class="info-card card-contact">
-          <div class="card-header">
-            <h3>Contact Information</h3>
+          <!-- TEMPLATE -->
+          <div class="info-card">
+            <div class="card-header">
+              <h3>Template</h3>
+              <button v-if="canEdit" @click="showEditTemplate = true" class="btn-edit">Edit</button>
+            </div>
+            <div class="card-content">
+              <p>{{ inspection.template_name || 'No template assigned' }}</p>
+              <span class="badge">{{ inspection.inspection_type.replace('_', ' ').toUpperCase() }}</span>
+            </div>
           </div>
-          <div class="card-content">
-            <div class="contact-row">
-              <strong>Email:</strong>
-              <span>{{ displayClientEmail }}</span>
-              <button v-if="canEdit" @click="showEditClientEmail = true" class="btn-edit-inline">✎</button>
+
+          <!-- INTERNAL NOTES -->
+          <div class="info-card">
+            <div class="card-header">
+              <h3>Internal Notes</h3>
+              <button v-if="canEdit" @click="showEditNotes = true" class="btn-edit">Edit</button>
             </div>
-            <div class="contact-row" v-if="inspection.client?.phone">
-              <strong>Phone:</strong>
-              <span>{{ inspection.client.phone }}</span>
+            <div class="card-content">
+              <p class="notes-text">{{ inspection.internal_notes || 'No notes added yet' }}</p>
             </div>
-            <div class="contact-row">
-              <strong>Tenant:</strong>
-              <span :style="!inspection.tenant_name && !inspection.tenant_email ? 'color:#94a3b8' : ''">
-                <template v-if="inspection.tenant_name || inspection.tenant_email">
-                  <span v-if="inspection.tenant_name">{{ inspection.tenant_name }}</span>
-                  <span v-if="inspection.tenant_name && inspection.tenant_email" style="color:#94a3b8"> · </span>
-                  <span v-if="inspection.tenant_email" style="font-size:13px;color:#64748b">{{ inspection.tenant_email }}</span>
+          </div>
+
+        </div><!-- /left-col -->
+
+        <!-- ── Right column ── -->
+        <div class="right-col">
+
+          <!-- CONDUCT DATE & TIME -->
+          <div class="info-card">
+            <div class="card-header">
+              <h3>Conduct Date & Time</h3>
+              <button v-if="canEdit" @click="showEditConductDate = true" class="btn-edit">Edit</button>
+            </div>
+            <div class="card-content">
+              <p class="date-display">{{ formatDate(inspection.conduct_date) }}</p>
+              <p class="time-display">🕐 {{ displayTimePreference }}</p>
+            </div>
+          </div>
+
+          <!-- KEY INFORMATION -->
+          <div class="info-card">
+            <div class="card-header">
+              <h3>Key Information</h3>
+            </div>
+            <div class="card-content">
+              <div class="key-section">
+                <div class="key-header">
+                  <strong>Key Location</strong>
+                  <button v-if="canEdit" @click="showEditKeyLocation = true" class="btn-edit-inline">✎</button>
+                </div>
+                <p>{{ inspection.key_location || 'Not specified' }}</p>
+              </div>
+              <div class="key-section">
+                <div class="key-header">
+                  <strong>Key Return</strong>
+                  <button v-if="canEdit" @click="showEditKeyReturn = true" class="btn-edit-inline">✎</button>
+                </div>
+                <p>{{ inspection.key_return || 'Not specified' }}</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- CONTACT INFORMATION -->
+          <div class="info-card">
+            <div class="card-header">
+              <h3>Contact Information</h3>
+            </div>
+            <div class="card-content">
+              <div class="contact-row">
+                <strong>Email:</strong>
+                <span>{{ displayClientEmail }}</span>
+                <button v-if="canEdit" @click="showEditClientEmail = true" class="btn-edit-inline">✎</button>
+              </div>
+              <div class="contact-row" v-if="inspection.client?.phone">
+                <strong>Phone:</strong>
+                <span>{{ inspection.client.phone }}</span>
+              </div>
+              <div class="contact-row">
+                <strong>Tenant:</strong>
+                <span :style="!inspection.tenant_name && !inspection.tenant_email ? 'color:#94a3b8' : ''">
+                  <template v-if="inspection.tenant_name || inspection.tenant_email">
+                    <span v-if="inspection.tenant_name">{{ inspection.tenant_name }}</span>
+                    <span v-if="inspection.tenant_name && inspection.tenant_email" style="color:#94a3b8"> · </span>
+                    <span v-if="inspection.tenant_email" style="font-size:13px;color:#64748b">{{ inspection.tenant_email }}</span>
+                  </template>
+                  <template v-else>Not set</template>
+                </span>
+                <button v-if="canEdit" @click="showEditTenantEmail = true" class="btn-edit-inline">✎</button>
+              </div>
+              <div class="contact-row">
+                <strong>Landlord:</strong>
+                <span :style="!inspection.landlord_email ? 'color:#94a3b8' : ''">
+                  {{ inspection.landlord_email || 'Not set' }}
+                </span>
+                <button v-if="canEdit" @click="showEditLandlordEmail = true" class="btn-edit-inline">✎</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- ASSIGNMENTS -->
+          <div class="info-card">
+            <div class="card-header">
+              <h3>Assignments</h3>
+            </div>
+            <div class="card-content">
+              <div class="assignment-row">
+                <strong>Clerk:</strong>
+                <span>{{ inspection.inspector?.name || 'Not assigned' }}</span>
+                <button v-if="canEdit" @click="showEditClerk = true" class="btn-edit-inline">✎</button>
+              </div>
+              <div class="assignment-row">
+                <strong>Typist:</strong>
+                <span>{{ inspection.typist?.name || 'Not assigned' }}</span>
+                <button v-if="canEdit" @click="showEditTypist = true" class="btn-edit-inline">✎</button>
+              </div>
+              <div class="assignment-row" style="align-items:center;gap:8px;">
+                <strong>Mode:</strong>
+                <span
+                  class="typist-mode-pill"
+                  :class="'tm-' + (inspection.typist_mode || 'none')"
+                >
+                  {{
+                    { ai_instant: 'AI Instant', ai_room: 'AI by Room', human: 'Human Typist' }[inspection.typist_mode]
+                    || '— Not set'
+                  }}
+                </span>
+                <button v-if="canEdit" @click="showEditTypistMode = true" class="btn-edit-inline">✎</button>
+              </div>
+              <p style="margin-top:8px;font-size:12px;color:#94a3b8;">
+                <template v-if="inspection.typist_mode === 'ai_instant' || inspection.typist_mode === 'ai_room' || inspection.typist_is_ai">
+                  AI report — syncs directly to Complete (no Processing or Review)
                 </template>
-                <template v-else>Not set</template>
-              </span>
-              <button v-if="canEdit" @click="showEditTenantEmail = true" class="btn-edit-inline">✎</button>
-            </div>
-            <div class="contact-row">
-              <strong>Landlord:</strong>
-              <span :style="!inspection.landlord_email ? 'color:#94a3b8' : ''">
-                {{ inspection.landlord_email || 'Not set' }}
-              </span>
-              <button v-if="canEdit" @click="showEditLandlordEmail = true" class="btn-edit-inline">✎</button>
+                <template v-else-if="inspection.typist_mode === 'human'">
+                  Human typist — full pipeline: Active → Processing → Review → Complete
+                </template>
+                <template v-else>
+                  No mode set — inspection goes Active → Review → Complete (no Processing)
+                </template>
+              </p>
             </div>
           </div>
-        </div>
 
-        <!-- TEMPLATE — col 1, row 4 -->
-        <div class="info-card card-template">
-          <div class="card-header">
-            <h3>Template</h3>
-            <button v-if="canEdit" @click="showEditTemplate = true" class="btn-edit">Edit</button>
+          <!-- DEPOSIT — check_out only -->
+          <div class="info-card" v-if="inspection.inspection_type === 'check_out'">
+            <div class="card-header">
+              <h3>Deposit</h3>
+            </div>
+            <div class="card-content">
+              <div class="contact-row">
+                <strong>Amount:</strong>
+                <span :style="!inspection.deposit_amount ? 'color:#94a3b8' : ''">
+                  {{ inspection.deposit_amount ? '£' + Number(inspection.deposit_amount).toFixed(2) : 'Not set' }}
+                </span>
+                <button v-if="canEdit" @click="showEditDeposit = true" class="btn-edit-inline">✎</button>
+              </div>
+              <div class="contact-row">
+                <strong>Scheme:</strong>
+                <span :style="!inspection.deposit_scheme ? 'color:#94a3b8' : ''">
+                  {{ inspection.deposit_scheme || 'Not set' }}
+                </span>
+              </div>
+              <div class="contact-row">
+                <strong>Ref:</strong>
+                <span :style="!inspection.deposit_ref ? 'color:#94a3b8' : ''">
+                  {{ inspection.deposit_ref || 'Not set' }}
+                </span>
+              </div>
+              <div class="contact-row" v-if="inspection.depositary_tenancy_id">
+                <strong>Depositary ID:</strong>
+                <span style="font-size:12px;color:#0369a1;font-family:monospace">{{ inspection.depositary_tenancy_id }}</span>
+              </div>
+              <div class="contact-row" v-if="inspection.depositary_pushed_at">
+                <strong>Pushed:</strong>
+                <span style="font-size:12px;color:#64748b">{{ new Date(inspection.depositary_pushed_at).toLocaleString('en-GB') }}</span>
+              </div>
+            </div>
           </div>
-          <div class="card-content">
-            <p>{{ inspection.template_name || 'No template assigned' }}</p>
-            <span class="badge">{{ inspection.inspection_type.replace('_', ' ').toUpperCase() }}</span>
-          </div>
-        </div>
 
-        <!-- ASSIGNMENTS — col 2, row 4 -->
-        <div class="info-card card-assignments">
-          <div class="card-header">
-            <h3>Assignments</h3>
-          </div>
-          <div class="card-content">
-            <div class="assignment-row">
-              <strong>Clerk:</strong>
-              <span>{{ inspection.inspector?.name || 'Not assigned' }}</span>
-              <button v-if="canEdit" @click="showEditClerk = true" class="btn-edit-inline">✎</button>
-            </div>
-            <div class="assignment-row">
-              <strong>Typist:</strong>
-              <span>{{ inspection.typist?.name || 'Not assigned' }}</span>
-              <button v-if="canEdit" @click="showEditTypist = true" class="btn-edit-inline">✎</button>
-            </div>
-            <div class="assignment-row" style="align-items:center;gap:8px;">
-              <strong>Mode:</strong>
-              <span
-                class="typist-mode-pill"
-                :class="'tm-' + (inspection.typist_mode || 'none')"
-              >
-                {{
-                  { ai_instant: 'AI Instant', ai_room: 'AI by Room', human: 'Human Typist' }[inspection.typist_mode]
-                  || '— Not set'
-                }}
-              </span>
-              <button v-if="canEdit" @click="showEditTypistMode = true" class="btn-edit-inline">✎</button>
-            </div>
-            <p class="helper-text" style="margin-top:8px;font-size:12px;color:#94a3b8;">
-              <template v-if="inspection.typist_mode === 'ai_instant' || inspection.typist_mode === 'ai_room' || inspection.typist_is_ai">
-                AI report — syncs directly to Complete (no Processing or Review)
-              </template>
-              <template v-else-if="inspection.typist_mode === 'human'">
-                Human typist — full pipeline: Active → Processing → Review → Complete
-              </template>
-              <template v-else>
-                No mode set — inspection goes Active → Review → Complete (no Processing)
-              </template>
-            </p>
-          </div>
-        </div>
-
-        <!-- INTERNAL NOTES — col 1, row 5 -->
-        <div class="info-card card-notes">
-          <div class="card-header">
-            <h3>Internal Notes</h3>
-            <button v-if="canEdit" @click="showEditNotes = true" class="btn-edit">Edit</button>
-          </div>
-          <div class="card-content">
-            <p class="notes-text">{{ inspection.internal_notes || 'No notes added yet' }}</p>
-          </div>
-        </div>
-
-        <!-- DEPOSIT — col 2, row 5 — check_out only -->
-        <div class="info-card card-deposit" v-if="inspection.inspection_type === 'check_out'">
-          <div class="card-header">
-            <h3>Deposit</h3>
-          </div>
-          <div class="card-content">
-            <div class="contact-row">
-              <strong>Amount:</strong>
-              <span :style="!inspection.deposit_amount ? 'color:#94a3b8' : ''">
-                {{ inspection.deposit_amount ? '£' + Number(inspection.deposit_amount).toFixed(2) : 'Not set' }}
-              </span>
-              <button v-if="canEdit" @click="showEditDeposit = true" class="btn-edit-inline">✎</button>
-            </div>
-            <div class="contact-row">
-              <strong>Scheme:</strong>
-              <span :style="!inspection.deposit_scheme ? 'color:#94a3b8' : ''">
-                {{ inspection.deposit_scheme || 'Not set' }}
-              </span>
-            </div>
-            <div class="contact-row">
-              <strong>Ref:</strong>
-              <span :style="!inspection.deposit_ref ? 'color:#94a3b8' : ''">
-                {{ inspection.deposit_ref || 'Not set' }}
-              </span>
-            </div>
-            <div class="contact-row" v-if="inspection.depositary_tenancy_id">
-              <strong>Depositary ID:</strong>
-              <span style="font-size:12px;color:#0369a1;font-family:monospace">{{ inspection.depositary_tenancy_id }}</span>
-            </div>
-            <div class="contact-row" v-if="inspection.depositary_pushed_at">
-              <strong>Pushed:</strong>
-              <span style="font-size:12px;color:#64748b">{{ new Date(inspection.depositary_pushed_at).toLocaleString('en-GB') }}</span>
-            </div>
-          </div>
-        </div>
+        </div><!-- /right-col -->
 
       </div>
 
@@ -1596,9 +1606,14 @@ onMounted(() => {
 /* Content Grid */
 .content-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-  gap: 16px;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
   align-items: start;
+}
+.left-col, .right-col {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
 /* Info Cards */
@@ -1989,6 +2004,9 @@ textarea.input-field { resize: vertical; }
 
 /* Responsive */
 @media (max-width: 1024px) {
+  .content-grid {
+    grid-template-columns: 1fr;
+  }
   .workflow-bar { overflow-x: auto; }
 }
 

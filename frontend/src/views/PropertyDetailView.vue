@@ -221,26 +221,14 @@ onMounted(fetchProperty)
 
   <div v-else-if="property" class="shell">
 
-    <!-- Top bar -->
-    <header class="topbar">
-      <button class="back-btn" @click="router.push('/properties')">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg>
-        Properties
-      </button>
-      <div class="topbar-center">
-        <div class="topbar-address">{{ property.address }}</div>
-        <div v-if="property.client_name" class="topbar-client">{{ property.client_name }}</div>
-      </div>
-      <div class="topbar-actions">
-        <a :href="`https://maps.google.com/?q=${encodeURIComponent(property.address)}`" target="_blank" class="btn-maps">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
-          Maps
-        </a>
-      </div>
-    </header>
-
     <!-- Main content -->
     <main class="main">
+      <div class="page-header">
+        <button class="back-btn" @click="router.push('/properties')">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg>
+          Properties
+        </button>
+      </div>
       <div class="content-grid">
 
         <!-- ── Left column ── -->
@@ -264,7 +252,12 @@ onMounted(fetchProperty)
           <div class="info-card">
             <div class="card-header">
               <h3>Property Details</h3>
-              <button class="btn-edit" @click="openEditDetails">Edit</button>
+              <div class="card-header-actions">
+                <a :href="`https://maps.google.com/?q=${encodeURIComponent(property.address)}`" target="_blank" class="btn-map-icon" title="Open in Google Maps">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                </a>
+                <button class="btn-edit" @click="openEditDetails">Edit</button>
+              </div>
             </div>
             <div class="card-content">
               <div class="detail-row">
@@ -576,19 +569,17 @@ onMounted(fetchProperty)
 
 .shell { display: flex; flex-direction: column; min-height: 100vh; background: #f1f5f9; }
 
-/* Topbar */
-.topbar { display: flex; align-items: center; gap: 14px; padding: 0 24px; height: 52px; background: #0f172a; border-bottom: 1px solid #1e293b; flex-shrink: 0; }
-.back-btn { display: flex; align-items: center; gap: 5px; padding: 5px 10px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); border-radius: 5px; font-size: 12px; color: #94a3b8; cursor: pointer; transition: all 0.15s; flex-shrink: 0; }
-.back-btn:hover { background: rgba(255,255,255,0.1); color: #e2e8f0; }
-.topbar-center { flex: 1; min-width: 0; }
-.topbar-address { font-size: 13px; font-weight: 700; color: #e2e8f0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.topbar-client { font-size: 11px; color: #6366f1; font-weight: 600; }
-.topbar-actions { display: flex; gap: 8px; flex-shrink: 0; }
-.btn-maps { display: flex; align-items: center; gap: 5px; padding: 5px 12px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); border-radius: 5px; font-size: 12px; color: #94a3b8; text-decoration: none; cursor: pointer; transition: all 0.15s; }
-.btn-maps:hover { background: rgba(255,255,255,0.1); color: #e2e8f0; }
-
 /* Main */
-.main { padding: 28px 32px 60px; }
+.main { padding: 24px 32px 60px; }
+
+.page-header { display: flex; align-items: center; margin-bottom: 20px; }
+.back-btn { display: inline-flex; align-items: center; gap: 5px; padding: 5px 12px; background: white; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 12px; font-weight: 500; color: #64748b; cursor: pointer; transition: all 0.15s; }
+.back-btn:hover { background: #f8fafc; color: #1e293b; border-color: #cbd5e1; }
+
+/* Card header actions group */
+.card-header-actions { display: flex; align-items: center; gap: 8px; }
+.btn-map-icon { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; color: #2563eb; text-decoration: none; transition: all 0.15s; flex-shrink: 0; }
+.btn-map-icon:hover { background: #dbeafe; border-color: #93c5fd; }
 .content-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; max-width: 1100px; }
 .left-col, .right-col { display: flex; flex-direction: column; gap: 20px; }
 

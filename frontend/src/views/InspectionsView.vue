@@ -75,11 +75,12 @@ const showModal = ref(false)
 
 // Filters
 const filters = ref({
-  client_ids: [],  // multi-select array
+  client_ids: [],    // multi-select array
   postcode: '',
-  statuses: [],    // multi-select array
-  clerk_ids: [],   // multi-select array
-  month: '',       // 'YYYY-MM' or ''
+  reference: '',     // reference number text search
+  statuses: [],      // multi-select array
+  clerk_ids: [],     // multi-select array
+  month: '',         // 'YYYY-MM' or ''
 })
 
 // Calendar filters
@@ -551,6 +552,10 @@ const filteredInspections = computed(() => {
     const s = filters.value.postcode.toLowerCase()
     result = result.filter(i => i.property_address && i.property_address.toLowerCase().includes(s))
   }
+  if (filters.value.reference) {
+    const s = filters.value.reference.toLowerCase()
+    result = result.filter(i => i.reference_number && i.reference_number.toLowerCase().includes(s))
+  }
   if (filters.value.statuses && filters.value.statuses.length)
     result = result.filter(i => filters.value.statuses.includes(i.status))
   if (filters.value.clerk_ids?.length)
@@ -562,6 +567,15 @@ const filteredInspections = computed(() => {
       return d.startsWith(filters.value.month)
     })
   }
+  // Sort newest first by conduct_date, falling back to created_at; nulls last
+  result.sort((a, b) => {
+    const da = a.conduct_date || a.created_at || ''
+    const db = b.conduct_date || b.created_at || ''
+    if (!da && !db) return 0
+    if (!da) return 1
+    if (!db) return -1
+    return db.localeCompare(da)
+  })
   return result
 })
 
@@ -628,7 +642,7 @@ function clerkFilterLabel(ids, isCalendar) {
 }
 
 function clearFilters() {
-  filters.value = { client_ids: [], postcode: '', statuses: [], clerk_ids: [], month: '' }
+  filters.value = { client_ids: [], postcode: '', reference: '', statuses: [], clerk_ids: [], month: '' }
 }
 
 function clearCalendarFilters() {
@@ -915,6 +929,10 @@ onMounted(() => {
           <input v-model="filters.postcode" type="text" placeholder="Search postcode..." class="filter-input" />
         </div>
         <div class="filter-group">
+          <label>Reference</label>
+          <input v-model="filters.reference" type="text" placeholder="Search reference..." class="filter-input" />
+        </div>
+        <div class="filter-group">
           <label>Workflow Stage</label>
           <div class="ms-dropdown" :class="{ open: openDropdown === 'status' }" @click="toggleDropdown('status')">
             <span class="ms-label">{{ filterLabel(filters.statuses, statusOptions, 'All Stages') }}</span>
@@ -1007,7 +1025,7 @@ onMounted(() => {
           </div>
         </div>
         <div v-if="filteredInspections.length === 0" class="empty-state">
-          {{ filters.client_ids.length || filters.postcode || filters.statuses.length || filters.clerk_ids.length
+          {{ filters.client_ids.length || filters.postcode || filters.reference || filters.statuses.length || filters.clerk_ids.length
             ? 'No inspections match your filters.'
             : 'No inspections yet. Create your first inspection!' }}
         </div>

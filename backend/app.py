@@ -129,7 +129,7 @@ def create_app():
     from routes.inspections     import inspections_bp
     from routes.dashboard       import dashboard_bp
     from routes.templates       import templates_bp
-    from routes.fixed_sections  import fixed_sections_bp
+    from routes.fixed_sections  import fixed_sections_bp, midterm_sections_bp
     from routes.ai              import ai_bp
     from routes.transcribe      import transcribe_bp
     from routes.pdf_import      import pdf_import_bp
@@ -147,7 +147,8 @@ def create_app():
     app.register_blueprint(inspections_bp,     url_prefix='/api/inspections')
     app.register_blueprint(dashboard_bp,       url_prefix='/api/dashboard')
     app.register_blueprint(templates_bp,       url_prefix='/api/templates')
-    app.register_blueprint(fixed_sections_bp,  url_prefix='/api/fixed-sections')
+    app.register_blueprint(fixed_sections_bp,   url_prefix='/api/fixed-sections')
+    app.register_blueprint(midterm_sections_bp, url_prefix='/api/midterm-sections')
     app.register_blueprint(ai_bp,              url_prefix='/api/ai')
     app.register_blueprint(transcribe_bp,      url_prefix='/api/transcribe')
     app.register_blueprint(pdf_import_bp,      url_prefix='/api/ai')

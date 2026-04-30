@@ -135,6 +135,7 @@ def copy_template(template_id):
                 description=item.description,
                 requires_photo=item.requires_photo,
                 requires_condition=item.requires_condition,
+                answer_options=item.answer_options or '',
                 order_index=item.order_index,
             )
             db.session.add(new_item)
@@ -282,6 +283,7 @@ def duplicate_section(section_id):
             description=item.description,
             requires_photo=item.requires_photo,
             requires_condition=item.requires_condition,
+            answer_options=item.answer_options or '',
             order_index=item.order_index,
         )
         db.session.add(new_item)
@@ -313,6 +315,7 @@ def add_item(section_id):
         description=data.get('description', ''),
         requires_photo=data.get('requires_photo', True),
         requires_condition=data.get('requires_condition', True),
+        answer_options=data.get('answer_options', '') or '',
         order_index=max_order + 1,
     )
     db.session.add(item)
@@ -334,6 +337,8 @@ def update_item(item_id):
         item.requires_photo = data['requires_photo']
     if 'requires_condition' in data:
         item.requires_condition = data['requires_condition']
+    if 'answer_options' in data:
+        item.answer_options = data['answer_options'] or ''
 
     db.session.commit()
     return jsonify(item.to_dict())
@@ -398,6 +403,7 @@ def duplicate_item(item_id):
         description=item.description,
         requires_photo=item.requires_photo,
         requires_condition=item.requires_condition,
+        answer_options=item.answer_options or '',
         order_index=max_order + 1,
     )
     db.session.add(new_item)

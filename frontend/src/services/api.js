@@ -222,8 +222,12 @@ const api = {
   updateSystemSettings(data) { return http.put('/api/system-settings', data) },
 
   // ── Fixed sections ────────────────────────────────────────────────────────
-  getFixedSections()         { return http.get('/api/fixed-sections') },
-  updateFixedSections(data)  { return http.put('/api/fixed-sections', data) },
+  getFixedSections()           { return http.get('/api/fixed-sections') },
+  updateFixedSections(data)    { return http.put('/api/fixed-sections', data) },
+
+  // ── Midterm sections ──────────────────────────────────────────────────────
+  getMidtermSections()         { return http.get('/api/midterm-sections') },
+  updateMidtermSections(data)  { return http.put('/api/midterm-sections', data) },
 
   // ── AI proxy ──────────────────────────────────────────────────────────────
   claudeProxy(payload) {

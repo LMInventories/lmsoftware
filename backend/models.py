@@ -313,6 +313,7 @@ class Item(db.Model):
     description        = db.Column(db.Text, default='')
     requires_photo     = db.Column(db.Boolean, default=True)
     requires_condition = db.Column(db.Boolean, default=True)
+    answer_options     = db.Column(db.Text, nullable=True, default='')   # JSON array, e.g. '["Yes","No","N/A"]'
     order_index        = db.Column(db.Integer, default=0)
     created_at         = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -324,6 +325,7 @@ class Item(db.Model):
             'description':        self.description,
             'requires_photo':     self.requires_photo,
             'requires_condition': self.requires_condition,
+            'answer_options':     self.answer_options or '',
             'order_index':        self.order_index,
         }
 

@@ -64,10 +64,12 @@ const deletingPreset  = ref(null)   // preset being confirmed for deletion
 const savingPreset    = ref(false)  // loading state while saving
 
 const newItemForm = ref({
-  name: '', description: '', requires_photo: true, requires_condition: true
+  name: '', description: '', requires_photo: true, requires_condition: true,
+  answer_options: '', _isQuestion: false,
 })
 const editItemForm = ref({
-  id: null, name: '', description: '', requires_photo: true, requires_condition: true
+  id: null, name: '', description: '', requires_photo: true, requires_condition: true,
+  answer_options: '', _isQuestion: false,
 })
 
 // ── Computed ──────────────────────────────────────────────────────────────────
@@ -315,32 +317,70 @@ function openAddItemModal(sectionId) {
 
 async function handleAddItem() {
   if (!newItemForm.value.name.trim()) { alert('Item name is required'); return }
+  // Build answer_options JSON from the question toggle state
+  const payload = { ...newItemForm.value }
+  if (payload._isQuestion) {
+    const opts = (payload.answer_options || 'Yes, No, N/A').split(',').map(s => s.trim()).filter(Boolean)
+    payload.answer_options = JSON.stringify(opts)
+    payload.requires_condition = true
+  } else {
+    payload.answer_options = ''
+  }
+  delete payload._isQuestion
   try {
-    const res = await api.addItem(showAddItemModal.value, newItemForm.value)
+    const res = await api.addItem(showAddItemModal.value, payload)
     const section = template.value.sections.find(s => s.id === showAddItemModal.value)
     if (section) {
       if (!section.items) section.items = []
       section.items.push(res.data)
     }
     showAddItemModal.value = null
+    newItemForm.value = { name: '', description: '', requires_photo: true, requires_condition: true, answer_options: '', _isQuestion: false }
   } catch (err) { console.error(err); alert('Failed to add item') }
 }
 
 function openEditItemModal(item) {
-  editItemForm.value = { ...item }
+  const ao = item.answer_options || ''
+  let optionsStr = ''
+  let isQuestion = false
+  try {
+    const parsed = ao ? JSON.parse(ao) : []
+    if (Array.isArray(parsed) && parsed.length) {
+      optionsStr = parsed.join(', ')
+      isQuestion = true
+    }
+  } catch {}
+  editItemForm.value = { ...item, answer_options: optionsStr, _isQuestion: isQuestion }
   showEditItemModal.value = item
 }
 
 async function handleUpdateItem() {
   if (!editItemForm.value.name.trim()) { alert('Item name is required'); return }
+  const payload = { ...editItemForm.value }
+  if (payload._isQuestion) {
+    const opts = (payload.answer_options || 'Yes, No, N/A').split(',').map(s => s.trim()).filter(Boolean)
+    payload.answer_options = JSON.stringify(opts)
+    payload.requires_condition = true
+  } else {
+    payload.answer_options = ''
+  }
+  delete payload._isQuestion
   try {
-    await api.updateItem(editItemForm.value.id, {
-      name:               editItemForm.value.name,
-      description:        editItemForm.value.description,
-      requires_photo:     editItemForm.value.requires_photo,
-      requires_condition: editItemForm.value.requires_condition,
+    await api.updateItem(payload.id, {
+      name:               payload.name,
+      description:        payload.description,
+      requires_photo:     payload.requires_photo,
+      requires_condition: payload.requires_condition,
+      answer_options:     payload.answer_options,
     })
-    Object.assign(showEditItemModal.value, editItemForm.value)
+    // Sync the live item in-place (including answer_options so rendering updates)
+    Object.assign(showEditItemModal.value, {
+      name:               payload.name,
+      description:        payload.description,
+      requires_photo:     payload.requires_photo,
+      requires_condition: payload.requires_condition,
+      answer_options:     payload.answer_options,
+    })
     showEditItemModal.value = null
   } catch (err) { console.error(err); alert('Failed to update item') }
 }
@@ -849,7 +889,13 @@ onMounted(fetchTemplate)
           </div>
           <div class="form-group-inline">
             <label class="checkbox-label"><input type="checkbox" v-model="newItemForm.requires_photo" /><span>Requires Photo</span></label>
-            <label class="checkbox-label"><input type="checkbox" v-model="newItemForm.requires_condition" /><span>Requires Condition</span></label>
+            <label class="checkbox-label" v-if="!newItemForm._isQuestion"><input type="checkbox" v-model="newItemForm.requires_condition" /><span>Requires Condition</span></label>
+            <label class="checkbox-label question-toggle"><input type="checkbox" v-model="newItemForm._isQuestion" /><span>Question Type</span></label>
+          </div>
+          <div v-if="newItemForm._isQuestion" class="form-group">
+            <label>Answer Options <span class="hint-text">(comma-separated)</span></label>
+            <input v-model="newItemForm.answer_options" type="text" placeholder="Yes, No, N/A" />
+            <p class="field-hint">Default: Yes, No, N/A — clerk selects one answer per room</p>
           </div>
         </div>
         <div class="modal-footer">
@@ -880,7 +926,13 @@ onMounted(fetchTemplate)
           </div>
           <div class="form-group-inline">
             <label class="checkbox-label"><input type="checkbox" v-model="editItemForm.requires_photo" /><span>Requires Photo</span></label>
-            <label class="checkbox-label"><input type="checkbox" v-model="editItemForm.requires_condition" /><span>Requires Condition</span></label>
+            <label class="checkbox-label" v-if="!editItemForm._isQuestion"><input type="checkbox" v-model="editItemForm.requires_condition" /><span>Requires Condition</span></label>
+            <label class="checkbox-label question-toggle"><input type="checkbox" v-model="editItemForm._isQuestion" /><span>Question Type</span></label>
+          </div>
+          <div v-if="editItemForm._isQuestion" class="form-group">
+            <label>Answer Options <span class="hint-text">(comma-separated)</span></label>
+            <input v-model="editItemForm.answer_options" type="text" placeholder="Yes, No, N/A" />
+            <p class="field-hint">Default: Yes, No, N/A — clerk selects one answer per room</p>
           </div>
         </div>
         <div class="modal-footer">
@@ -1430,6 +1482,10 @@ onMounted(fetchTemplate)
 .checkbox-label input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; }
 
 .optional { font-weight: 400; color: #94a3b8; }
+
+.question-toggle span { color: #6366f1; font-weight: 600; }
+.hint-text { font-weight: 400; color: #94a3b8; font-size: 12px; }
+.field-hint { font-size: 11px; color: #94a3b8; margin-top: 5px; }
 
 /* While dragging, force grab cursor everywhere */
 .template-editor.is-dragging,

@@ -781,6 +781,27 @@ def _get_global_fixed_sections():
             pass
     return _DEFAULT_GLOBAL_FIXED
 
+
+_DEFAULT_MIDTERM_FIXED = [
+    {'name': 'Property Condition Overview', 'enabled': True, 'columns': ['name', 'condition', 'additional_notes'], 'items': []},
+    {'name': 'Safety & Alarms',             'enabled': True, 'columns': ['name', 'answer', 'condition'],           'items': []},
+    {'name': 'Health & Safety',             'enabled': True, 'columns': ['name', 'answer', 'description'],         'items': []},
+    {'name': 'Utility Meter Readings',      'enabled': True, 'columns': ['name', 'location_serial', 'reading'],    'items': []},
+    {'name': 'Keys',                        'enabled': True, 'columns': ['name', 'description'],                   'items': []},
+]
+
+
+def _get_midterm_fixed_sections():
+    """Load the midterm-specific fixed sections config (mirrors GET /api/midterm-sections)."""
+    from models import SystemSetting
+    s = SystemSetting.query.filter_by(key='midterm_sections').first()
+    if s and s.value:
+        try:
+            return json.loads(s.value)
+        except Exception:
+            pass
+    return _DEFAULT_MIDTERM_FIXED
+
 # Which fields to write into report_data for each fixed section type
 # (mirrors the field names used by the frontend's get/set helpers)
 _FS_FIELD_MAP = {

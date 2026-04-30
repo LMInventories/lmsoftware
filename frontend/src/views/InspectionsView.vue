@@ -121,8 +121,8 @@ watch(
     form.value.source_inspection_id = null
     if (!propId) return
 
-    // Damage reports are standalone — no lifecycle lookup needed
-    if (iType === 'damage_report') return
+    // Standalone types — no lifecycle lookup needed
+    if (iType === 'damage_report' || iType === 'midterm') return
 
     historyLoading.value = true
     try {
@@ -1162,6 +1162,7 @@ onMounted(() => {
                 <select v-model="form.inspection_type" required>
                   <option value="check_in">Check In</option>
                   <option value="check_out">Check Out</option>
+                  <option value="midterm">Midterm Inspection</option>
                   <option value="interim">Interim Inspection</option>
                   <option value="inventory">Inventory</option>
                   <option value="damage_report">Damage Report</option>

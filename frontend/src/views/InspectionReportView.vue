@@ -205,8 +205,15 @@ async function load() {
       if (pRes.data.client_id) inspection.value.client_id = pRes.data.client_id
     }
 
-    actionCatalogue.value   = aRes?.data?.actions || []
-    fixedSectionsRaw.value  = fsRes?.data || []
+    actionCatalogue.value  = aRes?.data?.actions || []
+
+    // Midterm inspections use their own configurable section set
+    if (inspection.value?.inspection_type === 'midterm') {
+      const msRes = await api.getMidtermSections().catch(() => null)
+      fixedSectionsRaw.value = msRes?.data || []
+    } else {
+      fixedSectionsRaw.value = fsRes?.data || []
+    }
 
     // Load client photo settings (needs client_id, which is now set from pRes above)
     await loadClientSettings()
@@ -1367,12 +1374,20 @@ const rooms = computed(() => {
         ...s,
         // Apply any saved name override from reportData._roomNames
         name: reportData.value._roomNames?.[String(s.id)] ?? s.name,
-        sections: (s.items || []).map(item => ({
-          ...item,
-          label:          item.name || item.label || '',
-          hasDescription: true,
-          hasCondition:   item.requires_condition !== false,
-        })),
+        sections: (s.items || []).map(item => {
+          let answerOptions = []
+          try {
+            const ao = item.answer_options || ''
+            if (ao) answerOptions = JSON.parse(ao)
+          } catch {}
+          return {
+            ...item,
+            label:          item.name || item.label || '',
+            hasDescription: true,
+            hasCondition:   item.requires_condition !== false,
+            answerOptions,
+          }
+        }),
       }))
   }
 
@@ -2509,8 +2524,20 @@ async function moveToReview() {
                               @input="set(room.id,item.id,'description',$event.target.value)"></textarea>
                           </div>
                           <div v-if="item.hasCondition" class="room-field-cond">
-                            <label class="field-lbl">Condition</label>
-                            <textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" rows="3" :placeholder="`Condition of ${item.label.toLowerCase()}…`"
+                            <label class="field-lbl">{{ item.answerOptions?.length ? item.label : 'Condition' }}</label>
+                            <!-- Question-type item: dropdown of configured options -->
+                            <div v-if="item.answerOptions?.length" class="answer-option-row">
+                              <button
+                                v-for="opt in item.answerOptions"
+                                :key="opt"
+                                class="answer-opt-btn"
+                                :class="{ selected: get(room.id, item.id, 'condition') === opt }"
+                                :disabled="!canEdit"
+                                @click="set(room.id, item.id, 'condition', get(room.id, item.id, 'condition') === opt ? '' : opt)"
+                              >{{ opt }}</button>
+                            </div>
+                            <!-- Standard condition textarea -->
+                            <textarea v-else v-auto-resize class="fld-textarea" :disabled="!canEdit" rows="3" :placeholder="`Condition of ${item.label.toLowerCase()}…`"
                               :value="get(room.id,item.id,'condition')"
                               @input="set(room.id,item.id,'condition',$event.target.value)"></textarea>
                           </div>
@@ -3520,6 +3547,13 @@ async function moveToReview() {
 .fld-textarea{width:100%;padding:7px 10px;border:1px solid #e2e8f0;border-radius:5px;font-size:13px;color:#1e293b;font-family:inherit;resize:none;overflow:hidden;line-height:1.5;background:white;transition:border-color 0.15s;min-height:36px}
 .fld-textarea:focus{outline:none;border-color:#6366f1;box-shadow:0 0 0 2px rgba(99,102,241,0.08)}
 .fld-mono{font-family:'Courier New',monospace}
+
+/* Answer-option buttons (question-type items) */
+.answer-option-row{display:flex;flex-wrap:wrap;gap:6px;padding:4px 0}
+.answer-opt-btn{padding:6px 14px;border:1.5px solid #cbd5e1;border-radius:20px;font-size:13px;font-weight:600;color:#64748b;background:white;cursor:pointer;transition:all 0.15s;white-space:nowrap}
+.answer-opt-btn:hover:not(:disabled){border-color:#6366f1;color:#6366f1;background:#f5f3ff}
+.answer-opt-btn.selected{background:#6366f1;border-color:#6366f1;color:white}
+.answer-opt-btn:disabled{opacity:0.55;cursor:default}
 
 /* Foot */
 .foot{display:flex;align-items:center;justify-content:space-between;padding:20px 0}

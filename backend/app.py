@@ -204,60 +204,72 @@ def _setup_database():
             ), {'t': table, 'c': column}).fetchone()
             return row is not None
 
+    def _alter_column(label: str, alter_sql: str):
+        """
+        Run an ALTER TABLE statement with lock-timeout protection on PostgreSQL.
+
+        Railway keeps the old deployment alive until the new one passes its
+        healthcheck. The old app's connection pool holds ACCESS SHARE locks on
+        every table it has queried, which blocks the ACCESS EXCLUSIVE lock that
+        ALTER TABLE requires — causing an indefinite hang that prevents gunicorn
+        from starting and the healthcheck from ever passing.
+
+        Fix: on Postgres we set lock_timeout = 3 s before the DDL so the
+        statement raises an error instead of waiting forever. We catch that
+        error, log a clear warning, and let the app start anyway — the migration
+        will succeed on the next restart once the old pod's connections have
+        drained. On SQLite there is no lock contention between deployments so we
+        run the statement directly.
+        """
+        print(f"Migrating: {label}...")
+        try:
+            if not _is_sqlite():
+                # Fail fast rather than hang. 3 s is generous enough to succeed
+                # in the common case (no live contention) but short enough not to
+                # block the healthcheck during a blue-green deploy.
+                db.session.execute(text("SET LOCAL lock_timeout = '3s'"))
+            db.session.execute(text(alter_sql))
+            db.session.commit()
+            print(f"✅ {label}")
+            return True
+        except Exception as exc:
+            db.session.rollback()
+            # LockNotAvailable (55P03) is the expected failure during a rolling
+            # deploy. Any other error is also non-fatal here — we log it and
+            # move on so gunicorn can start and serve traffic.
+            print(f"⚠️  Migration skipped (will retry on next restart): {label} — {exc}")
+            return False
+
     # users.is_ai — added when AI Typist feature was introduced
     if not column_exists('users', 'is_ai'):
-        print("Migrating: adding users.is_ai column...")
         default = "0" if _is_sqlite() else "FALSE"
-        db.session.execute(
-            text(f"ALTER TABLE users ADD COLUMN is_ai BOOLEAN NOT NULL DEFAULT {default}")
-        )
-        db.session.commit()
-        print("✅ users.is_ai added.")
+        _alter_column("users.is_ai",
+                      f"ALTER TABLE users ADD COLUMN is_ai BOOLEAN NOT NULL DEFAULT {default}")
 
     # users.typist_mode — 'ai_instant' | 'ai_room' | 'human' | null
     if not column_exists('users', 'typist_mode'):
-        print("Migrating: adding users.typist_mode column...")
-        db.session.execute(
-            text("ALTER TABLE users ADD COLUMN typist_mode VARCHAR(20)")
-        )
-        db.session.commit()
-        print("✅ users.typist_mode added.")
+        _alter_column("users.typist_mode",
+                      "ALTER TABLE users ADD COLUMN typist_mode VARCHAR(20)")
 
     # inspections.typist_mode — per-inspection override of clerk-level typist_mode
     if not column_exists('inspections', 'typist_mode'):
-        print("Migrating: adding inspections.typist_mode column...")
-        db.session.execute(
-            text("ALTER TABLE inspections ADD COLUMN typist_mode VARCHAR(20)")
-        )
-        db.session.commit()
-        print("✅ inspections.typist_mode added.")
+        _alter_column("inspections.typist_mode",
+                      "ALTER TABLE inspections ADD COLUMN typist_mode VARCHAR(20)")
 
     # inspections.tenant_name — tenant's full name for AIIC-compliant cover page
     if not column_exists('inspections', 'tenant_name'):
-        print("Migrating: adding inspections.tenant_name column...")
-        db.session.execute(
-            text("ALTER TABLE inspections ADD COLUMN tenant_name VARCHAR(255)")
-        )
-        db.session.commit()
-        print("✅ inspections.tenant_name added.")
+        _alter_column("inspections.tenant_name",
+                      "ALTER TABLE inspections ADD COLUMN tenant_name VARCHAR(255)")
 
     # inspections.landlord_email — landlord email for report distribution
     if not column_exists('inspections', 'landlord_email'):
-        print("Migrating: adding inspections.landlord_email column...")
-        db.session.execute(
-            text("ALTER TABLE inspections ADD COLUMN landlord_email VARCHAR(255)")
-        )
-        db.session.commit()
-        print("✅ inspections.landlord_email added.")
+        _alter_column("inspections.landlord_email",
+                      "ALTER TABLE inspections ADD COLUMN landlord_email VARCHAR(255)")
 
     # inspections.reference_number — links inspection to an invoice/billing reference
     if not column_exists('inspections', 'reference_number'):
-        print("Migrating: adding inspections.reference_number column...")
-        db.session.execute(
-            text("ALTER TABLE inspections ADD COLUMN reference_number VARCHAR(100)")
-        )
-        db.session.commit()
-        print("✅ inspections.reference_number added.")
+        _alter_column("inspections.reference_number",
+                      "ALTER TABLE inspections ADD COLUMN reference_number VARCHAR(100)")
 
     # ── Deposit / Depositary fields ───────────────────────────────────────────
     for _col, _ddl in [
@@ -268,45 +280,30 @@ def _setup_database():
         ('depositary_pushed_at',  'TIMESTAMP'),
     ]:
         if not column_exists('inspections', _col):
-            print(f'Migrating: adding inspections.{_col} column...')
-            db.session.execute(text(f'ALTER TABLE inspections ADD COLUMN {_col} {_ddl}'))
-            db.session.commit()
-            print(f'✅ inspections.{_col} added.')
+            _alter_column(f"inspections.{_col}",
+                          f"ALTER TABLE inspections ADD COLUMN {_col} {_ddl}")
 
     # items.answer_options — JSON array of selectable answers for question-type template items
     if not column_exists('items', 'answer_options'):
-        print("Migrating: adding items.answer_options column...")
-        db.session.execute(text("ALTER TABLE items ADD COLUMN answer_options TEXT DEFAULT ''"))
-        db.session.commit()
-        print("✅ items.answer_options added.")
+        _alter_column("items.answer_options",
+                      "ALTER TABLE items ADD COLUMN answer_options TEXT DEFAULT ''")
 
     # templates.is_transient — PDF-import templates are hidden from the Templates UI
     if not column_exists('templates', 'is_transient'):
-        print("Migrating: adding templates.is_transient column...")
         default = "0" if _is_sqlite() else "FALSE"
-        db.session.execute(
-            text(f"ALTER TABLE templates ADD COLUMN is_transient BOOLEAN DEFAULT {default}")
-        )
-        db.session.commit()
-        print("✅ templates.is_transient added.")
+        _alter_column("templates.is_transient",
+                      f"ALTER TABLE templates ADD COLUMN is_transient BOOLEAN DEFAULT {default}")
 
     # clients.logo_inverted — pre-made white/inverted logo for coloured PDF cover footer
     if not column_exists('clients', 'logo_inverted'):
-        print("Migrating: adding clients.logo_inverted column...")
-        db.session.execute(text("ALTER TABLE clients ADD COLUMN logo_inverted TEXT"))
-        db.session.commit()
-        print("✅ clients.logo_inverted added.")
+        _alter_column("clients.logo_inverted",
+                      "ALTER TABLE clients ADD COLUMN logo_inverted TEXT")
 
-    # clients.invert_logo — invert company logo/email colour on PDF cover for clients
-    # with light-coloured or dark-coloured branding
+    # clients.invert_logo — use inverted logo on PDF cover footer
     if not column_exists('clients', 'invert_logo'):
-        print("Migrating: adding clients.invert_logo column...")
         default = "0" if _is_sqlite() else "FALSE"
-        db.session.execute(
-            text(f"ALTER TABLE clients ADD COLUMN invert_logo BOOLEAN DEFAULT {default}")
-        )
-        db.session.commit()
-        print("✅ clients.invert_logo added.")
+        _alter_column("clients.invert_logo",
+                      f"ALTER TABLE clients ADD COLUMN invert_logo BOOLEAN DEFAULT {default}")
 
     # ── Reset midterm_sections to v2 defaults if still on old v1 schema ───────
     # The original defaults used "Property Condition Overview" / "Safety & Alarms";

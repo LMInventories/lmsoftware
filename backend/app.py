@@ -206,39 +206,51 @@ def _setup_database():
 
     def _alter_column(label: str, alter_sql: str):
         """
-        Run an ALTER TABLE statement with lock-timeout protection on PostgreSQL.
+        Run an ALTER TABLE with retry + lock-timeout on PostgreSQL.
 
-        Railway keeps the old deployment alive until the new one passes its
-        healthcheck. The old app's connection pool holds ACCESS SHARE locks on
-        every table it has queried, which blocks the ACCESS EXCLUSIVE lock that
-        ALTER TABLE requires — causing an indefinite hang that prevents gunicorn
-        from starting and the healthcheck from ever passing.
+        During a Railway blue-green deploy the old pod's SQLAlchemy connection
+        pool may hold ACCESS SHARE locks on the table, blocking the ACCESS
+        EXCLUSIVE lock that ALTER TABLE needs.
 
-        Fix: on Postgres we set lock_timeout = 3 s before the DDL so the
-        statement raises an error instead of waiting forever. We catch that
-        error, log a clear warning, and let the app start anyway — the migration
-        will succeed on the next restart once the old pod's connections have
-        drained. On SQLite there is no lock contention between deployments so we
-        run the statement directly.
+        Strategy:
+          • Set lock_timeout = 3 s so each attempt fails fast instead of hanging.
+          • Retry up to 7 times with increasing delays (total ≈ 38 s wait, well
+            within Railway's 300 s healthcheck window).
+          • If all retries fail, RAISE so gunicorn never starts, the healthcheck
+            fails, and Railway keeps the old deployment live — the operator can
+            simply redeploy once traffic has drained.  This is the safe outcome:
+            the app never runs with a mismatched schema.
         """
+        import time
         print(f"Migrating: {label}...")
-        try:
-            if not _is_sqlite():
-                # Fail fast rather than hang. 3 s is generous enough to succeed
-                # in the common case (no live contention) but short enough not to
-                # block the healthcheck during a blue-green deploy.
-                db.session.execute(text("SET LOCAL lock_timeout = '3s'"))
-            db.session.execute(text(alter_sql))
-            db.session.commit()
-            print(f"✅ {label}")
-            return True
-        except Exception as exc:
-            db.session.rollback()
-            # LockNotAvailable (55P03) is the expected failure during a rolling
-            # deploy. Any other error is also non-fatal here — we log it and
-            # move on so gunicorn can start and serve traffic.
-            print(f"⚠️  Migration skipped (will retry on next restart): {label} — {exc}")
-            return False
+        # pre-attempt delay in seconds: first try is immediate, then back-off
+        retry_schedule = [0, 2, 4, 8, 8, 8, 8]   # sum of waits = 38 s
+
+        for attempt, pre_delay in enumerate(retry_schedule):
+            if pre_delay:
+                print(f"  ↻ {label}: lock contention, retrying in {pre_delay}s "
+                      f"(attempt {attempt + 1}/{len(retry_schedule)})…")
+                time.sleep(pre_delay)
+            try:
+                if not _is_sqlite():
+                    # Fail fast per attempt — never hang more than 3 s at a time.
+                    db.session.execute(text("SET LOCAL lock_timeout = '3s'"))
+                db.session.execute(text(alter_sql))
+                db.session.commit()
+                print(f"✅ {label}")
+                return True
+            except Exception as exc:
+                db.session.rollback()
+                if attempt < len(retry_schedule) - 1:
+                    print(f"  ⚠ {label} attempt {attempt + 1} failed: {exc}")
+                else:
+                    # All retries exhausted.  Abort so Railway keeps the old
+                    # deployment live and the operator can retry the deploy.
+                    raise RuntimeError(
+                        f"Migration '{label}' could not acquire a lock after "
+                        f"{len(retry_schedule)} attempts (~{sum(retry_schedule)}s total). "
+                        f"Aborting startup — redeploy once lock contention clears."
+                    ) from exc
 
     # users.is_ai — added when AI Typist feature was introduced
     if not column_exists('users', 'is_ai'):

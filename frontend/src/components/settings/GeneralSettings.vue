@@ -67,6 +67,8 @@ function onLogoChange(e) {
     form.value.logo = reader.result
   }
   reader.readAsDataURL(file)
+  // Clear so the same file can be re-selected next time without being silently ignored
+  e.target.value = ''
 }
 
 function removeLogo() {
@@ -86,6 +88,7 @@ function onAiicLogoChange(e) {
     form.value.aiic_logo = reader.result
   }
   reader.readAsDataURL(file)
+  e.target.value = ''
 }
 
 function removeAiicLogo() {
@@ -105,6 +108,7 @@ function onLogoInvertedChange(e) {
     form.value.logo_inverted = reader.result
   }
   reader.readAsDataURL(file)
+  e.target.value = ''
 }
 
 function removeLogoInverted() {

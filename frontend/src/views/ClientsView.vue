@@ -40,6 +40,8 @@ const logoInput = ref(null)
 const logoPreview = ref(null)
 
 function triggerLogoUpload() {
+  // Clear value first so selecting the same file again always fires 'change'
+  if (logoInput.value) logoInput.value.value = ''
   logoInput.value.click()
 }
 
@@ -49,6 +51,7 @@ function handleLogoUpload(event) {
 
   if (file.size > 2 * 1024 * 1024) {
     alert('Logo must be under 2MB')
+    event.target.value = ''
     return
   }
 
@@ -56,6 +59,8 @@ function handleLogoUpload(event) {
   reader.onload = (e) => {
     form.value.logo = e.target.result  // base64 data URL
     logoPreview.value = e.target.result
+    // Clear so the same file can be re-selected if needed
+    event.target.value = ''
   }
   reader.readAsDataURL(file)
 }
@@ -122,12 +127,20 @@ function openEditModal(client) {
 async function handleSubmit() {
   try {
     if (editingClient.value) {
-      await api.updateClient(editingClient.value.id, form.value)
+      const res = await api.updateClient(editingClient.value.id, form.value)
+      // Immediately patch the local list with the server response so the UI
+      // reflects the new logo/colour without waiting for a full re-fetch.
+      if (res.data) {
+        const idx = clients.value.findIndex(c => c.id === res.data.id)
+        if (idx !== -1) clients.value[idx] = res.data
+      }
     } else {
-      await api.createClient(form.value)
+      const res = await api.createClient(form.value)
+      if (res.data) clients.value.push(res.data)
     }
     showEditModal.value = false
-    await fetchClients()
+    // Re-fetch in the background to ensure full consistency
+    fetchClients()
   } catch (error) {
     console.error('Failed to save client:', error)
     alert('Failed to save client')
@@ -400,24 +413,40 @@ onMounted(() => {
                 <!-- Logo upload -->
                 <div class="form-group">
                   <label>Client Logo</label>
-                  <div class="logo-upload-area" @click="triggerLogoUpload">
-                    <div v-if="logoPreview" class="logo-upload-preview">
+
+                  <!-- Preview (shown when a logo is set) -->
+                  <div v-if="logoPreview" class="logo-preview-area">
+                    <div class="logo-preview-box" :style="{ background: form.primary_color || '#1E3A8A' }">
                       <img :src="logoPreview" alt="Logo preview" class="logo-preview-thumb" />
-                      <button @click.stop="removeLogo" class="btn-remove-logo">✕ Remove</button>
                     </div>
-                    <div v-else class="logo-upload-placeholder">
+                    <div class="logo-preview-actions">
+                      <label class="btn-logo-action btn-logo-replace">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                        Replace Logo
+                        <input type="file" accept="image/*" style="display:none" @change="handleLogoUpload" ref="logoInput" />
+                      </label>
+                      <button type="button" class="btn-logo-action btn-logo-remove" @click="removeLogo">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- Upload prompt (no logo yet) -->
+                  <div v-else class="logo-upload-area" @click="triggerLogoUpload">
+                    <div class="logo-upload-placeholder">
                       <div class="upload-icon">🖼️</div>
                       <div class="upload-text">Click to upload logo</div>
                       <div class="upload-hint">PNG, JPG, SVG · Max 2MB</div>
                     </div>
+                    <input
+                      ref="logoInput"
+                      type="file"
+                      accept="image/*"
+                      style="display: none"
+                      @change="handleLogoUpload"
+                    />
                   </div>
-                  <input
-                    ref="logoInput"
-                    type="file"
-                    accept="image/*"
-                    style="display: none"
-                    @change="handleLogoUpload"
-                  />
                 </div>
 
                 <!-- Brand colour -->
@@ -601,9 +630,29 @@ h1 { font-size: 21px; font-weight: 700; color: #0f172a; margin: 0 0 1px; }
 .upload-icon { font-size: 22px; }
 .upload-text { font-size: 12px; font-weight: 600; color: #475569; }
 .upload-hint { font-size: 10px; color: #94a3b8; }
-.logo-upload-preview { padding: 12px; display: flex; align-items: center; justify-content: space-between; gap: 10px; background: #f8fafc; }
-.logo-preview-thumb { max-height: 40px; max-width: 120px; object-fit: contain; }
-.btn-remove-logo { padding: 4px 8px; background: #fee2e2; color: #dc2626; border: none; border-radius: 4px; font-size: 11px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+
+/* Logo preview + explicit action buttons */
+.logo-preview-area { display: flex; flex-direction: column; gap: 8px; }
+.logo-preview-box {
+  display: flex; align-items: center; justify-content: center;
+  height: 64px; border-radius: 8px; overflow: hidden;
+  border: 1px solid rgba(0,0,0,0.08);
+}
+.logo-preview-thumb { max-height: 52px; max-width: 100%; object-fit: contain; padding: 4px; }
+.logo-preview-actions { display: flex; gap: 8px; }
+.btn-logo-action {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 5px 12px; border-radius: 6px; font-size: 12px; font-weight: 600;
+  cursor: pointer; border: 1px solid; transition: background 0.15s; line-height: 1;
+}
+.btn-logo-replace {
+  background: #f1f5f9; color: #1e293b; border-color: #e2e8f0;
+}
+.btn-logo-replace:hover { background: #e2e8f0; }
+.btn-logo-remove {
+  background: transparent; color: #ef4444; border-color: #fecaca;
+}
+.btn-logo-remove:hover { background: #fef2f2; }
 
 /* Colour picker */
 .color-picker-row { margin-bottom: 8px; }

@@ -317,6 +317,11 @@ def _setup_database():
         _alter_column("clients.invert_logo",
                       f"ALTER TABLE clients ADD COLUMN invert_logo BOOLEAN DEFAULT {default}")
 
+    # clients.report_footer_text_color — custom colour for footer company name + email text
+    if not column_exists('clients', 'report_footer_text_color'):
+        _alter_column("clients.report_footer_text_color",
+                      "ALTER TABLE clients ADD COLUMN report_footer_text_color VARCHAR(7)")
+
     # ── Reset midterm_sections to v2 defaults if still on old v1 schema ───────
     # The original defaults used "Property Condition Overview" / "Safety & Alarms";
     # the v2 defaults match the industry-standard midterm format (Overview, Keys,

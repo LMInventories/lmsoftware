@@ -825,10 +825,17 @@ class _PDFBuilder:
         logo_max_w = pw - 2*margin        # full-width for centred logo
 
         # invert_logo: per-client toggle — when on, swap to the company-wide
-        # inverted/white logo (stored in system settings, not per-client) so it
-        # shows on the coloured footer background.  Email text also turns white.
+        # inverted/white logo (stored in system settings, not per-client).
         invert_logo       = bool(cl.get('invert_logo'))
         logo_inverted_url = self.sys_settings.get('logo_inverted', '')
+
+        # Footer text colour — per-client, defaults to white so it shows on
+        # coloured backgrounds.  Fully independent of the logo toggle.
+        _ftc_hex = (cl.get('report_footer_text_color') or '#FFFFFF').lstrip('#')
+        try:
+            footer_text_color = colors.HexColor(f'#{_ftc_hex}')
+        except Exception:
+            footer_text_color = colors.white
 
         # ── Centred: company logo (from system settings) + company email ─────
         company_logo_url = self.sys_settings.get('logo', '')
@@ -859,12 +866,12 @@ class _PDFBuilder:
             # Fall back to company name text
             footer_name = cl.get('company') or cl.get('name') or ''
             if footer_name:
-                canvas.setFillColor(colors.white if invert_logo else hdr_c)
+                canvas.setFillColor(footer_text_color)
                 canvas.setFont('Helvetica-Bold', 9)
                 canvas.drawCentredString(pw / 2, footer_h * 0.55, footer_name[:40])
 
         if company_email:
-            canvas.setFillColor(colors.white if invert_logo else hdr_c)
+            canvas.setFillColor(footer_text_color)
             canvas.setFont('Helvetica', 7)
             canvas.drawCentredString(pw / 2, 2.5*mm, company_email[:60])
 

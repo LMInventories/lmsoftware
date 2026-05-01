@@ -25,6 +25,7 @@ const form = ref({
   show_photo_timestamp:       false,          // overlay timestamp on enlarged photos
   action_summary_position:    'bottom',       // 'top' | 'bottom' | 'none'
   invert_logo:                false,          // use inverted logo on PDF cover footer
+  report_footer_text_color:   '#FFFFFF',      // footer company name + email text colour
 })
 
 const effectiveColor = computed(() => {
@@ -76,6 +77,7 @@ async function selectClient(id) {
     form.value.show_photo_timestamp      = ps.show_photo_timestamp      || false
     form.value.action_summary_position  = ps.action_summary_position  || 'bottom'
     form.value.invert_logo               = !!selectedClient.value.invert_logo
+    form.value.report_footer_text_color  = selectedClient.value.report_footer_text_color || '#FFFFFF'
   } catch (err) {
     console.error('Failed to load client:', err)
   }
@@ -94,6 +96,7 @@ async function saveSettings() {
       report_body_text_color:     form.value.report_body_text_color,
       report_orientation:         form.value.report_orientation,
       invert_logo:                form.value.invert_logo,
+      report_footer_text_color:   form.value.report_footer_text_color,
       report_photo_settings:      JSON.stringify({
         photo_room_overview:   form.value.photo_room_overview,
         photo_room_item:       form.value.photo_room_item,
@@ -130,8 +133,9 @@ const presetColors = [
   '#DB2777', '#EA580C', '#374151', '#000000'
 ]
 
-const headerTextPresets = ['#FFFFFF', '#F1F5F9', '#1e293b', '#374151', '#000000']
-const bodyTextPresets   = ['#1e293b', '#374151', '#4b5563', '#6b7280', '#000000']
+const headerTextPresets     = ['#FFFFFF', '#F1F5F9', '#1e293b', '#374151', '#000000']
+const bodyTextPresets       = ['#1e293b', '#374151', '#4b5563', '#6b7280', '#000000']
+const footerTextPresets     = ['#FFFFFF', '#F1F5F9', '#e2e8f0', '#1e293b', '#000000']
 
 onMounted(() => fetchClients())
 </script>
@@ -209,11 +213,34 @@ onMounted(() => fetchClients())
             <div>
               <div class="toggle-title">Use light / inverted logo on PDF cover footer</div>
               <div class="toggle-desc">
-                When enabled, the PDF footer uses the light/white logo and white email text so it shows on the coloured background.
+                When enabled, the PDF footer uses the light/white logo so it shows on the coloured background.
                 Upload the logo once in <strong>General Settings → Light / Inverted Logo</strong>.
               </div>
             </div>
           </label>
+
+          <!-- Footer text colour -->
+          <div class="footer-tc-row">
+            <div class="footer-tc-meta">
+              <span class="footer-tc-label">Footer Text Colour</span>
+              <span class="footer-tc-desc">Colour of the company name and email line on the PDF cover footer</span>
+            </div>
+            <div class="footer-tc-controls">
+              <div class="color-row">
+                <input v-model="form.report_footer_text_color" type="color" class="color-native" />
+                <input v-model="form.report_footer_text_color" type="text" class="input mono" placeholder="#FFFFFF" maxlength="7" />
+                <!-- Live preview swatch against the actual footer colour -->
+                <div class="footer-tc-preview" :style="{ background: effectiveColor }">
+                  <span :style="{ color: form.report_footer_text_color }">info@example.com</span>
+                </div>
+              </div>
+              <div class="swatches">
+                <div v-for="p in footerTextPresets" :key="p" class="swatch"
+                  :class="{ active: form.report_footer_text_color === p, 'swatch--light': p === '#FFFFFF' || p === '#F1F5F9' }"
+                  :style="{ background: p }" @click="form.report_footer_text_color = p" :title="p"></div>
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- Report colour -->
@@ -569,8 +596,8 @@ onMounted(() => fetchClients())
             </div>
           </div>
           <div class="cp-footer">
-            <span :style="{ color: form.report_header_text_color }">L&amp;M Inventories</span>
-            <span :style="{ color: form.report_header_text_color }">Confidential</span>
+            <span :style="{ color: form.report_footer_text_color }">L&amp;M Inventories</span>
+            <span :style="{ color: form.report_footer_text_color }">info@example.com</span>
           </div>
         </div>
 
@@ -799,6 +826,34 @@ onMounted(() => fetchClients())
 
 .toggle-title { font-size: 13px; font-weight: 600; color: #1e293b; }
 .toggle-desc { font-size: 12px; color: #64748b; margin-top: 1px; }
+
+/* ── Footer text colour ───────────────────────────────────── */
+.footer-tc-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid #f1f5f9;
+}
+
+.footer-tc-meta { width: 150px; flex-shrink: 0; }
+.footer-tc-label { display: block; font-size: 13px; font-weight: 600; color: #1e293b; margin-bottom: 3px; }
+.footer-tc-desc  { display: block; font-size: 11px; color: #94a3b8; line-height: 1.4; }
+
+.footer-tc-controls { flex: 1; display: flex; flex-direction: column; gap: 8px; }
+
+.footer-tc-preview {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px 12px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  min-width: 110px;
+}
 
 /* ── Colour block ─────────────────────────────────────────── */
 .color-block {

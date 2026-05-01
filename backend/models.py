@@ -65,8 +65,9 @@ class Client(db.Model):
     report_photo_settings    = db.Column(db.Text)          # JSON: photo placement prefs
     report_header_text_color = db.Column(db.String(20))    # text colour on section header bars
     report_body_text_color   = db.Column(db.String(20))    # body/table text colour
-    report_orientation       = db.Column(db.String(20))    # 'portrait' | 'landscape'
-    invert_logo              = db.Column(db.Boolean, default=False)  # invert company logo/email colour on PDF cover
+    report_orientation          = db.Column(db.String(20))    # 'portrait' | 'landscape'
+    invert_logo                 = db.Column(db.Boolean, default=False)  # swap to inverted logo on PDF cover footer
+    report_footer_text_color    = db.Column(db.String(7))    # colour of company name + email text in PDF cover footer
     created_at            = db.Column(db.DateTime, default=datetime.utcnow)
     email_notifications   = db.Column(db.Text)
 
@@ -87,8 +88,9 @@ class Client(db.Model):
             'report_photo_settings':      self.report_photo_settings,
             'report_header_text_color':  self.report_header_text_color,
             'report_body_text_color':    self.report_body_text_color,
-            'report_orientation':        self.report_orientation,
-            'invert_logo':               self.invert_logo or False,
+            'report_orientation':           self.report_orientation,
+            'invert_logo':                  self.invert_logo or False,
+            'report_footer_text_color':     self.report_footer_text_color or '#FFFFFF',
             'created_at':             self.created_at.isoformat() if self.created_at else None,
         }
 

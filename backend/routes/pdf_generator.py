@@ -824,35 +824,24 @@ class _PDFBuilder:
         logo_max_h = footer_h - 8*mm      # max logo height within bar
         logo_max_w = pw - 2*margin        # full-width for centred logo
 
-        # Invert flag: when set, render company logo/email in white so a dark
-        # PNG logo is visible on a coloured footer background.
-        invert_logo = bool(cl.get('invert_logo'))
+        # invert_logo: use the client's dedicated inverted/white logo upload if set,
+        # otherwise fall back to the standard logo.  When enabled, email text is
+        # also rendered in white so it shows on the coloured footer background.
+        invert_logo       = bool(cl.get('invert_logo'))
+        logo_inverted_url = cl.get('logo_inverted', '')
 
         # ── Centred: company logo (from system settings) + company email ─────
         company_logo_url = self.sys_settings.get('logo', '')
         company_email    = self.sys_settings.get('email', '')
         centre_logo_drawn = False
 
-        if company_logo_url:
-            try:
-                raw = _load_image_bytes(company_logo_url)
-                if invert_logo:
-                    # Invert colours while preserving alpha channel (supports PNG)
-                    try:
-                        from PIL import Image as _PIL, ImageOps as _IOP
-                        pil = _PIL.open(io.BytesIO(raw))
-                        if pil.mode == 'RGBA':
-                            r, g, b, a = pil.split()
-                            inv = _IOP.invert(_PIL.merge('RGB', (r, g, b)))
-                            pil = _PIL.merge('RGBA', (*inv.split(), a))
-                        else:
-                            pil = _IOP.invert(pil.convert('RGB'))
-                        buf = io.BytesIO()
-                        pil.save(buf, format='PNG')
-                        raw = buf.getvalue()
-                    except Exception:
-                        pass  # fall back to un-inverted if Pillow unavailable
+        # Pick which logo to render: inverted version (if uploaded) else standard
+        active_logo_url = (logo_inverted_url if (invert_logo and logo_inverted_url)
+                           else company_logo_url)
 
+        if active_logo_url:
+            try:
+                raw = _load_image_bytes(active_logo_url)
                 img  = ImageReader(io.BytesIO(raw))
                 iw, ih = img.getSize()
                 email_reserve = 5*mm if company_email else 0

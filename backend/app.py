@@ -290,6 +290,13 @@ def _setup_database():
         db.session.commit()
         print("✅ templates.is_transient added.")
 
+    # clients.logo_inverted — pre-made white/inverted logo for coloured PDF cover footer
+    if not column_exists('clients', 'logo_inverted'):
+        print("Migrating: adding clients.logo_inverted column...")
+        db.session.execute(text("ALTER TABLE clients ADD COLUMN logo_inverted TEXT"))
+        db.session.commit()
+        print("✅ clients.logo_inverted added.")
+
     # clients.invert_logo — invert company logo/email colour on PDF cover for clients
     # with light-coloured or dark-coloured branding
     if not column_exists('clients', 'invert_logo'):

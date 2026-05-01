@@ -24,7 +24,8 @@ const form = ref({
   photo_room_item:            'below',        // 'above' | 'below' | 'hyperlink'
   show_photo_timestamp:       false,          // overlay timestamp on enlarged photos
   action_summary_position:    'bottom',       // 'top' | 'bottom' | 'none'
-  invert_logo:                false,          // invert company logo + email colour on PDF cover
+  invert_logo:                false,          // use inverted logo on PDF cover footer
+  logo_inverted:              null,           // base64 data URL of the white/inverted logo
 })
 
 const effectiveColor = computed(() => {
@@ -76,6 +77,7 @@ async function selectClient(id) {
     form.value.show_photo_timestamp      = ps.show_photo_timestamp      || false
     form.value.action_summary_position  = ps.action_summary_position  || 'bottom'
     form.value.invert_logo               = !!selectedClient.value.invert_logo
+    form.value.logo_inverted             = selectedClient.value.logo_inverted || null
   } catch (err) {
     console.error('Failed to load client:', err)
   }
@@ -94,6 +96,7 @@ async function saveSettings() {
       report_body_text_color:     form.value.report_body_text_color,
       report_orientation:         form.value.report_orientation,
       invert_logo:                form.value.invert_logo,
+      logo_inverted:              form.value.logo_inverted,
       report_photo_settings:      JSON.stringify({
         photo_room_overview:   form.value.photo_room_overview,
         photo_room_item:       form.value.photo_room_item,
@@ -207,13 +210,31 @@ onMounted(() => fetchClients())
               <div class="toggle-thumb"></div>
             </div>
             <div>
-              <div class="toggle-title">Invert logo &amp; email colours on PDF cover</div>
+              <div class="toggle-title">Use alternate logo on PDF cover footer</div>
               <div class="toggle-desc">
-                Use when the uploaded logo is dark — inverts it to white so it shows clearly on a coloured footer.
-                PNG files with transparent backgrounds are supported.
+                Upload a white or light-coloured version of the logo below — used on the coloured footer so it stays visible. Email text also turns white.
               </div>
             </div>
           </label>
+          <div v-if="form.invert_logo" class="inv-logo-block">
+            <div class="inv-logo-preview" :style="{ background: selectedClient.report_color_override || selectedClient.primary_color || '#1E3A8A' }">
+              <img v-if="form.logo_inverted" :src="form.logo_inverted" alt="Inverted logo preview" class="inv-logo-img" />
+              <span v-else class="inv-logo-placeholder">Upload a white / light logo</span>
+            </div>
+            <div class="inv-logo-actions">
+              <label class="btn-upload btn-upload--sm">
+                <input type="file" accept="image/*" style="display:none" @change="e => {
+                  const file = e.target.files[0]; if (!file) return
+                  const reader = new FileReader()
+                  reader.onload = ev => { form.logo_inverted = ev.target.result }
+                  reader.readAsDataURL(file)
+                }" />
+                {{ form.logo_inverted ? 'Replace' : 'Upload' }} Inverted Logo
+              </label>
+              <button v-if="form.logo_inverted" class="btn-remove-sm" @click.prevent="form.logo_inverted = null">Remove</button>
+            </div>
+            <p class="inv-logo-hint">PNG with transparent background recommended. Preview shows how it will appear on the footer colour.</p>
+          </div>
         </div>
 
         <!-- Report colour -->
@@ -757,6 +778,29 @@ onMounted(() => fetchClients())
 .muted { font-size: 11px; color: #94a3b8; }
 
 .brand-warn { font-size: 11px; color: #f59e0b; margin-top: 4px; }
+
+/* ── Inverted logo upload ─────────────────────────────────── */
+.inv-logo-block { margin-top: 12px; }
+.inv-logo-preview {
+  display: flex; align-items: center; justify-content: center;
+  height: 56px; border-radius: 8px; margin-bottom: 8px; overflow: hidden;
+}
+.inv-logo-img { max-height: 44px; max-width: 100%; object-fit: contain; }
+.inv-logo-placeholder { font-size: 11px; color: rgba(255,255,255,0.55); font-style: italic; }
+.inv-logo-actions { display: flex; gap: 8px; align-items: center; }
+.btn-upload--sm {
+  display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+  padding: 5px 12px; border-radius: 6px; font-size: 12px; font-weight: 600;
+  background: #f1f5f9; color: #1e293b; border: 1px solid #e2e8f0;
+  transition: background 0.15s;
+}
+.btn-upload--sm:hover { background: #e2e8f0; }
+.btn-remove-sm {
+  padding: 5px 10px; border-radius: 6px; font-size: 12px; font-weight: 600;
+  background: transparent; color: #ef4444; border: 1px solid #fecaca; cursor: pointer;
+}
+.btn-remove-sm:hover { background: #fef2f2; }
+.inv-logo-hint { font-size: 11px; color: #94a3b8; margin-top: 6px; }
 .lnk { color: #6366f1; text-decoration: underline; cursor: pointer; }
 
 /* ── Toggle ───────────────────────────────────────────────── */

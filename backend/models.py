@@ -58,6 +58,7 @@ class Client(db.Model):
     company               = db.Column(db.String(100))
     address               = db.Column(db.Text)
     logo                  = db.Column(db.Text)   # base64 encoded
+    logo_inverted         = db.Column(db.Text)   # white/inverted version for coloured PDF footer
     primary_color         = db.Column(db.String(7), default='#1E3A8A')
     report_disclaimer     = db.Column(db.Text)
     report_color_override = db.Column(db.String(7))
@@ -80,6 +81,7 @@ class Client(db.Model):
             'company':               self.company,
             'address':               self.address,
             'logo':                  self.logo,
+            'logo_inverted':         self.logo_inverted,
             'primary_color':         self.primary_color,
             'report_disclaimer':     self.report_disclaimer,
             'report_color_override':  self.report_color_override,

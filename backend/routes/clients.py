@@ -42,6 +42,7 @@ def create_client():
         report_header_text_color=data.get('report_header_text_color'),
         report_body_text_color=data.get('report_body_text_color'),
         report_orientation=data.get('report_orientation'),
+        invert_logo=bool(data.get('invert_logo', False)),
     )
 
     db.session.add(client)
@@ -104,6 +105,8 @@ def update_client(client_id):
         client.report_body_text_color = data['report_body_text_color']
     if 'report_orientation' in data:
         client.report_orientation = data['report_orientation']
+    if 'invert_logo' in data:
+        client.invert_logo = bool(data['invert_logo'])
 
     db.session.commit()
     return jsonify(client.to_dict())

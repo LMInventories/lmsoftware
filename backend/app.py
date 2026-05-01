@@ -290,6 +290,17 @@ def _setup_database():
         db.session.commit()
         print("✅ templates.is_transient added.")
 
+    # clients.invert_logo — invert company logo/email colour on PDF cover for clients
+    # with light-coloured or dark-coloured branding
+    if not column_exists('clients', 'invert_logo'):
+        print("Migrating: adding clients.invert_logo column...")
+        default = "0" if _is_sqlite() else "FALSE"
+        db.session.execute(
+            text(f"ALTER TABLE clients ADD COLUMN invert_logo BOOLEAN DEFAULT {default}")
+        )
+        db.session.commit()
+        print("✅ clients.invert_logo added.")
+
     # ── Reset midterm_sections to v2 defaults if still on old v1 schema ───────
     # The original defaults used "Property Condition Overview" / "Safety & Alarms";
     # the v2 defaults match the industry-standard midterm format (Overview, Keys,

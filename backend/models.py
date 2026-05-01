@@ -65,6 +65,7 @@ class Client(db.Model):
     report_header_text_color = db.Column(db.String(20))    # text colour on section header bars
     report_body_text_color   = db.Column(db.String(20))    # body/table text colour
     report_orientation       = db.Column(db.String(20))    # 'portrait' | 'landscape'
+    invert_logo              = db.Column(db.Boolean, default=False)  # invert company logo/email colour on PDF cover
     created_at            = db.Column(db.DateTime, default=datetime.utcnow)
     email_notifications   = db.Column(db.Text)
 
@@ -86,6 +87,7 @@ class Client(db.Model):
             'report_header_text_color':  self.report_header_text_color,
             'report_body_text_color':    self.report_body_text_color,
             'report_orientation':        self.report_orientation,
+            'invert_logo':               self.invert_logo or False,
             'created_at':             self.created_at.isoformat() if self.created_at else None,
         }
 

@@ -739,7 +739,7 @@ class _PDFBuilder:
             canvas.drawCentredString(pw/2, ph - hdr_h + (hdr_h - 8*mm) / 2, initials)
 
         # ── Property photo — full width, below header ─────────────────────────
-        photo_h   = 90 * mm
+        photo_h   = 130 * mm
         photo_y   = ph - hdr_h - photo_h
         photo_url = self.prop.get('overview_photo')
         photo_drawn = False
@@ -822,50 +822,72 @@ class _PDFBuilder:
         canvas.rect(0, 0, pw, footer_h, fill=1, stroke=0)
 
         logo_max_h = footer_h - 8*mm      # max logo height within bar
-        logo_max_w = pw / 2 - 2*margin    # max logo width per column
+        logo_max_w = pw - 2*margin        # full-width for centred logo
 
-        # ── Left column: company logo (from system settings) + company email ──
+        # Invert flag: when set, render company logo/email in white so a dark
+        # PNG logo is visible on a coloured footer background.
+        invert_logo = bool(cl.get('invert_logo'))
+
+        # ── Centred: company logo (from system settings) + company email ─────
         company_logo_url = self.sys_settings.get('logo', '')
         company_email    = self.sys_settings.get('email', '')
-        left_logo_drawn  = False
+        centre_logo_drawn = False
 
         if company_logo_url:
             try:
-                data = _load_image_bytes(company_logo_url)
-                img  = ImageReader(io.BytesIO(data))
+                raw = _load_image_bytes(company_logo_url)
+                if invert_logo:
+                    # Invert colours while preserving alpha channel (supports PNG)
+                    try:
+                        from PIL import Image as _PIL, ImageOps as _IOP
+                        pil = _PIL.open(io.BytesIO(raw))
+                        if pil.mode == 'RGBA':
+                            r, g, b, a = pil.split()
+                            inv = _IOP.invert(_PIL.merge('RGB', (r, g, b)))
+                            pil = _PIL.merge('RGBA', (*inv.split(), a))
+                        else:
+                            pil = _IOP.invert(pil.convert('RGB'))
+                        buf = io.BytesIO()
+                        pil.save(buf, format='PNG')
+                        raw = buf.getvalue()
+                    except Exception:
+                        pass  # fall back to un-inverted if Pillow unavailable
+
+                img  = ImageReader(io.BytesIO(raw))
                 iw, ih = img.getSize()
                 email_reserve = 5*mm if company_email else 0
                 lh_max = logo_max_h - email_reserve
                 scale  = min(logo_max_w/iw, lh_max/ih)
                 dw, dh = iw*scale, ih*scale
-                x = margin
+                x = (pw - dw) / 2   # horizontally centred
                 y = email_reserve + (footer_h - email_reserve - dh) / 2
                 canvas.drawImage(img, x, y, dw, dh, mask='auto')
-                left_logo_drawn = True
+                centre_logo_drawn = True
             except Exception:
                 pass
 
-        if not left_logo_drawn:
+        if not centre_logo_drawn:
             # Fall back to company name text
             footer_name = cl.get('company') or cl.get('name') or ''
             if footer_name:
-                canvas.setFillColor(hdr_c)
+                canvas.setFillColor(colors.white if invert_logo else hdr_c)
                 canvas.setFont('Helvetica-Bold', 9)
-                canvas.drawString(margin, footer_h * 0.55, footer_name[:40])
+                canvas.drawCentredString(pw / 2, footer_h * 0.55, footer_name[:40])
 
         if company_email:
-            canvas.setFillColor(hdr_c)
+            canvas.setFillColor(colors.white if invert_logo else hdr_c)
             canvas.setFont('Helvetica', 7)
-            canvas.drawString(margin, 2.5*mm, company_email[:60])
+            canvas.drawCentredString(pw / 2, 2.5*mm, company_email[:60])
 
-        # ── Right column: AIIC logo (if configured, else invisible) ──────────
+        # ── Right side: AIIC logo (if configured) ────────────────────────────
         aiic_logo_url = self.sys_settings.get('aiic_logo', '')
         if aiic_logo_url:
             try:
                 data = _load_image_bytes(aiic_logo_url)
                 img  = ImageReader(io.BytesIO(data))
                 iw, ih = img.getSize()
-                scale  = min(logo_max_w/iw, logo_max_h/ih)
+                aiic_max_w = pw / 3 - margin
+                scale  = min(aiic_max_w/iw, logo_max_h/ih)
                 dw, dh = iw*scale, ih*scale
                 x = pw - margin - dw
                 y = (footer_h - dh) / 2
@@ -974,7 +996,7 @@ class _PDFBuilder:
             _vwa = uw - 10*mm - 18*mm  # variable width when Answer col present
             COL_DEFS = {
                 'condition_summary': {'heads':['Ref','Name','Condition'],                                  'widths':[10*mm, _vw*0.44, _vw*0.56]},
-                'cleaning_summary':  {'heads':['Ref','Area','Cleanliness','Notes'],                        'widths':[10*mm, _vw*0.30, _vw*0.22, _vw*0.48]},
+                'cleaning_summary':  {'heads':['Ref','Area','Cleanliness','Notes'],                        'widths':[10*mm, _vw*0.26, _vw*0.30, _vw*0.44]},
                 'smoke_alarms':      {'heads':['Ref','Question','Answer','Notes'],                         'widths':[10*mm, _vwa*0.55, 18*mm, _vwa*0.45]},
                 'health_safety':     {'heads':['Ref','Question','Answer','Notes'],                         'widths':[10*mm, _vwa*0.55, 18*mm, _vwa*0.45]},
                 'fire_door_safety':  {'heads':['Ref','Name','Question','Answer','Notes'],                  'widths':[10*mm, _vwa*0.22, _vwa*0.38, 18*mm, _vwa*0.40]},
@@ -1315,7 +1337,9 @@ def _adapt_item(item: dict, sec_type: str, sec_idx: int, row_idx: int) -> dict:
     if sec_type == 'meter_readings':
         return {'id': rid, 'name': item.get('name',''), 'locationSerial': item.get('location_serial',''), 'reading': item.get('reading','')}
     if sec_type == 'cleaning_summary':
-        return {'id': rid, 'name': item.get('name',''), 'cleanliness': '', 'cleanlinessNotes': item.get('additional_notes','')}
+        # additional_notes is a Settings-level hint — not pre-filled user data.
+        # Keep cleanlinessNotes empty so the gv() fallback never shows hint text in the PDF.
+        return {'id': rid, 'name': item.get('name',''), 'cleanliness': '', 'cleanlinessNotes': ''}
     if sec_type == 'condition_summary':
         return {'id': rid, 'name': item.get('name',''), 'condition': item.get('condition', item.get('description',''))}
     if sec_type == 'fire_door_safety':

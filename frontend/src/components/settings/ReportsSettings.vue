@@ -24,6 +24,7 @@ const form = ref({
   photo_room_item:            'below',        // 'above' | 'below' | 'hyperlink'
   show_photo_timestamp:       false,          // overlay timestamp on enlarged photos
   action_summary_position:    'bottom',       // 'top' | 'bottom' | 'none'
+  invert_logo:                false,          // invert company logo + email colour on PDF cover
 })
 
 const effectiveColor = computed(() => {
@@ -74,6 +75,7 @@ async function selectClient(id) {
     form.value.photo_room_item        = ps.photo_room_item        || 'below'
     form.value.show_photo_timestamp      = ps.show_photo_timestamp      || false
     form.value.action_summary_position  = ps.action_summary_position  || 'bottom'
+    form.value.invert_logo               = !!selectedClient.value.invert_logo
   } catch (err) {
     console.error('Failed to load client:', err)
   }
@@ -91,6 +93,7 @@ async function saveSettings() {
       report_header_text_color:   form.value.report_header_text_color,
       report_body_text_color:     form.value.report_body_text_color,
       report_orientation:         form.value.report_orientation,
+      invert_logo:                form.value.invert_logo,
       report_photo_settings:      JSON.stringify({
         photo_room_overview:   form.value.photo_room_overview,
         photo_room_item:       form.value.photo_room_item,
@@ -199,6 +202,18 @@ onMounted(() => fetchClients())
               </div>
             </div>
           </div>
+          <label class="toggle-row" style="margin-top:12px">
+            <div class="toggle" :class="{ on: form.invert_logo }" @click="form.invert_logo = !form.invert_logo">
+              <div class="toggle-thumb"></div>
+            </div>
+            <div>
+              <div class="toggle-title">Invert logo &amp; email colours on PDF cover</div>
+              <div class="toggle-desc">
+                Use when the uploaded logo is dark — inverts it to white so it shows clearly on a coloured footer.
+                PNG files with transparent backgrounds are supported.
+              </div>
+            </div>
+          </label>
         </div>
 
         <!-- Report colour -->

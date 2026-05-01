@@ -35,7 +35,6 @@ def create_client():
         company=data.get('company'),
         address=data.get('address'),
         logo=data.get('logo'),
-        logo_inverted=data.get('logo_inverted'),
         primary_color=data.get('primary_color', '#1E3A8A'),
         report_disclaimer=data.get('report_disclaimer'),
         report_color_override=data.get('report_color_override'),
@@ -92,8 +91,6 @@ def update_client(client_id):
         client.address = data['address']
     if 'logo' in data:
         client.logo = data['logo']
-    if 'logo_inverted' in data:
-        client.logo_inverted = data['logo_inverted']
     if 'primary_color' in data:
         client.primary_color = data['primary_color']
     if 'report_disclaimer' in data:

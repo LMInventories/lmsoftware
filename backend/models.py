@@ -81,7 +81,6 @@ class Client(db.Model):
             'company':               self.company,
             'address':               self.address,
             'logo':                  self.logo,
-            'logo_inverted':         self.logo_inverted,
             'primary_color':         self.primary_color,
             'report_disclaimer':     self.report_disclaimer,
             'report_color_override':  self.report_color_override,

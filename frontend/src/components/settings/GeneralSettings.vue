@@ -11,6 +11,9 @@ const logoInputRef = ref(null)
 const aiicLogoPreview = ref(null)
 const aiicLogoFile = ref(null)
 const aiicLogoInputRef = ref(null)
+const logoInvertedPreview = ref(null)
+const logoInvertedFile = ref(null)
+const logoInvertedInputRef = ref(null)
 
 const form = ref({
   company_name: '',
@@ -23,6 +26,7 @@ const form = ref({
   website: '',
   logo: '',
   aiic_logo: '',
+  logo_inverted: '',
   report_disclaimer: '',
 })
 
@@ -41,9 +45,11 @@ async function fetchSettings() {
     form.value.website       = s.website       || ''
     form.value.logo              = s.logo              || ''
     form.value.aiic_logo         = s.aiic_logo         || ''
+    form.value.logo_inverted     = s.logo_inverted     || ''
     form.value.report_disclaimer = s.report_disclaimer || ''
     if (s.logo) logoPreview.value = s.logo
     if (s.aiic_logo) aiicLogoPreview.value = s.aiic_logo
+    if (s.logo_inverted) logoInvertedPreview.value = s.logo_inverted
   } catch (err) {
     console.error('Failed to load system settings:', err)
   } finally {
@@ -89,6 +95,25 @@ function removeAiicLogo() {
   if (aiicLogoInputRef.value) aiicLogoInputRef.value.value = ''
 }
 
+function onLogoInvertedChange(e) {
+  const file = e.target.files?.[0]
+  if (!file) return
+  logoInvertedFile.value = file
+  const reader = new FileReader()
+  reader.onload = () => {
+    logoInvertedPreview.value = reader.result
+    form.value.logo_inverted = reader.result
+  }
+  reader.readAsDataURL(file)
+}
+
+function removeLogoInverted() {
+  logoInvertedPreview.value = null
+  logoInvertedFile.value = null
+  form.value.logo_inverted = ''
+  if (logoInvertedInputRef.value) logoInvertedInputRef.value.value = ''
+}
+
 async function save() {
   saving.value = true
   try {
@@ -103,6 +128,7 @@ async function save() {
       website:       form.value.website,
       logo:               form.value.logo,
       aiic_logo:          form.value.aiic_logo,
+      logo_inverted:      form.value.logo_inverted,
       report_disclaimer:  form.value.report_disclaimer,
     })
     saved.value = true
@@ -209,6 +235,48 @@ onMounted(fetchSettings)
                 <input ref="aiicLogoInputRef" type="file" accept="image/*" style="display:none" @change="onAiicLogoChange" />
               </label>
               <button v-if="aiicLogoPreview" class="btn-remove-logo" @click="removeAiicLogo">Remove</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Inverted / light logo for dark PDF footers -->
+        <div class="panel">
+          <div class="panel-title">
+            <span class="panel-icon">🌗</span>
+            Light / Inverted Logo
+          </div>
+          <p class="panel-desc">
+            A white or light-coloured version of your logo, used on coloured PDF cover footers when the
+            <strong>Use alternate logo</strong> toggle is enabled for a client in Report Settings.
+            PNG with a transparent background recommended.
+          </p>
+
+          <div class="logo-zone">
+            <div class="logo-preview-wrap">
+              <!-- Preview against a dark tile so a white PNG is visible -->
+              <div class="logo-preview logo-preview--dark" :class="{ 'logo-preview--empty': !logoInvertedPreview }">
+                <img v-if="logoInvertedPreview" :src="logoInvertedPreview" alt="Inverted logo" class="logo-img" />
+                <div v-else class="logo-placeholder logo-placeholder--dark">
+                  <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.4)" stroke-width="1.5">
+                    <rect x="3" y="3" width="18" height="18" rx="2"/>
+                    <circle cx="8.5" cy="8.5" r="1.5"/>
+                    <polyline points="21 15 16 10 5 21"/>
+                  </svg>
+                  <span>No inverted logo uploaded</span>
+                </div>
+              </div>
+            </div>
+            <div class="logo-actions">
+              <label class="btn-upload">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                  <polyline points="17 8 12 3 7 8"/>
+                  <line x1="12" y1="3" x2="12" y2="15"/>
+                </svg>
+                {{ logoInvertedPreview ? 'Replace Logo' : 'Upload Logo' }}
+                <input ref="logoInvertedInputRef" type="file" accept="image/*" style="display:none" @change="onLogoInvertedChange" />
+              </label>
+              <button v-if="logoInvertedPreview" class="btn-remove-logo" @click="removeLogoInverted">Remove</button>
             </div>
           </div>
         </div>
@@ -449,6 +517,15 @@ onMounted(fetchSettings)
 }
 
 .logo-preview--empty { }
+
+.logo-preview--dark {
+  background: #1e293b;
+  border-color: #334155;
+}
+
+.logo-placeholder--dark span {
+  color: rgba(255, 255, 255, 0.4);
+}
 
 .logo-img {
   max-width: 100%;

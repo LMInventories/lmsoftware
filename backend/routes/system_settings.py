@@ -19,6 +19,8 @@ ALLOWED_KEYS = {
     'city', 'postcode', 'email', 'phone', 'website', 'logo',
     # AIIC membership branding
     'aiic_logo',
+    # Inverted / light-coloured company logo for use on dark/coloured PDF footers
+    'logo_inverted',
     # The Depositary integration
     'depositary_api_url', 'depositary_api_key',
     # Report style (global)

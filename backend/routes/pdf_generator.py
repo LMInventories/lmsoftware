@@ -824,11 +824,11 @@ class _PDFBuilder:
         logo_max_h = footer_h - 8*mm      # max logo height within bar
         logo_max_w = pw - 2*margin        # full-width for centred logo
 
-        # invert_logo: use the client's dedicated inverted/white logo upload if set,
-        # otherwise fall back to the standard logo.  When enabled, email text is
-        # also rendered in white so it shows on the coloured footer background.
+        # invert_logo: per-client toggle — when on, swap to the company-wide
+        # inverted/white logo (stored in system settings, not per-client) so it
+        # shows on the coloured footer background.  Email text also turns white.
         invert_logo       = bool(cl.get('invert_logo'))
-        logo_inverted_url = cl.get('logo_inverted', '')
+        logo_inverted_url = self.sys_settings.get('logo_inverted', '')
 
         # ── Centred: company logo (from system settings) + company email ─────
         company_logo_url = self.sys_settings.get('logo', '')

@@ -322,6 +322,12 @@ def _setup_database():
         _alter_column("clients.report_footer_text_color",
                       "ALTER TABLE clients ADD COLUMN report_footer_text_color VARCHAR(7)")
 
+    # inspections.completion_email_sent — prevents auto email re-sending on re-completion
+    if not column_exists('inspections', 'completion_email_sent'):
+        default = "0" if _is_sqlite() else "FALSE"
+        _alter_column("inspections.completion_email_sent",
+                      f"ALTER TABLE inspections ADD COLUMN completion_email_sent BOOLEAN NOT NULL DEFAULT {default}")
+
     # ── Reset midterm_sections to v2 defaults if still on old v1 schema ───────
     # The original defaults used "Property Condition Overview" / "Safety & Alarms";
     # the v2 defaults match the industry-standard midterm format (Overview, Keys,

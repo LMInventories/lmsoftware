@@ -475,40 +475,50 @@ def update_inspection(inspection_id):
                     recipients = _get_report_recipients(insp)
                     print(f'[pdf]   recipients     : {recipients}')
 
-                    if not recipients:
-                        print(f'[pdf] WARNING: no recipients resolved — set client email, email override, or tenant email on the inspection.')
-                        return
-
-                    # Generate PDF
+                    # Generate PDF (always — Drive upload + Depositary also need it)
                     pdf_bytes = generate_inspection_pdf(_insp_id)
                     print(f'[pdf] PDF generated OK — {len(pdf_bytes)} bytes')
 
-                    # Send — use client object if available; fall back to a stub so the
-                    # email body still renders when client relationship can't be loaded.
-                    from routes.email_service import send_report_complete
-                    effective_client = client
-                    if not effective_client:
-                        class _StubClient:
-                            name    = 'Client'
-                            email   = ''
-                            company = ''
-                            logo    = None
-                            primary_color            = '#1E3A8A'
-                            report_color_override    = None
-                            report_header_text_color = '#FFFFFF'
-                            report_body_text_color   = '#1e293b'
-                            report_orientation       = 'portrait'
-                            report_disclaimer        = ''
-                        effective_client = _StubClient()
-                        print(f'[pdf] WARNING: no client object — using stub for email body')
-
-                    ok, err = send_report_complete(insp, effective_client, prop, pdf_bytes, recipients=recipients)
-                    if ok:
-                        print(f'[pdf] email sent OK → {recipients}')
+                    # ── Auto email — only on first completion ─────────
+                    # If completion_email_sent is already True the inspection was
+                    # previously completed, emailed, then re-opened for edits.
+                    # Skip the auto send so the client only ever receives one
+                    # automatic email; any subsequent sends are via Share PDF.
+                    if insp.completion_email_sent:
+                        print(f'[pdf] auto email suppressed — already sent for inspection {_insp_id}')
                     else:
-                        print(f'[pdf] email FAILED: {err}')
-                        if 'credentials not configured' in str(err):
-                            print(f'[pdf] ACTION REQUIRED: set SMTP_USER and SMTP_PASSWORD in Railway environment variables')
+                        if not recipients:
+                            print(f'[pdf] WARNING: no recipients resolved — set client email, email override, or tenant email on the inspection.')
+                        else:
+                            # Send — use client object if available; fall back to a stub so the
+                            # email body still renders when client relationship can't be loaded.
+                            from routes.email_service import send_report_complete
+                            effective_client = client
+                            if not effective_client:
+                                class _StubClient:
+                                    name    = 'Client'
+                                    email   = ''
+                                    company = ''
+                                    logo    = None
+                                    primary_color            = '#1E3A8A'
+                                    report_color_override    = None
+                                    report_header_text_color = '#FFFFFF'
+                                    report_body_text_color   = '#1e293b'
+                                    report_orientation       = 'portrait'
+                                    report_disclaimer        = ''
+                                effective_client = _StubClient()
+                                print(f'[pdf] WARNING: no client object — using stub for email body')
+
+                            ok, err = send_report_complete(insp, effective_client, prop, pdf_bytes, recipients=recipients)
+                            if ok:
+                                print(f'[pdf] email sent OK → {recipients}')
+                                # Mark so re-completions don't trigger another auto email
+                                insp.completion_email_sent = True
+                                db.session.commit()
+                            else:
+                                print(f'[pdf] email FAILED: {err}')
+                                if 'credentials not configured' in str(err):
+                                    print(f'[pdf] ACTION REQUIRED: set SMTP_USER and SMTP_PASSWORD in Railway environment variables')
 
                     # ── Push to The Depositary (check_out inspections only) ────
                     if insp.inspection_type == 'check_out':
@@ -1136,4 +1146,28 @@ def _transform_report_data(source_type, target_type, raw, include_photos=False):
                 for field in ('cleanliness', 'cleanlinessNotes', 'locationSerial',
                               'reading', 'answer', 'notes', 'name'):
                     if field in row_data:
-                        new_row[field] = row_
+                        new_row[field] = row_data[field]
+                # Photos
+                if include_photos:
+                    for photo_field in ('_photos', '_photoTs'):
+                        if photo_field in row_data:
+                            new_row[photo_field] = row_data[photo_field]
+                # Carry sub-items — combine conditions
+                if '_subs' in row_data and isinstance(row_data['_subs'], list):
+                    new_row['_subs'] = [
+                        {
+                            '_sid':        sub.get('_sid', ''),
+                            'description': sub.get('description', ''),
+                            'condition':   _combine_conditions(
+                                sub.get('inventoryCondition'), sub.get('checkOutCondition'),
+                                fallback=sub.get('condition', '')
+                            ),
+                        }
+                        for sub in row_data['_subs']
+                    ]
+
+            new_section[row_id] = new_row
+
+        dst[section_id] = new_section
+
+    return dst

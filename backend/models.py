@@ -198,6 +198,10 @@ class Inspection(db.Model):
 
     notes       = db.Column(db.Text)
     report_data = db.Column(db.Text)  # JSON
+    # Tracks whether the automatic completion email has been sent.
+    # Once True, subsequent complete->active->complete cycles skip the auto email
+    # so clients only receive it once.  Manual 'Share PDF' is unaffected.
+    completion_email_sent = db.Column(db.Boolean, default=False, nullable=False)
     created_at  = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at  = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

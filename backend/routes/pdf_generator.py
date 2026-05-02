@@ -505,6 +505,14 @@ class _PDFBuilder:
                     if not act.get('actionId'):
                         continue
                     self.actions_summary.append({'room': room.get('name', ''), 'item': item.get('label') or item.get('name') or '', **act})
+            # Custom items (additional items added during tenancy)
+            custom_items = (self.rd.get(str(room['id'])) or {}).get('_customItems', []) or []
+            for ci in custom_items:
+                cid = ci.get('_cid', '')
+                for act in self._item_actions(room['id'], cid):
+                    if not act.get('actionId'):
+                        continue
+                    self.actions_summary.append({'room': room.get('name', ''), 'item': ci.get('name') or 'Additional Item', **act})
         for a in self.actions_summary:
             aid = a['actionId']
             if aid not in self.action_groups:
@@ -1174,6 +1182,45 @@ class _PDFBuilder:
                                 self._p('—'),
                                 self._p(sub_desc),
                                 self._p(sub_cond or '—'),
+                            ])
+
+            # ── Additional Items (Check Out: items added during tenancy) ──────
+            if co:
+                custom_items = (self.rd.get(str(room['id'])) or {}).get('_customItems', []) or []
+                if custom_items:
+                    # Divider row spanning all columns
+                    div_style = ParagraphStyle('ai_div', fontName='Helvetica-Oblique', fontSize=7,
+                                               leading=9, textColor=colors.HexColor('#1e40af'))
+                    tbl_data.append([Paragraph('Additional Items — added during tenancy', div_style),
+                                     '', '', '', '', ''])
+                    for ci_idx, ci in enumerate(custom_items):
+                        cid    = ci.get('_cid', '')
+                        ci_name = ci.get('name') or 'Additional Item'
+                        ci_coc  = ci.get('checkOutCondition') or '—'
+                        acts    = self._item_actions(room['id'], cid)
+                        act_txt = ', '.join(self._action_name(a['actionId']) for a in acts if a.get('actionId'))
+                        ref     = f'{room_num}.A{ci_idx + 1}'
+                        added_style = ParagraphStyle('ai_added', fontName='Helvetica-Oblique', fontSize=7,
+                                                     leading=9, textColor=colors.HexColor('#64748b'))
+                        tbl_data.append([
+                            Paragraph(ref, self.s_ref),
+                            self._p(ci_name, self.s_bold),
+                            Paragraph('—', self.s_cell),
+                            Paragraph('Added during tenancy', added_style),
+                            self._p(ci_coc),
+                            self._p(act_txt or '—', self.s_cell_sm),
+                        ])
+                        # Sub-items of custom item
+                        for sub in self._get_subs(room['id'], cid):
+                            sub_desc = sub.get('description') or ''
+                            sub_co   = sub.get('checkOutCondition') or sub.get('condition') or ''
+                            tbl_data.append([
+                                Paragraph('-', self.s_ref),
+                                self._p('—'),
+                                self._p(sub_desc),
+                                Paragraph('—', self.s_cell),
+                                self._p(sub_co or '—'),
+                                Paragraph('', self.s_cell),
                             ])
 
             room_tbl = Table(tbl_data, colWidths=widths, repeatRows=1)

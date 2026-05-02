@@ -1620,6 +1620,31 @@ function removeSubItem(roomId, itemId, sid) {
   unsaved.value = true
 }
 
+// ── Custom Items (Check Out — items added to the property during tenancy) ─────
+// Stored as reportData[roomId]._customItems = [{ _cid, name, checkOutCondition }]
+// Sub-items, photos, and actions reuse the standard helpers (cid as itemId).
+function getCustomItems(roomId) { return reportData.value[roomId]?._customItems ?? [] }
+function addCustomItem(roomId) {
+  if (!reportData.value[roomId]) reportData.value[roomId] = {}
+  if (!reportData.value[roomId]._customItems) reportData.value[roomId]._customItems = []
+  const cid = `ci_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
+  reportData.value[roomId]._customItems.push({ _cid: cid, name: '', checkOutCondition: '' })
+  unsaved.value = true
+}
+function setCustomItemField(roomId, cid, field, value) {
+  const item = (reportData.value[roomId]?._customItems || []).find(i => i._cid === cid)
+  if (item) { item[field] = value; unsaved.value = true }
+}
+function removeCustomItem(roomId, cid) {
+  if (!reportData.value[roomId]?._customItems) return
+  reportData.value[roomId]._customItems = reportData.value[roomId]._customItems.filter(i => i._cid !== cid)
+  // Clean up associated subs, photos, and actions stored under the cid key
+  if (reportData.value[roomId]?.[cid]) delete reportData.value[roomId][cid]
+  const actKey = `_actions_${cid}`
+  if (reportData.value[roomId]?.[actKey]) delete reportData.value[roomId][actKey]
+  unsaved.value = true
+}
+
 // ── Room name overrides ────────────────────────────────────────────────────
 // Stored in reportData._roomNames: { [roomId]: customName }
 // Only used in the report editor — does NOT affect the template.
@@ -2831,6 +2856,127 @@ async function moveToReview() {
               </div>
             </div>
 
+            <!-- ── Additional Items (Check Out only) ─────────────────────���─── -->
+            <div v-if="isCheckOut" class="additional-items-section">
+              <div class="additional-items-hd">
+                <span class="ai-title">🆕 Additional Items</span>
+                <span class="ai-subtitle">Items added to the property during tenancy</span>
+              </div>
+
+              <div v-for="ci in getCustomItems(room.id)" :key="ci._cid" class="ai-item">
+                <!-- Item header: editable name + delete -->
+                <div class="ai-item-hd">
+                  <input
+                    class="fld-input ai-name-input"
+                    :disabled="!canEdit"
+                    placeholder="Item name — e.g. Wardrobe added by tenant…"
+                    :value="ci.name"
+                    @input="setCustomItemField(room.id, ci._cid, 'name', $event.target.value)"
+                  />
+                  <button v-if="canEdit" class="del-item-icon-btn ai-del-btn" @click="removeCustomItem(room.id, ci._cid)" title="Remove item">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+                  </button>
+                </div>
+
+                <!-- Condition + actions row -->
+                <div class="item-fields-row co-fields-row">
+                  <div class="item-fields-main">
+                    <div class="room-field-cond">
+                      <label class="field-lbl">Condition at Check Out</label>
+                      <textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" rows="3"
+                        placeholder="Describe condition…"
+                        :value="ci.checkOutCondition || ''"
+                        @input="setCustomItemField(room.id, ci._cid, 'checkOutCondition', $event.target.value)">
+                      </textarea>
+                    </div>
+                    <div class="room-field-actions" :class="{ 'actions-expanded': isActionExpanded(room.id, ci._cid) }">
+                      <label class="field-lbl">Actions</label>
+                      <CheckOutActionPicker
+                        :actions="getItemActions(room.id, ci._cid)"
+                        :room-id="room.id"
+                        :item-id="ci._cid"
+                        :condition-text="ci.checkOutCondition || ''"
+                        @update:actions="val => setItemActions(room.id, ci._cid, val)"
+                      />
+                    </div>
+                  </div>
+                  <div class="item-btn-col">
+                    <button class="cam-btn cam-btn-item"
+                      :class="{ 'cam-has': getPhotos(room.id, ci._cid).length }"
+                      @click="togglePanel(room.id, ci._cid)" title="Photos">
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                      <span v-if="getPhotos(room.id, ci._cid).length" class="cam-count">{{ getPhotos(room.id, ci._cid).length }}</span>
+                    </button>
+                    <button class="cam-btn cam-btn-item action-trigger-btn"
+                      :class="{ 'action-has': getItemActions(room.id, ci._cid).length }"
+                      @click.stop="toggleActionExpanded(room.id, ci._cid)" title="Actions">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                      <span v-if="getItemActions(room.id, ci._cid).length" class="cam-count action-count">{{ getItemActions(room.id, ci._cid).length }}</span>
+                    </button>
+                    <button v-if="canEdit" class="cam-btn cam-btn-item" @click="addSubItem(room.id, ci._cid)" title="Add sub-item" style="font-size:16px;line-height:1">+</button>
+                  </div>
+                </div>
+
+                <!-- Sub-items -->
+                <div v-if="getSubs(room.id, ci._cid).length" class="sub-items">
+                  <div v-for="sub in getSubs(room.id, ci._cid)" :key="sub._sid" class="sub-item">
+                    <div class="item-fields-row sub-fields-row">
+                      <div class="item-fields-main">
+                        <div class="room-field-desc">
+                          <label class="field-lbl">Description</label>
+                          <textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" rows="2" placeholder="Describe…" :value="sub.description" @input="setSubField(room.id, ci._cid, sub._sid, 'description', $event.target.value)"></textarea>
+                        </div>
+                        <div class="room-field-cond">
+                          <label class="field-lbl">Condition at Check Out</label>
+                          <textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" rows="2" placeholder="Condition…" :value="sub.checkOutCondition || sub.condition || ''" @input="setSubField(room.id, ci._cid, sub._sid, 'checkOutCondition', $event.target.value)"></textarea>
+                        </div>
+                      </div>
+                      <div class="item-btn-col">
+                        <button class="cam-btn cam-btn-item" :class="{ 'cam-has': getPhotos(room.id, sub._sid).length }" @click="togglePanel(room.id, sub._sid)" title="Photos">
+                          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                          <span v-if="getPhotos(room.id, sub._sid).length" class="cam-count">{{ getPhotos(room.id, sub._sid).length }}</span>
+                        </button>
+                        <button class="del-item-icon-btn" @click="removeSubItem(room.id, ci._cid, sub._sid)" title="Remove sub-item">
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+                        </button>
+                      </div>
+                    </div>
+                    <div v-if="isPanelOpen(room.id, sub._sid)" class="photo-panel-inline photo-panel-sub">
+                      <div v-for="(ph,pi) in getPhotos(room.id, sub._sid)" :key="pi" class="ph-thumb ph-thumb-lg" style="cursor:pointer" @click="openLightbox(room.id, sub._sid, pi)">
+                        <img :src="ph" class="ph-img-click" />
+                        <button class="ph-del" @click="removePhoto(room.id, sub._sid, pi)">×</button>
+                      </div>
+                      <label class="ph-upload-btn">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                        Upload photos
+                        <input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(room.id, sub._sid, e.target.files)" />
+                      </label>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Item photo panel -->
+                <div v-if="isPanelOpen(room.id, ci._cid)" class="photo-panel-inline">
+                  <div v-for="(ph,pi) in getPhotos(room.id, ci._cid)" :key="pi" class="ph-thumb ph-thumb-lg" style="cursor:pointer" @click="openLightbox(room.id, ci._cid, pi)">
+                    <img :src="ph" class="ph-img-click" />
+                    <button class="ph-del" @click="removePhoto(room.id, ci._cid, pi)">×</button>
+                  </div>
+                  <button v-if="getPhotos(room.id,ci._cid).length" class="ph-view-all-btn" @click.stop="openPhotoGrid(room.id,ci._cid,'')">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> View All
+                  </button>
+                  <label class="ph-upload-btn">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                    Upload photos
+                    <input type="file" accept="image/*" multiple style="display:none" @change="e=>addPhotos(room.id, ci._cid, e.target.files)" />
+                  </label>
+                </div>
+              </div>
+
+              <div v-if="canEdit" class="add-row-bar add-row-bar-ai">
+                <button class="add-row-btn add-row-btn-ai" @click="addCustomItem(room.id)">+ Add item added during tenancy</button>
+              </div>
+            </div>
+
             <div class="add-row-bar add-row-bar-room">
               <button class="add-row-btn add-row-btn-room" @click="addRoomExtraItem(room.id)">+ Add line</button>
             </div>
@@ -3490,6 +3636,18 @@ async function moveToReview() {
 .add-row-btn{padding:5px 12px;background:none;border:1px dashed #6366f1;border-radius:5px;font-size:12px;font-weight:600;color:#6366f1;cursor:pointer;transition:all 0.12s}
 .add-row-btn:hover{background:#eff6ff}
 .add-row-btn-room{border-color:#a78bfa;color:#7c3aed}.add-row-btn-room:hover{background:#f5f3ff}
+
+/* ── Additional Items (Check Out) ─────────────────────────────────────── */
+.additional-items-section{margin:12px 0 4px;padding:12px 14px 10px;background:#eff6ff;border:1.5px dashed #93c5fd;border-radius:8px}
+.additional-items-hd{display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap}
+.ai-title{font-weight:700;font-size:13px;color:#1e40af}
+.ai-subtitle{font-size:12px;color:#64748b;font-style:italic}
+.ai-item{background:#fff;border:1px solid #bfdbfe;border-radius:6px;padding:12px;margin-bottom:10px}
+.ai-item-hd{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.ai-name-input{flex:1;font-weight:600;font-size:13px}
+.ai-del-btn{flex-shrink:0}
+.add-row-bar-ai{margin-top:6px}
+.add-row-btn-ai{border-color:#3b82f6;color:#1d4ed8}.add-row-btn-ai:hover{background:#eff6ff}
 
 /* Delete */
 .del-btn{width:24px;height:24px;background:none;border:1px solid #fca5a5;border-radius:4px;font-size:14px;color:#ef4444;cursor:pointer;transition:all 0.12s;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0}

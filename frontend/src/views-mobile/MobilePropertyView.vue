@@ -25,6 +25,12 @@ const inspection  = ref(null)
 const syncing     = ref(false)
 const syncMsg     = ref('')
 const showConfirm = ref(false) // confirm "Finish & Sync" dialog
+const showReview  = ref(false) // proofreading review overlay
+const reviewLoading = ref(false)
+const reviewTemplate   = ref(null)
+const reviewReportData = ref({})
+
+const isCheckOut = computed(() => inspection.value?.inspection_type === 'check_out')
 
 onMounted(async () => {
   // Load from local DB first for instant display
@@ -125,6 +131,61 @@ async function doSync(markFinished = false) {
 
   setTimeout(() => { syncMsg.value = '' }, 5000)
 }
+
+// ── Review (proofreading before Finish) ──────────────────────────────
+async function openReview() {
+  showReview.value  = true
+  reviewLoading.value = true
+  try {
+    reviewReportData.value = await getReportData(id)
+    if (inspection.value?.template_id) {
+      const tRes = await api.getTemplate(inspection.value.template_id)
+      reviewTemplate.value = tRes.data
+    }
+  } catch { /* offline — show what we have */ }
+  reviewLoading.value = false
+}
+
+// Builds a flat list of { sectionName, items: [{ label, condition }] }
+const reviewRooms = computed(() => {
+  if (!reviewTemplate.value) return []
+  const rd = reviewReportData.value
+  const co = isCheckOut.value
+  const result = []
+
+  // Rooms only (fixed sections are typically not filled on mobile; skip for brevity)
+  const rooms = (reviewTemplate.value.sections || []).filter(s => s.is_room || s.section_type === 'room')
+  for (const room of rooms) {
+    const rid = String(room.id)
+    const deleted = new Set(((rd[rid] || {})._deleted || []).map(String))
+    const items = []
+
+    // Template items
+    for (const item of (room.items || room.sections || [])) {
+      if (deleted.has(String(item.id))) continue
+      const label = item.name || item.label || ''
+      const cond  = co
+        ? (rd[rid]?.[String(item.id)]?.checkOutCondition || '')
+        : (rd[rid]?.[String(item.id)]?.condition || '')
+      items.push({ label, cond, isEmpty: !cond })
+    }
+
+    // Extra items (mobile-added)
+    for (const ex of ((rd[rid] || {})._extra || [])) {
+      if (!ex._eid || deleted.has(String(ex._eid))) continue
+      const label = ex.label || ex.name || 'New item'
+      const indexed = rd[rid]?.[ex._eid] || {}
+      const merged  = { ...indexed, ...ex }
+      const cond    = co
+        ? (merged.checkOutCondition || '')
+        : (merged.condition || '')
+      items.push({ label, cond, isEmpty: !cond })
+    }
+
+    if (items.length) result.push({ name: room.name, items })
+  }
+  return result
+})
 
 // ── Change Template ───────────────────────────────────────────────────
 const showTemplateSheet    = ref(false)
@@ -292,11 +353,59 @@ async function applyTemplateChange() {
         v-if="['active'].includes(inspection.status)"
         class="mpv-finish-btn"
         :disabled="syncing"
-        @click="showConfirm = true"
+        @click="openReview"
       >
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
         Finish & Sync
       </button>
+    </div>
+
+    <!-- ══ REVIEW OVERLAY ════════════════════════════════════════════════ -->
+    <div v-if="showReview" class="mpv-overlay mpv-review-overlay">
+      <div class="mpv-review-sheet">
+        <!-- Header -->
+        <div class="mpv-review-hd">
+          <div class="mpv-review-hd-text">
+            <h3 class="mpv-review-title">Review Report</h3>
+            <p class="mpv-review-sub">Proofread before finalising — no photos shown</p>
+          </div>
+          <button class="mpv-sheet-close" @click="showReview = false">✕</button>
+        </div>
+
+        <!-- Loading -->
+        <div v-if="reviewLoading" class="mpv-review-loading">
+          <svg class="spin" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2.5"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>
+          Loading report…
+        </div>
+
+        <!-- Content -->
+        <div v-else class="mpv-review-body">
+          <div v-if="!reviewRooms.length" class="mpv-review-empty">
+            No rooms found — the template may not have loaded.
+          </div>
+
+          <div v-for="room in reviewRooms" :key="room.name" class="mpv-review-room">
+            <div class="mpv-review-room-name">{{ room.name }}</div>
+            <div v-for="item in room.items" :key="item.label" class="mpv-review-item"
+              :class="{ 'mpv-review-item--empty': item.isEmpty }">
+              <span class="mpv-review-item-label">{{ item.label }}</span>
+              <span class="mpv-review-item-cond">{{ item.cond || '— not filled' }}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Footer actions -->
+        <div class="mpv-review-footer">
+          <button class="mpv-review-edit-btn" @click="showReview = false; router.push(`/mobile/inspection/${id}/report`)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+            Edit Report
+          </button>
+          <button class="mpv-review-finish-btn" @click="showReview = false; showConfirm = true">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            Looks Good — Finish & Sync
+          </button>
+        </div>
+      </div>
     </div>
 
     <!-- Confirm finish dialog -->
@@ -604,6 +713,76 @@ async function applyTemplateChange() {
 .mpv-confirm-ok {
   flex: 2; padding: 14px; background: #16a34a; color: white;
   border: none; border-radius: 12px; font-size: 15px; font-weight: 800; cursor: pointer; font-family: inherit;
+}
+
+/* ── Review overlay ───────────────────────────────────────────────────── */
+.mpv-review-overlay { align-items: stretch; }
+.mpv-review-sheet {
+  width: 100%;
+  height: 100%;
+  background: #0f172a;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.mpv-review-hd {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 20px 18px 12px;
+  border-bottom: 1px solid #1e293b;
+  flex-shrink: 0;
+}
+.mpv-review-hd-text { flex: 1 }
+.mpv-review-title { font-size: 17px; font-weight: 800; color: #f1f5f9; margin: 0 }
+.mpv-review-sub { font-size: 12px; color: #64748b; margin: 2px 0 0 }
+.mpv-review-loading {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  gap: 10px; color: #94a3b8; font-size: 14px;
+}
+.mpv-review-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px 16px;
+  -webkit-overflow-scrolling: touch;
+}
+.mpv-review-empty { color: #94a3b8; font-size: 14px; padding: 20px 0; text-align: center }
+.mpv-review-room { margin-bottom: 18px }
+.mpv-review-room-name {
+  font-size: 14px; font-weight: 800; color: #6366f1;
+  padding: 6px 0 4px;
+  border-bottom: 1px solid #1e293b;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.mpv-review-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 0;
+  border-bottom: 1px solid #1e293b;
+}
+.mpv-review-item--empty .mpv-review-item-cond { color: #ef4444; }
+.mpv-review-item-label { font-size: 12px; font-weight: 700; color: #94a3b8 }
+.mpv-review-item-cond  { font-size: 14px; color: #e2e8f0; line-height: 1.4 }
+.mpv-review-footer {
+  display: flex;
+  gap: 10px;
+  padding: 14px 16px 32px;
+  border-top: 1px solid #1e293b;
+  background: #0f172a;
+  flex-shrink: 0;
+}
+.mpv-review-edit-btn {
+  flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 13px; background: #1e293b; color: #cbd5e1;
+  border: none; border-radius: 12px; font-size: 14px; font-weight: 700; cursor: pointer; font-family: inherit;
+}
+.mpv-review-finish-btn {
+  flex: 2; display: flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 13px; background: #16a34a; color: white;
+  border: none; border-radius: 12px; font-size: 14px; font-weight: 800; cursor: pointer; font-family: inherit;
 }
 
 .mpv-loading {

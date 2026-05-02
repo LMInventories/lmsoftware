@@ -428,9 +428,9 @@ const cleanlinessOpts = [
               </div>
               <div class="mst-field">
                 <label class="mst-label">Reading</label>
-                <input class="mst-input" type="text" placeholder="12345.6"
+                <textarea class="mst-input mst-textarea" rows="2" placeholder="e.g. 12345.6 (or credit amount, notes…)"
                   :value="get(sec.id, row.id, 'reading')"
-                  @input="set(sec.id, row.id, 'reading', $event.target.value)" />
+                  @input="set(sec.id, row.id, 'reading', $event.target.value)"></textarea>
               </div>
             </template>
           </div>

@@ -62,12 +62,21 @@ function onLogoChange(e) {
   if (!file) return
   const inputEl = e.target
   logoFile.value = file
+  // Show preview immediately (synchronous — no async wait)
+  const objectUrl = URL.createObjectURL(file)
+  logoPreview.value = objectUrl
   const reader = new FileReader()
   reader.onload = () => {
-    logoPreview.value = reader.result
     form.value.logo = reader.result
-    // Clear AFTER data is captured so async read isn't interrupted
+    logoPreview.value = reader.result   // switch to persistent base64
+    URL.revokeObjectURL(objectUrl)
     inputEl.value = ''
+  }
+  reader.onerror = () => {
+    console.error('[GeneralSettings] Failed to read logo')
+    logoPreview.value = form.value.logo || null
+    logoFile.value = null
+    URL.revokeObjectURL(objectUrl)
   }
   reader.readAsDataURL(file)
 }
@@ -84,11 +93,20 @@ function onAiicLogoChange(e) {
   if (!file) return
   const inputEl = e.target
   aiicLogoFile.value = file
+  const objectUrl = URL.createObjectURL(file)
+  aiicLogoPreview.value = objectUrl
   const reader = new FileReader()
   reader.onload = () => {
-    aiicLogoPreview.value = reader.result
     form.value.aiic_logo = reader.result
+    aiicLogoPreview.value = reader.result
+    URL.revokeObjectURL(objectUrl)
     inputEl.value = ''
+  }
+  reader.onerror = () => {
+    console.error('[GeneralSettings] Failed to read AIIC logo')
+    aiicLogoPreview.value = form.value.aiic_logo || null
+    aiicLogoFile.value = null
+    URL.revokeObjectURL(objectUrl)
   }
   reader.readAsDataURL(file)
 }
@@ -105,11 +123,20 @@ function onLogoInvertedChange(e) {
   if (!file) return
   const inputEl = e.target
   logoInvertedFile.value = file
+  const objectUrl = URL.createObjectURL(file)
+  logoInvertedPreview.value = objectUrl
   const reader = new FileReader()
   reader.onload = () => {
-    logoInvertedPreview.value = reader.result
     form.value.logo_inverted = reader.result
+    logoInvertedPreview.value = reader.result
+    URL.revokeObjectURL(objectUrl)
     inputEl.value = ''
+  }
+  reader.onerror = () => {
+    console.error('[GeneralSettings] Failed to read inverted logo')
+    logoInvertedPreview.value = form.value.logo_inverted || null
+    logoInvertedFile.value = null
+    URL.revokeObjectURL(objectUrl)
   }
   reader.readAsDataURL(file)
 }
@@ -124,7 +151,7 @@ function removeLogoInverted() {
 async function save() {
   saving.value = true
   try {
-    await api.updateSystemSettings({
+    const res = await api.updateSystemSettings({
       company_name:  form.value.company_name,
       address_line1: form.value.address_line1,
       address_line2: form.value.address_line2,
@@ -138,6 +165,21 @@ async function save() {
       logo_inverted:      form.value.logo_inverted,
       report_disclaimer:  form.value.report_disclaimer,
     })
+    // Sync previews from what the server actually confirmed it stored.
+    // If a logo save silently failed, the preview will correctly revert.
+    const s = res.data?.settings || {}
+    if ('logo' in s) {
+      form.value.logo = s.logo || ''
+      logoPreview.value = s.logo || null
+    }
+    if ('aiic_logo' in s) {
+      form.value.aiic_logo = s.aiic_logo || ''
+      aiicLogoPreview.value = s.aiic_logo || null
+    }
+    if ('logo_inverted' in s) {
+      form.value.logo_inverted = s.logo_inverted || ''
+      logoInvertedPreview.value = s.logo_inverted || null
+    }
     saved.value = true
     setTimeout(() => saved.value = false, 2500)
   } catch (err) {

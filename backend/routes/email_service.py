@@ -555,15 +555,18 @@ def send_typist_assignment(typist, inspection, property_obj, client):
 
 # ── 3. Report complete (with PDF) ────────────────────────────────────────────
 
-def send_report_complete(inspection, client, property_obj, pdf_bytes=None, recipients=None):
+def send_report_complete(inspection, client, property_obj, pdf_bytes=None, recipients=None,
+                         pdf_download_url=None):
     """
     Send report-complete email from reports@ address, optionally with PDF attached.
 
-    pdf_bytes:  raw bytes of the PDF, or None to send without attachment.
-    recipients: explicit deduplicated list of email strings built by
-                pdf_generator._get_report_recipients() — covers client email
-                (or override) plus tenant, without duplication. Falls back to
-                the old client_email_override / client.email logic if omitted.
+    pdf_bytes:        raw bytes of the PDF, or None to send without attachment.
+    recipients:       explicit deduplicated list of email strings built by
+                      pdf_generator._get_report_recipients(). Falls back to
+                      client_email_override / client.email if omitted.
+    pdf_download_url: when set the PDF is NOT attached; instead a prominent
+                      "Download Report" button is shown pointing to this URL.
+                      Used when the PDF exceeds the email attachment size limit.
     """
     prop_addr  = getattr(property_obj, 'address', '') or '—'
     insp_type  = _type_label(getattr(inspection, 'inspection_type', ''))
@@ -573,17 +576,33 @@ def send_report_complete(inspection, client, property_obj, pdf_bytes=None, recip
     safe_addr = prop_addr.replace(',', '').replace(' ', '_')[:40]
     pdf_name  = f"InspectPro_{insp_type}_{safe_addr}_{insp_date.replace(' ', '_')}.pdf"
 
-    attached_text = 'attached ' if pdf_bytes else ''
+    if pdf_download_url:
+        # Large PDF — link instead of attachment
+        intro_text = 'the completed inspection report for the property below. The report is available via the download link.'
+        download_btn = (
+            f'<p style="margin:20px 0 0;text-align:center;">'
+            f'<a href="{pdf_download_url}" '
+            f'style="display:inline-block;padding:12px 28px;background-color:#1e3a8a;color:#ffffff;'
+            f'font-family:Arial,Helvetica,sans-serif;font-size:15px;font-weight:bold;'
+            f'text-decoration:none;border-radius:6px;">Download Report (PDF)</a></p>'
+            f'<p style="margin:10px 0 0;text-align:center;font-family:Arial,Helvetica,sans-serif;'
+            f'font-size:11px;color:#94a3b8;">This link expires in 30 days.</p>'
+        )
+    else:
+        intro_text   = ('attached ' if pdf_bytes else '') + 'the completed inspection report for the property below.'
+        download_btn = ''
+
     body = (
         f'''<p style="margin:0 0 16px;font-family:Arial,Helvetica,sans-serif;font-size:17px;font-weight:bold;color:#1e293b;">Inspection Report: {insp_type}</p>'''
         f'''<p style="margin:0 0 12px;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#475569;">Dear {client.name},</p>'''
-        f'''<p style="margin:0 0 16px;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#475569;">Please find {attached_text}the completed inspection report for the property below.</p>'''
+        f'''<p style="margin:0 0 16px;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#475569;">Please find {intro_text}</p>'''
         + _info_table_open()
         + _info_row('Property',    prop_addr)
         + _info_row('Report Type', _pill(insp_type, *PILL_COLORS['green']))
         + _info_row('Date',        insp_date)
         + _info_row('Inspector',   clerk_name, last=True)
         + _info_table_close()
+        + download_btn
         + '''<p style="margin:12px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#475569;">Please review the report and contact us if you have any questions or concerns.</p>'''
     )
 
@@ -600,7 +619,7 @@ def send_report_complete(inspection, client, property_obj, pdf_bytes=None, recip
         return False, 'No recipient email'
 
     atts = []
-    if pdf_bytes:
+    if pdf_bytes and not pdf_download_url:
         atts.append((pdf_name, pdf_bytes))
 
     return _send(SMTP_FROM_REPORTS, to_addrs, subject, _wrap(body, subject),

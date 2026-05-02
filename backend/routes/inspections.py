@@ -509,7 +509,33 @@ def update_inspection(inspection_id):
                                 effective_client = _StubClient()
                                 print(f'[pdf] WARNING: no client object — using stub for email body')
 
-                            ok, err = send_report_complete(insp, effective_client, prop, pdf_bytes, recipients=recipients)
+                            # ── Large-PDF handling ──────────────────────────
+                            # Resend's limit is 40 MB total (content + attachments).
+                            # A 30 MB PDF encodes to ~40 MB in base64, so we upload
+                            # anything over 25 MB to S3 and send a download link.
+                            _PDF_ATTACH_LIMIT = 25 * 1024 * 1024  # 25 MB
+                            _pdf_dl_url = None
+                            if len(pdf_bytes) > _PDF_ATTACH_LIMIT:
+                                print(f'[pdf] PDF is {len(pdf_bytes)//1024//1024} MB — uploading to S3 for download link')
+                                try:
+                                    from utils.s3 import is_configured as s3_ok, upload_bytes, presign_get, new_key
+                                    if s3_ok():
+                                        import datetime as _dt
+                                        _key = f"reports/inspection-{_insp_id}-{_dt.datetime.utcnow().strftime('%Y%m%d%H%M%S')}.pdf"
+                                        upload_bytes(pdf_bytes, _key, content_type='application/pdf')
+                                        _pdf_dl_url = presign_get(_key, expires=30 * 24 * 3600)  # 30 days
+                                        print(f'[pdf] S3 upload OK — presigned URL generated (30-day expiry)')
+                                    else:
+                                        print(f'[pdf] WARNING: PDF too large for email and S3 is not configured — will attempt attachment anyway')
+                                except Exception as _s3_err:
+                                    print(f'[pdf] S3 upload failed (non-fatal): {_s3_err} — will attempt attachment anyway')
+
+                            ok, err = send_report_complete(
+                                insp, effective_client, prop,
+                                pdf_bytes  = None if _pdf_dl_url else pdf_bytes,
+                                recipients = recipients,
+                                pdf_download_url = _pdf_dl_url,
+                            )
                             if ok:
                                 print(f'[pdf] email sent OK → {recipients}')
                                 # Mark so re-completions don't trigger another auto email
@@ -726,8 +752,30 @@ def share_pdf(inspection_id):
                     report_disclaimer        = ''
 
                 effective_client = client or _StubClient()
+
+                # ── Large-PDF handling (same threshold as auto-send) ──────
+                _PDF_ATTACH_LIMIT = 25 * 1024 * 1024  # 25 MB
+                _pdf_dl_url = None
+                if len(_pdf_bytes) > _PDF_ATTACH_LIMIT:
+                    print(f'[share-pdf] PDF is {len(_pdf_bytes)//1024//1024} MB — uploading to S3')
+                    try:
+                        from utils.s3 import is_configured as s3_ok, upload_bytes, presign_get
+                        if s3_ok():
+                            import datetime as _dt
+                            _key = f"reports/inspection-{_insp_id}-{_dt.datetime.utcnow().strftime('%Y%m%d%H%M%S')}.pdf"
+                            upload_bytes(_pdf_bytes, _key, content_type='application/pdf')
+                            _pdf_dl_url = presign_get(_key, expires=30 * 24 * 3600)
+                            print(f'[share-pdf] S3 upload OK — presigned URL generated')
+                        else:
+                            print(f'[share-pdf] WARNING: PDF too large and S3 not configured — attempting attachment anyway')
+                    except Exception as _s3_err:
+                        print(f'[share-pdf] S3 upload failed (non-fatal): {_s3_err} — attempting attachment anyway')
+
                 ok, err = send_report_complete(
-                    insp, effective_client, prop, _pdf_bytes, recipients=_emails
+                    insp, effective_client, prop,
+                    pdf_bytes        = None if _pdf_dl_url else _pdf_bytes,
+                    recipients       = _emails,
+                    pdf_download_url = _pdf_dl_url,
                 )
                 if ok:
                     print(f'[share-pdf] sent OK → {_emails}')

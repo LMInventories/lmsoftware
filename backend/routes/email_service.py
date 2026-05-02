@@ -586,7 +586,7 @@ def send_report_complete(inspection, client, property_obj, pdf_bytes=None, recip
             f'font-family:Arial,Helvetica,sans-serif;font-size:15px;font-weight:bold;'
             f'text-decoration:none;border-radius:6px;">Download Report (PDF)</a></p>'
             f'<p style="margin:10px 0 0;text-align:center;font-family:Arial,Helvetica,sans-serif;'
-            f'font-size:11px;color:#94a3b8;">This link expires in 30 days.</p>'
+            f'font-size:11px;color:#94a3b8;">This link expires in 7 days.</p>'
         )
     else:
         intro_text   = ('attached ' if pdf_bytes else '') + 'the completed inspection report for the property below.'

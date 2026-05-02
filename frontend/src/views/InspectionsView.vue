@@ -546,6 +546,10 @@ const calendarEvents = computed(() => {
 
 const filteredInspections = computed(() => {
   let result = [...inspections.value]
+  // Clients must not see inspections in active or processing stage
+  if (authStore.isClient) {
+    result = result.filter(i => !['active', 'processing'].includes(i.status))
+  }
   if (filters.value.client_ids?.length)
     result = result.filter(i => filters.value.client_ids.map(Number).includes(Number(i.client_id)))
   if (filters.value.postcode) {
@@ -1021,7 +1025,7 @@ onMounted(() => {
 
           <div class="card-footer">
             <span class="card-created">Created {{ new Date(inspection.created_at).toLocaleDateString('en-GB') }}</span>
-            <button @click.stop="deleteInspection(inspection.id)" class="btn-delete-sm">✕</button>
+            <button v-if="authStore.isAdmin || authStore.isManager" @click.stop="deleteInspection(inspection.id)" class="btn-delete-sm">✕</button>
           </div>
         </div>
         <div v-if="filteredInspections.length === 0" class="empty-state">

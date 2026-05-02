@@ -60,15 +60,16 @@ async function fetchSettings() {
 function onLogoChange(e) {
   const file = e.target.files?.[0]
   if (!file) return
+  const inputEl = e.target
   logoFile.value = file
   const reader = new FileReader()
   reader.onload = () => {
     logoPreview.value = reader.result
     form.value.logo = reader.result
+    // Clear AFTER data is captured so async read isn't interrupted
+    inputEl.value = ''
   }
   reader.readAsDataURL(file)
-  // Clear so the same file can be re-selected next time without being silently ignored
-  e.target.value = ''
 }
 
 function removeLogo() {
@@ -81,14 +82,15 @@ function removeLogo() {
 function onAiicLogoChange(e) {
   const file = e.target.files?.[0]
   if (!file) return
+  const inputEl = e.target
   aiicLogoFile.value = file
   const reader = new FileReader()
   reader.onload = () => {
     aiicLogoPreview.value = reader.result
     form.value.aiic_logo = reader.result
+    inputEl.value = ''
   }
   reader.readAsDataURL(file)
-  e.target.value = ''
 }
 
 function removeAiicLogo() {
@@ -101,14 +103,15 @@ function removeAiicLogo() {
 function onLogoInvertedChange(e) {
   const file = e.target.files?.[0]
   if (!file) return
+  const inputEl = e.target
   logoInvertedFile.value = file
   const reader = new FileReader()
   reader.onload = () => {
     logoInvertedPreview.value = reader.result
     form.value.logo_inverted = reader.result
+    inputEl.value = ''
   }
   reader.readAsDataURL(file)
-  e.target.value = ''
 }
 
 function removeLogoInverted() {

@@ -326,6 +326,10 @@ def update_inspection(inspection_id):
     user = get_current_user()
     inspection = Inspection.query.get_or_404(inspection_id)
     data = request.json
+    # Clients cannot modify inspections via the API
+    if user.role == 'client':
+        return jsonify({'error': 'Forbidden'}), 403
+
     # Clerks can update their own inspections when assigned, active, or in review.
     # 'assigned' must be included so the mobile app can activate the inspection
     # (Assigned → Active) and so offline-started inspections can sync directly

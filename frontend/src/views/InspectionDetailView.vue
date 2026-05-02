@@ -135,6 +135,7 @@ const canEdit = computed(() => authStore.isAdmin || authStore.isManager)
 
 const canAdvance = computed(() => {
   if (!inspection.value) return false
+  if (authStore.isClient) return false
   if (currentStepIndex.value >= statusSteps.value.length - 1) return false
   if (authStore.isAdmin || authStore.isManager) return true
   const clerkAllowed = ['assigned', 'active']
@@ -149,6 +150,26 @@ const canGoBack = computed(() => {
 
 const nextStep = computed(() => statusSteps.value[currentStepIndex.value + 1] ?? null)
 const prevStep = computed(() => statusSteps.value[currentStepIndex.value - 1] ?? null)
+
+// Clients only see created → assigned → complete in the progress track
+const clientVisibleStatuses = ['created', 'assigned', 'complete']
+const displayStatusSteps = computed(() => {
+  if (!authStore.isClient) return statusSteps.value
+  return statusSteps.value.filter(s => clientVisibleStatuses.includes(s.key))
+})
+const displayStepIndex = computed(() => {
+  if (!inspection.value) return 0
+  const idx = displayStatusSteps.value.findIndex(s => s.key === inspection.value.status)
+  // If current status is not in display set (e.g. active/processing for client),
+  // find the last step that precedes the current real status
+  if (idx !== -1) return idx
+  const realIdx = statusSteps.value.findIndex(s => s.key === inspection.value.status)
+  let closest = 0
+  displayStatusSteps.value.forEach((s, i) => {
+    if (statusSteps.value.findIndex(ss => ss.key === s.key) < realIdx) closest = i
+  })
+  return closest
+})
 
 // Status colour theming
 const statusColors = {
@@ -530,30 +551,30 @@ onMounted(() => {
 
       <!-- Status + Workflow Action Bar -->
       <div class="workflow-bar">
-        <!-- Progress track -->
+        <!-- Progress track — clients only see created/assigned/complete -->
         <div class="status-track">
           <div
-            v-for="(step, index) in statusSteps"
+            v-for="(step, index) in displayStatusSteps"
             :key="step.key"
             class="status-step"
             :class="{
-              'status-step--completed': index < currentStepIndex,
-              'status-step--active': index === currentStepIndex,
-              'status-step--pending': index > currentStepIndex
+              'status-step--completed': index < displayStepIndex,
+              'status-step--active': index === displayStepIndex,
+              'status-step--pending': index > displayStepIndex
             }"
           >
             <div class="step-bubble">
-              <svg v-if="index < currentStepIndex" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              <svg v-if="index < displayStepIndex" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
               <span v-else class="step-num">{{ index + 1 }}</span>
             </div>
             <span class="step-label">{{ step.label }}</span>
-            <div v-if="index < statusSteps.length - 1" class="step-connector" :class="{ 'step-connector--done': index < currentStepIndex }"></div>
+            <div v-if="index < displayStatusSteps.length - 1" class="step-connector" :class="{ 'step-connector--done': index < displayStepIndex }"></div>
           </div>
         </div>
 
         <!-- Action buttons -->
         <div class="workflow-actions">
-          <!-- Current status badge -->
+          <!-- Current status badge — clients see 'In Progress' for active/processing/review -->
           <div
             class="current-status-badge"
             :style="{
@@ -562,7 +583,9 @@ onMounted(() => {
             }"
           >
             <div class="status-dot" :style="{ background: statusColors[inspection.status]?.dot }"></div>
-            {{ statusSteps.find(s => s.key === inspection.status)?.label }}
+            {{ authStore.isClient && !clientVisibleStatuses.includes(inspection.status)
+                ? 'In Progress'
+                : statusSteps.find(s => s.key === inspection.status)?.label }}
           </div>
 
           <!-- Back button (managers only) -->
@@ -585,9 +608,9 @@ onMounted(() => {
             Advance to {{ nextStep?.label }} →
           </button>
 
-          <!-- Edit Report button — always visible to admin/manager; for others only in active/processing/review -->
+          <!-- Edit Report button — visible to admin/manager always; clerks/typists in active/processing/review; never to clients -->
           <button
-            v-if="authStore.isAdmin || authStore.isManager || ['active', 'processing', 'review'].includes(inspection.status)"
+            v-if="!authStore.isClient && (authStore.isAdmin || authStore.isManager || ['active', 'processing', 'review'].includes(inspection.status))"
             @click="router.push(`/inspections/${inspection.id}/report`)"
             class="btn-edit-report"
           >

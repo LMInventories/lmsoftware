@@ -90,6 +90,12 @@ async function load() {
     const iRes = await api.getInspection(route.params.id)
     inspection.value = iRes.data
 
+    // Clients must not access the report editor for active or processing inspections
+    if (authStore.isClient && ['active', 'processing'].includes(inspection.value.status)) {
+      router.replace(`/inspections/${route.params.id}`)
+      return
+    }
+
     const iType = inspection.value.inspection_type
     const isCheckOutType = iType === 'check_out'
 

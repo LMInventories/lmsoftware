@@ -523,8 +523,8 @@ def update_inspection(inspection_id):
                                         import datetime as _dt
                                         _key = f"reports/inspection-{_insp_id}-{_dt.datetime.utcnow().strftime('%Y%m%d%H%M%S')}.pdf"
                                         upload_bytes(pdf_bytes, _key, content_type='application/pdf')
-                                        _pdf_dl_url = presign_get(_key, expires=604800)  # 30 days
-                                        print(f'[pdf] S3 upload OK — presigned URL generated (30-day expiry)')
+                                        _pdf_dl_url = presign_get(_key, expires=604800)  # 7 days (AWS S3 maximum)
+                                        print(f'[pdf] S3 upload OK — presigned URL generated (7-day expiry)')
                                     else:
                                         print(f'[pdf] WARNING: PDF too large for email and S3 is not configured — will attempt attachment anyway')
                                 except Exception as _s3_err:
@@ -764,7 +764,7 @@ def share_pdf(inspection_id):
                             import datetime as _dt
                             _key = f"reports/inspection-{_insp_id}-{_dt.datetime.utcnow().strftime('%Y%m%d%H%M%S')}.pdf"
                             upload_bytes(_pdf_bytes, _key, content_type='application/pdf')
-                            _pdf_dl_url = presign_get(_key, expires=604800)
+                            _pdf_dl_url = presign_get(_key, expires=604800)  # 7 days (AWS S3 maximum)
                             print(f'[share-pdf] S3 upload OK — presigned URL generated')
                         else:
                             print(f'[share-pdf] WARNING: PDF too large and S3 not configured — attempting attachment anyway')
@@ -1148,4 +1148,74 @@ def _transform_report_data(source_type, target_type, raw, include_photos=False):
                     if not include_photos:
                         new_ex.pop('_photos', None)
                         new_ex.pop('_photoTs', None)
-                
+                extras.append(new_ex)
+            new_section['_extra'] = extras
+
+        # Row-level data
+        for row_id, row_data in section_data.items():
+            if row_id.startswith('_'):
+                continue
+            if not isinstance(row_data, dict):
+                continue
+
+            new_row = {}
+
+            if source_type in ('check_in', 'inventory') and target_type == 'check_out':
+                new_row['description'] = row_data.get('description', '')
+                new_row['inventoryCondition'] = row_data.get('condition', '')
+                new_row['checkOutCondition'] = ''
+                for field in ('cleanliness', 'cleanlinessNotes', 'locationSerial',
+                              'reading', 'answer', 'notes', 'name'):
+                    if field in row_data:
+                        new_row[field] = row_data[field]
+                # Photos — stored as _photos (underscore prefix) in modern sync
+                if include_photos:
+                    for photo_field in ('_photos', '_photoTs'):
+                        if photo_field in row_data:
+                            new_row[photo_field] = row_data[photo_field]
+                # Carry sub-items — promote condition → inventoryCondition
+                if '_subs' in row_data and isinstance(row_data['_subs'], list):
+                    new_row['_subs'] = [
+                        {
+                            '_sid':               sub.get('_sid', ''),
+                            'description':        sub.get('description', ''),
+                            'inventoryCondition': sub.get('condition', ''),
+                            'checkOutCondition':  '',
+                        }
+                        for sub in row_data['_subs']
+                    ]
+
+            elif source_type == 'check_out' and target_type in ('check_in', 'inventory'):
+                new_row['description'] = row_data.get('description', '')
+                new_row['condition'] = _combine_conditions(
+                    row_data.get('inventoryCondition'), row_data.get('checkOutCondition'),
+                    fallback=row_data.get('condition', '')
+                )
+                for field in ('cleanliness', 'cleanlinessNotes', 'locationSerial',
+                              'reading', 'answer', 'notes', 'name'):
+                    if field in row_data:
+                        new_row[field] = row_data[field]
+                # Photos
+                if include_photos:
+                    for photo_field in ('_photos', '_photoTs'):
+                        if photo_field in row_data:
+                            new_row[photo_field] = row_data[photo_field]
+                # Carry sub-items — combine conditions
+                if '_subs' in row_data and isinstance(row_data['_subs'], list):
+                    new_row['_subs'] = [
+                        {
+                            '_sid':        sub.get('_sid', ''),
+                            'description': sub.get('description', ''),
+                            'condition':   _combine_conditions(
+                                sub.get('inventoryCondition'), sub.get('checkOutCondition'),
+                                fallback=sub.get('condition', '')
+                            ),
+                        }
+                        for sub in row_data['_subs']
+                    ]
+
+            new_section[row_id] = new_row
+
+        dst[section_id] = new_section
+
+    return dst

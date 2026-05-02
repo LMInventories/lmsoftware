@@ -604,10 +604,18 @@ def preview_pdf(inspection_id):
     # Apply the same access rules as the GET single-inspection endpoint.
     # Clerks may only export their own inspections.
     # Typists may only export inspections assigned to them.
+    # Clients may only export complete inspections linked to their client account.
     if user.role == 'clerk' and inspection.inspector_id != user.id:
         return jsonify({'error': 'Forbidden'}), 403
     if user.role == 'typist' and inspection.typist_id != user.id:
         return jsonify({'error': 'Forbidden'}), 403
+    if user.role == 'client':
+        if inspection.status != 'complete':
+            return jsonify({'error': 'The PDF is only available once the inspection is complete'}), 403
+        client_id = getattr(user, 'client_id', None)
+        prop_client_id = inspection.property.client_id if inspection.property else None
+        if not client_id or prop_client_id != client_id:
+            return jsonify({'error': 'Forbidden'}), 403
 
     if not inspection.report_data:
         return jsonify({'error': 'No report data — inspection has not been filled in yet'}), 400
@@ -647,8 +655,19 @@ def share_pdf(inspection_id):
     import threading
 
     user = get_current_user()
-    if not is_admin_or_manager(user):
-        return jsonify({'error': 'Forbidden — only admins and managers may share PDFs'}), 403
+    inspection = Inspection.query.get_or_404(inspection_id)
+
+    # Admins and managers can share any inspection's PDF.
+    # Clients can share PDFs for complete inspections linked to their own client account.
+    if user.role == 'client':
+        if inspection.status != 'complete':
+            return jsonify({'error': 'The PDF is only available once the inspection is complete'}), 403
+        client_id = getattr(user, 'client_id', None)
+        prop_client_id = inspection.property.client_id if inspection.property else None
+        if not client_id or prop_client_id != client_id:
+            return jsonify({'error': 'Forbidden'}), 403
+    elif not is_admin_or_manager(user):
+        return jsonify({'error': 'Forbidden'}), 403
 
     data   = request.get_json(force=True) or {}
     emails = data.get('emails', [])
@@ -657,8 +676,6 @@ def share_pdf(inspection_id):
     emails = [e.strip() for e in emails if e.strip()]
     if not emails:
         return jsonify({'error': 'No email addresses provided'}), 400
-
-    inspection = Inspection.query.get_or_404(inspection_id)
     if not inspection.report_data:
         return jsonify({'error': 'No report data — inspection has not been filled in yet'}), 400
 
@@ -1119,28 +1136,4 @@ def _transform_report_data(source_type, target_type, raw, include_photos=False):
                 for field in ('cleanliness', 'cleanlinessNotes', 'locationSerial',
                               'reading', 'answer', 'notes', 'name'):
                     if field in row_data:
-                        new_row[field] = row_data[field]
-                # Photos
-                if include_photos:
-                    for photo_field in ('_photos', '_photoTs'):
-                        if photo_field in row_data:
-                            new_row[photo_field] = row_data[photo_field]
-                # Carry sub-items — combine conditions
-                if '_subs' in row_data and isinstance(row_data['_subs'], list):
-                    new_row['_subs'] = [
-                        {
-                            '_sid':        sub.get('_sid', ''),
-                            'description': sub.get('description', ''),
-                            'condition':   _combine_conditions(
-                                sub.get('inventoryCondition'), sub.get('checkOutCondition'),
-                                fallback=sub.get('condition', '')
-                            ),
-                        }
-                        for sub in row_data['_subs']
-                    ]
-
-            new_section[row_id] = new_row
-
-        dst[section_id] = new_section
-
-    return dst
+                        new_row[field] = row_

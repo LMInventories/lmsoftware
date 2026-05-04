@@ -115,50 +115,54 @@ onBeforeUnmount(() => {
 })
 
 // ── Assigned actions ──────────────────────────────────────────────────────
-// Internal copy — we emit on every change
-const assigned = computed(() => props.actions || [])
-
-function isAssigned(actionId) {
-  return assigned.value.some(a => a.actionId === actionId)
+// Ensure every stored action entry has a stable _id so the same actionId can
+// appear multiple times (e.g. Maintenance Required — Tenant AND Landlord/Agent).
+function generateId() {
+  return `act_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
 }
 
-function getAssigned(actionId) {
-  return assigned.value.find(a => a.actionId === actionId)
-}
-
-// Normalise an action object: ensure it has conditions[] (migrate legacy condition string)
 function normaliseAction(a) {
-  if (a.conditions) return a
-  return { ...a, conditions: a.condition ? [a.condition] : [] }
-}
-
-function getConditions(a) {
-  return (normaliseAction(a)).conditions
-}
-
-function toggleAction(actionId) {
-  if (isAssigned(actionId)) {
-    emit('update:actions', assigned.value.filter(a => a.actionId !== actionId))
-  } else {
-    emit('update:actions', [
-      ...assigned.value,
-      { actionId, responsibility: responsibilities.value[0] || '', conditions: [] }
-    ])
+  return {
+    _id:          a._id || generateId(),
+    actionId:     a.actionId,
+    responsibility: a.responsibility ?? '',
+    conditions:   a.conditions ?? (a.condition ? [a.condition] : []),
   }
 }
 
-function setResponsibility(actionId, value) {
+const assigned = computed(() => (props.actions || []).map(normaliseAction))
+
+function instanceCount(actionId) {
+  return assigned.value.filter(a => a.actionId === actionId).length
+}
+
+function getConditions(a) {
+  return normaliseAction(a).conditions
+}
+
+// Always ADD a new instance — never toggle-off. Use the × button to remove.
+function addAction(actionId) {
+  emit('update:actions', [
+    ...assigned.value,
+    normaliseAction({ actionId, responsibility: responsibilities.value[0] || '', conditions: [] }),
+  ])
+}
+
+function removeAction(_id) {
+  emit('update:actions', assigned.value.filter(a => a._id !== _id))
+}
+
+function setResponsibility(_id, value) {
   emit('update:actions', assigned.value.map(a =>
-    a.actionId === actionId ? { ...normaliseAction(a), responsibility: value } : a
+    a._id === _id ? { ...a, responsibility: value } : a
   ))
 }
 
-function toggleCondition(actionId, line) {
+function toggleCondition(_id, line) {
   emit('update:actions', assigned.value.map(a => {
-    if (a.actionId !== actionId) return a
-    const norm = normaliseAction(a)
-    const has = norm.conditions.includes(line)
-    return { ...norm, conditions: has ? norm.conditions.filter(c => c !== line) : [...norm.conditions, line] }
+    if (a._id !== _id) return a
+    const has = a.conditions.includes(line)
+    return { ...a, conditions: has ? a.conditions.filter(c => c !== line) : [...a.conditions, line] }
   }))
 }
 
@@ -176,7 +180,7 @@ function getCatalogueItem(actionId) {
       <template v-if="assigned.length">
         <div
           v-for="a in assigned"
-          :key="a.actionId"
+          :key="a._id"
           class="cap-pill"
           :style="{
             background: (getCatalogueItem(a.actionId)?.color || '#64748b') + '20',
@@ -188,7 +192,7 @@ function getCatalogueItem(actionId) {
           <span class="cap-pill-name">{{ getCatalogueItem(a.actionId)?.name || a.actionId }}</span>
           <span v-if="a.responsibility" class="cap-pill-resp">· {{ a.responsibility }}</span>
           <span v-if="getConditions(a).length" class="cap-pill-resp">· {{ getConditions(a).length > 1 ? getConditions(a).length + ' conditions' : getConditions(a)[0] }}</span>
-          <button class="cap-pill-x" @click.stop="toggleAction(a.actionId)">×</button>
+          <button class="cap-pill-x" @click.stop="removeAction(a._id)">×</button>
         </div>
       </template>
 
@@ -217,43 +221,44 @@ function getCatalogueItem(actionId) {
         </div>
 
         <template v-else>
-          <!-- Action toggle list -->
-          <div class="cap-section-lbl">Select actions</div>
+          <!-- Action add buttons — clicking always adds a new instance -->
+          <div class="cap-section-lbl">Add action <span class="cap-opt">(tap to add; same action can be added multiple times)</span></div>
           <div class="cap-action-list">
             <button
               v-for="cat in catalogue"
               :key="cat.id"
               class="cap-action-btn"
-              :class="{ active: isAssigned(cat.id) }"
-              :style="isAssigned(cat.id) ? {
+              :class="{ active: instanceCount(cat.id) > 0 }"
+              :style="instanceCount(cat.id) > 0 ? {
                 background:   cat.color + '18',
                 borderColor:  cat.color + '80',
                 color:        cat.color,
               } : {}"
-              @click="toggleAction(cat.id)"
+              @click="addAction(cat.id)"
             >
               <span class="cap-action-dot" :style="{ background: cat.color }"></span>
               {{ cat.name }}
-              <svg v-if="isAssigned(cat.id)" class="cap-check" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+              <span v-if="instanceCount(cat.id) > 0" class="cap-count-badge" :style="{ background: cat.color }">
+                {{ instanceCount(cat.id) }}
+              </span>
             </button>
           </div>
 
-          <!-- Per-action details (shown for assigned ones) -->
+          <!-- Per-action instance details -->
           <template v-if="assigned.length">
             <div class="cap-divider"></div>
             <div class="cap-section-lbl">Details</div>
 
             <div
               v-for="a in assigned"
-              :key="a.actionId"
+              :key="a._id"
               class="cap-detail-row"
             >
-              <div
-                class="cap-detail-label"
-                :style="{ color: getCatalogueItem(a.actionId)?.color || '#64748b' }"
-              >
+              <!-- Action name + remove button -->
+              <div class="cap-detail-label" :style="{ color: getCatalogueItem(a.actionId)?.color || '#64748b' }">
                 <span class="cap-action-dot" :style="{ background: getCatalogueItem(a.actionId)?.color || '#64748b' }"></span>
-                {{ getCatalogueItem(a.actionId)?.name || a.actionId }}
+                <span style="flex:1">{{ getCatalogueItem(a.actionId)?.name || a.actionId }}</span>
+                <button class="cap-remove-btn" @click="removeAction(a._id)" title="Remove this action">✕</button>
               </div>
 
               <!-- Responsibility -->
@@ -262,7 +267,7 @@ function getCatalogueItem(actionId) {
                 <select
                   class="cap-select"
                   :value="a.responsibility"
-                  @change="setResponsibility(a.actionId, $event.target.value)"
+                  @change="setResponsibility(a._id, $event.target.value)"
                 >
                   <option value="">— Select —</option>
                   <option v-for="r in responsibilities" :key="r" :value="r">{{ r }}</option>
@@ -273,7 +278,6 @@ function getCatalogueItem(actionId) {
               <div class="cap-detail-field">
                 <label class="cap-field-lbl">Condition <span class="cap-opt">(select all that apply)</span></label>
 
-                <!-- Lines available: multi-select checkbox list -->
                 <template v-if="conditionLines.length">
                   <div class="cap-cond-list">
                     <label
@@ -286,21 +290,20 @@ function getCatalogueItem(actionId) {
                         type="checkbox"
                         class="cap-cond-cb"
                         :checked="getConditions(a).includes(line)"
-                        @change="toggleCondition(a.actionId, line)"
+                        @change="toggleCondition(a._id, line)"
                       />
                       <span class="cap-cond-text">{{ line }}</span>
                     </label>
                   </div>
                 </template>
 
-                <!-- No lines yet: plain text input (each line = one condition) -->
                 <template v-else>
                   <input
                     class="cap-note-input"
                     type="text"
                     placeholder="e.g. Heavy marks to low level door…"
                     :value="getConditions(a).join(', ')"
-                    @change="toggleCondition(a.actionId, $event.target.value.trim())"
+                    @change="toggleCondition(a._id, $event.target.value.trim())"
                     maxlength="200"
                   />
                 </template>
@@ -476,10 +479,31 @@ function getCatalogueItem(actionId) {
   border-radius: 3px;
   flex-shrink: 0;
 }
-.cap-check {
+.cap-count-badge {
   margin-left: auto;
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  color: white;
+  font-size: 11px;
+  font-weight: 700;
 }
+
+.cap-remove-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  color: #94a3b8;
+  padding: 0 2px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.cap-remove-btn:hover { color: #ef4444; }
 
 /* Detail rows */
 .cap-divider {
@@ -564,38 +588,4 @@ function getCatalogueItem(actionId) {
 }
 .cap-cond-item.cap-cond-checked {
   background: #eff6ff;
-  border-color: #93c5fd;
-}
-.cap-cond-cb {
-  flex-shrink: 0;
-  margin-top: 2px;
-  accent-color: #6366f1;
-  cursor: pointer;
-}
-.cap-cond-text {
-  color: #374151;
-}
-.cap-cond-checked .cap-cond-text {
-  color: #1d4ed8;
-  font-weight: 600;
-}
-
-/* Footer */
-.cap-footer {
-  margin-top: 12px;
-  display: flex;
-  justify-content: flex-end;
-}
-.cap-done-btn {
-  padding: 7px 20px;
-  background: #6366f1;
-  color: white;
-  border: none;
-  border-radius: 7px;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.cap-done-btn:hover { background: #4f46e5; }
-</style>
+  border-color

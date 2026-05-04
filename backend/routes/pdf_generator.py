@@ -499,15 +499,23 @@ class _PDFBuilder:
         """
         Build the Actions cell for a check-out row.
 
-        Each action gets its own Paragraph so they appear on separate lines and
+        Each action instance gets its own Paragraph (one per line) so they
         visually align with the corresponding check-out condition text lines.
+        When a responsibility is set it is appended after a dash so that
+        duplicate action types (e.g. two 'Maintenance Required' entries) are
+        distinguishable at a glance.
         If no actions, renders a single '—'.
         """
         valid = [a for a in acts if a.get('actionId')]
         if not valid:
             paras = [self._p('—', self.s_cell_sm)]
         else:
-            paras = [self._p(self._action_name(a['actionId']), self.s_cell_sm) for a in valid]
+            paras = []
+            for a in valid:
+                name = self._action_name(a['actionId'])
+                resp = (a.get('responsibility') or '').strip()
+                text = f"{name} — {resp}" if resp else name
+                paras.append(self._p(text, self.s_cell_sm))
         return paras + (extra_paragraphs or [])
 
     def _build_actions_summary(self):
@@ -1528,13 +1536,4 @@ def _get_report_recipients(inspection) -> list:
       2. tenant_email if set and not already included
     """
     # 'SUPPRESS' is set on backdated imports where no email should fire
-    if inspection.client_email_override == 'SUPPRESS':
-        return []
-
-    recipients = []
-    primary = ''
-    if inspection.client_email_override:
-        primary = inspection.client_email_override.strip()
-    elif inspection.property and inspection.property.client:
-        primary = (inspection.property.client.email or '').strip()
-    # primary may itself be comma-separate
+  

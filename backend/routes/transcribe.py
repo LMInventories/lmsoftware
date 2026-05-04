@@ -152,7 +152,14 @@ VERBATIM RULES — absolute, no exceptions:
 - Do NOT apply description/condition splitting — everything goes into "condition"
 - Convert spoken numbers to numerals: "two" → "2", "three" → "3"
 - Format quantities as "N x item": "two bulbs" → "2 x bulbs"
-- Capitalise the first word
+- Capitalise the first word of each observation
+- SEPARATE OBSERVATIONS ON DIFFERENT LINES: if the clerk mentions two or more distinct observations
+  about different parts or fittings of the same item, put each observation on its own line using \\n
+  NEVER join separate observations with a comma — use \\n instead
+  Example: "handles slightly loose, one screw missing to interior handle"
+    CORRECT:   "Handles slightly loose\\nOne screw missing to interior handle"
+    INCORRECT: "Handles slightly loose, one screw missing to interior handle"
+  A single observation about one thing may still use commas within that one line
 
 Return ONLY valid JSON, no markdown:
 {{"condition": "..."}}"""
@@ -1070,8 +1077,15 @@ VERBATIM RULES — absolute, no exceptions:
 4. If the clerk names an item directly: fill its "checkOutCondition" field.
 5. If the clerk names a sub-item (matching its Description): fill that sub-item's "checkOutCondition"
    and include it under the parent item's "_subs" array, using the exact _sid shown above.
-6. Capitalise the first word.
+6. Capitalise the first word of each observation.
 7. Only fill items/sub-items that are mentioned. Omit everything else.
+8. SEPARATE OBSERVATIONS ON DIFFERENT LINES: if the clerk mentions two or more distinct observations
+   about different parts or fittings of the same item, put each on its own line using \\n.
+   NEVER join separate observations with a comma — use \\n instead.
+   Example: "handles slightly loose, one screw missing to interior handle"
+     CORRECT:   "Handles slightly loose\\nOne screw missing to interior handle"
+     INCORRECT: "Handles slightly loose, one screw missing to interior handle"
+   A single observation about one thing may still use commas within that one line.
 
 Return ONLY valid JSON — no markdown, no extra text.
 Use "checkOutCondition" (not "condition") for all fields.
@@ -1369,39 +1383,4 @@ def transcribe_full():
 
     audio_b64 = data.get('audio')
     mime_type = data.get('mimeType', 'audio/webm')
-    template  = data.get('template', {})
-
-    if not audio_b64:
-        return jsonify({'error': 'No audio data'}), 400
-
-    # Debug: log what we received
-    print(f'[transcribe/item] mimeType received: {repr(mime_type)}')
-    print(f'[transcribe/item] audio_b64 length: {len(audio_b64)}')
-
-    if not os.environ.get('OPENAI_API_KEY'):
-        return jsonify({'error': 'OPENAI_API_KEY not configured on server'}), 503
-
-    if not os.environ.get('ANTHROPIC_API_KEY'):
-        return jsonify({'error': 'ANTHROPIC_API_KEY not configured on server'}), 503
-
-    try:
-        audio_bytes = base64.b64decode(audio_b64)
-    except Exception:
-        return jsonify({'error': 'Invalid base64 audio data'}), 400
-
-    try:
-        transcript = _whisper_transcribe(audio_bytes, mime_type)
-
-        if not transcript:
-            return jsonify({'error': 'No speech detected in recording'}), 422
-
-        filled = _claude_fill_full_report(transcript, template)
-
-        return jsonify({
-            'transcript': transcript,
-            'filled':     filled,
-        })
-
-    except Exception as e:
-        print(f'[transcribe/full] Error: {e}')
-        return jsonify({'error': str(e)}), 500
+  

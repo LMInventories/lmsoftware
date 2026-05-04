@@ -495,6 +495,21 @@ class _PDFBuilder:
         c = next((x for x in self.action_catalogue if str(x.get('id')) == str(aid)), None)
         return (c or {}).get('color') or '#64748b'
 
+    def _acts_cell(self, acts, extra_paragraphs=None):
+        """
+        Build the Actions cell for a check-out row.
+
+        Each action gets its own Paragraph so they appear on separate lines and
+        visually align with the corresponding check-out condition text lines.
+        If no actions, renders a single '—'.
+        """
+        valid = [a for a in acts if a.get('actionId')]
+        if not valid:
+            paras = [self._p('—', self.s_cell_sm)]
+        else:
+            paras = [self._p(self._action_name(a['actionId']), self.s_cell_sm) for a in valid]
+        return paras + (extra_paragraphs or [])
+
     def _build_actions_summary(self):
         for room in self.rooms:
             for item in self._ordered_items(room):
@@ -1147,8 +1162,7 @@ class _PDFBuilder:
                     inv  = (item.get('inventoryCondition') or '') if is_ex else (self._get(room['id'],item['id'],'inventoryCondition') or self._get(room['id'],item['id'],'condition'))
                     co_c = (item.get('checkOutCondition')  or 'As Check In') if is_ex else (self._get(room['id'],item['id'],'checkOutCondition') or 'As Check In')
                     acts = self._item_actions(room['id'], iid)
-                    act_txt = ', '.join(self._action_name(a['actionId']) for a in acts if a.get('actionId'))
-                    acts_cell = [self._p(act_txt or '—', self.s_cell_sm)] + link_p
+                    acts_cell = self._acts_cell(acts, extra_paragraphs=link_p)
                     tbl_data.append([Paragraph(ref,self.s_ref), self._p(label,self.s_bold), self._p(desc or '—'), self._p(inv or '—'), self._p(co_c), acts_cell])
                     # Sub-items
                     if not is_ex:
@@ -1198,7 +1212,6 @@ class _PDFBuilder:
                         ci_name = ci.get('name') or 'Additional Item'
                         ci_coc  = ci.get('checkOutCondition') or '—'
                         acts    = self._item_actions(room['id'], cid)
-                        act_txt = ', '.join(self._action_name(a['actionId']) for a in acts if a.get('actionId'))
                         ref     = f'{room_num}.A{ci_idx + 1}'
                         added_style = ParagraphStyle('ai_added', fontName='Helvetica-Oblique', fontSize=7,
                                                      leading=9, textColor=colors.HexColor('#64748b'))
@@ -1208,7 +1221,7 @@ class _PDFBuilder:
                             Paragraph('—', self.s_cell),
                             Paragraph('Added during tenancy', added_style),
                             self._p(ci_coc),
-                            self._p(act_txt or '—', self.s_cell_sm),
+                            self._acts_cell(acts),
                         ])
                         # Sub-items of custom item
                         for sub in self._get_subs(room['id'], cid):
@@ -1524,13 +1537,4 @@ def _get_report_recipients(inspection) -> list:
         primary = inspection.client_email_override.strip()
     elif inspection.property and inspection.property.client:
         primary = (inspection.property.client.email or '').strip()
-    # primary may itself be comma-separated (e.g. "a@b.com, c@d.com")
-    for addr in primary.split(','):
-        addr = addr.strip().lower()
-        if addr and addr not in recipients:
-            recipients.append(addr)
-    if inspection.tenant_email:
-        tenant = inspection.tenant_email.strip().lower()
-        if tenant and tenant not in recipients:
-            recipients.append(tenant)
-    return recipients
+    # primary may itself be comma-separate

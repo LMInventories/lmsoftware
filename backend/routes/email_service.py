@@ -715,3 +715,61 @@ def send_confirmation_email(
     )
 
     return _send(SMTP_FROM, recipient_email, subject, _wrap(body, subject))
+
+
+# ── Signing link email ────────────────────────────────────────────────────────
+
+def send_signing_link_email(inspection, role, signer_name, recipient_email, signing_url):
+    """
+    Send a signing-link email to a tenant or landlord/agent.
+    inspection  — Inspection ORM object
+    role        — 'tenant' | 'landlord_agent'
+    signer_name — display name for the recipient
+    signing_url — full tokenised URL to the signing page
+    """
+    address     = inspection.property.address if inspection.property else '—'
+    type_label  = _type_label(inspection.inspection_type)
+    conduct_str = _fmt_date(inspection.conduct_date)
+
+    role_label = 'Tenant' if role == 'tenant' else 'Landlord / Agent'
+    subject    = f'Please Sign: {type_label} Report — {address}'
+
+    body = f"""
+<p style="margin:0 0 20px;font-family:Arial,Helvetica,sans-serif;font-size:16px;color:#1e293b;">
+  Dear {signer_name},
+</p>
+<p style="margin:0 0 16px;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#475569;line-height:1.6;">
+  A {type_label.lower()} report has been completed for the property below. Please review the
+  declaration and add your signature using the button below.
+</p>
+{_info_table_open()}
+{_info_row('Property', address)}
+{_info_row('Report Type', type_label)}
+{_info_row('Inspection Date', conduct_str)}
+{_info_row('Signing As', role_label, last=True)}
+{_info_table_close()}
+<p style="margin:28px 0 10px;font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#64748b;line-height:1.6;">
+  By signing this document you confirm that you have had the opportunity to review the report and
+  agree that it accurately represents the condition of the property at the time of inspection.
+</p>
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin:8px 0 24px;">
+  <tr>
+    <td style="border-radius:8px;background-color:#1e3a8a;">
+      <a href="{signing_url}"
+         style="display:inline-block;padding:14px 32px;font-family:Arial,Helvetica,sans-serif;
+                font-size:15px;font-weight:bold;color:#ffffff;text-decoration:none;
+                border-radius:8px;">
+        ✍️&nbsp; Sign Document
+      </a>
+    </td>
+  </tr>
+</table>
+<p style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#94a3b8;line-height:1.6;">
+  This link is valid for 30 days. If you did not expect this email, please contact your letting agent.
+  <br>Do not share this link with anyone else.
+</p>
+"""
+    return _send(SMTP_FROM, recipient_email, subject, _wrap(body, subject))
+
+
+# ── S

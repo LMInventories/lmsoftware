@@ -588,4 +588,73 @@ function getCatalogueItem(actionId) {
 }
 .cap-cond-item.cap-cond-checked {
   background: #eff6ff;
-  border-color
+  border-color: #93c5fd;
+}
+.cap-cond-cb {
+  flex-shrink: 0;
+  margin-top: 2px;
+  accent-color: #6366f1;
+  cursor: pointer;
+}
+.cap-cond-text {
+  color: #374151;
+}
+.cap-cond-checked .cap-cond-text {
+  color: #1d4ed8;
+  font-weight: 600;
+}
+
+/* Footer */
+.cap-footer {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
+}
+.cap-done-btn {
+  padding: 7px 20px;
+  background: #6366f1;
+  color: white;
+  border: none;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.cap-done-btn:hover { background: #4f46e5; }
+</style>
+: #93c5fd;
+}
+.cap-cond-cb {
+  flex-shrink: 0;
+  margin-top: 2px;
+  accent-color: #6366f1;
+  cursor: pointer;
+}
+.cap-cond-text {
+  color: #374151;
+}
+.cap-cond-checked .cap-cond-text {
+  color: #1d4ed8;
+  font-weight: 600;
+}
+
+/* Footer */
+.cap-footer {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
+}
+.cap-done-btn {
+  padding: 7px 20px;
+  background: #6366f1;
+  color: white;
+  border: none;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.cap-done-btn:hover { background: #4f46e5; }
+</style>

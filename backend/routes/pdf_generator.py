@@ -681,7 +681,6 @@ class _PDFBuilder:
         story += self._rooms()
         if self.is_check_out and self.act_pos == 'bottom':
             story += self._action_summary()
-        story += self._signatures_page()
         return story
 
     def build(self) -> bytes:
@@ -925,132 +924,6 @@ class _PDFBuilder:
 
         canvas.restoreState()
 
-    # ── Signatures declaration page ───────────────────────────────────────────
-
-    def _signatures_page(self):
-        """
-        Final page of the PDF — declaration text + three signature blocks.
-        Signatures are loaded from the InspectionSignature table.
-        Roles shown: Clerk, Tenant, Landlord/Agent (optional — only if signed or a row exists).
-        """
-        from reportlab.platypus import HRFlowable, Spacer as _Sp
-        from reportlab.lib.styles import ParagraphStyle
-        from reportlab.lib.enums import TA_CENTER
-        from reportlab.lib import colors as _rl_colors
-        import io
-
-        uw = self._uw()
-
-        # Load signatures from DB
-        sigs_by_role = {}
-        try:
-            from models import InspectionSignature
-            for s in InspectionSignature.query.filter_by(inspection_id=self.inspection.id).all():
-                # Prefer the most recent; in_person beats remote if same role has both
-                existing = sigs_by_role.get(s.role)
-                if not existing or (s.method == 'in_person' and existing.method == 'remote') or \
-                   (s.signed_at and existing.signed_at and s.signed_at > existing.signed_at):
-                    sigs_by_role[s.role] = s
-        except Exception as _e:
-            print(f'[pdf] signatures load failed (non-fatal): {_e}')
-
-        type_label = {
-            'inventory': 'Inventory', 'check_in': 'Check In', 'check_out': 'Check Out',
-            'mid_term': 'Mid-Term Visit', 'interim': 'Interim Inspection',
-            'snagging': 'Snagging', 'hhsrs': 'HHSRS',
-        }.get((self.inspection.inspection_type or '').lower().replace(' ', '_'),
-              self.inspection.inspection_type or 'Inspection')
-
-        # Styles
-        s_decl = ParagraphStyle('sig_decl', fontName='Helvetica', fontSize=9,
-                                 leading=14, textColor=_rl_colors.HexColor('#475569'),
-                                 spaceAfter=0)
-        s_role = ParagraphStyle('sig_role', fontName='Helvetica-Bold', fontSize=9,
-                                 leading=12, textColor=_rl_colors.HexColor('#1e293b'))
-        s_name = ParagraphStyle('sig_name', fontName='Helvetica', fontSize=8.5,
-                                 leading=12, textColor=_rl_colors.HexColor('#64748b'))
-        s_await = ParagraphStyle('sig_await', fontName='Helvetica-Oblique', fontSize=8.5,
-                                  leading=12, textColor=_rl_colors.HexColor('#94a3b8'))
-
-        declaration = (
-            f'I/We, the undersigned, confirm that I/we have had the opportunity to review the '
-            f'contents of this {type_label} report and agree that it accurately represents the '
-            f'condition of the property at the time of inspection. I/we understand that this '
-            f'document may be used as evidence in any future deposit dispute or legal proceedings.'
-        )
-
-        story = [
-            PageBreak(),
-            _Anchor('anchor_signatures'),
-            _HeaderBar('Signatures & Declaration', self.brand, self.hdr_c),
-            Spacer(1, 5*mm),
-            Paragraph(declaration, s_decl),
-            Spacer(1, 8*mm),
-        ]
-
-        # Always show Clerk + Tenant; show Landlord/Agent only if a record exists
-        roles_to_show = [
-            ('clerk',          'Inspector / Clerk'),
-            ('tenant',         'Tenant'),
-        ]
-        if 'landlord_agent' in sigs_by_role:
-            roles_to_show.append(('landlord_agent', 'Landlord / Agent'))
-
-        sig_col_w = (uw - (len(roles_to_show) - 1) * 6*mm) / len(roles_to_show)
-
-        sig_cells = []
-        for role_key, role_display in roles_to_show:
-            sig = sigs_by_role.get(role_key)
-            cell_items = [Paragraph(role_display, s_role), Spacer(1, 2*mm)]
-
-            if sig and sig.signed_at and sig.signature_data:
-                # Embed the signature image
-                try:
-                    raw = sig.signature_data
-                    if raw.startswith('data:'):
-                        raw = raw.split(',', 1)[1]
-                    img_bytes = base64.b64decode(raw)
-                    from reportlab.platypus import Image as _RLImage
-                    img = _RLImage(io.BytesIO(img_bytes), width=sig_col_w * 0.85, height=18*mm)
-                    img.hAlign = 'LEFT'
-                    cell_items.append(img)
-                except Exception as _ie:
-                    cell_items.append(Paragraph('(signature image unavailable)', s_await))
-
-                signed_str = sig.signed_at.strftime('%-d %B %Y') if sig.signed_at else '—'
-                name_str   = sig.signer_name or '—'
-                cell_items += [
-                    Spacer(1, 2*mm),
-                    Paragraph(f'{name_str}', s_name),
-                    Paragraph(f'Signed {signed_str}', s_name),
-                ]
-            else:
-                # Blank box awaiting signature
-                cell_items.append(Spacer(1, 18*mm))
-                cell_items.append(Paragraph('Awaiting signature', s_await))
-                cell_items.append(Paragraph('Name: ___________________________', s_name))
-                cell_items.append(Paragraph('Date: ____________________________', s_name))
-
-            sig_cells.append(cell_items)
-
-        col_widths = [sig_col_w] * len(sig_cells)
-        tbl_data   = [sig_cells]
-
-        tbl = Table(tbl_data, colWidths=col_widths, rowHeights=None)
-        tbl.setStyle(TableStyle([
-            ('VALIGN',        (0,0), (-1,-1), 'TOP'),
-            ('TOPPADDING',    (0,0), (-1,-1), 8),
-            ('BOTTOMPADDING', (0,0), (-1,-1), 8),
-            ('LEFTPADDING',   (0,0), (-1,-1), 6),
-            ('RIGHTPADDING',  (0,0), (-1,-1), 6),
-            ('BOX',           (0,0), (-1,-1), 0.5, _rl_colors.HexColor('#cbd5e1')),
-            ('INNERGRID',     (0,0), (-1,-1), 0.5, _rl_colors.HexColor('#e2e8f0')),
-            ('BACKGROUND',    (0,0), (-1,-1), _rl_colors.HexColor('#f8fafc')),
-        ]))
-
-        story.append(tbl)
-        return story
-
     def _cover(self):
         """Returns a single NextPageTemplate + PageBreak — actual drawing happens in _draw_cover."""
         from reportlab.platypus import NextPageTemplate
@@ -1087,7 +960,6 @@ class _PDFBuilder:
             add(r.get('name', ''), f'anchor_room_{r["id"]}')
         if self.is_check_out and self.act_pos == 'bottom' and self.actions_summary:
             add('Action Summary', 'anchor_action_summary')
-        add('Signatures', 'anchor_signatures')
 
         uw  = self._uw()
         if page_map is not None:
@@ -1527,4 +1399,141 @@ def _adapt_item(item: dict, sec_type: str, sec_idx: int, row_idx: int) -> dict:
     """Mirror of InspectionReportView._adaptItem() — produces row with same id as frontend."""
     rid = f'fs_{sec_idx}_{row_idx}'
     if sec_type == 'meter_readings':
-        return {'id': ri
+        return {'id': rid, 'name': item.get('name',''), 'locationSerial': item.get('location_serial',''), 'reading': item.get('reading','')}
+    if sec_type == 'cleaning_summary':
+        # additional_notes is a Settings-level hint — not pre-filled user data.
+        # Keep cleanlinessNotes empty so the gv() fallback never shows hint text in the PDF.
+        return {'id': rid, 'name': item.get('name',''), 'cleanliness': '', 'cleanlinessNotes': ''}
+    if sec_type == 'condition_summary':
+        return {'id': rid, 'name': item.get('name',''), 'condition': item.get('condition', item.get('description',''))}
+    if sec_type == 'fire_door_safety':
+        return {'id': rid, 'name': item.get('name',''), 'question': item.get('question',''), 'answer': '', 'notes': item.get('additional_notes','')}
+    if sec_type in ('smoke_alarms', 'health_safety'):
+        # additional_notes is guidance/hint text — not a pre-filled answer
+        return {'id': rid, 'question': item.get('name', item.get('question','')), 'answer': '', 'notes': '', 'guidance': item.get('additional_notes','')}
+    if sec_type == 'keys':
+        return {'id': rid, 'name': item.get('name',''), 'description': item.get('description','')}
+    return {'id': rid, 'name': item.get('name',''), 'condition': ''}
+
+def _load_fixed_sections() -> list:
+    """
+    Load fixed sections from system_settings (or fall back to defaults).
+    Produces the same structure the frontend builds in its fixedSections computed:
+      - section id: fs_{secIdx}_{slugified_name}
+      - row id:     fs_{secIdx}_{rowIdx}
+    report_data is keyed by these same ids.
+    """
+    try:
+        from models import SystemSetting
+        s = SystemSetting.query.filter_by(key='fixed_sections').first()
+        sections = json.loads(s.value) if (s and s.value) else DEFAULT_FIXED_SECTIONS
+    except Exception:
+        sections = DEFAULT_FIXED_SECTIONS
+
+    result = []
+    sec_idx = 0  # only increment for enabled sections (matches frontend filter)
+    for raw in sections:
+        if not raw.get('enabled', True):
+            continue
+        cols     = raw.get('columns', [])
+        sec_type = _infer_type(cols, raw.get('name', ''))
+        import re
+        slug   = re.sub(r'[^a-z0-9]', '_', raw['name'].lower())
+        rd_key = f'fs_{sec_idx}_{slug}'
+        rows    = [_adapt_item(item, sec_type, sec_idx, ri) for ri, item in enumerate(raw.get('items') or [])]
+        result.append({
+            'id':      rd_key,
+            'name':    raw['name'],
+            'type':    sec_type,
+            'columns': cols,
+            'rows':    rows,
+        })
+        sec_idx += 1
+    return result
+
+
+def _load_midterm_sections() -> list:
+    """
+    Load midterm fixed sections from system_settings (key='midterm_sections').
+    Uses the same id / row-id scheme as _load_fixed_sections so that report_data
+    keyed by fs_{secIdx}_{slug} matches correctly.
+    """
+    try:
+        from models import SystemSetting
+        from routes.fixed_sections import DEFAULT_MIDTERM_SECTIONS
+        s = SystemSetting.query.filter_by(key='midterm_sections').first()
+        sections = json.loads(s.value) if (s and s.value) else DEFAULT_MIDTERM_SECTIONS
+    except Exception:
+        try:
+            from routes.fixed_sections import DEFAULT_MIDTERM_SECTIONS
+            sections = DEFAULT_MIDTERM_SECTIONS
+        except Exception:
+            sections = []
+
+    result = []
+    sec_idx = 0
+    import re
+    for raw in sections:
+        if not raw.get('enabled', True):
+            continue
+        cols     = raw.get('columns', [])
+        sec_type = _infer_type(cols, raw.get('name', ''))
+        slug     = re.sub(r'[^a-z0-9]', '_', raw['name'].lower())
+        rd_key   = f'fs_{sec_idx}_{slug}'
+        rows     = [_adapt_item(item, sec_type, sec_idx, ri) for ri, item in enumerate(raw.get('items') or [])]
+        result.append({
+            'id':      rd_key,
+            'name':    raw['name'],
+            'type':    sec_type,
+            'columns': cols,
+            'rows':    rows,
+        })
+        sec_idx += 1
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ORM → dict helpers + recipient builder
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _client_dict(client) -> dict:
+    if not client:
+        return {}
+    return {
+        'id':                       client.id,
+        'name':                     client.name or '',
+        'email':                    client.email or '',
+        'company':                  client.company or '',
+        'logo':                     client.logo or '',
+        'primary_color':            client.primary_color or '#1E3A8A',
+        'report_disclaimer':        client.report_disclaimer or '',
+        'report_color_override':    client.report_color_override or '',
+        'report_header_text_color': client.report_header_text_color or '#FFFFFF',
+        'report_body_text_color':   client.report_body_text_color or '#1e293b',
+        'report_orientation':       client.report_orientation or 'portrait',
+        'report_photo_settings':    client.report_photo_settings or '',
+    }
+
+
+def _prop_dict(prop) -> dict:
+    if not prop:
+        return {}
+    return {
+        'id':             prop.id,
+        'address':        prop.address or '',
+        'overview_photo': prop.overview_photo or '',
+        'property_type':  prop.property_type or '',
+        'bedrooms':       prop.bedrooms,
+        'bathrooms':      prop.bathrooms,
+    }
+
+
+def _get_report_recipients(inspection) -> list:
+    """
+    Deduplicated recipient list from the Contacts section:
+      1. client_email_override if set, else client.email
+         ('SUPPRESS' sentinel → no recipients, no email sent)
+      2. tenant_email if set and not already included
+    """
+    # 'SUPPRESS' is set on backdated imports where no email should fire
+  

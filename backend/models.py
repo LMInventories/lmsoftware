@@ -403,8 +403,9 @@ class TranscriptionUsage(db.Model):
         }
 
 
-class InspectionSignature(db.Model):
-    """
-    Stores clerk, tenant and (optionally) landlord/agent signatures for an inspection.
-    In-person signatures are captured on the mobile app and synced up.
-    Remote signat
+class SystemSetting(db.Model):
+    __tablename__ = 'system_settings'
+
+    id    = db.Column(db.Integer, primary_key=True)
+    key   = db.Column(db.String(100), unique=True, nullable=False)
+    value = db.Column(db.Text)

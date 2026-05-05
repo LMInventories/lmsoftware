@@ -33,10 +33,6 @@ const showPhotoModal = ref(false)
 const photoUploading = ref(false)
 const localPhoto = ref(null)
 
-// Signatures
-const signatures = ref([])
-const sendingLinks = ref(false)
-
 // PDF export
 
 // Share PDF modal
@@ -256,7 +252,6 @@ async function fetchInspection() {
     editForms.value.landlord_email  = inspection.value.landlord_email || ''
     editForms.value.client_email_override = inspection.value.client_email_override || inspection.value.client?.email || ''
     localPhoto.value = inspection.value.property?.overview_photo || null
-    fetchSignatures()
   } catch (error) {
     console.error('Failed to fetch inspection:', error)
     toast.error('Failed to load inspection')
@@ -498,39 +493,6 @@ const previewBranding = computed(() => ({
   photoUrl:        localPhoto.value || inspection.value?.property?.overview_photo || null,
   disclaimer:      inspection.value?.client?.report_disclaimer || null,
 }))
-
-async function fetchSignatures() {
-  if (!inspection.value?.id) return
-  try {
-    const res = await api.get(`/inspections/${inspection.value.id}/signatures`)
-    signatures.value = res.data
-  } catch (e) {
-    console.error('Failed to load signatures:', e)
-  }
-}
-
-function sigForRole(role) {
-  return signatures.value.find(s => s.role === role) || null
-}
-
-async function sendSigningLinks(roles) {
-  sendingLinks.value = true
-  try {
-    const res = await api.post(`/inspections/${inspection.value.id}/signing-links`, { roles })
-    const results = res.data
-    const failed = Object.entries(results).filter(([, v]) => !v.sent)
-    if (failed.length === 0) {
-      toast.success('Signing link(s) sent successfully')
-    } else {
-      failed.forEach(([role, v]) => toast.error(`${role}: ${v.error || 'Failed to send'}`))
-    }
-    await fetchSignatures()
-  } catch (e) {
-    toast.error('Failed to send signing links')
-  } finally {
-    sendingLinks.value = false
-  }
-}
 
 onMounted(() => {
   fetchInspection()
@@ -937,79 +899,6 @@ onMounted(() => {
                 <strong>Pushed:</strong>
                 <span style="font-size:12px;color:#64748b">{{ new Date(inspection.depositary_pushed_at).toLocaleString('en-GB') }}</span>
               </div>
-            </div>
-          </div>
-
-
-          <!-- SIGNATURES -->
-          <div class="info-card" v-if="!authStore.isClient">
-            <div class="card-header">
-              <h3>Signatures</h3>
-            </div>
-            <div class="card-content">
-
-              <!-- Clerk -->
-              <div class="sig-row">
-                <div class="sig-role-label">Inspector / Clerk</div>
-                <div v-if="sigForRole('clerk')" class="sig-status signed">
-                  ✓ Signed in person
-                  <span class="sig-date">{{ new Date(sigForRole('clerk').signed_at).toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' }) }}</span>
-                  <span class="sig-name" v-if="sigForRole('clerk').signer_name"> · {{ sigForRole('clerk').signer_name }}</span>
-                </div>
-                <div v-else class="sig-status pending">Awaiting signature</div>
-              </div>
-
-              <!-- Tenant -->
-              <div class="sig-row">
-                <div class="sig-role-label">Tenant</div>
-                <div v-if="sigForRole('tenant') && sigForRole('tenant').signed_at" class="sig-status signed">
-                  ✓ Signed
-                  <span class="sig-date">{{ new Date(sigForRole('tenant').signed_at).toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' }) }}</span>
-                  <span class="sig-name" v-if="sigForRole('tenant').signer_name"> · {{ sigForRole('tenant').signer_name }}</span>
-                  <span class="sig-method">({{ sigForRole('tenant').method === 'in_person' ? 'in person' : 'remote' }})</span>
-                </div>
-                <div v-else-if="sigForRole('tenant')" class="sig-status link-sent">
-                  Link sent — awaiting signature
-                  <button v-if="canEdit" class="btn-resend" @click="sendSigningLinks(['tenant'])" :disabled="sendingLinks">Resend</button>
-                </div>
-                <div v-else class="sig-status pending">
-                  Not sent
-                  <button v-if="canEdit && inspection.tenant_email" class="btn-send-link" @click="sendSigningLinks(['tenant'])" :disabled="sendingLinks">
-                    {{ sendingLinks ? 'Sending…' : 'Send Link' }}
-                  </button>
-                  <span v-else-if="canEdit && !inspection.tenant_email" class="sig-no-email">No email on record</span>
-                </div>
-              </div>
-
-              <!-- Landlord / Agent -->
-              <div class="sig-row">
-                <div class="sig-role-label">Landlord / Agent</div>
-                <div v-if="sigForRole('landlord_agent') && sigForRole('landlord_agent').signed_at" class="sig-status signed">
-                  ✓ Signed
-                  <span class="sig-date">{{ new Date(sigForRole('landlord_agent').signed_at).toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' }) }}</span>
-                  <span class="sig-name" v-if="sigForRole('landlord_agent').signer_name"> · {{ sigForRole('landlord_agent').signer_name }}</span>
-                  <span class="sig-method">({{ sigForRole('landlord_agent').method === 'in_person' ? 'in person' : 'remote' }})</span>
-                </div>
-                <div v-else-if="sigForRole('landlord_agent')" class="sig-status link-sent">
-                  Link sent — awaiting signature
-                  <button v-if="canEdit" class="btn-resend" @click="sendSigningLinks(['landlord_agent'])" :disabled="sendingLinks">Resend</button>
-                </div>
-                <div v-else class="sig-status pending">
-                  Not sent
-                  <button v-if="canEdit && inspection.landlord_email" class="btn-send-link" @click="sendSigningLinks(['landlord_agent'])" :disabled="sendingLinks">
-                    {{ sendingLinks ? 'Sending…' : 'Send Link' }}
-                  </button>
-                  <span v-else-if="canEdit && !inspection.landlord_email" class="sig-no-email">No email on record</span>
-                </div>
-              </div>
-
-              <!-- Send all -->
-              <div v-if="canEdit" class="sig-send-all">
-                <button class="btn-sig-all" :disabled="sendingLinks" @click="sendSigningLinks(['tenant', 'landlord_agent'])">
-                  {{ sendingLinks ? 'Sending…' : '✉ Send / Resend All Links' }}
-                </button>
-              </div>
-
             </div>
           </div>
 
@@ -2257,41 +2146,5 @@ textarea.input-field { resize: vertical; }
     font-size: 14px !important;
   }
 }
-
-/* ── Signatures card ─────────────────────────────────────────────────────── */
-.sig-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 0;
-  border-bottom: 1px solid #f1f5f9;
-  flex-wrap: wrap;
-}
-.sig-row:last-of-type { border-bottom: none; }
-.sig-role-label { font-size: 13px; font-weight: 600; color: #94a3b8; min-width: 130px; flex-shrink: 0; }
-.sig-status { display: flex; align-items: center; gap: 6px; font-size: 13px; flex-wrap: wrap; }
-.sig-status.signed    { color: #16a34a; font-weight: 600; }
-.sig-status.pending   { color: #94a3b8; }
-.sig-status.link-sent { color: #d97706; }
-.sig-date   { font-size: 12px; color: #64748b; font-weight: 400; }
-.sig-name   { font-size: 12px; color: #64748b; }
-.sig-method { font-size: 11px; color: #94a3b8; }
-.sig-no-email { font-size: 12px; color: #94a3b8; font-style: italic; }
-.btn-send-link, .btn-resend {
-  padding: 3px 10px; font-size: 12px; font-weight: 700;
-  border-radius: 5px; cursor: pointer;
-  border: 1.5px solid #1e3a8a; background: #eff6ff; color: #1e3a8a;
-  transition: background 0.15s; white-space: nowrap;
-}
-.btn-send-link:hover, .btn-resend:hover { background: #dbeafe; }
-.btn-send-link:disabled, .btn-resend:disabled { opacity: 0.5; cursor: not-allowed; }
-.sig-send-all { padding-top: 12px; }
-.btn-sig-all {
-  width: 100%; padding: 9px 0; font-size: 13px; font-weight: 600;
-  border: 1.5px solid #1e3a8a; border-radius: 7px;
-  background: #1e3a8a; color: #fff; cursor: pointer; transition: background 0.15s;
-}
-.btn-sig-all:hover { background: #1e40af; }
-.btn-sig-all:disabled { opacity: 0.5; cursor: not-allowed; }
 
 </style>

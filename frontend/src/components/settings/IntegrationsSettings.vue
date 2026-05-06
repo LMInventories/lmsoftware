@@ -284,7 +284,7 @@ const integrations = [
     category: 'Document Management',
     name: 'Google Sheets — Master Sheet',
     logo: 'https://cdn.simpleicons.org/googlesheets',
-    description: 'Automatically append a row to your master job-records spreadsheet whenever a new inspection is created. Writes: Reference, Date, Type, Address, Bedrooms, Client, Clerk.',
+    description: 'Automatically append a row to your master job-records spreadsheet whenever a new inspection is created. Writes: Client, Clerk, Date, Reference, Address, Job, Size — leaving your formula columns (H, I, J) untouched.',
     color: '#34A853',
     status: 'available',
     badge: 'Free',
@@ -524,7 +524,8 @@ function handleConnect(integration) {
 
         <div class="config-notice" style="margin-top:12px; font-size:12px; color:#475569;">
           <strong>Column order InspectPro writes (must match your header row):</strong><br>
-          A: Reference &nbsp;·&nbsp; B: Date &nbsp;·&nbsp; C: Type &nbsp;·&nbsp; D: Address &nbsp;·&nbsp; E: Bedrooms &nbsp;·&nbsp; F: Client &nbsp;·&nbsp; G: Clerk
+          A: Client &nbsp;·&nbsp; B: Clerk &nbsp;·&nbsp; C: Date &nbsp;·&nbsp; D: Reference &nbsp;·&nbsp; E: Address &nbsp;·&nbsp; F: Job &nbsp;·&nbsp; G: Size
+          <br><span style="color:#94a3b8;">Columns H, I, J (your formulas &amp; tick boxes) are not touched.</span>
         </div>
 
         <div class="config-status" v-if="masterSheetId && googleStatus.has_sheets">
@@ -649,7 +650,4 @@ h2 { font-size: 18px; font-weight: 700; color: #0f172a; margin: 0 0 6px; }
   gap: 8px;
   transition: box-shadow 0.15s, transform 0.12s;
 }
-.int-card:hover { box-shadow: 0 3px 12px rgba(0,0,0,0.07); transform: translateY(-1px); }
-.int-card--available {
-  border-color: #c7d2fe;
-  background: linear-grad
+.int

@@ -3,11 +3,15 @@ services/google_sheets.py
 ─────────────────────────
 Google Sheets API helper for InspectPro.
 
-Currently used to append a new row to the master job-records spreadsheet
-whenever an inspection is created.
+Appends a new row to the master job-records spreadsheet whenever an
+inspection is created.
 
 Column order written (must match your sheet's header row):
-  A: Reference | B: Date | C: Type | D: Address | E: Bedrooms | F: Client | G: Clerk
+  A: Client | B: Clerk | C: Date | D: Reference | E: Address | F: Job | G: Size
+
+Columns H, I (formulas) and J (tick boxes) are left untouched — the row is
+written by looking up the last non-empty cell in column A and targeting the
+very next row explicitly, so Sheets formulas in H:J never interfere.
 
 Requires:
   • Google OAuth connected with the spreadsheets scope
@@ -50,30 +54,12 @@ def _get_sheet_id() -> Optional[str]:
 
 
 def _build_row(inspection) -> list:
-    """Return the list of cell values to write, in column order."""
-    # Reference
-    ref = (inspection.reference_number or '').strip() or f'INS-{inspection.id}'
-
-    # Date — prefer conduct_date, fall back to scheduled_date
-    date_obj = inspection.conduct_date or inspection.scheduled_date
-    date_str = date_obj.strftime('%d/%m/%Y') if date_obj else ''
-
-    # Inspection type — human-readable
-    type_map = {
-        'check_in':      'Check In',
-        'check_out':     'Check Out',
-        'midterm':       'Mid-Term',
-        'damage_report': 'Damage Report',
-    }
-    insp_type = type_map.get(inspection.inspection_type or '', inspection.inspection_type or '')
-
-    # Property fields
-    prop = inspection.property
-    address  = prop.address  if prop else ''
-    bedrooms = prop.bedrooms if prop else ''
-    bedrooms = str(bedrooms) if bedrooms is not None else ''
-
+    """
+    Return cell values in the agreed column order:
+    A: Client | B: Clerk | C: Date | D: Reference | E: Address | F: Job | G: Size
+    """
     # Client — prefer company name, fall back to contact name
+    prop = inspection.property
     client = prop.client if prop else None
     client_name = ''
     if client:
@@ -82,7 +68,55 @@ def _build_row(inspection) -> list:
     # Clerk
     clerk_name = inspection.inspector.name if inspection.inspector else ''
 
-    return [ref, date_str, insp_type, address, bedrooms, client_name, clerk_name]
+    # Date — prefer conduct_date, fall back to scheduled_date
+    date_obj = inspection.conduct_date or inspection.scheduled_date
+    date_str = date_obj.strftime('%d/%m/%Y') if date_obj else ''
+
+    # Reference
+    ref = (inspection.reference_number or '').strip() or f'INS-{inspection.id}'
+
+    # Address
+    address = prop.address if prop else ''
+
+    # Job type — human-readable
+    type_map = {
+        'check_in':      'Check In',
+        'check_out':     'Check Out',
+        'midterm':       'Mid-Term',
+        'damage_report': 'Damage Report',
+    }
+    job = type_map.get(inspection.inspection_type or '', inspection.inspection_type or '')
+
+    # Size (bedrooms)
+    bedrooms = prop.bedrooms if prop else None
+    size = str(bedrooms) if bedrooms is not None else ''
+
+    return [client_name, clerk_name, date_str, ref, address, job, size]
+
+
+def _get_next_row(sheet_id: str, token: str) -> int:
+    """
+    Read column A to find the last populated cell, then return the next row
+    number. Starts at row 2 (row 1 is assumed to be the header).
+
+    This avoids the Sheets :append endpoint treating formula-filled cells in
+    columns H/I/J as "table data" and inserting the row in the wrong place.
+    """
+    url = f'{_SHEETS_BASE}/{sheet_id}/values/A:A'
+    req = urllib.request.Request(
+        url,
+        headers={'Authorization': f'Bearer {token}'},
+        method='GET',
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        data = json.loads(resp.read())
+
+    values = data.get('values', [])
+    # values is a list of rows; each row is a list with one element (or empty).
+    # Count how many rows have any content in column A.
+    populated = sum(1 for r in values if r and str(r[0]).strip())
+    # Next row is one past the last populated row, minimum row 2.
+    return max(2, populated + 1)
 
 
 def _append(inspection) -> tuple[bool, Optional[str]]:
@@ -97,38 +131,6 @@ def _append(inspection) -> tuple[bool, Optional[str]]:
     if not token:
         return False, 'Google not connected (no valid access token)'
 
-    row = _build_row(inspection)
+    row_data = _build_row(inspection)
 
-    # Append to the first sheet, starting from column A
-    # valueInputOption=USER_ENTERED lets Sheets parse dates / numbers
-    # insertDataOption=INSERT_ROWS always adds a new row rather than overwriting
-    url = (
-        f'{_SHEETS_BASE}/{sheet_id}/values/A:G:append'
-        f'?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS'
-    )
-
-    payload = json.dumps({'values': [row]}).encode('utf-8')
-    req = urllib.request.Request(
-        url,
-        data=payload,
-        headers={
-            'Authorization': f'Bearer {token}',
-            'Content-Type':  'application/json',
-        },
-        method='POST',
-    )
-
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            result = json.loads(resp.read())
-        updated = result.get('updates', {}).get('updatedRows', 0)
-        print(f'[sheets] appended {updated} row(s) to sheet {sheet_id} for inspection {inspection.id}')
-        return True, None
-    except urllib.error.HTTPError as e:
-        body = e.read().decode('utf-8', errors='replace')
-        msg = f'Sheets API {e.code}: {body[:300]}'
-        print(f'[sheets] ERROR: {msg}')
-        return False, msg
-    except Exception as exc:
-        print(f'[sheets] ERROR: {exc}')
-        return False, str(exc)
+    # Fin

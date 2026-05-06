@@ -346,4 +346,7 @@ def google_disconnect():
             print('[google] token revoked OK')
         except Exception as e:
             # Non-fatal — clear local tokens regardless
-            print(f'[google
+            print(f'[google] revoke request failed (non-fatal): {e}')
+
+    _clear_tokens()
+    return jsonify({'disconnected': True})

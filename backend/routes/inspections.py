@@ -1254,4 +1254,18 @@ def _transform_report_data(source_type, target_type, raw, include_photos=False):
                         {
                             '_sid':        sub.get('_sid', ''),
                             'description': sub.get('description', ''),
-                         
+'_sid':        sub.get('_sid', ''),
+                            'description': sub.get('description', ''),
+                            'condition':   _combine_conditions(
+                                sub.get('inventoryCondition'), sub.get('checkOutCondition'),
+                                fallback=sub.get('condition', '')
+                            ),
+                        }
+                        for sub in row_data['_subs']
+                    ]
+
+            new_section[row_id] = new_row
+
+        dst[section_id] = new_section
+
+    return dst

@@ -76,4 +76,6 @@ def update_settings():
     rows = SystemSetting.query.all()
     data = {r.key: r.value for r in rows}
     return jsonify({
-        'updated': 
+        'updated': updated,
+        'settings': {k: data.get(k, '') for k in ALLOWED_KEYS},
+    })

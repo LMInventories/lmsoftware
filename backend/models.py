@@ -403,6 +403,43 @@ class TranscriptionUsage(db.Model):
         }
 
 
+class InspectionSignature(db.Model):
+    """
+    Stores clerk, tenant and (optionally) landlord/agent signatures for an inspection.
+    In-person signatures are captured on the mobile app and synced up.
+    Remote signatures arrive via a tokenised signing link emailed to the recipient.
+    """
+    __tablename__ = 'inspection_signatures'
+
+    id               = db.Column(db.Integer, primary_key=True)
+    inspection_id    = db.Column(db.Integer, db.ForeignKey('inspections.id', ondelete='CASCADE'), nullable=False)
+    # 'clerk' | 'tenant' | 'landlord_agent'
+    role             = db.Column(db.String(30), nullable=False)
+    signer_name      = db.Column(db.String(255))
+    # base64-encoded PNG of the drawn signature
+    signature_data   = db.Column(db.Text)
+    signed_at        = db.Column(db.DateTime)
+    # 'in_person' (captured on device) | 'remote' (via email link)
+    method           = db.Column(db.String(20), default='in_person')
+    # Remote-signing token — unique UUID, nulled after use
+    token            = db.Column(db.String(64), unique=True, nullable=True)
+    token_expires_at = db.Column(db.DateTime, nullable=True)
+    ip_address       = db.Column(db.String(45), nullable=True)
+
+    inspection = db.relationship('Inspection', backref=db.backref('signatures', lazy=True, cascade='all, delete-orphan'))
+
+    def to_dict(self):
+        return {
+            'id':            self.id,
+            'inspection_id': self.inspection_id,
+            'role':          self.role,
+            'signer_name':   self.signer_name,
+            'signed_at':     self.signed_at.isoformat() if self.signed_at else None,
+            'method':        self.method,
+            'has_signature': bool(self.signature_data),
+        }
+
+
 class SystemSetting(db.Model):
     __tablename__ = 'system_settings'
 

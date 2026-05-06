@@ -135,7 +135,17 @@ def _append(inspection) -> tuple[bool, Optional[str]]:
 
     # Find the target row by inspecting column A -- safe even when H:J have
     # formulas or tick boxes that would confuse the :append heuristic.
-    next_row = _get_next_row(sheet_id, token)
+    try:
+        next_row = _get_next_row(sheet_id, token)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode('utf-8', errors='replace')
+        msg = f'Sheets GET {e.code}: {body[:400]}'
+        print(f'[sheets] ERROR reading next row: {msg}')
+        return False, msg
+    except Exception as exc:
+        print(f'[sheets] ERROR reading next row: {exc}')
+        return False, str(exc)
+
     target_range = f'A{next_row}:G{next_row}'
 
     url = (
@@ -162,9 +172,9 @@ def _append(inspection) -> tuple[bool, Optional[str]]:
         return True, None
     except urllib.error.HTTPError as e:
         body = e.read().decode('utf-8', errors='replace')
-        msg = f'Sheets API {e.code}: {body[:300]}'
-        print(f'[sheets] ERROR: {msg}')
+        msg = f'Sheets PUT {e.code}: {body[:400]}'
+        print(f'[sheets] ERROR writing row: {msg}')
         return False, msg
     except Exception as exc:
-        print(f'[sheets] ERROR: {exc}')
+        print(f'[sheets] ERROR writing row: {exc}')
         return False, str(exc)

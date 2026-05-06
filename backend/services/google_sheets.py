@@ -78,11 +78,11 @@ def _build_row(inspection) -> list:
     # Address
     address = prop.address if prop else ''
 
-    # Job type — human-readable
+    # Job type — exact labels expected by master sheet formulas
     type_map = {
-        'check_in':      'Check In',
+        'check_in':      'Inventory & Check In',
         'check_out':     'Check Out',
-        'midterm':       'Mid-Term',
+        'midterm':       'Midterm',
         'damage_report': 'Damage Report',
     }
     job = type_map.get(inspection.inspection_type or '', inspection.inspection_type or '')

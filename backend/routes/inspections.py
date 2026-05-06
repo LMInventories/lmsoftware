@@ -763,24 +763,19 @@ def share_pdf(inspection_id):
     if not inspection.report_data:
         return jsonify({'error': 'No report data — inspection has not been filled in yet'}), 400
 
-    try:
-        pdf_bytes = generate_inspection_pdf(inspection_id)
-    except Exception as e:
-        import traceback
-        print(traceback.format_exc())
-        return jsonify({'error': f'PDF generation failed: {e}'}), 500
-
-    # Run the SMTP send in a background thread so the HTTP response returns
-    # immediately and Gunicorn's request timeout can't kill the worker.
+    # PDF generation + send both happen in a background thread so the HTTP
+    # response returns instantly. Previously, generating the PDF synchronously
+    # could exceed the frontend's 30 s axios timeout, producing a "Failed"
+    # toast even though the email subsequently sent correctly.
     from flask import current_app
-    _app        = current_app._get_current_object()
-    _insp_id    = inspection_id
-    _emails     = list(emails)
-    _pdf_bytes  = pdf_bytes
+    _app     = current_app._get_current_object()
+    _insp_id = inspection_id
+    _emails  = list(emails)
 
     def _send_shared():
         with _app.app_context():
             try:
+                from routes.pdf_generator import generate_inspection_pdf as _gen_pdf
                 from models import Inspection as _Insp
                 from routes.email_service import send_report_complete
                 insp   = _Insp.query.get(_insp_id)
@@ -801,6 +796,10 @@ def share_pdf(inspection_id):
 
                 effective_client = client or _StubClient()
 
+                print(f'[share-pdf] generating PDF for inspection {_insp_id}')
+                _pdf_bytes = _gen_pdf(_insp_id)
+                print(f'[share-pdf] PDF generated ({len(_pdf_bytes)//1024} KB) — sending to {_emails}')
+
                 # ── Large-PDF handling (same threshold as auto-send) ──────
                 _PDF_ATTACH_LIMIT = 25 * 1024 * 1024  # 25 MB
                 _pdf_dl_url = None
@@ -812,7 +811,7 @@ def share_pdf(inspection_id):
                             import datetime as _dt
                             _key = f"reports/inspection-{_insp_id}-{_dt.datetime.utcnow().strftime('%Y%m%d%H%M%S')}.pdf"
                             upload_bytes(_pdf_bytes, _key, content_type='application/pdf')
-                            _pdf_dl_url = presign_get(_key, expires=604800)  # 7 days (AWS S3 maximum)
+                            _pdf_dl_url = presign_get(_key, expires=604800)  # 7 days
                             print(f'[share-pdf] S3 upload OK — presigned URL generated')
                         else:
                             print(f'[share-pdf] WARNING: PDF too large and S3 not configured — attempting attachment anyway')
@@ -836,8 +835,8 @@ def share_pdf(inspection_id):
 
     threading.Thread(target=_send_shared, daemon=False).start()
 
-    # Return immediately — the send happens in the background
-    return jsonify({'message': f'Report queued for delivery to {", ".join(emails)}'})
+    # Return immediately — PDF generation + send happen in the background.
+    return jsonify({'queued': True, 'message': f'Report being sent to {", ".join(_emails)}'})
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1253,8 +1252,6 @@ def _transform_report_data(source_type, target_type, raw, include_photos=False):
                     new_row['_subs'] = [
                         {
                             '_sid':        sub.get('_sid', ''),
-                            'description': sub.get('description', ''),
-'_sid':        sub.get('_sid', ''),
                             'description': sub.get('description', ''),
                             'condition':   _combine_conditions(
                                 sub.get('inventoryCondition'), sub.get('checkOutCondition'),

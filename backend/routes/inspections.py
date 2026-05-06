@@ -314,6 +314,16 @@ def create_inspection():
     db.session.add(inspection)
     db.session.commit()
     _bust_dashboard()
+
+    # ── Master sheet append (fire-and-forget) ────────────────────────────
+    try:
+        from services.google_sheets import append_inspection_row
+        ok, err = append_inspection_row(inspection)
+        if not ok:
+            print(f'[sheets] non-fatal: {err}')
+    except Exception as _sheet_exc:
+        print(f'[sheets] non-fatal exception: {_sheet_exc}')
+
     return jsonify(inspection_detail(inspection)), 201
 
 
@@ -431,6 +441,44 @@ def update_inspection(inspection_id):
                 inspection.property.overview_photo = overview_uri
         except Exception as _ov_err:
             print(f'[sync] overview photo extraction failed (non-fatal): {_ov_err}')
+
+        # ── Lift in-person signatures out of report_data and persist to DB ──────
+        # The mobile app stores captured signatures at report_data._signatures as:
+        # { clerk: { signer_name, signature_data, signed_at },
+        #   tenant: { ... }, landlord_agent: { ... } }
+        try:
+            from models import InspectionSignature
+            from datetime import datetime as _dt
+            rd_sigs = json.loads(data['report_data']) if isinstance(data['report_data'], str) else data['report_data']
+            _sigs_blob = rd_sigs.get('_signatures') or {}
+            for _role, _sd in _sigs_blob.items():
+                if _role not in ('clerk', 'tenant', 'landlord_agent'):
+                    continue
+                if not (_sd or {}).get('signature_data'):
+                    continue
+                # Replace any existing in-person record for this role
+                existing_sig = InspectionSignature.query.filter_by(
+                    inspection_id=inspection_id, role=_role, method='in_person'
+                ).first()
+                if existing_sig:
+                    db.session.delete(existing_sig)
+                _signed_at = None
+                try:
+                    _signed_at = _dt.fromisoformat(_sd['signed_at'])
+                except Exception:
+                    _signed_at = _dt.utcnow()
+                db.session.add(InspectionSignature(
+                    inspection_id  = inspection_id,
+                    role           = _role,
+                    signer_name    = _sd.get('signer_name', ''),
+                    signature_data = _sd['signature_data'],
+                    signed_at      = _signed_at,
+                    method         = 'in_person',
+                ))
+            db.session.flush()
+        except Exception as _sig_err:
+            print(f'[sync] signature extraction failed (non-fatal): {_sig_err}')
+            db.session.rollback()
 
     # ── Commit all field changes first ───────────────────────────────────────
     # Status is saved before PDF generation so a slow/failing PDF never blocks
@@ -1206,16 +1254,4 @@ def _transform_report_data(source_type, target_type, raw, include_photos=False):
                         {
                             '_sid':        sub.get('_sid', ''),
                             'description': sub.get('description', ''),
-                            'condition':   _combine_conditions(
-                                sub.get('inventoryCondition'), sub.get('checkOutCondition'),
-                                fallback=sub.get('condition', '')
-                            ),
-                        }
-                        for sub in row_data['_subs']
-                    ]
-
-            new_section[row_id] = new_row
-
-        dst[section_id] = new_section
-
-    return dst
+                         

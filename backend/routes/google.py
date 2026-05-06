@@ -49,6 +49,7 @@ CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET', '')
 SCOPES = [
     'https://www.googleapis.com/auth/drive.file',
     'https://www.googleapis.com/auth/calendar.events',
+    'https://www.googleapis.com/auth/spreadsheets',
     'openid',
     'email',
 ]
@@ -318,10 +319,11 @@ def google_status():
         tokens.get('google_access_token') and tokens.get('google_refresh_token')
     )
     return jsonify({
-        'connected':    connected,
-        'email':        tokens.get('google_email', ''),
-        'has_drive':    'drive' in scopes,
-        'has_calendar': 'calendar' in scopes,
+        'connected':     connected,
+        'email':         tokens.get('google_email', ''),
+        'has_drive':     'drive' in scopes,
+        'has_calendar':  'calendar' in scopes,
+        'has_sheets':    'spreadsheets' in scopes,
     })
 
 
@@ -344,7 +346,4 @@ def google_disconnect():
             print('[google] token revoked OK')
         except Exception as e:
             # Non-fatal — clear local tokens regardless
-            print(f'[google] revoke request failed (non-fatal): {e}')
-
-    _clear_tokens()
-    return jsonify({'disconnected': True})
+            print(f'[google

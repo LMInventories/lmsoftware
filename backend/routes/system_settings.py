@@ -29,6 +29,8 @@ ALLOWED_KEYS = {
     'report_orientation',
     # Report disclaimer (shown on every report)
     'report_disclaimer',
+    # Google Sheets master job-records spreadsheet
+    'google_master_sheet_id',
 }
 
 
@@ -74,6 +76,4 @@ def update_settings():
     rows = SystemSetting.query.all()
     data = {r.key: r.value for r in rows}
     return jsonify({
-        'updated': updated,
-        'settings': {k: data.get(k, '') for k in ALLOWED_KEYS},
-    })
+        'updated': 

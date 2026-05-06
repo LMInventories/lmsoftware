@@ -43,14 +43,45 @@ async function saveDepositarySettings() {
 }
 
 // ── Google OAuth ──────────────────────────────────────────────────────────────
-// Status shared by both Drive and Calendar cards
+// Status shared by Drive, Calendar, and Sheets cards
 const googleStatus = ref({
   connected:    false,
   email:        '',
   has_drive:    false,
   has_calendar: false,
+  has_sheets:   false,
 })
 const googleDisconnecting = ref(false)
+
+// ── Google Sheets — Master Sheet config ───────────────────────────────────────
+const showSheetsPanel  = ref(false)
+const masterSheetId    = ref('')
+const sheetsSaving     = ref(false)
+const sheetsSaved      = ref(false)
+const sheetsTestMsg    = ref('')
+const sheetsTesting    = ref(false)
+
+async function loadSheetsSettings() {
+  try {
+    const res = await api.getSystemSettings()
+    masterSheetId.value = (res.data || {}).google_master_sheet_id || ''
+  } catch (e) {
+    console.error('Failed to load Sheets settings:', e)
+  }
+}
+
+async function saveSheetsSettings() {
+  sheetsSaving.value = true
+  try {
+    await api.updateSystemSettings({ google_master_sheet_id: masterSheetId.value.trim() })
+    sheetsSaved.value = true
+    setTimeout(() => sheetsSaved.value = false, 2500)
+  } catch (e) {
+    alert('Failed to save — please try again.')
+  } finally {
+    sheetsSaving.value = false
+  }
+}
 
 async function loadGoogleStatus() {
   try {
@@ -85,6 +116,7 @@ async function disconnectGoogle() {
 onMounted(async () => {
   await loadDepositarySettings()
   await loadGoogleStatus()
+  await loadSheetsSettings()
 
   // Handle redirect-back from Google OAuth
   const params = new URLSearchParams(window.location.search)
@@ -248,6 +280,20 @@ const integrations = [
 
   // ─ Document Management ────────────────────────────────────────────────────
   {
+    id: 'google_sheets',
+    category: 'Document Management',
+    name: 'Google Sheets — Master Sheet',
+    logo: 'https://cdn.simpleicons.org/googlesheets',
+    description: 'Automatically append a row to your master job-records spreadsheet whenever a new inspection is created. Writes: Reference, Date, Type, Address, Bedrooms, Client, Clerk.',
+    color: '#34A853',
+    status: 'available',
+    badge: 'Free',
+    benefit: 'Replaces your Zapier → intake sheet workflow',
+    googleOAuth: true,
+    scopeKey: 'has_sheets',
+    configurable: true,
+  },
+  {
     id: 'google_drive',
     category: 'Document Management',
     name: 'Google Drive',
@@ -347,7 +393,8 @@ function handleConnect(integration) {
     return
   }
   if (integration.configurable) {
-    if (integration.id === 'depositary') { showDepositaryPanel.value = true }
+    if (integration.id === 'depositary')    { showDepositaryPanel.value = true }
+    if (integration.id === 'google_sheets') { showSheetsPanel.value = true }
     return
   }
   if (integration.googleOAuth) {
@@ -431,6 +478,69 @@ function handleConnect(integration) {
             <span v-else-if="integration.googleOAuth && googleStatus.connected && !googleStatus[integration.scopeKey]">Re-authorise →</span>
             <span v-else-if="integration.status === 'available'">Connect →</span>
             <span v-else>Notify Me</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Google Sheets — Master Sheet config panel -->
+    <div v-if="showSheetsPanel" class="modal-overlay" @click.self="showSheetsPanel = false">
+      <div class="modal modal--wide">
+        <div class="modal-icon" style="font-size:28px;">📊</div>
+        <h3>Google Sheets — Master Sheet</h3>
+        <p class="modal-sub">
+          When a new inspection is created, InspectPro will append one row to your master sheet automatically —
+          no Zapier or intermediate intake sheet required.
+        </p>
+
+        <div v-if="!googleStatus.connected" class="config-notice config-notice--warn">
+          ⚠ <strong>Google not connected.</strong> Connect your Google account first
+          (Settings → Integrations → Google Drive / Calendar) then re-open this panel.
+        </div>
+        <div v-else-if="!googleStatus.has_sheets" class="config-notice config-notice--warn">
+          ⚠ <strong>Sheets permission not granted.</strong>
+          Your current Google connection was made before the Sheets scope was added.
+          Please <a href="#" @click.prevent="connectGoogle()">re-authorise Google</a> to add spreadsheet access.
+        </div>
+        <div v-else class="config-notice">
+          ✅ Connected as <strong>{{ googleStatus.email }}</strong> — spreadsheet access granted.
+        </div>
+
+        <div class="config-fields" style="margin-top:16px;">
+          <div class="config-field">
+            <label>Spreadsheet ID</label>
+            <input
+              v-model="masterSheetId"
+              type="text"
+              class="config-input"
+              placeholder="e.g. 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms"
+            />
+            <p class="field-hint">
+              Found in the sheet URL:
+              <code>docs.google.com/spreadsheets/d/<strong>[ID here]</strong>/edit</code>
+            </p>
+          </div>
+        </div>
+
+        <div class="config-notice" style="margin-top:12px; font-size:12px; color:#475569;">
+          <strong>Column order InspectPro writes (must match your header row):</strong><br>
+          A: Reference &nbsp;·&nbsp; B: Date &nbsp;·&nbsp; C: Type &nbsp;·&nbsp; D: Address &nbsp;·&nbsp; E: Bedrooms &nbsp;·&nbsp; F: Client &nbsp;·&nbsp; G: Clerk
+        </div>
+
+        <div class="config-status" v-if="masterSheetId && googleStatus.has_sheets">
+          ✅ Ready — rows will be appended to this sheet when inspections are created.
+        </div>
+        <div class="config-status config-status--warn" v-else-if="!masterSheetId">
+          ⚠ Enter a Spreadsheet ID above to enable.
+        </div>
+
+        <div class="modal-actions">
+          <button class="btn-secondary" @click="showSheetsPanel = false">Close</button>
+          <transition name="fade">
+            <span v-if="sheetsSaved" class="saved-badge">✓ Saved</span>
+          </transition>
+          <button class="btn-primary" :disabled="sheetsSaving || !googleStatus.has_sheets" @click="saveSheetsSettings">
+            {{ sheetsSaving ? 'Saving…' : 'Save' }}
           </button>
         </div>
       </div>
@@ -542,120 +652,4 @@ h2 { font-size: 18px; font-weight: 700; color: #0f172a; margin: 0 0 6px; }
 .int-card:hover { box-shadow: 0 3px 12px rgba(0,0,0,0.07); transform: translateY(-1px); }
 .int-card--available {
   border-color: #c7d2fe;
-  background: linear-gradient(135deg, #fafbff 0%, #f0f4ff 100%);
-}
-
-.card-top { display: flex; align-items: center; justify-content: space-between; }
-
-.int-icon {
-  width: 40px; height: 40px; border-radius: 9px;
-  border: 1px solid;
-  display: flex; align-items: center; justify-content: center;
-  flex-shrink: 0;
-}
-.int-logo-img { width: 24px; height: 24px; object-fit: contain; }
-.int-logo-text { font-size: 11px; font-weight: 800; }
-
-.badge-row { display: flex; gap: 5px; flex-wrap: wrap; justify-content: flex-end; }
-
-.badge {
-  font-size: 10px; font-weight: 700;
-  padding: 2px 7px; border-radius: 8px;
-}
-.badge--info    { background: #f0f9ff; color: #0369a1; }
-.badge--available { background: #dcfce7; color: #166534; }
-.badge--soon    { background: #fef9c3; color: #92400e; }
-
-.int-name { font-size: 14px; font-weight: 700; color: #1e293b; }
-.int-desc { font-size: 12px; color: #64748b; line-height: 1.5; margin: 0; flex: 1; }
-
-.int-benefit {
-  font-size: 11px; font-weight: 600; color: #0369a1;
-  background: #eff6ff;
-  border-radius: 6px; padding: 5px 9px;
-  display: flex; align-items: center; gap: 5px;
-}
-
-.int-connected-badge {
-  font-size: 11px; font-weight: 600; color: #166534;
-  background: #dcfce7; border: 1px solid #bbf7d0;
-  border-radius: 6px; padding: 5px 9px;
-}
-
-.int-btn {
-  margin-top: 4px; padding: 7px 14px;
-  border-radius: 7px; border: none;
-  font-size: 12px; font-weight: 700;
-  cursor: pointer; transition: all 0.15s;
-  align-self: flex-start;
-}
-.int-btn--connect { background: #6366f1; color: white; }
-.int-btn--connect:hover { background: #4f46e5; }
-.int-btn--soon { background: #f1f5f9; color: #64748b; }
-.int-btn--soon:hover { background: #e2e8f0; color: #1e293b; }
-
-/* ─ Modal ────────────────────────────────────────────────────────────────── */
-.modal-overlay {
-  position: fixed; inset: 0;
-  background: rgba(0,0,0,0.45);
-  display: flex; align-items: center; justify-content: center;
-  z-index: 1000; padding: 20px;
-}
-.modal {
-  background: white; border-radius: 14px;
-  padding: 28px 28px 24px;
-  max-width: 400px; width: 100%;
-  text-align: center;
-  display: flex; flex-direction: column; align-items: center; gap: 12px;
-  box-shadow: 0 20px 60px rgba(0,0,0,0.2);
-}
-.modal-icon { font-size: 40px; }
-.modal h3 { font-size: 17px; font-weight: 700; color: #0f172a; margin: 0; }
-.modal p { font-size: 13px; color: #64748b; line-height: 1.6; margin: 0; }
-.btn-primary {
-  padding: 9px 22px; background: #6366f1; color: white;
-  border: none; border-radius: 8px;
-  font-size: 13px; font-weight: 700; cursor: pointer;
-}
-.btn-primary:hover { background: #4f46e5; }
-.btn-secondary {
-  padding: 9px 18px; background: white; color: #374151;
-  border: 1px solid #d1d5db; border-radius: 8px;
-  font-size: 13px; font-weight: 600; cursor: pointer;
-}
-.btn-secondary:hover { background: #f9fafb; }
-
-/* Depositary / config modal */
-.modal--wide { max-width: 520px; text-align: left; align-items: stretch; }
-.modal-sub { font-size: 13px; color: #64748b; line-height: 1.6; margin: 0; }
-.config-notice {
-  background: #fffbeb; border: 1px solid #fde68a;
-  border-radius: 8px; padding: 12px 14px;
-  font-size: 12px; color: #92400e; line-height: 1.5;
-}
-.config-notice a { color: #0369a1; }
-.config-fields { display: flex; flex-direction: column; gap: 12px; width: 100%; }
-.config-field { display: flex; flex-direction: column; gap: 5px; }
-.config-field label { font-size: 12px; font-weight: 700; color: #374151; }
-.config-input {
-  padding: 9px 12px; border: 1px solid #d1d5db; border-radius: 8px;
-  font-size: 13px; font-family: inherit; color: #1e293b; width: 100%; box-sizing: border-box;
-}
-.config-input:focus { outline: none; border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99,102,241,.1); }
-.config-status {
-  font-size: 12px; font-weight: 600; color: #166534;
-  background: #dcfce7; border-radius: 7px; padding: 8px 12px; width: 100%; box-sizing: border-box;
-}
-.config-status--warn { color: #92400e; background: #fffbeb; }
-.modal-actions { display: flex; align-items: center; gap: 10px; justify-content: flex-end; width: 100%; }
-.saved-badge { font-size: 13px; font-weight: 600; color: #16a34a; }
-.int-btn--configured { background: #dcfce7; color: #166534; border: 1px solid #bbf7d0; }
-.int-btn--configured:hover { background: #bbf7d0; }
-.fade-enter-active, .fade-leave-active { transition: opacity 0.3s; }
-.fade-enter-from, .fade-leave-to { opacity: 0; }
-
-/* ─ Responsive ─────────────────────────────────────────────────────────── */
-@media (max-width: 768px) {
-  .cards-grid { grid-template-columns: 1fr; }
-}
-</style>
+  background: linear-grad

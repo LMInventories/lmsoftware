@@ -94,10 +94,10 @@ _RED_TXT    = colors.HexColor('#991b1b')
 # Fetch image bytes from URL
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _compress_image(data: bytes, max_px: int = 1200, quality: int = 72) -> bytes:
+def _compress_image(data: bytes, max_px: int = 900, quality: int = 65) -> bytes:
     """
     Resize and re-compress image bytes with Pillow before embedding in PDF.
-    Keeps peak memory low — a 5 MB phone JPEG becomes ~120 KB after this.
+    Keeps peak memory low — a 5 MB phone JPEG becomes ~80 KB after this.
     Falls back to the original bytes if Pillow is unavailable or the image
     can't be decoded (e.g. corrupt data).
     """
@@ -401,10 +401,50 @@ class _PDFBuilder:
 
         self._init_styles()
 
+        # Image cache: url/data-uri → compressed JPEG bytes.
+        # Shared across both PDF-build passes so images are only fetched and
+        # compressed once regardless of how many times they appear in the story.
+        self._img_cache: dict = {}
+
         self.actions_summary = []
         self.action_groups   = {}
         if self.is_check_out:
             self._build_actions_summary()
+
+    # ── Cached image fetch ────────────────────────────────────────────────────
+
+    def _fetch_image(self, url: str, max_w_mm: float, max_h_mm: float, link_url: str = None):
+        """
+        Instance-level replacement for the module-level _fetch_image().
+        Compressed bytes are stored in self._img_cache keyed by URL/data-URI
+        so each unique image is only downloaded and Pillow-compressed ONCE,
+        even across the two build passes used for TOC page numbers.
+        """
+        if not url:
+            return None
+        try:
+            if url not in self._img_cache:
+                if url.startswith('data:'):
+                    import base64 as _b64
+                    _, b64data = url.split(',', 1)
+                    raw = _b64.b64decode(b64data)
+                else:
+                    req = urllib.request.Request(url, headers={'User-Agent': 'InspectPro/1.0'})
+                    raw = urllib.request.urlopen(req, timeout=8).read()
+                self._img_cache[url] = _compress_image(raw)
+            data = self._img_cache[url]
+            buf  = io.BytesIO(data)
+            img  = RLImage(buf)
+            w_pt = max_w_mm * mm
+            h_pt = max_h_mm * mm
+            scale = min(w_pt / img.drawWidth, h_pt / img.drawHeight, 1.0)
+            img.drawWidth  *= scale
+            img.drawHeight *= scale
+            if link_url:
+                return _ClickableImage(img, link_url)
+            return img
+        except Exception:
+            return None
 
     # ── Styles ────────────────────────────────────────────────────────────────
 
@@ -610,7 +650,7 @@ class _PDFBuilder:
         cell_w  = uw / cols
         cells   = []
         for i, url in enumerate(urls):
-            img    = _fetch_image(url, cell_w / mm - 4, 38, link_url=gallery_url)
+            img    = self._fetch_image(url, cell_w / mm - 4, 38, link_url=gallery_url)
             ts_txt = self._fmt_ts(ts[i] if i < len(ts) else None) if self.add_ts else ''
             inner  = [img or Paragraph('(photo)', self.s_small)]
             if ts_txt:
@@ -681,6 +721,7 @@ class _PDFBuilder:
         story += self._rooms()
         if self.is_check_out and self.act_pos == 'bottom':
             story += self._action_summary()
+        story += self._signatures_page()
         return story
 
     def build(self) -> bytes:
@@ -710,6 +751,9 @@ class _PDFBuilder:
             _PT(id='main',  frames=[main_frame1]),
         ])
         doc1.build(self._build_story(page_map=None))
+        # Free the first-pass buffer immediately — we only needed it for page_map.
+        tmp.close()
+        del tmp, doc1
 
         # ── Pass 2: build final PDF with real page numbers in Contents ───────────
         buf = io.BytesIO()
@@ -778,7 +822,7 @@ class _PDFBuilder:
             try:
                 req  = urllib.request.Request(photo_url, headers={'User-Agent': 'InspectPro/1.0'})
                 data = urllib.request.urlopen(req, timeout=8).read()
-                data = _compress_image(data, max_px=1600)
+                data = _compress_image(data, max_px=1200, quality=70)
                 img  = ImageReader(io.BytesIO(data))
                 canvas.drawImage(img, 0, photo_y, pw, photo_h,
                                  preserveAspectRatio=False, mask='auto')
@@ -924,6 +968,132 @@ class _PDFBuilder:
 
         canvas.restoreState()
 
+    # ── Signatures declaration page ───────────────────────────────────────────
+
+    def _signatures_page(self):
+        """
+        Final page of the PDF — declaration text + three signature blocks.
+        Signatures are loaded from the InspectionSignature table.
+        Roles shown: Clerk, Tenant, Landlord/Agent (optional — only if signed or a row exists).
+        """
+        from reportlab.platypus import HRFlowable, Spacer as _Sp
+        from reportlab.lib.styles import ParagraphStyle
+        from reportlab.lib.enums import TA_CENTER
+        from reportlab.lib import colors as _rl_colors
+        import io
+
+        uw = self._uw()
+
+        # Load signatures from DB
+        sigs_by_role = {}
+        try:
+            from models import InspectionSignature
+            for s in InspectionSignature.query.filter_by(inspection_id=self.inspection.id).all():
+                # Prefer the most recent; in_person beats remote if same role has both
+                existing = sigs_by_role.get(s.role)
+                if not existing or (s.method == 'in_person' and existing.method == 'remote') or \
+                   (s.signed_at and existing.signed_at and s.signed_at > existing.signed_at):
+                    sigs_by_role[s.role] = s
+        except Exception as _e:
+            print(f'[pdf] signatures load failed (non-fatal): {_e}')
+
+        type_label = {
+            'inventory': 'Inventory', 'check_in': 'Check In', 'check_out': 'Check Out',
+            'mid_term': 'Mid-Term Visit', 'interim': 'Interim Inspection',
+            'snagging': 'Snagging', 'hhsrs': 'HHSRS',
+        }.get((self.inspection.inspection_type or '').lower().replace(' ', '_'),
+              self.inspection.inspection_type or 'Inspection')
+
+        # Styles
+        s_decl = ParagraphStyle('sig_decl', fontName='Helvetica', fontSize=9,
+                                 leading=14, textColor=_rl_colors.HexColor('#475569'),
+                                 spaceAfter=0)
+        s_role = ParagraphStyle('sig_role', fontName='Helvetica-Bold', fontSize=9,
+                                 leading=12, textColor=_rl_colors.HexColor('#1e293b'))
+        s_name = ParagraphStyle('sig_name', fontName='Helvetica', fontSize=8.5,
+                                 leading=12, textColor=_rl_colors.HexColor('#64748b'))
+        s_await = ParagraphStyle('sig_await', fontName='Helvetica-Oblique', fontSize=8.5,
+                                  leading=12, textColor=_rl_colors.HexColor('#94a3b8'))
+
+        declaration = (
+            f'I/We, the undersigned, confirm that I/we have had the opportunity to review the '
+            f'contents of this {type_label} report and agree that it accurately represents the '
+            f'condition of the property at the time of inspection. I/we understand that this '
+            f'document may be used as evidence in any future deposit dispute or legal proceedings.'
+        )
+
+        story = [
+            PageBreak(),
+            _Anchor('anchor_signatures'),
+            _HeaderBar('Signatures & Declaration', self.brand, self.hdr_c),
+            Spacer(1, 5*mm),
+            Paragraph(declaration, s_decl),
+            Spacer(1, 8*mm),
+        ]
+
+        # Always show Clerk + Tenant; show Landlord/Agent only if a record exists
+        roles_to_show = [
+            ('clerk',          'Inspector / Clerk'),
+            ('tenant',         'Tenant'),
+        ]
+        if 'landlord_agent' in sigs_by_role:
+            roles_to_show.append(('landlord_agent', 'Landlord / Agent'))
+
+        sig_col_w = (uw - (len(roles_to_show) - 1) * 6*mm) / len(roles_to_show)
+
+        sig_cells = []
+        for role_key, role_display in roles_to_show:
+            sig = sigs_by_role.get(role_key)
+            cell_items = [Paragraph(role_display, s_role), Spacer(1, 2*mm)]
+
+            if sig and sig.signed_at and sig.signature_data:
+                # Embed the signature image
+                try:
+                    raw = sig.signature_data
+                    if raw.startswith('data:'):
+                        raw = raw.split(',', 1)[1]
+                    img_bytes = base64.b64decode(raw)
+                    from reportlab.platypus import Image as _RLImage
+                    img = _RLImage(io.BytesIO(img_bytes), width=sig_col_w * 0.85, height=18*mm)
+                    img.hAlign = 'LEFT'
+                    cell_items.append(img)
+                except Exception as _ie:
+                    cell_items.append(Paragraph('(signature image unavailable)', s_await))
+
+                signed_str = sig.signed_at.strftime('%-d %B %Y') if sig.signed_at else '—'
+                name_str   = sig.signer_name or '—'
+                cell_items += [
+                    Spacer(1, 2*mm),
+                    Paragraph(f'{name_str}', s_name),
+                    Paragraph(f'Signed {signed_str}', s_name),
+                ]
+            else:
+                # Blank box awaiting signature
+                cell_items.append(Spacer(1, 18*mm))
+                cell_items.append(Paragraph('Awaiting signature', s_await))
+                cell_items.append(Paragraph('Name: ___________________________', s_name))
+                cell_items.append(Paragraph('Date: ____________________________', s_name))
+
+            sig_cells.append(cell_items)
+
+        col_widths = [sig_col_w] * len(sig_cells)
+        tbl_data   = [sig_cells]
+
+        tbl = Table(tbl_data, colWidths=col_widths, rowHeights=None)
+        tbl.setStyle(TableStyle([
+            ('VALIGN',        (0,0), (-1,-1), 'TOP'),
+            ('TOPPADDING',    (0,0), (-1,-1), 8),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 8),
+            ('LEFTPADDING',   (0,0), (-1,-1), 6),
+            ('RIGHTPADDING',  (0,0), (-1,-1), 6),
+            ('BOX',           (0,0), (-1,-1), 0.5, _rl_colors.HexColor('#cbd5e1')),
+            ('INNERGRID',     (0,0), (-1,-1), 0.5, _rl_colors.HexColor('#e2e8f0')),
+            ('BACKGROUND',    (0,0), (-1,-1), _rl_colors.HexColor('#f8fafc')),
+        ]))
+
+        story.append(tbl)
+        return story
+
     def _cover(self):
         """Returns a single NextPageTemplate + PageBreak — actual drawing happens in _draw_cover."""
         from reportlab.platypus import NextPageTemplate
@@ -960,6 +1130,7 @@ class _PDFBuilder:
             add(r.get('name', ''), f'anchor_room_{r["id"]}')
         if self.is_check_out and self.act_pos == 'bottom' and self.actions_summary:
             add('Action Summary', 'anchor_action_summary')
+        add('Signatures', 'anchor_signatures')
 
         uw  = self._uw()
         if page_map is not None:
@@ -1118,7 +1289,7 @@ class _PDFBuilder:
                     ref     = f'{room_num}.{idx}'
                     g_url   = photo_links.get(iid)
                     for pi, url in enumerate(self._photos(room['id'], iid)):
-                        img    = _fetch_image(url, uw/mm/4-4, 38, link_url=g_url)
+                        img    = self._fetch_image(url, uw/mm/4-4, 38, link_url=g_url)
                         ts_txt = self._fmt_ts(ts_list[pi] if pi < len(ts_list) else None) if self.add_ts else ''
                         cell   = [img or Paragraph('(photo)', self.s_small)]
                         if ts_txt: cell.append(Paragraph(ts_txt, self.s_small))
@@ -1536,4 +1707,22 @@ def _get_report_recipients(inspection) -> list:
       2. tenant_email if set and not already included
     """
     # 'SUPPRESS' is set on backdated imports where no email should fire
-  
+    if inspection.client_email_override == 'SUPPRESS':
+        return []
+
+    recipients = []
+    primary = ''
+    if inspection.client_email_override:
+        primary = inspection.client_email_override.strip()
+    elif inspection.property and inspection.property.client:
+        primary = (inspection.property.client.email or '').strip()
+    # primary may itself be comma-separated (e.g. "a@b.com, c@d.com")
+    for addr in primary.split(','):
+        addr = addr.strip().lower()
+        if addr and addr not in recipients:
+            recipients.append(addr)
+    if inspection.tenant_email:
+        tenant = inspection.tenant_email.strip().lower()
+        if tenant and tenant not in recipients:
+            recipients.append(tenant)
+    return recipien

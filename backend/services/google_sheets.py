@@ -133,4 +133,38 @@ def _append(inspection) -> tuple[bool, Optional[str]]:
 
     row_data = _build_row(inspection)
 
-    # Fin
+    # Find the target row by inspecting column A -- safe even when H:J have
+    # formulas or tick boxes that would confuse the :append heuristic.
+    next_row = _get_next_row(sheet_id, token)
+    target_range = f'A{next_row}:G{next_row}'
+
+    url = (
+        f'{_SHEETS_BASE}/{sheet_id}/values/{target_range}'
+        f'?valueInputOption=USER_ENTERED'
+    )
+
+    payload = json.dumps({'range': target_range, 'values': [row_data]}).encode('utf-8')
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={
+            'Authorization': f'Bearer {token}',
+            'Content-Type':  'application/json',
+        },
+        method='PUT',
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            result = json.loads(resp.read())
+        updated = result.get('updatedRows', 0)
+        print(f'[sheets] wrote {updated} row(s) at {target_range} in sheet {sheet_id} for inspection {inspection.id}')
+        return True, None
+    except urllib.error.HTTPError as e:
+        body = e.read().decode('utf-8', errors='replace')
+        msg = f'Sheets API {e.code}: {body[:300]}'
+        print(f'[sheets] ERROR: {msg}')
+        return False, msg
+    except Exception as exc:
+        print(f'[sheets] ERROR: {exc}')
+        return False, str(exc)

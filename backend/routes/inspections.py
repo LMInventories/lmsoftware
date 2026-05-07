@@ -305,6 +305,7 @@ def create_inspection():
         status=initial_status,
         source_inspection_id=source_id,
         tenant_email=data.get('tenant_email'),
+        reference_number=data.get('reference_number') or None,
         client_email_override=data.get('client_email_override'),
         conduct_date=conduct_date,
         conduct_time_preference=data.get('conduct_time_preference'),
@@ -1266,3 +1267,167 @@ def _transform_report_data(source_type, target_type, raw, include_photos=False):
         dst[section_id] = new_section
 
     return dst
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /api/inspections/<id>/save_as_template
+# Admin/manager only. Inspection must be complete.
+# Extracts all room items (condition text stored as item descriptions) so the
+# same building can be re-inspected quickly with just updated photos.
+# ─────────────────────────────────────────────────────────────────────────────
+@inspections_bp.route('/<int:inspection_id>/save_as_template', methods=['POST', 'OPTIONS'])
+@jwt_required()
+def save_as_template(inspection_id):
+    if request.method == 'OPTIONS':
+        return '', 204
+
+    user = get_current_user()
+    if not is_admin_or_manager(user):
+        return jsonify({'error': 'Forbidden'}), 403
+
+    inspection = Inspection.query.options(
+        selectinload(Inspection.template).selectinload(Template.sections).selectinload(Section.items),
+        joinedload(Inspection.property),
+    ).get_or_404(inspection_id)
+
+    if inspection.status != 'complete':
+        return jsonify({'error': 'Only completed inspections can be saved as a template'}), 400
+
+    body = request.get_json(force=True) or {}
+    address = (inspection.property.address if inspection.property else '') or ''
+    template_name = (body.get('name') or address or f'Inspection {inspection_id}').strip()
+    inspection_type = body.get('inspection_type') or inspection.inspection_type or 'check_in'
+
+    rd = {}
+    if inspection.report_data:
+        try:
+            rd = json.loads(inspection.report_data) if isinstance(inspection.report_data, str) else inspection.report_data
+        except Exception:
+            pass
+
+    room_names_override = rd.get('_roomNames', {})
+    hidden_rooms = set(str(x) for x in (rd.get('_hiddenRooms') or []))
+    rooms_to_extract = []
+
+    # 1. Template-based rooms
+    tmpl = inspection.template
+    if tmpl:
+        for s in sorted(tmpl.sections or [], key=lambda x: x.order_index):
+            if s.section_type != 'room' or str(s.id) in hidden_rooms:
+                continue
+            room_name = room_names_override.get(str(s.id), s.name)
+            section_rd = rd.get(str(s.id), {})
+            deleted_items = set(str(d) for d in (section_rd.get('_deleted', []) or []))
+            items_out = []
+            for item in sorted(s.items or [], key=lambda i: i.order_index):
+                if str(item.id) in deleted_items:
+                    continue
+                item_rd = section_rd.get(str(item.id), {})
+                condition = (
+                    item_rd.get('condition') or item_rd.get('inventoryCondition')
+                    or item_rd.get('checkOutCondition') or ''
+                ).strip()
+                subs_out = []
+                for sub in (item_rd.get('_subs') or []):
+                    sub_cond = (
+                        sub.get('condition') or sub.get('inventoryCondition')
+                        or sub.get('checkOutCondition') or ''
+                    ).strip()
+                    subs_out.append({'name': sub.get('description') or '', 'description': sub_cond})
+                items_out.append({
+                    'name': item.name,
+                    'description': condition,
+                    'requires_photo': bool(item.requires_photo),
+                    'requires_condition': bool(item.requires_condition),
+                    'answer_options': item.answer_options or '',
+                    'subs': subs_out,
+                })
+            # Extra items added by clerk in the field
+            for ex in (section_rd.get('_extra') or []):
+                eid = str(ex.get('_eid', ''))
+                ex_data = section_rd.get(eid, {}) if eid else {}
+                merged = {**ex_data, **ex}
+                ex_cond = (
+                    merged.get('condition') or merged.get('inventoryCondition')
+                    or merged.get('checkOutCondition') or ''
+                ).strip()
+                items_out.append({
+                    'name': merged.get('name') or merged.get('description') or 'Item',
+                    'description': ex_cond,
+                    'requires_photo': True,
+                    'requires_condition': True,
+                    'answer_options': '',
+                    'subs': [],
+                })
+            rooms_to_extract.append({'name': room_name, 'items': items_out})
+
+    # 2. Custom rooms added by clerk (not in template)
+    for cr in (rd.get('_customRooms') or []):
+        key = str(cr.get('key') or '')
+        if not key or key in hidden_rooms:
+            continue
+        room_name = room_names_override.get(key, cr.get('name') or 'Room')
+        cr_rd = rd.get(key, {})
+        items_out = []
+        for ex in (cr_rd.get('_extra') or []):
+            eid = str(ex.get('_eid', ''))
+            ex_data = cr_rd.get(eid, {}) if eid else {}
+            merged = {**ex_data, **ex}
+            ex_cond = (
+                merged.get('condition') or merged.get('inventoryCondition')
+                or merged.get('checkOutCondition') or ''
+            ).strip()
+            items_out.append({
+                'name': merged.get('name') or merged.get('description') or 'Item',
+                'description': ex_cond,
+                'requires_photo': True,
+                'requires_condition': True,
+                'answer_options': '',
+                'subs': [],
+            })
+        rooms_to_extract.append({'name': room_name, 'items': items_out})
+
+    # Create the template
+    new_template = Template(
+        name=template_name,
+        inspection_type=inspection_type,
+        content='{}',
+        is_default=False,
+        is_transient=False,
+    )
+    db.session.add(new_template)
+    db.session.flush()
+
+    for room_idx, room in enumerate(rooms_to_extract):
+        section = Section(
+            template_id=new_template.id,
+            name=room['name'],
+            section_type='room',
+            order_index=room_idx,
+            is_required=False,
+        )
+        db.session.add(section)
+        db.session.flush()
+        for item_idx, it in enumerate(room['items']):
+            db.session.add(Item(
+                section_id=section.id,
+                name=it['name'],
+                description=it['description'],
+                requires_photo=it['requires_photo'],
+                requires_condition=it['requires_condition'],
+                answer_options=it['answer_options'],
+                order_index=item_idx,
+            ))
+
+    db.session.commit()
+    room_count = len(rooms_to_extract)
+    item_count = sum(len(r['items']) for r in rooms_to_extract)
+    print(f'[save_as_template] created template "{template_name}" (id={new_template.id}) '
+          f'from inspection {inspection_id}: {room_count} rooms, {item_count} items')
+    return jsonify({
+        'template_id': new_template.id,
+        'name': new_template.name,
+        'inspection_type': new_template.inspection_type,
+        'room_count': room_count,
+        'item_count': item_count,
+    }), 201

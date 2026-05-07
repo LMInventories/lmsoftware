@@ -1725,4 +1725,54 @@ def _get_report_recipients(inspection) -> list:
         tenant = inspection.tenant_email.strip().lower()
         if tenant and tenant not in recipients:
             recipients.append(tenant)
-    return recipien
+    return recipients
+        'primary_color':            client.primary_color or '#1E3A8A',
+        'report_disclaimer':        client.report_disclaimer or '',
+        'report_color_override':    client.report_color_override or '',
+        'report_header_text_color': client.report_header_text_color or '#FFFFFF',
+        'report_body_text_color':   client.report_body_text_color or '#1e293b',
+        'report_orientation':       client.report_orientation or 'portrait',
+        'report_photo_settings':    client.report_photo_settings or '',
+    }
+
+
+def _prop_dict(prop) -> dict:
+    if not prop:
+        return {}
+    return {
+        'id':             prop.id,
+        'address':        prop.address or '',
+        'overview_photo': prop.overview_photo or '',
+        'property_type':  prop.property_type or '',
+        'bedrooms':       prop.bedrooms,
+        'bathrooms':      prop.bathrooms,
+    }
+
+
+def _get_report_recipients(inspection) -> list:
+    """
+    Deduplicated recipient list from the Contacts section:
+      1. client_email_override if set, else client.email
+         ('SUPPRESS' sentinel -> no recipients, no email sent)
+      2. tenant_email if set and not already included
+    """
+    # 'SUPPRESS' is set on backdated imports where no email should fire
+    if inspection.client_email_override == 'SUPPRESS':
+        return []
+
+    recipients = []
+    primary = ''
+    if inspection.client_email_override:
+        primary = inspection.client_email_override.strip()
+    elif inspection.property and inspection.property.client:
+        primary = (inspection.property.client.email or '').strip()
+    # primary may itself be comma-separated (e.g. "a@b.com, c@d.com")
+    for addr in primary.split(','):
+        addr = addr.strip().lower()
+        if addr and addr not in recipients:
+            recipients.append(addr)
+    if inspection.tenant_email:
+        tenant = inspection.tenant_email.strip().lower()
+        if tenant and tenant not in recipients:
+            recipients.append(tenant)
+    return recipients

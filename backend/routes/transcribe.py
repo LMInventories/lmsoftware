@@ -10,6 +10,84 @@ from models import db, TranscriptionUsage
 transcribe_bp = Blueprint('transcribe', __name__)
 
 
+# ── JSON safety ────────────────────────────────────────────────────────────
+def _sanitise_json(s: str) -> str:
+    """
+    Claude occasionally emits literal control characters (real newlines,
+    tabs, carriage returns) inside JSON string values instead of the
+    escaped sequences \\n / \\t / \\r.  These are technically invalid JSON
+    and cause json.loads to raise JSONDecodeError.
+
+    This function walks the raw string character-by-character and replaces
+    any bare control character found *inside* a JSON string with its
+    correctly-escaped counterpart, leaving the structural characters
+    (newlines between keys, etc.) untouched.
+    """
+    result = []
+    in_string = False
+    escape_next = False
+    for ch in s:
+        if escape_next:
+            result.append(ch)
+            escape_next = False
+        elif ch == '\\' and in_string:
+            result.append(ch)
+            escape_next = True
+        elif ch == '"':
+            result.append(ch)
+            in_string = not in_string
+        elif in_string and ch == '\n':
+            result.append('\\n')
+        elif in_string and ch == '\r':
+            result.append('\\r')
+        elif in_string and ch == '\t':
+            result.append('\\t')
+        else:
+            result.append(ch)
+    return ''.join(result)
+
+
+# ── Whisper transcript post-corrections ───────────────────────────────────
+# Whisper consistently mishears certain property-inspection terms.
+# Apply these substitutions after transcription, before Claude sees the text.
+import re as _re
+_TRANSCRIPT_CORRECTIONS = [
+    # Technical terms
+    (_re.compile(r'\bcereal number\b', _re.I),    'serial number'),
+    (_re.compile(r'\bserial numbers?\b', _re.I),  'serial number'),  # normalise
+    (_re.compile(r'\bse real number\b', _re.I),   'serial number'),
+    (_re.compile(r'\bsiren number\b', _re.I),     'serial number'),
+    (_re.compile(r'\bwhite goods\b', _re.I),      'white goods'),    # keep as-is (just pin)
+    # Common dictation mishearings
+    (_re.compile(r'\bwarm and tare\b', _re.I),    'fair wear and tear'),
+    (_re.compile(r'\bwhere and tare\b', _re.I),   'fair wear and tear'),
+    (_re.compile(r'\bwear and tare\b', _re.I),    'fair wear and tear'),
+    (_re.compile(r'\bfair wear and tear\b', _re.I), 'fair wear and tear'),  # pin
+    (_re.compile(r'\bcoving\b', _re.I),           'coving'),
+    (_re.compile(r'\bcorving\b', _re.I),          'coving'),
+    (_re.compile(r'\bskirting board\b', _re.I),   'skirting board'),
+    (_re.compile(r'\bskirting boards?\b', _re.I), 'skirting board'),
+    (_re.compile(r'\barchitrave\b', _re.I),       'architrave'),
+    (_re.compile(r'\bark it trave\b', _re.I),     'architrave'),
+    (_re.compile(r'\binduction hob\b', _re.I),    'induction hob'),
+    (_re.compile(r'\bextractor fan\b', _re.I),    'extractor fan'),
+    (_re.compile(r'\bextractor\b', _re.I),        'extractor'),
+    (_re.compile(r'\bthermostatic\b', _re.I),     'thermostatic'),
+    (_re.compile(r'\bthermostat ic\b', _re.I),    'thermostatic'),
+    (_re.compile(r'\bTRV\b', _re.I),              'TRV'),
+    (_re.compile(r'\bdouble glazed\b', _re.I),    'double glazed'),
+    (_re.compile(r'\bUPVC\b', _re.I),             'UPVC'),
+    (_re.compile(r'\byou PVC\b', _re.I),          'UPVC'),
+    (_re.compile(r'\bu PVC\b', _re.I),            'UPVC'),
+]
+
+def _correct_transcript(text: str) -> str:
+    """Apply known Whisper mishearing corrections for property inspection vocabulary."""
+    for pattern, replacement in _TRANSCRIPT_CORRECTIONS:
+        text = pattern.sub(replacement, text)
+    return text
+
+
 # ── Edit-mode detection ────────────────────────────────────────────────────
 # Clerks can prefix a recording with trigger phrases to amend existing fields
 # rather than filling only-if-empty.
@@ -101,17 +179,20 @@ def _whisper_transcribe(audio_bytes: bytes, mime_type: str) -> str:
                 language='en',
                 response_format='text',
                 prompt=(
-                    'This is a UK property inventory inspection dictation. '
-                    'The speaker is describing the condition and appearance of items in a room. '
-                    'Items may include furniture, fixtures, fittings, walls, floors, ceilings. '
-                    'The speaker may use these commands — preserve them exactly as spoken: '
+                    'UK property inventory inspection dictation. '
+                    'Speaker describes item appearance and condition. '
+                    'Key vocabulary: serial number, skirting board, coving, architrave, '
+                    'induction hob, extractor fan, UPVC, double glazed, thermostatic, TRV, '
+                    'fair wear and tear, in good order, in fair order, in poor order. '
+                    'Commands to preserve exactly: '
                     '"Not Applicable", "Add sub item", '
                     '"Amend description", "Amend condition", '
-                    '"Add to description", "Add to condition". '
-                    'Preserve all detail and command phrases accurately.'
+                    '"Add to description", "Add to condition", "Amend", "Add". '
+                    'Transcribe all words accurately, including technical property terms.'
                 )
             )
-        return str(response).strip()
+        raw_transcript = str(response).strip()
+        return _correct_transcript(raw_transcript)
     finally:
         os.unlink(tmp_path)
 
@@ -170,7 +251,7 @@ Return ONLY valid JSON, no markdown:
         )
         raw = message.content[0].text.strip()
         raw = raw.replace('```json', '').replace('```', '').strip()
-        return json.loads(raw), message
+        return json.loads(_sanitise_json(raw)), message
 
     # Shared formatting rules applied to all section types
     formatting_rules = """
@@ -243,37 +324,49 @@ Return ONLY valid JSON, no markdown:
 - description: the physical appearance (material, colour, size, style, finish)
 - condition: the state or working order
 
-SPLITTING rules:
-- Condition phrases that signal the start of the condition field:
-  "in good order", "in fair order", "in poor order", "good order", "fair order",
-  "poor order", "as new", "as inventory", "in good condition"
-- Anything said AFTER a condition phrase is ALSO condition, not description.
-  Example: "two white metal radiators, in good order, appear complete"
-    description: "Two white metal radiators"
-    condition: "In good order, appear complete"
-- Functional observations like "appear complete", "tested for power", "appears working"
-  are ALWAYS condition, never description
-- If transcript only mentions condition, leave description blank
-- If the clerk mentions NO condition at all, default condition to "In good order"
+SPLITTING rules — read carefully:
+- These phrases signal the START of the condition portion:
+    "in good order", "in fair order", "in poor order", "good order", "fair order",
+    "poor order", "as new", "as inventory", "in good condition", "in fair condition",
+    "in poor condition", "some wear", "light wear", "heavy wear", "light scratches",
+    "light marks", "light staining", "light surface", "surface scratching",
+    "tested", "working", "functional", "appears", "appear", "note", "noted",
+    "please note", "fair wear and tear"
+- Everything AFTER a condition phrase is ALSO condition, not description.
+  Example: "Black Beko induction hob, four burners, light surface scratching to hob plate"
+    description: "Black Beko induction hob\n4 x burners"
+    condition:   "Light surface scratching to hob plate"
+- Functional observations ("appear complete", "tested for power", "appears working",
+  "note scuff", "please note") are ALWAYS condition, never description
+- Damage, marks, scratches, staining, wear = condition
+- If the transcript contains ANY condition observations, use them — do NOT substitute "In good order"
+- ONLY use "In good order" as a default if the clerk genuinely said nothing about condition AND
+  there are no wear, damage, or observation words present
 
-MULTI-COMPONENT FORMATTING — this is critical:
-- If the description contains multiple distinct physical components, put EACH on its own line using \n
-- A "component" is a distinct element — different material, surface type, or fitting
-- ALWAYS use \n line breaks, NEVER commas to separate components
+DEFAULT CONDITION RULE — this is critical:
+- "In good order" is a fallback ONLY when zero condition information exists
+- If the clerk said ANYTHING about appearance quality, wear, damage, or function — use their words
+- WRONG: clerk says "light surface scratching" → condition: "In good order"
+- RIGHT: clerk says "light surface scratching" → condition: "Light surface scratching"
+
+MULTI-COMPONENT FORMATTING:
+- If description has multiple distinct physical components, put EACH on its own line using \\n
+- A "component" is a distinct element — different surface, fitting, or object
+- ALWAYS use \\n, NEVER commas to separate components
   Example: "part white ceramic tile, part grey fitted carpet with silver metal threshold"
-    CORRECT:   "Part white ceramic tile\nPart grey fitted carpet\nSilver metal threshold"
+    CORRECT:   "Part white ceramic tile\\nPart grey fitted carpet\\nSilver metal threshold"
     INCORRECT: "Part white ceramic tile, part grey fitted carpet with silver metal threshold"
   Example: "dark wood curtain rail, two green fabric floor length curtains"
-    CORRECT:   "Dark wood curtain rail\n2 x green fabric floor length curtains"
+    CORRECT:   "Dark wood curtain rail\\n2 x green fabric floor length curtains"
     INCORRECT: "Dark wood curtain rail, two green fabric floor length curtains"
-- The same rule applies to condition if multiple condition points are made:
+- Same rule applies to condition — multiple observations each get their own line:
   Example: "in good order, light indentations to tiles, light wear to carpet"
-    CORRECT:   "In good order\nLight indentations to tiles\nLight wear to carpet"
+    CORRECT:   "In good order\\nLight indentations to tiles\\nLight wear to carpet"
     INCORRECT: "In good order, light indentations to tiles, light wear to carpet"
-- When in doubt: if you would use a comma to separate two ideas, use \n instead
+- When in doubt: if you'd use a comma between two ideas, use \\n instead
 
 Return ONLY valid JSON, no markdown:
-{"description": "...", "condition": "In good order"}"""
+{"description": "...", "condition": "..."}"""
 
     prompt = f"""You are processing a UK property inspection dictation.
 
@@ -304,7 +397,7 @@ CRITICAL LANGUAGE RULES:
 
     raw = message.content[0].text.strip()
     raw = raw.replace('```json', '').replace('```', '').strip()
-    return json.loads(raw), message
+    return json.loads(_sanitise_json(raw)), message
 
 def _claude_fill_full_report(transcript: str, template_structure: dict) -> dict:
     """
@@ -359,7 +452,7 @@ Return ONLY valid JSON in this exact shape (no markdown):
 
     raw = message.content[0].text.strip()
     raw = raw.replace('```json', '').replace('```', '').strip()
-    return json.loads(raw)
+    return json.loads(_sanitise_json(raw))
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────
@@ -589,7 +682,7 @@ Rules:
 
         raw = message.content[0].text.strip()
         raw = raw.replace('```json', '').replace('```', '').strip()
-        result = json.loads(raw)
+        result = json.loads(_sanitise_json(raw))
 
         # Ensure all required fields are present
         for field in ('sectionKey', 'sectionName', 'itemKey', 'itemName'):
@@ -1025,7 +1118,7 @@ The "_delete" flag is only included when the clerk says "Not Applicable" for tha
     raw = message.content[0].text.strip()
     raw = raw.replace('```json', '').replace('```', '').strip()
     try:
-        return json.loads(raw)
+        return json.loads(_sanitise_json(raw))
     except json.JSONDecodeError:
         print(f'[_claude_fill_room] JSON parse error: {raw[:200]}')
         return {}
@@ -1110,7 +1203,7 @@ Example output:
     raw = message.content[0].text.strip()
     raw = raw.replace('```json', '').replace('```', '').strip()
     try:
-        return json.loads(raw)
+        return json.loads(_sanitise_json(raw))
     except json.JSONDecodeError:
         print(f'[_claude_fill_room_checkout] JSON parse error: {raw[:200]}')
         return {}
@@ -1262,7 +1355,7 @@ Return ONLY valid JSON matching that shape — no markdown, no extra text, real 
     raw = message.content[0].text.strip()
     raw = raw.replace('```json', '').replace('```', '').strip()
     try:
-        return json.loads(raw)
+        return json.loads(_sanitise_json(raw))
     except json.JSONDecodeError:
         print(f'[_claude_fill_fixed_section] JSON parse error: {raw[:200]}')
         return {}

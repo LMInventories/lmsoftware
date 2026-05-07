@@ -139,6 +139,7 @@ def create_app():
     from routes.email_notifications  import email_bp
     from routes.gallery              import gallery_bp
     from routes.photos               import photos_bp
+    from routes.signatures           import signatures_bp
 
     app.register_blueprint(auth_bp,            url_prefix='/api/auth')
     app.register_blueprint(auth_reset_bp,      url_prefix='/api/auth')
@@ -158,6 +159,7 @@ def create_app():
     app.register_blueprint(email_bp,           url_prefix='/api/email')
     app.register_blueprint(gallery_bp,         url_prefix='/api')
     app.register_blueprint(photos_bp,          url_prefix='/api/photos')
+    app.register_blueprint(signatures_bp,      url_prefix='/api')
 
     # Optional blueprints — register only if the file exists
     _optional = [
@@ -349,6 +351,7 @@ def _setup_database():
     # index already exists. These cover the most frequent filter/join columns so
     # that list queries and dashboard aggregations don't do full table scans.
     _indexes = [
+        'CREATE INDEX IF NOT EXISTS idx_signatures_inspection_id ON inspection_signatures(inspection_id)',
         'CREATE INDEX IF NOT EXISTS idx_inspections_property_id  ON inspections(property_id)',
         'CREATE INDEX IF NOT EXISTS idx_inspections_inspector_id ON inspections(inspector_id)',
         'CREATE INDEX IF NOT EXISTS idx_inspections_typist_id    ON inspections(typist_id)',

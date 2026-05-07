@@ -44,6 +44,11 @@ const showSharePdf      = ref(false)
 const sharePdfEmails    = ref('')
 const sharePdfSending   = ref(false)
 
+// Save as Template modal
+const showSaveAsTemplate   = ref(false)
+const saveTemplateForm     = ref({ name: '', inspection_type: 'check_in' })
+const saveTemplateSaving   = ref(false)
+
 const editForms = ref({
   reference_number: '',
   conduct_date: '',
@@ -448,6 +453,33 @@ async function sendSharedPdf() {
   }
 }
 
+// ── Save as Template ─────────────────────────────────────────────────
+function openSaveAsTemplate() {
+  saveTemplateForm.value = {
+    name: inspection.value.property_address || '',
+    inspection_type: inspection.value.inspection_type || 'check_in',
+  }
+  showSaveAsTemplate.value = true
+}
+
+async function submitSaveAsTemplate() {
+  if (!saveTemplateForm.value.name.trim()) { toast.error('Please enter a template name'); return }
+  saveTemplateSaving.value = true
+  try {
+    const res = await api.saveAsTemplate(inspection.value.id, {
+      name: saveTemplateForm.value.name.trim(),
+      inspection_type: saveTemplateForm.value.inspection_type,
+    })
+    const { name, room_count, item_count } = res.data
+    toast.success(`Template "${name}" saved — ${room_count} rooms, ${item_count} items`)
+    showSaveAsTemplate.value = false
+  } catch (err) {
+    toast.error(err.response?.data?.error || 'Failed to save template')
+  } finally {
+    saveTemplateSaving.value = false
+  }
+}
+
 // ── Server-side PDF preview (admin/manager — no email sent) ────────
 const pdfPreviewing = ref(false)
 async function previewServerPdf() {
@@ -677,6 +709,15 @@ onMounted(() => {
             class="btn-share-pdf"
           >
             📤 Share PDF
+          </button>
+
+          <!-- Save as Template — admin/manager only, complete inspections only -->
+          <button
+            v-if="inspection.status === 'complete' && (authStore.isAdmin || authStore.isManager)"
+            @click="openSaveAsTemplate"
+            class="btn-save-template"
+          >
+            🗂 Save as Template
           </button>
 
         </div>
@@ -1388,6 +1429,53 @@ onMounted(() => {
         </div>
       </div>
 
+      <!-- Save as Template Modal -->
+      <div v-if="showSaveAsTemplate" class="modal-overlay" @click.self="showSaveAsTemplate = false">
+        <div class="sat-modal">
+          <div class="sat-header">
+            <h3>🗂 Save Report as Template</h3>
+            <button class="share-pdf-close" @click="showSaveAsTemplate = false">✕</button>
+          </div>
+          <div class="sat-body">
+            <p class="sat-desc">
+              All rooms and items from this completed report will be saved as a new template,
+              with current conditions pre-filled as descriptions. Clerks can then update
+              only what has changed on the next inspection.
+            </p>
+            <div class="sat-field">
+              <label>Template Name</label>
+              <input
+                v-model="saveTemplateForm.name"
+                type="text"
+                placeholder="e.g. 12 Acacia Avenue — Check In"
+                class="sat-input"
+                @keydown.enter.prevent="submitSaveAsTemplate"
+              />
+            </div>
+            <div class="sat-field">
+              <label>Inspection Type</label>
+              <select v-model="saveTemplateForm.inspection_type" class="sat-input">
+                <option value="check_in">Check In</option>
+                <option value="check_out">Check Out</option>
+                <option value="midterm">Midterm Inspection</option>
+                <option value="inventory">Inventory</option>
+                <option value="damage_report">Damage Report</option>
+              </select>
+            </div>
+          </div>
+          <div class="sat-footer">
+            <button class="btn-cancel" @click="showSaveAsTemplate = false">Cancel</button>
+            <button
+              class="btn-save-tpl"
+              :disabled="saveTemplateSaving || !saveTemplateForm.name.trim()"
+              @click="submitSaveAsTemplate"
+            >
+              {{ saveTemplateSaving ? 'Saving…' : 'Save Template' }}
+            </button>
+          </div>
+        </div>
+      </div>
+
 
     </div>
   </div>
@@ -1715,6 +1803,93 @@ onMounted(() => {
 }
 .btn-send-pdf:hover:not(:disabled) { filter: brightness(1.12); }
 .btn-send-pdf:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* Save as Template button */
+.btn-save-template {
+  padding: 9px 18px;
+  background: #7c3aed;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: white;
+  cursor: pointer;
+  transition: filter 0.15s;
+}
+.btn-save-template:hover { filter: brightness(1.15); }
+
+/* Save as Template modal */
+.sat-modal {
+  background: white;
+  border-radius: 14px;
+  width: 480px;
+  max-width: 96vw;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.18);
+  overflow: hidden;
+}
+.sat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 22px 16px;
+  border-bottom: 1px solid #e2e8f0;
+}
+.sat-header h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: #1e293b;
+}
+.sat-body { padding: 20px 22px; }
+.sat-desc {
+  margin: 0 0 18px;
+  font-size: 13px;
+  color: #475569;
+  line-height: 1.55;
+}
+.sat-field { margin-bottom: 14px; }
+.sat-field label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+}
+.sat-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #1e293b;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.sat-input:focus { border-color: #7c3aed; }
+.sat-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 22px 18px;
+  border-top: 1px solid #f1f5f9;
+}
+.btn-save-tpl {
+  padding: 9px 20px;
+  background: #7c3aed;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: white;
+  cursor: pointer;
+  transition: filter 0.15s;
+}
+.btn-save-tpl:hover:not(:disabled) { filter: brightness(1.12); }
+.btn-save-tpl:disabled { opacity: 0.55; cursor: not-allowed; }
 
 .btn-preview-pdf {
   padding: 9px 18px;

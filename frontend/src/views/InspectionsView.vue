@@ -98,6 +98,7 @@ const form = ref({
   inspector_id: null,
   typist_id: null,
   tenant_email: '',
+  reference_number: '',
   conduct_date: '',
   time_preference: 'anytime',
   time_hour: '09',
@@ -790,6 +791,7 @@ function openModal() {
     template_id: null,
     typist_id: null,
     tenant_email: '',
+    reference_number: '',
     conduct_date: '',
     time_preference: 'anytime',
     time_hour: '09',
@@ -832,6 +834,7 @@ async function handleSubmit() {
       typist_id: form.value.typist_id,
       template_id: form.value.template_id || null,
       tenant_email: form.value.tenant_email,
+      reference_number: form.value.reference_number || null,
       conduct_time_preference: timePreference,
       source_inspection_id: form.value.source_inspection_id || null,
       include_photos: form.value.include_photos || false
@@ -1269,6 +1272,13 @@ onMounted(() => {
                 <label>Tenant Email(s)</label>
                 <input v-model="form.tenant_email" type="text" placeholder="tenant@example.com, tenant2@example.com" />
                 <p class="helper-text">💡 Separate multiple addresses with commas</p>
+              </div>
+
+              <!-- Reference Number -->
+              <div class="form-group">
+                <label>Reference Number</label>
+                <input v-model="form.reference_number" type="text" placeholder="e.g. INS-2024-001" />
+                <p class="helper-text">Optional — auto-generated if left blank</p>
               </div>
             </div>
 

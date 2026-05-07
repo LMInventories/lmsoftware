@@ -78,10 +78,16 @@ def filter_inspections_for_user(query, user):
             Inspection.status == 'processing'
         )
     elif user.role == 'client':
-        from models import Property
-        return query.join(Property, Inspection.property_id == Property.id).filter(
-            Property.client_id == user.client_id
+        from models import Property, db
+        # Use a subquery instead of an explicit JOIN so it doesn't collide with
+        # the joinedload(Inspection.property) already on the query — SQLAlchemy
+        # can produce incorrect results when the same table is joined twice.
+        client_property_ids = (
+            db.session.query(Property.id)
+            .filter(Property.client_id == user.client_id)
+            .subquery()
         )
+        return query.filter(Inspection.property_id.in_(client_property_ids))
     # Unknown role — return nothing
     return query.filter(False)
 
@@ -106,7 +112,7 @@ def filter_properties_for_user(query, user):
         )
         return query.filter(Property.id.in_(assigned_property_ids))
     elif user.role == 'typist':
-        # Typists don't need property lists — return empty
+        # Typists don't need property lists -- return empty
         return query.filter(False)
     elif user.role == 'client':
         return query.filter(Property.client_id == user.client_id)

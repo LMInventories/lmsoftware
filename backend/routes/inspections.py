@@ -452,34 +452,36 @@ def update_inspection(inspection_id):
             from datetime import datetime as _dt
             rd_sigs = json.loads(data['report_data']) if isinstance(data['report_data'], str) else data['report_data']
             _sigs_blob = rd_sigs.get('_signatures') or {}
-            for _role, _sd in _sigs_blob.items():
-                if _role not in ('clerk', 'tenant', 'landlord_agent'):
-                    continue
-                if not (_sd or {}).get('signature_data'):
-                    continue
-                # Replace any existing in-person record for this role
-                existing_sig = InspectionSignature.query.filter_by(
-                    inspection_id=inspection_id, role=_role, method='in_person'
-                ).first()
-                if existing_sig:
-                    db.session.delete(existing_sig)
-                _signed_at = None
-                try:
-                    _signed_at = _dt.fromisoformat(_sd['signed_at'])
-                except Exception:
-                    _signed_at = _dt.utcnow()
-                db.session.add(InspectionSignature(
-                    inspection_id  = inspection_id,
-                    role           = _role,
-                    signer_name    = _sd.get('signer_name', ''),
-                    signature_data = _sd['signature_data'],
-                    signed_at      = _signed_at,
-                    method         = 'in_person',
-                ))
-            db.session.flush()
+            # Use a savepoint so a failure here only rolls back the signature
+            # writes — it must NOT roll back the status change or other field
+            # updates already pending in the session.
+            with db.session.begin_nested():
+                for _role, _sd in _sigs_blob.items():
+                    if _role not in ('clerk', 'tenant', 'landlord_agent'):
+                        continue
+                    if not (_sd or {}).get('signature_data'):
+                        continue
+                    # Replace any existing in-person record for this role
+                    existing_sig = InspectionSignature.query.filter_by(
+                        inspection_id=inspection_id, role=_role, method='in_person'
+                    ).first()
+                    if existing_sig:
+                        db.session.delete(existing_sig)
+                    _signed_at = None
+                    try:
+                        _signed_at = _dt.fromisoformat(_sd['signed_at'])
+                    except Exception:
+                        _signed_at = _dt.utcnow()
+                    db.session.add(InspectionSignature(
+                        inspection_id  = inspection_id,
+                        role           = _role,
+                        signer_name    = _sd.get('signer_name', ''),
+                        signature_data = _sd['signature_data'],
+                        signed_at      = _signed_at,
+                        method         = 'in_person',
+                    ))
         except Exception as _sig_err:
             print(f'[sync] signature extraction failed (non-fatal): {_sig_err}')
-            db.session.rollback()
 
     # ── Commit all field changes first ───────────────────────────────────────
     # Status is saved before PDF generation so a slow/failing PDF never blocks

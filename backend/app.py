@@ -117,12 +117,6 @@ def create_app():
         logging.error('Unhandled exception:\n%s', tb)
         return {'error': 'Internal server error', 'detail': str(e)}, 500
 
-    @app.errorhandler(500)
-    def handle_500(e):
-        tb = traceback.format_exc()
-        logging.error('500 error:\n%s', tb)
-        return {'error': 'Internal server error', 'detail': str(e)}, 500
-
     db.init_app(app)
     JWTManager(app)
 

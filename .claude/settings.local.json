@@ -1,7 +1,30 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git *)"
+      "Bash(git *)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Projects\\\\lmsoftware\\\\lmsoftware\" -Force)",
+      "Bash(Select-Object -Property Mode, Name)",
+      "Bash(Format-Table)",
+      "Bash(xargs grep -l \"window\\\\.\")",
+      "Bash(xargs grep -l \"transcribe/item\\\\|saveRecording\")",
+      "Bash(xargs grep -l \"transcribeItem\\\\|createRecording\")",
+      "Bash(powershell -Command \"Select-String -Path 'InspectionReportView.vue' -Pattern 'button.*mic|button.*audio|button.*record|button.*voice' | Select-Object -First 20\")",
+      "Bash(powershell -Command \"Select-String -Path 'InspectionReportView.vue' -Pattern '^import ' | Select-Object -First 30\")",
+      "Bash(powershell -Command \"Get-ChildItem -Path 'src' -Recurse -Include '*.vue','*.js' | Select-String -Pattern 'transcrib|record.*item|dictate|mic.*button' | Select-Object -First 30\")",
+      "Bash(powershell -Command \"Select-String -Path 'MobileSectionTab.vue' -Pattern 'toggleRecording|isRecording|startRecording|stopRecording' | Select-Object -First 30\")",
+      "Bash(powershell -Command \"Select-String -Path 'src/services/sync.js' -Pattern 'transcrib|recordings|item_key' | Select-Object -First 40\")",
+      "Bash(powershell -Command \"Get-ChildItem -Path 'views' -Include '*.vue' | Select-String -Pattern 'toggleRecording|recordingKey|mediaRecorder|transcrib' | Select-Object -First 20\")",
+      "Bash(powershell -Command \"Get-ChildItem -Path '.' -Recurse -Include '*.vue','*.js' | Select-String -Pattern 'transcribeItem|/transcribe/item' | Select-Object -First 30\")",
+      "Bash(powershell -Command \"Get-ChildItem -Path '.' -Directory | Select-Object Name\")",
+      "Bash(powershell -Command \"Get-ChildItem -Path '.' -Recurse -Include '*.py' | Select-String -Pattern 'transcribe.*item|/transcribe|def.*transcrib' | Select-Object -First 50\"C:\\\\Users\\\\robyn\\\\Downloads\\\\inspectpro-release-37\\\\app-release.apk)",
+      "Bash(powershell -Command \"Get-ChildItem -Path 'frontend', 'backend' -Recurse -Include '*.vue','*.js','*.py' | Select-String -Pattern 'api\\\\.transcribeItem|transcribeItem\\\\\\(' -A 3 | Select-Object -First 50\")",
+      "Bash(powershell -Command \"Select-String -Path 'views/InspectionReportView.vue' -Pattern 'record|mic|audio|transcri' -i | Select-Object -First 20\")",
+      "Bash(powershell -Command \"Select-String -Path 'MobileSectionTab.vue' -Pattern 'transcribeItem|api.transcribe|POST.*transcribe' | Select-Object -First 20\")",
+      "Bash(powershell -Command \"Select-String -Path '*.py' -Pattern 'createRecording|/recordings|def.*recording' | Select-Object -First 40\")",
+      "Bash(powershell -Command \"Select-String -Path 'api.js' -Pattern 'createRecording' | Select-Object -First 10\")",
+      "Bash(powershell -Command \"Get-Content api.js | Select-String -Pattern '/recording|createRecording' -A 2\")",
+      "Bash(powershell -Command \"Select-String -Path 'api.js' -Pattern 'recording' -i\")",
+      "Bash(powershell -Command \"Select-String -Path 'api.js' -Pattern 'recording'\")"
     ]
   }
 }

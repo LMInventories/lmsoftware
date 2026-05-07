@@ -8,11 +8,6 @@ export default defineConfig({
     host: true,          // allow external access
     port: 3000,
 
-    // ✅ Allow Cloudflare tunnel domain
-    allowedHosts: [
-      'lime-newsletter-sapphire-kingdom.trycloudflare.com'
-    ],
-
     // ✅ Send API calls to Flask automatically
     proxy: {
       '/api': {

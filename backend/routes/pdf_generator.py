@@ -1222,8 +1222,13 @@ class _PDFBuilder:
                 if t == 'keys':
                     return [ref_p, self._p(r.get('name','')), self._p(gv(r,is_extra,'description') or '—')]
                 if t == 'meter_readings':
-                    reading_p = Paragraph(gv(r,is_extra,'reading') or '—', ParagraphStyle('mono', fontName='Courier', fontSize=8, leading=11, textColor=self.body_c))
-                    return [ref_p, self._p(r.get('name','')), self._p(gv(r,is_extra,'locationSerial') or '—'), reading_p]
+                    # Preserve line breaks — ReportLab Paragraph needs <br/> not \n
+                    raw_reading = gv(r, is_extra, 'reading') or '—'
+                    reading_html = raw_reading.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('\n', '<br/>')
+                    reading_p = Paragraph(reading_html, ParagraphStyle('mono', fontName='Courier', fontSize=8, leading=11, textColor=self.body_c))
+                    raw_serial = gv(r, is_extra, 'locationSerial') or '—'
+                    serial_html = raw_serial.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('\n', '<br/>')
+                    return [ref_p, self._p(r.get('name','')), Paragraph(serial_html, ParagraphStyle('rd_serial', fontSize=8, leading=11, textColor=self.body_c)), reading_p]
                 return [ref_p, self._p(r.get('name','')), self._p(gv(r,is_extra,'condition') or gv(r,is_extra,'description') or '—')]
 
             photo_row_indices = []

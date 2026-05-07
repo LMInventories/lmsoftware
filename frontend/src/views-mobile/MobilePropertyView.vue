@@ -146,44 +146,76 @@ async function openReview() {
   reviewLoading.value = false
 }
 
-// Builds a flat list of { sectionName, items: [{ label, condition }] }
+// Builds a list of { name, items: [{ label, desc, cond, isEmpty, subs }] }
+// subs: [{ label, desc, cond }] — sub-items added via the report view
 const reviewRooms = computed(() => {
-  if (!reviewTemplate.value) return []
   const rd = reviewReportData.value
   const co = isCheckOut.value
   const result = []
 
-  // Rooms only (fixed sections are typically not filled on mobile; skip for brevity)
-  const rooms = (reviewTemplate.value.sections || []).filter(s => s.is_room || s.section_type === 'room')
-  for (const room of rooms) {
-    const rid = String(room.id)
+  // Helper: extract condition from a merged data object
+  const getCond = (data) => co
+    ? (data?.checkOutCondition || data?.condition || '')
+    : (data?.condition || '')
+
+  // Helper: build sub-items array for a given item's stored data
+  const buildSubs = (itemData) => {
+    return ((itemData || {})._subs || []).map(sub => ({
+      label: sub.description || sub.label || '—',
+      cond:  co ? (sub.checkOutCondition || sub.condition || '') : (sub.condition || ''),
+    })).filter(s => s.label || s.cond)
+  }
+
+  // Helper: process a list of data entries into review items
+  const processItems = (templateItems, extraItems, rid) => {
     const deleted = new Set(((rd[rid] || {})._deleted || []).map(String))
     const items = []
 
     // Template items
-    for (const item of (room.items || room.sections || [])) {
+    for (const item of (templateItems || [])) {
       if (deleted.has(String(item.id))) continue
-      const label = item.name || item.label || ''
-      const cond  = co
-        ? (rd[rid]?.[String(item.id)]?.checkOutCondition || '')
-        : (rd[rid]?.[String(item.id)]?.condition || '')
-      items.push({ label, cond, isEmpty: !cond })
+      const iid      = String(item.id)
+      const itemData = rd[rid]?.[iid] || {}
+      const label    = item.name || item.label || ''
+      const desc     = itemData.description || ''
+      const cond     = getCond(itemData)
+      const subs     = buildSubs(itemData)
+      items.push({ label, desc, cond, isEmpty: !cond && !subs.length, subs })
     }
 
-    // Extra items (mobile-added)
+    // Extra items (mobile-added rooms or additional items)
     for (const ex of ((rd[rid] || {})._extra || [])) {
       if (!ex._eid || deleted.has(String(ex._eid))) continue
-      const label = ex.label || ex.name || 'New item'
       const indexed = rd[rid]?.[ex._eid] || {}
       const merged  = { ...indexed, ...ex }
-      const cond    = co
-        ? (merged.checkOutCondition || '')
-        : (merged.condition || '')
-      items.push({ label, cond, isEmpty: !cond })
+      const label   = merged.label || merged.name || 'New item'
+      const desc    = merged.description || ''
+      const cond    = getCond(merged)
+      const subs    = buildSubs(merged)
+      items.push({ label, desc, cond, isEmpty: !cond && !subs.length, subs })
     }
-
-    if (items.length) result.push({ name: room.name, items })
+    return items
   }
+
+  // Template rooms
+  if (reviewTemplate.value) {
+    const rooms = (reviewTemplate.value.sections || []).filter(s => s.is_room || s.section_type === 'room')
+    for (const room of rooms) {
+      const rid   = String(room.id)
+      const name  = rd._roomNames?.[rid] ?? room.name
+      const items = processItems(room.items || room.sections || [], rd[rid]?._extra, rid)
+      if (items.length) result.push({ name, items })
+    }
+  }
+
+  // Custom rooms (added by clerk on mobile — stored under rd._customRooms)
+  for (const cr of (rd._customRooms || [])) {
+    const rid  = String(cr.key)
+    const name = rd._roomNames?.[rid] ?? cr.name ?? 'Custom Room'
+    const items = processItems([], rd[rid]?._extra, rid)
+    if (items.length) result.push({ name, items })
+  }
+
   return result
 })
 
@@ -389,7 +421,17 @@ async function applyTemplateChange() {
             <div v-for="item in room.items" :key="item.label" class="mpv-review-item"
               :class="{ 'mpv-review-item--empty': item.isEmpty }">
               <span class="mpv-review-item-label">{{ item.label }}</span>
-              <span class="mpv-review-item-cond">{{ item.cond || '— not filled' }}</span>
+              <span v-if="item.desc" class="mpv-review-item-desc">{{ item.desc }}</span>
+              <span class="mpv-review-item-cond">{{ item.cond || (item.subs.length ? '' : '— not filled') }}</span>
+              <!-- Sub-items -->
+              <div v-if="item.subs && item.subs.length" class="mpv-review-subs">
+                <div v-for="(sub, si) in item.subs" :key="si" class="mpv-review-sub">
+                  <span class="mpv-review-sub-label">{{ sub.label }}</span>
+                  <span class="mpv-review-sub-cond" :class="{ 'mpv-review-sub-cond--empty': !sub.cond }">
+                    {{ sub.cond || '— not filled' }}
+                  </span>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -765,7 +807,25 @@ async function applyTemplateChange() {
 }
 .mpv-review-item--empty .mpv-review-item-cond { color: #ef4444; }
 .mpv-review-item-label { font-size: 12px; font-weight: 700; color: #94a3b8 }
-.mpv-review-item-cond  { font-size: 14px; color: #e2e8f0; line-height: 1.4 }
+.mpv-review-item-desc  { font-size: 13px; color: #cbd5e1; font-style: italic; white-space: pre-wrap; }
+.mpv-review-item-cond  { font-size: 14px; color: #e2e8f0; line-height: 1.4; white-space: pre-wrap; }
+/* Sub-items */
+.mpv-review-subs {
+  margin-top: 6px;
+  padding-left: 10px;
+  border-left: 2px solid #334155;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mpv-review-sub {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.mpv-review-sub-label { font-size: 11px; font-weight: 700; color: #64748b; }
+.mpv-review-sub-cond  { font-size: 13px; color: #cbd5e1; white-space: pre-wrap; }
+.mpv-review-sub-cond--empty { color: #ef4444; }
 .mpv-review-footer {
   display: flex;
   gap: 10px;

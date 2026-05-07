@@ -14,7 +14,7 @@ def create_app():
     instance_path = os.path.join(basedir, 'instance')
     os.makedirs(instance_path, exist_ok=True)
 
-    # ── Database ──────────────────────────────────────────────────────────────
+    # ── Database ────────────────────────────────────────────────────
     database_url = os.environ.get('DATABASE_URL')
     if database_url:
         database_url = database_url.replace('postgres://', 'postgresql+psycopg://')
@@ -27,7 +27,7 @@ def create_app():
 
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-    # ── Connection pool ───────────────────────────────────────────────────────
+    # ── Connection pool ───────────────────────────────────────────────
     # pool_pre_ping    — test each connection before use; discards stale sockets
     # pool_recycle     — replace connections after 5 min (before Railway kills them)
     # pool_use_lifo    — prefer freshest connections; cold connections are more
@@ -57,7 +57,7 @@ def create_app():
     # separate upload endpoints rather than inline base64.
     app.config['MAX_CONTENT_LENGTH'] = 150 * 1024 * 1024  # 150 MB
 
-    # ── CORS ──────────────────────────────────────────────────────────────────
+    # ── CORS ───────────────────────────────────────────────────────────────────
     # Base origins always allowed (localhost for dev, custom domain for prod)
     allowed_origins = [
         'http://localhost:5173',
@@ -87,9 +87,25 @@ def create_app():
     def health():
         return {'status': 'ok'}, 200
 
-    # ── Global error handlers ─────────────────────────────────────────────────
+    # ── Global error handlers ─────────────────────────────────────────────
     import traceback
     import logging
+    from sqlalchemy.exc import OperationalError as SAOperationalError
+
+    @app.errorhandler(SAOperationalError)
+    def handle_db_disconnect(e):
+        # Railway's PostgreSQL proxy occasionally drops SSL connections mid-query.
+        # pool_pre_ping catches stale idle connections but cannot prevent a live
+        # connection from being severed during execution.  When that happens we
+        # discard the broken session immediately so it is not returned to the pool,
+        # then return 503 so the client knows to retry.
+        try:
+            db.session.remove()
+        except Exception:
+            pass
+        tb = traceback.format_exc()
+        logging.error('Database connection error (SSL/OperationalError):\n%s', tb)
+        return {'error': 'Database temporarily unavailable — please retry in a moment.'}, 503
 
     @app.errorhandler(Exception)
     def handle_unhandled_exception(e):
@@ -110,7 +126,7 @@ def create_app():
     db.init_app(app)
     JWTManager(app)
 
-    # ── Gzip compression ──────────────────────────────────────────────────────
+    # ── Gzip compression ──────────────────────────────────────────────────
     # Compresses JSON API responses before sending to the client.
     # Inspection reports embed base64 photos so payloads can be 500KB–5MB.
     # Gzip typically achieves 60-80% reduction on JSON/base64 text, meaning a
@@ -121,7 +137,7 @@ def create_app():
     app.config['COMPRESS_MIN_SIZE'] = 1000  # only compress responses > 1KB
     Compress(app)
 
-    # ── Blueprints ────────────────────────────────────────────────────────────
+    # ── Blueprints ─────────────────────────────────────────────────────────────
     from routes.auth            import auth_bp
     from routes.auth_reset      import auth_reset_bp
     from routes.users           import users_bp
@@ -285,7 +301,7 @@ def _setup_database():
         _alter_column("inspections.reference_number",
                       "ALTER TABLE inspections ADD COLUMN reference_number VARCHAR(100)")
 
-    # ── Deposit / Depositary fields ───────────────────────────────────────────
+    # ── Deposit / Depositary fields ─────────────────────────────────────────────
     for _col, _ddl in [
         ('deposit_amount',        'NUMERIC(10,2)'),
         ('deposit_scheme',        'VARCHAR(50)'),
@@ -330,7 +346,7 @@ def _setup_database():
         _alter_column("inspections.completion_email_sent",
                       f"ALTER TABLE inspections ADD COLUMN completion_email_sent BOOLEAN NOT NULL DEFAULT {default}")
 
-    # ── Reset midterm_sections to v2 defaults if still on old v1 schema ───────
+    # ── Reset midterm_sections to v2 defaults if still on old v1 schema ───────────
     # The original defaults used "Property Condition Overview" / "Safety & Alarms";
     # the v2 defaults match the industry-standard midterm format (Overview, Keys,
     # Smoke & CO). Reset only if the stored data still has the old first section name.
@@ -346,7 +362,7 @@ def _setup_database():
         except Exception:
             pass
 
-    # ── Performance indexes ──────────────────────────────────────────────────
+    # ── Performance indexes ────────────────────────────────────────────────────────
     # CREATE INDEX IF NOT EXISTS is safe to run on every boot — a no-op when the
     # index already exists. These cover the most frequent filter/join columns so
     # that list queries and dashboard aggregations don't do full table scans.
@@ -367,7 +383,7 @@ def _setup_database():
             db.session.rollback()
     db.session.commit()
 
-    # ── Seed standard midterm room section presets ───────────────────────────
+    # ── Seed standard midterm room section presets ───────────────────────────────
     # These presets appear in the template editor "From Preset" picker and give
     # clerks a one-click starting point for each midterm room section.
     _MIDTERM_PRESETS = [
@@ -439,7 +455,7 @@ def _setup_database():
             print(f"Seeded section preset: {_preset_data['name']}")
     db.session.commit()
 
-    # ── Seed (only on a completely empty database) ───────────────────────────
+    # ── Seed (only on a completely empty database) ───────────────────────────────
     if User.query.count() == 0:
         print("Fresh database — seeding demo data...")
 

@@ -485,16 +485,14 @@ function buildReportHTML() {
             <td>${e(desc) || '—'}</td><td>${e(inv) || '—'}</td>
             <td>${coC}</td><td>${actHtml}</td>
           </tr>`
-          if (!isEx) {
-            for (const sub of getSubs(room.id, item.id)) {
-              const subInv = sub.inventoryCondition || sub.condition || ''
-              const subCo  = sub.checkOutCondition || ''
-              body += `<tr class="sub-item-row">
-                <td class="col-ref">-</td><td class="col-item">—</td>
-                <td>${e(sub.description) || '—'}</td><td>${e(subInv) || '—'}</td>
-                <td>${e(subCo) || '—'}</td><td></td>
-              </tr>`
-            }
+          for (const sub of getSubs(room.id, item.id)) {
+            const subInv = sub.inventoryCondition || sub.condition || ''
+            const subCo  = sub.checkOutCondition || ''
+            body += `<tr class="sub-item-row">
+              <td class="col-ref">-</td><td class="col-item">—</td>
+              <td>${e(sub.description) || '—'}</td><td>${e(subInv) || '—'}</td>
+              <td>${e(subCo) || '—'}</td><td></td>
+            </tr>`
           }
         } else {
           const cond = isEx ? (item.condition || '') : get(room.id, item.id, 'condition')
@@ -502,13 +500,11 @@ function buildReportHTML() {
             <td class="col-ref">${e(ref)}</td><td class="col-item">${e(label)}</td>
             <td>${e(desc) || '—'}</td><td>${e(cond) || '—'}</td>
           </tr>`
-          if (!isEx) {
-            for (const sub of getSubs(room.id, item.id)) {
-              body += `<tr class="sub-item-row">
-                <td class="col-ref">-</td><td class="col-item">—</td>
-                <td>${e(sub.description) || '—'}</td><td>${e(sub.condition) || '—'}</td>
-              </tr>`
-            }
+          for (const sub of getSubs(room.id, item.id)) {
+            body += `<tr class="sub-item-row">
+              <td class="col-ref">-</td><td class="col-item">—</td>
+              <td>${e(sub.description) || '—'}</td><td>${e(sub.condition) || '—'}</td>
+            </tr>`
           }
         }
       }

@@ -1474,7 +1474,7 @@ const rooms = computed(() => {
         // Merge both so mobile-synced data is visible; _extra entry values take precedence
         // so that any web-side edits (which do write into _extra) are not overwritten.
         const indexed = reportData.value[room.id]?.[ex._eid] || {}
-        return { ...indexed, ...ex, id: ex._eid, label: ex.label || ex.name || 'New item', _type: 'extra', _itemKey: ex._eid }
+        return { ...indexed, ...ex, id: ex._eid, label: ex.label || ex.name || 'New item', _type: 'extra', _itemKey: ex._eid, hasDescription: true, hasCondition: true }
       })
     const all = [...tmplItems, ...extraItems]
     if (!storedOrder || storedOrder.length === 0) return { ...room, _orderedItems: all }
@@ -2742,8 +2742,8 @@ async function moveToReview() {
 
                 </div>
 
-                <!-- Sub-items (template items only) — Check In / Inventory layout -->
-                <div v-if="!isCheckOut && item._type === 'template' && getSubs(room.id, item.id).length" class="sub-items">
+                <!-- Sub-items — Check In / Inventory layout -->
+                <div v-if="!isCheckOut && (item._type === 'template' || item._type === 'extra') && getSubs(room.id, item.id).length" class="sub-items">
                   <div v-for="sub in getSubs(room.id, item.id)" :key="sub._sid" class="sub-item">
                     <div class="item-fields-row sub-fields-row">
                       <div class="item-fields-main">
@@ -2782,8 +2782,8 @@ async function moveToReview() {
                   </div>
                 </div>
 
-                <!-- Sub-items (template items only) — Check Out layout -->
-                <div v-if="isCheckOut && item._type === 'template' && getSubs(room.id, item.id).length" class="sub-items co-sub-items">
+                <!-- Sub-items — Check Out layout -->
+                <div v-if="isCheckOut && (item._type === 'template' || item._type === 'extra') && getSubs(room.id, item.id).length" class="sub-items co-sub-items">
                   <div v-for="sub in getSubs(room.id, item.id)" :key="sub._sid" class="sub-item">
                     <div class="item-fields-row sub-fields-row">
                       <div class="item-fields-main">

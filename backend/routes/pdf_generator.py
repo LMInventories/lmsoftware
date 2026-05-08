@@ -1349,8 +1349,7 @@ class _PDFBuilder:
                     acts_cell = self._acts_cell(acts, extra_paragraphs=link_p)
                     tbl_data.append([Paragraph(ref,self.s_ref), self._p(label,self.s_bold), self._p(desc or '—'), self._p(inv or '—'), self._p(co_c), acts_cell])
                     # Sub-items
-                    if not is_ex:
-                        for sub in self._get_subs(room['id'], item['id']):
+                    for sub in self._get_subs(room['id'], item['id']):
                             sub_desc = sub.get('description') or ''
                             sub_inv  = sub.get('inventoryCondition') or sub.get('condition') or ''
                             sub_co   = sub.get('checkOutCondition') or ''
@@ -1371,8 +1370,7 @@ class _PDFBuilder:
                     cond_cell = [self._p(cond or '—')] + link_p
                     tbl_data.append([Paragraph(ref,self.s_ref), self._p(label,self.s_bold), self._p(desc or '—'), cond_cell])
                     # Sub-items
-                    if not is_ex:
-                        for sub in self._get_subs(room['id'], item['id']):
+                    for sub in self._get_subs(room['id'], item['id']):
                             sub_desc = sub.get('description') or ''
                             sub_cond = sub.get('condition') or ''
                             tbl_data.append([

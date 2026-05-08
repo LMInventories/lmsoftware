@@ -893,6 +893,11 @@ FORMATTING NUMBERS AND QUANTITIES:
 - Format quantities as "N x item": "two green curtains" → "2 x green curtains"
 - Capitalise the first word of each line
 - Do NOT use bullet points or dashes
+- MULTI-COMPONENT LINES: when a description or condition contains more than one distinct component,
+  separate each component with a newline character \n — NEVER use commas to join them.
+  ✓ CORRECT:   "White painted door\nChrome lever handle\nChrome letter box"
+  ✗ INCORRECT: "White painted door, chrome lever handle, chrome letter box"
+  This applies to both description and condition fields.
 
 SPLITTING description vs condition:
 - Condition signal phrases: "in good order", "in fair order", "in poor order", "good order",
@@ -900,12 +905,18 @@ SPLITTING description vs condition:
 - Everything said AFTER a condition phrase is also condition
 - Functional observations ("appear complete", "tested", "appears working") are always condition
 - If no condition is mentioned, default condition to "In good order"
+- DESCRIPTION CLOSES PERMANENTLY the moment a condition signal phrase (or defect phrase) is
+  encountered. Once closed, NO further text may be added to description — not even text that
+  sounds descriptive. All remaining text for that element goes into condition only.
+  The only exception is an explicit amendment command from the clerk.
 
 HOW TO PARSE EACH ITEM — follow this algorithm exactly:
 
 STEP 1: When the clerk says an item name (CHAPTER HEADING), start collecting for that item.
 STEP 2: Collect words as DESCRIPTION for the current element, until you hit a CONDITION SIGNAL PHRASE.
-STEP 3: When you hit a CONDITION SIGNAL PHRASE, it IMMEDIATELY closes the description.
+STEP 3: When you hit a CONDITION SIGNAL PHRASE, it IMMEDIATELY and PERMANENTLY closes the description.
+         The description field is now LOCKED — no further text may be written to it for this element
+         under any circumstances (unless the clerk explicitly uses an amendment command).
          The condition signal PLUS any location qualifiers that follow ("to [place]", "at [place]",
          "near [place]", "throughout", "on [place]") = the CONDITION for the current element.
          Keep collecting into the condition until you reach a new DESCRIPTIVE TERM or the next chapter heading.

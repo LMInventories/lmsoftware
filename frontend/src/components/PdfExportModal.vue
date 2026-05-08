@@ -68,6 +68,9 @@ function getExtra(sectionId) {
 function getItemActions(roomId, itemId) {
   return props.reportData[roomId]?.[`_actions_${itemId}`] ?? []
 }
+function getSubs(roomId, itemId) {
+  return props.reportData[roomId]?.[String(itemId)]?._subs ?? []
+}
 function getOrderedRoomItems(room) {
   const storedOrder   = props.reportData[room.id]?._itemOrder
   const templateItems = (room.sections || []).map(item => ({ ...item, _type: 'template' }))
@@ -482,12 +485,31 @@ function buildReportHTML() {
             <td>${e(desc) || '—'}</td><td>${e(inv) || '—'}</td>
             <td>${coC}</td><td>${actHtml}</td>
           </tr>`
+          if (!isEx) {
+            for (const sub of getSubs(room.id, item.id)) {
+              const subInv = sub.inventoryCondition || sub.condition || ''
+              const subCo  = sub.checkOutCondition || ''
+              body += `<tr class="sub-item-row">
+                <td class="col-ref">-</td><td class="col-item">—</td>
+                <td>${e(sub.description) || '—'}</td><td>${e(subInv) || '—'}</td>
+                <td>${e(subCo) || '—'}</td><td></td>
+              </tr>`
+            }
+          }
         } else {
           const cond = isEx ? (item.condition || '') : get(room.id, item.id, 'condition')
           body += `<tr>
             <td class="col-ref">${e(ref)}</td><td class="col-item">${e(label)}</td>
             <td>${e(desc) || '—'}</td><td>${e(cond) || '—'}</td>
           </tr>`
+          if (!isEx) {
+            for (const sub of getSubs(room.id, item.id)) {
+              body += `<tr class="sub-item-row">
+                <td class="col-ref">-</td><td class="col-item">—</td>
+                <td>${e(sub.description) || '—'}</td><td>${e(sub.condition) || '—'}</td>
+              </tr>`
+            }
+          }
         }
       }
 
@@ -611,6 +633,9 @@ function buildReportHTML() {
     tbody tr:nth-child(even) td { background: #f8fafc; }
     /* Photo rows inside tables never get zebra stripe */
     tr.photo-tr td { background: white !important; padding: 4px 10px 8px; border-bottom: 1px solid #f1f5f9; }
+    /* Sub-item rows: muted ref, no zebra override */
+    tr.sub-item-row td { background: white !important; color: #475569; font-size: 8pt; }
+    tr.sub-item-row .col-ref { color: #94a3b8; font-weight: 400; }
 
     .col-ref  { width: 5%;  font-weight: 700; color: ${brand}; white-space: nowrap; font-size: 8pt; }
     .col-item { width: 18%; font-weight: 600; }

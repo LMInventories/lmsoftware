@@ -1,25 +1,67 @@
 from flask import Blueprint, request, jsonify
-from flask_jwt_extended import jwt_required
+from flask_jwt_extended import jwt_required, get_jwt_identity
 from models import db, Property
 from permissions import get_current_user, filter_properties_for_user, is_admin_or_manager, is_client
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
+import time
 
 properties_bp = Blueprint('properties', __name__)
 
+# ── Properties list cache ──────────────────────────────────────────────────────
+# Keyed per user so each user sees their own scoped data.
+# Busted on any property or inspection write.
+_PROP_CACHE: dict = {}
+_PROP_CACHE_TTL = 300  # 5 minutes
+
+
+def _prop_cache_get(key: str):
+    entry = _PROP_CACHE.get(key)
+    if entry and time.monotonic() - entry['ts'] < _PROP_CACHE_TTL:
+        return entry['data']
+    return None
+
+
+def _prop_cache_set(key: str, data):
+    _PROP_CACHE[key] = {'data': data, 'ts': time.monotonic()}
+    if len(_PROP_CACHE) > 500:
+        oldest = sorted(_PROP_CACHE, key=lambda k: _PROP_CACHE[k]['ts'])
+        for k in oldest[:100]:
+            _PROP_CACHE.pop(k, None)
+
+
+def invalidate_properties_cache(user_id=None):
+    """Call after any write that changes property or inspection data."""
+    if user_id is not None:
+        _PROP_CACHE.pop(f'props:{user_id}', None)
+    else:
+        _PROP_CACHE.clear()
+
+
 def _property_query_eager():
-    """Return a Property query that eager-loads client + inspections in one SQL pass."""
+    """Return a Property query that eager-loads client + inspections.
+
+    selectinload for inspections avoids a cartesian JOIN (one result row per
+    inspection per property) and instead issues a single IN-query for all
+    inspections belonging to the matched properties.
+    """
     return Property.query.options(
         joinedload(Property.client),
-        joinedload(Property.inspections),
+        selectinload(Property.inspections),
     )
 
 @properties_bp.route('', methods=['GET'])
 @jwt_required()
 def get_properties():
     user = get_current_user()
+    cache_key = f'props:{user.id}'
+    cached = _prop_cache_get(cache_key)
+    if cached is not None:
+        return jsonify(cached)
     query = filter_properties_for_user(_property_query_eager(), user)
     properties = query.all()
-    return jsonify([p.to_dict() for p in properties])
+    data = [p.to_dict() for p in properties]
+    _prop_cache_set(cache_key, data)
+    return jsonify(data)
 
 @properties_bp.route('/<int:property_id>', methods=['GET'])
 @jwt_required()
@@ -73,6 +115,7 @@ def create_property():
     )
     db.session.add(prop)
     db.session.commit()
+    invalidate_properties_cache()
     return jsonify(prop.to_dict()), 201
 
 @properties_bp.route('/<int:property_id>', methods=['PUT'])
@@ -104,6 +147,7 @@ def update_property(property_id):
     if 'overview_photo'    in data: prop.overview_photo    = data['overview_photo']
     if 'notes'             in data: prop.notes             = data['notes']
     db.session.commit()
+    invalidate_properties_cache()
     return jsonify(prop.to_dict())
 
 @properties_bp.route('/<int:property_id>/photo', methods=['POST'])
@@ -122,6 +166,7 @@ def upload_property_photo(property_id):
         return jsonify({'error': 'No photo provided'}), 400
     prop.overview_photo = data['photo']
     db.session.commit()
+    invalidate_properties_cache()
     return jsonify({'overview_photo': prop.overview_photo})
 
 @properties_bp.route('/<int:property_id>', methods=['DELETE'])
@@ -133,4 +178,5 @@ def delete_property(property_id):
     prop = Property.query.get_or_404(property_id)
     db.session.delete(prop)
     db.session.commit()
+    invalidate_properties_cache()
     return '', 204

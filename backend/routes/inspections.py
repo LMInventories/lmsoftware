@@ -10,13 +10,49 @@ import time
 import random
 import string
 
-# Bust dashboard cache after any write so counts/activity stay accurate
+# ── Inspections list cache ────────────────────────────────────────────────────
+# Keyed per user so role-based filtering is preserved.
+# Busted on any inspection write.
+_INSP_CACHE: dict = {}
+_INSP_CACHE_TTL = 300  # 5 minutes
+
+
+def _insp_cache_get(key: str):
+    entry = _INSP_CACHE.get(key)
+    if entry and time.monotonic() - entry['ts'] < _INSP_CACHE_TTL:
+        return entry['data']
+    return None
+
+
+def _insp_cache_set(key: str, data):
+    _INSP_CACHE[key] = {'data': data, 'ts': time.monotonic()}
+    if len(_INSP_CACHE) > 500:
+        oldest = sorted(_INSP_CACHE, key=lambda k: _INSP_CACHE[k]['ts'])
+        for k in oldest[:100]:
+            _INSP_CACHE.pop(k, None)
+
+
+def invalidate_inspections_cache(user_id=None):
+    if user_id is not None:
+        _INSP_CACHE.pop(f'insp:{user_id}', None)
+    else:
+        _INSP_CACHE.clear()
+
+
+# Bust dashboard + properties + inspections caches after any inspection write
 def _bust_dashboard():
     try:
         from routes.dashboard import invalidate_dashboard_cache
         invalidate_dashboard_cache()
     except Exception:
         pass
+    try:
+        from routes.properties import invalidate_properties_cache
+        invalidate_properties_cache()
+    except Exception:
+        pass
+    invalidate_inspections_cache()
+
 
 inspections_bp = Blueprint('inspections', __name__)
 
@@ -130,6 +166,10 @@ def inspection_detail(inspection):
 @jwt_required()
 def get_inspections():
     user = get_current_user()
+    cache_key = f'insp:{user.id}'
+    cached = _insp_cache_get(cache_key)
+    if cached is not None:
+        return jsonify(cached)
     # Eager-load all relationships accessed in the list serialiser in a single
     # query (4 JOINs) instead of issuing 4 lazy-load queries per inspection.
     # Without this, 50 inspections → 200+ round trips → intermittent timeouts.
@@ -140,7 +180,7 @@ def get_inspections():
     )
     query = filter_inspections_for_user(eager, user)
     inspections = query.all()
-    return jsonify([{
+    data = [{
         'id': i.id,
         'property_id': i.property_id,
         'property_address': i.property.address if i.property else None,
@@ -157,7 +197,9 @@ def get_inspections():
         'conduct_time_preference': i.conduct_time_preference,
         'scheduled_date': i.scheduled_date.isoformat() if i.scheduled_date else None,
         'created_at': i.created_at.isoformat() if i.created_at else None,
-    } for i in inspections])
+    } for i in inspections]
+    _insp_cache_set(cache_key, data)
+    return jsonify(data)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

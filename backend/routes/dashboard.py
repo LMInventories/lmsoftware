@@ -18,7 +18,7 @@ dashboard_bp = Blueprint('dashboard', __name__)
 # Note: each gunicorn worker has its own cache dict; data can be up to
 # 30 s stale in the rare case two workers are used back-to-back. Acceptable.
 _CACHE: dict = {}
-_CACHE_TTL = 30  # seconds
+_CACHE_TTL = 300  # seconds (5 minutes)
 
 
 def _cache_get(key: str):

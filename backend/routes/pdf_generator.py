@@ -1365,6 +1365,14 @@ class _PDFBuilder:
                     cond = (item.get('condition') or '') if is_ex else self._get(room['id'],item['id'],'condition')
                     cond_cell = [self._p(cond or '—')] + link_p
                     tbl_data.append([Paragraph(ref,self.s_ref), self._p(label,self.s_bold), cond_cell])
+                    # Sub-items
+                    for sub in self._get_subs(room['id'], item['id']):
+                        sub_cond = sub.get('condition') or ''
+                        tbl_data.append([
+                            Paragraph('-', self.s_ref),
+                            self._p('—'),
+                            self._p(sub_cond or '—'),
+                        ])
                 else:
                     cond = (item.get('condition') or '') if is_ex else self._get(room['id'],item['id'],'condition')
                     cond_cell = [self._p(cond or '—')] + link_p

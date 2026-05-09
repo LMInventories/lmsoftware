@@ -2605,7 +2605,7 @@ async function moveToReview() {
                               :value="get(room.id,item.id,'notes')"
                               @input="set(room.id,item.id,'notes',$event.target.value)"></textarea>
                           </div>
-                          <button v-if="canEdit && item.hasDescription && !isDamageReport" class="add-sub-btn add-sub-below" @click="addSubItem(room.id, item.id)">+ Add sub-item</button>
+                          <button v-if="canEdit && item.hasDescription" class="add-sub-btn add-sub-below" @click="addSubItem(room.id, item.id)">+ Add sub-item</button>
                         </div>
                         <!-- Buttons stacked to the right -->
                         <div class="item-btn-col" v-if="item.hasCondition || item.hasDescription || (!item.hasCondition && !item.hasDescription)">
@@ -2747,7 +2747,7 @@ async function moveToReview() {
                   <div v-for="sub in getSubs(room.id, item.id)" :key="sub._sid" class="sub-item">
                     <div class="item-fields-row sub-fields-row">
                       <div class="item-fields-main">
-                        <div class="room-field-desc">
+                        <div v-if="!isDamageReport" class="room-field-desc">
                           <label class="field-lbl">Description</label>
                           <textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" rows="2" placeholder="Describe…" :value="sub.description" @input="setSubField(room.id,item.id,sub._sid,'description',$event.target.value)"></textarea>
                         </div>

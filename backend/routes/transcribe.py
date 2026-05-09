@@ -197,7 +197,7 @@ def _whisper_transcribe(audio_bytes: bytes, mime_type: str) -> str:
         os.unlink(tmp_path)
 
 
-def _claude_fill_item(transcript: str, item_label: str, room_name: str, section_type: str = 'room', edit_mode: str = 'normal', is_check_out: bool = False) -> dict:
+def _claude_fill_item(transcript: str, item_label: str, room_name: str, section_type: str = 'room', edit_mode: str = 'normal', is_check_out: bool = False, is_damage_report: bool = False) -> dict:
     """
     Given a short transcript for a single item, return the appropriate fields
     based on section type. Uses claude-haiku-4-5.
@@ -248,6 +248,42 @@ Return ONLY valid JSON, no markdown:
             model='claude-haiku-4-5',
             max_tokens=200,
             messages=[{'role': 'user', 'content': co_prompt}]
+        )
+        raw = message.content[0].text.strip()
+        raw = raw.replace('```json', '').replace('```', '').strip()
+        return json.loads(_sanitise_json(raw)), message
+
+    # ── Damage Report per-item mode — verbatim, condition only ─────────────────
+    if is_damage_report and section_type == 'room':
+        dmg_prompt = f"""You are processing a UK property DAMAGE REPORT inspection dictation.
+The clerk is describing the damage to a single item.
+
+Item: {item_label}
+Room: {room_name}
+
+The clerk said:
+"{transcript}"
+
+RULES — absolute, no exceptions:
+- Return the COMPLETE transcript in "condition" — there is NO description field in a damage report
+- ONLY remove filler sounds: um, uh, er, errr, umm, erm, and clear false starts
+- Do NOT interpret, condense, or paraphrase — use the clerk's exact words
+- Convert spoken numbers to numerals: "two" → "2", "three" → "3"
+- Format quantities as "N x item": "two marks" → "2 x marks"
+- Capitalise the first word of each line
+- SEPARATE OBSERVATIONS ON DIFFERENT LINES: if the clerk mentions two or more distinct damage
+  observations, put each on its own line using \\n. NEVER join with commas.
+  Example: "scuff to bottom panel, chip to frame edge"
+    CORRECT:   "Scuff to bottom panel\\nChip to frame edge"
+    INCORRECT: "Scuff to bottom panel, chip to frame edge"
+  A single observation about one location may use commas within that line.
+
+Return ONLY valid JSON, no markdown:
+{{"condition": "..."}}"""
+        message = client.messages.create(
+            model='claude-haiku-4-5',
+            max_tokens=200,
+            messages=[{'role': 'user', 'content': dmg_prompt}]
         )
         raw = message.content[0].text.strip()
         raw = raw.replace('```json', '').replace('```', '').strip()
@@ -507,8 +543,9 @@ def transcribe_item():
     room_name    = data.get('roomName', '')
     section_id   = data.get('sectionId')
     row_id       = data.get('rowId')
-    section_type = data.get('sectionType', 'room')  # room|condition_summary|cleaning_summary|keys|meter_readings|fire_door_safety|health_safety
-    is_check_out = bool(data.get('isCheckOut', False))
+    section_type      = data.get('sectionType', 'room')  # room|condition_summary|cleaning_summary|keys|meter_readings|fire_door_safety|health_safety
+    is_check_out      = bool(data.get('isCheckOut', False))
+    is_damage_report  = bool(data.get('isDamageReport', False))
 
     if not audio_b64:
         return jsonify({'error': 'No audio data'}), 400
@@ -549,7 +586,7 @@ def transcribe_item():
                 'sectionType': section_type,
             })
 
-        filled, filled_msg = _claude_fill_item(transcript, item_label, room_name, section_type, edit_mode, is_check_out)
+        filled, filled_msg = _claude_fill_item(transcript, item_label, room_name, section_type, edit_mode, is_check_out, is_damage_report)
 
         # Log usage
         try:
@@ -846,13 +883,14 @@ def transcribe_usage():
     })
 
 
-def _claude_fill_room(transcript: str, section_name: str, items: list) -> dict:
+def _claude_fill_room(transcript: str, section_name: str, items: list, processed_ids: list = None) -> dict:
     """
     Fill a single room's items from a continuous dictation transcript.
     Item names are used as 'chapter headings' — the clerk says the item name
     then describes it, so the AI maps each passage to the correct item.
 
     items: [{ 'id': str, 'name': str, 'hasCondition': bool, 'hasDescription': bool }]
+    processed_ids: item IDs already filled in a previous pass — skip unless explicitly amended.
 
     Returns: { itemId: { 'description': '...', 'condition': '...' } }
     """
@@ -863,6 +901,25 @@ def _claude_fill_room(transcript: str, section_name: str, items: list) -> dict:
         for item in items
     )
 
+    processed_note = ''
+    if processed_ids:
+        id_list = ', '.join(f'"{pid}"' for pid in processed_ids)
+        processed_note = f"""
+══════════════════════════════════════════════════════
+ALREADY-TRANSCRIBED ITEMS — do not re-fill
+══════════════════════════════════════════════════════
+The following item IDs were filled in a previous transcription pass:
+  {id_list}
+
+Do NOT output these items unless the clerk explicitly says one of:
+  • "Amend [item name] ..."
+  • "Add to [item name] ..."
+  • "Return to [item name], amend ..."
+  • "Return to [item name], add ..."
+  • "Return to [item name], add sub-item ..."
+If the clerk does not explicitly address an already-transcribed item, omit it from your output entirely.
+"""
+
     prompt = f"""You are processing a UK property inventory inspection dictation for a single room.
 
 The clerk walked through the room and spoke each item name aloud followed by its description and condition.
@@ -872,7 +929,7 @@ Room: {section_name}
 
 Items to fill (use the ID as the JSON key, match by Name):
 {items_list}
-
+{processed_note}
 Transcript:
 "{transcript}"
 
@@ -1081,6 +1138,9 @@ The clerk may amend or extend an already-described item using these commands:
   "Return to [item name], add to condition, [new text]"
   "Return to [item name], amend, [new text]"  — overwrite both fields
   "Return to [item name], add, [new text]"    — append to both fields
+  "Return to [item name], add sub-item [description and condition]"
+      → creates a new _subs entry on the named item; parse description/condition using the
+         same sub-item rules. Do NOT include _descAction or _condAction — only output _subs.
 
 When you detect any amendment phrase, include these optional action flags in that item's JSON:
   "_descAction": "overwrite"  → caller will replace the existing description
@@ -1217,6 +1277,126 @@ Example output:
         return json.loads(_sanitise_json(raw))
     except json.JSONDecodeError:
         print(f'[_claude_fill_room_checkout] JSON parse error: {raw[:200]}')
+        return {}
+
+
+def _claude_fill_room_damage(transcript: str, section_name: str, items: list, processed_ids: list = None) -> dict:
+    """
+    Damage Report version of _claude_fill_room.
+    Item names act as chapter headings; everything the clerk says maps to 'condition' only.
+    No description field is ever populated.
+
+    Returns: { itemId: { 'condition': '...' } }
+          or { itemId: { '_subs': [{ 'condition': '...' }] } }
+    """
+    client = anthropic.Anthropic(api_key=os.environ.get('ANTHROPIC_API_KEY'))
+
+    items_list = '\n'.join(
+        f'  - ID: "{item["id"]}", Name: "{item["name"]}"'
+        for item in items
+    )
+
+    processed_note = ''
+    if processed_ids:
+        id_list = ', '.join(f'"{pid}"' for pid in processed_ids)
+        processed_note = f"""
+══════════════════════════════════════════════════════
+ALREADY-TRANSCRIBED ITEMS — do not re-fill
+══════════════════════════════════════════════════════
+The following item IDs were filled in a previous pass:
+  {id_list}
+
+Omit them from output unless the clerk explicitly says "Return to [name], add sub-item ..."
+or uses an amendment command ("Amend [name] condition ...", "Add to [name] condition ...").
+"""
+
+    prompt = f"""You are processing a UK property DAMAGE REPORT inspection dictation for a single room.
+
+The clerk walks through the room and says each item name followed by a description of the damage.
+Item names act as CHAPTER HEADINGS — everything said after an item name goes into that item's
+"condition" field. There is NO description field in a damage report.
+
+Room: {section_name}
+
+Items (use the ID as the JSON key, match by Name):
+{items_list}
+{processed_note}
+Transcript:
+"{transcript}"
+
+RULES:
+1. Match each passage to the closest item name. Abbreviations and partial names are fine.
+2. Everything the clerk says after an item name is DAMAGE CONDITION — put it all in "condition".
+   Never use a "description" field.
+3. VERBATIM: use the clerk's exact words. Only remove filler sounds (um, uh, er, errr, umm, erm)
+   and clear false starts (e.g. "scuff — scuff to base" → "scuff to base").
+4. MULTIPLE OBSERVATIONS: when the clerk mentions two or more distinct damage observations,
+   separate each with a newline (\\n). NEVER use commas to join separate observations.
+   ✓ CORRECT:   "Scuff to bottom panel\\nChip to frame"
+   ✗ INCORRECT: "Scuff to bottom panel, chip to frame"
+   A single observation about one location may still use commas within that line.
+5. Convert spoken numbers to numerals: "two" → "2". Format quantities as "N x item".
+6. Capitalise the first word of each line.
+7. Only fill items that are mentioned. Omit unmentioned items entirely.
+8. If a single component has multiple distinct damage observations, each goes on its own line.
+
+══════════════════════════════════════════════════════
+NOT APPLICABLE
+══════════════════════════════════════════════════════
+The clerk may say "[item name] Not Applicable" to mark an item as not present.
+  → Set "_delete": true on that item. Do NOT fill condition.
+
+══════════════════════════════════════════════════════
+SUB-ITEMS
+══════════════════════════════════════════════════════
+The clerk may say "sub-item" or "next sub-item" to start a new damage element within the
+same item (e.g. a second wall surface or a second component).
+Each sub-item has its own "condition" only. No description.
+
+"Return to [item name], add sub-item [damage content]"
+  → Creates a new _subs entry on the named item. Only condition, no _descAction/_condAction.
+
+══════════════════════════════════════════════════════
+AMENDMENT COMMANDS
+══════════════════════════════════════════════════════
+"Amend [item name] condition [new content]"       → overwrite condition (_condAction: "overwrite")
+"Add to [item name] condition [new content]"      → append to condition (_condAction: "append")
+"Return to [item name], amend condition, [text]"  → overwrite condition (_condAction: "overwrite")
+"Return to [item name], add to condition, [text]" → append to condition (_condAction: "append")
+
+Return ONLY valid JSON — no markdown, no extra text.
+{{
+  "<itemId>": {{
+    "condition": "Damage observation one\\nDamage observation two"
+  }},
+  "<deletedItemId>": {{
+    "_delete": true
+  }},
+  "<amendedItemId>": {{
+    "condition": "replacement or addition",
+    "_condAction": "overwrite"
+  }},
+  "<itemWithSubs>": {{
+    "condition": "Main element damage",
+    "_subs": [
+      {{ "condition": "Second element damage" }},
+      {{ "condition": "Third element damage" }}
+    ]
+  }}
+}}"""
+
+    message = client.messages.create(
+        model='claude-haiku-4-5',
+        max_tokens=3000,
+        messages=[{'role': 'user', 'content': prompt}]
+    )
+
+    raw = message.content[0].text.strip()
+    raw = raw.replace('```json', '').replace('```', '').strip()
+    try:
+        return json.loads(_sanitise_json(raw))
+    except json.JSONDecodeError:
+        print(f'[_claude_fill_room_damage] JSON parse error: {raw[:200]}')
         return {}
 
 
@@ -1405,11 +1585,13 @@ def transcribe_room():
     if not data:
         return jsonify({'error': 'No data provided'}), 400
 
-    clips        = data.get('clips', [])
-    section_name = data.get('sectionName', 'Room')
-    section_type = data.get('sectionType', 'room')   # 'room' | fixed-section types
-    items        = data.get('items', [])
-    is_check_out = bool(data.get('isCheckOut', False))
+    clips              = data.get('clips', [])
+    section_name       = data.get('sectionName', 'Room')
+    section_type       = data.get('sectionType', 'room')   # 'room' | fixed-section types
+    items              = data.get('items', [])
+    is_check_out       = bool(data.get('isCheckOut', False))
+    is_damage_report   = bool(data.get('isDamageReport', False))
+    processed_item_ids = data.get('processedItemIds') or []
 
     if not clips:
         return jsonify({'error': 'No audio clips provided'}), 400
@@ -1444,8 +1626,10 @@ def transcribe_room():
         if section_type == 'room':
             if is_check_out:
                 filled = _claude_fill_room_checkout(full_transcript, section_name, items)
+            elif is_damage_report:
+                filled = _claude_fill_room_damage(full_transcript, section_name, items, processed_item_ids or None)
             else:
-                filled = _claude_fill_room(full_transcript, section_name, items)
+                filled = _claude_fill_room(full_transcript, section_name, items, processed_item_ids or None)
         else:
             filled = _claude_fill_fixed_section(full_transcript, section_name, section_type, items)
     except Exception as e:

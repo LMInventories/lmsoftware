@@ -1174,6 +1174,7 @@ class _PDFBuilder:
             sid        = section['id']
             vis_rows   = [r for r in (section.get('rows') or []) if not self._hidden(sid, r['id'])]
             extra_rows = self._extra(sid)
+            sec_names  = (self.rd.get(str(sid)) or {}).get('_names') or {}
             n_vis      = len(vis_rows)
 
             def row_ref(row_id, is_extra=False):
@@ -1187,6 +1188,12 @@ class _PDFBuilder:
 
             def gv(r, is_extra, field):
                 return (r.get(field) or '') if is_extra else (self._get(sid, r['id'], field) or r.get(field) or '')
+
+            def rn(r, is_extra):
+                """Effective item name — honours clerk rename stored in _names for template items."""
+                if is_extra:
+                    return r.get('name', '')
+                return sec_names.get(str(r['id'])) or r.get('name', '')
 
             # All width sets must sum exactly to uw so tables are the same width.
             # vw = variable space after subtracting fixed-width columns (Ref=10mm, Answer=18mm)
@@ -1210,17 +1217,17 @@ class _PDFBuilder:
                 ref_p = Paragraph(row_ref(rid, is_extra), self.s_ref)
 
                 if t == 'condition_summary':
-                    return [ref_p, self._p(r.get('name','')), self._p(gv(r,is_extra,'condition') or '—')]
+                    return [ref_p, self._p(rn(r,is_extra)), self._p(gv(r,is_extra,'condition') or '—')]
                 if t == 'cleaning_summary':
-                    return [ref_p, self._p(r.get('name','')), self._p(gv(r,is_extra,'cleanliness') or '—'), self._p(gv(r,is_extra,'cleanlinessNotes') or '—', self.s_cell_sm)]
+                    return [ref_p, self._p(rn(r,is_extra)), self._p(gv(r,is_extra,'cleanliness') or '—'), self._p(gv(r,is_extra,'cleanlinessNotes') or '—', self.s_cell_sm)]
                 if t in ('smoke_alarms','health_safety'):
                     ans = gv(r,is_extra,'answer') or r.get('answer','')
-                    return [ref_p, self._p(r.get('question') or r.get('name','')), self._ans_badge(ans), self._p(gv(r,is_extra,'notes') or r.get('notes','') or '—', self.s_cell_sm)]
+                    return [ref_p, self._p(r.get('question') or rn(r,is_extra)), self._ans_badge(ans), self._p(gv(r,is_extra,'notes') or r.get('notes','') or '—', self.s_cell_sm)]
                 if t == 'fire_door_safety':
                     ans = gv(r,is_extra,'answer') or r.get('answer','')
-                    return [ref_p, self._p(r.get('name','')), self._p(r.get('question','')), self._ans_badge(ans), self._p(gv(r,is_extra,'notes') or r.get('notes','') or '—', self.s_cell_sm)]
+                    return [ref_p, self._p(rn(r,is_extra)), self._p(r.get('question','')), self._ans_badge(ans), self._p(gv(r,is_extra,'notes') or r.get('notes','') or '—', self.s_cell_sm)]
                 if t == 'keys':
-                    return [ref_p, self._p(r.get('name','')), self._p(gv(r,is_extra,'description') or '—')]
+                    return [ref_p, self._p(rn(r,is_extra)), self._p(gv(r,is_extra,'description') or '—')]
                 if t == 'meter_readings':
                     # Preserve line breaks — ReportLab Paragraph needs <br/> not \n
                     raw_reading = gv(r, is_extra, 'reading') or '—'
@@ -1228,8 +1235,8 @@ class _PDFBuilder:
                     reading_p = Paragraph(reading_html, ParagraphStyle('mono', fontName='Courier', fontSize=8, leading=11, textColor=self.body_c))
                     raw_serial = gv(r, is_extra, 'locationSerial') or '—'
                     serial_html = raw_serial.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('\n', '<br/>')
-                    return [ref_p, self._p(r.get('name','')), Paragraph(serial_html, ParagraphStyle('rd_serial', fontSize=8, leading=11, textColor=self.body_c)), reading_p]
-                return [ref_p, self._p(r.get('name','')), self._p(gv(r,is_extra,'condition') or gv(r,is_extra,'description') or '—')]
+                    return [ref_p, self._p(rn(r,is_extra)), Paragraph(serial_html, ParagraphStyle('rd_serial', fontSize=8, leading=11, textColor=self.body_c)), reading_p]
+                return [ref_p, self._p(rn(r,is_extra)), self._p(gv(r,is_extra,'condition') or gv(r,is_extra,'description') or '—')]
 
             photo_row_indices = []
             for r in vis_rows:

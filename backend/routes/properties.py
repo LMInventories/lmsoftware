@@ -37,17 +37,56 @@ def invalidate_properties_cache(user_id=None):
         _PROP_CACHE.clear()
 
 
-def _property_query_eager():
-    """Return a Property query that eager-loads client + inspections.
+def _property_query_slim():
+    """List view — join client only. Skips the inspection selectinload so the
+    list endpoint doesn't pull every inspection row for every property."""
+    return Property.query.options(joinedload(Property.client))
 
-    selectinload for inspections avoids a cartesian JOIN (one result row per
-    inspection per property) and instead issues a single IN-query for all
-    inspections belonging to the matched properties.
-    """
+
+def _property_query_eager():
+    """Detail view — eager-loads client + inspections for a single property."""
     return Property.query.options(
         joinedload(Property.client),
         selectinload(Property.inspections),
     )
+
+
+def _property_list_item(p):
+    """Slim serialiser for the list endpoint.
+
+    Omits the inspections collection (not shown on the list page) and strips
+    base64 overview photos — each blob can be hundreds of KB, sending them for
+    every property in one response is the single biggest payload cost. S3 URLs
+    are short strings and are kept as-is.
+    """
+    photo = p.overview_photo
+    if photo and not photo.startswith('https://'):
+        photo = None
+    return {
+        'id':                p.id,
+        'client_id':         p.client_id,
+        'client_name':       p.client.name    if p.client else None,
+        'client_company':    p.client.company if p.client else None,
+        'address':           p.address,
+        'property_type':     p.property_type,
+        'bedrooms':          p.bedrooms,
+        'bathrooms':         p.bathrooms,
+        'furnished':         p.furnished,
+        'parking':           p.parking,
+        'garden':            p.garden,
+        'elevator':          p.elevator,
+        'detachment_type':   p.detachment_type,
+        'elevation':         p.elevation,
+        'meter_electricity': p.meter_electricity,
+        'meter_gas':         p.meter_gas,
+        'meter_heat':        p.meter_heat,
+        'meter_water':       p.meter_water,
+        'notes':             p.notes,
+        'overview_photo':    photo,
+        'created_at':        p.created_at.isoformat() if p.created_at else None,
+        'inspections':       [],
+    }
+
 
 @properties_bp.route('', methods=['GET'])
 @jwt_required()
@@ -57,9 +96,9 @@ def get_properties():
     cached = _prop_cache_get(cache_key)
     if cached is not None:
         return jsonify(cached)
-    query = filter_properties_for_user(_property_query_eager(), user)
+    query = filter_properties_for_user(_property_query_slim(), user)
     properties = query.all()
-    data = [p.to_dict() for p in properties]
+    data = [_property_list_item(p) for p in properties]
     _prop_cache_set(cache_key, data)
     return jsonify(data)
 

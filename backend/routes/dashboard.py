@@ -165,33 +165,6 @@ def get_dashboard_stats():
             'created_at':              i.created_at.isoformat() if i.created_at else None,
         })
 
-    # ── Recent inspections (backwards compat) — role-filtered ────────────────
-    recent_q = (
-        _base_inspection_query()
-        .options(*_eager)
-        .order_by(Inspection.created_at.desc())
-        .limit(10)
-        .all()
-    )
-    recent_list = []
-    for i in recent_q:
-        recent_list.append({
-            'id':               i.id,
-            'property_address': i.property.address if i.property else 'Unknown',
-            'client_name':      (i.property.client.name if i.property and i.property.client else None),
-            'client_id':        (i.property.client_id if i.property else None),
-            'inspection_type':  i.inspection_type,
-            'status':           i.status,
-            'conduct_date':     i.conduct_date.isoformat() if i.conduct_date else None,
-            'updated_at': (
-                i.updated_at.isoformat() if hasattr(i, 'updated_at') and i.updated_at
-                else (i.created_at.isoformat() if i.created_at else None)
-            ),
-            'created_at':       i.created_at.isoformat() if i.created_at else None,
-            'inspector_name':   i.inspector.name if i.inspector else None,
-            'typist_name':      i.typist.name if i.typist else None,
-        })
-
     payload = {
         'status_counts': {
             'created':    sc.get('created',    0),
@@ -207,9 +180,8 @@ def get_dashboard_stats():
             'users':       total_users,
             'inspections': total_inspections,
         },
-        'activity':           activity_list,
-        'upcoming':           upcoming_list,
-        'recent_inspections': recent_list,
+        'activity': activity_list,
+        'upcoming': upcoming_list,
     }
     _cache_set(cache_key, payload)
     return jsonify(payload)

@@ -30,24 +30,7 @@ async function fetchDashboardStats() {
   loading.value = true
   try {
     const response = await api.getDashboardStats()
-    const data = response.data
-
-    const now = new Date(); now.setHours(0,0,0,0)
-
-    const upcoming = (data.recent_inspections || [])
-      .filter(i => i.conduct_date && new Date(i.conduct_date) >= now)
-      .sort((a, b) => new Date(a.conduct_date) - new Date(b.conduct_date))
-
-    const activity = data.activity || (data.recent_inspections || []).slice(0, 15).map(i => ({
-      type: 'inspection',
-      label: i.property_address,
-      sub: i.client_name,
-      time: i.updated_at || i.created_at,
-      status: i.status,
-      id: i.id
-    }))
-
-    stats.value = { ...data, upcoming, activity }
+    stats.value = response.data
   } catch (error) {
     console.error('Failed to fetch dashboard stats:', error)
   } finally {

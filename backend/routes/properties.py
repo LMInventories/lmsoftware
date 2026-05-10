@@ -1,8 +1,8 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from models import db, Property
+from models import db, Property, Client
 from permissions import get_current_user, filter_properties_for_user, is_admin_or_manager, is_client
-from sqlalchemy.orm import joinedload, selectinload
+from sqlalchemy.orm import joinedload, selectinload, defer
 import time
 
 properties_bp = Blueprint('properties', __name__)
@@ -38,9 +38,19 @@ def invalidate_properties_cache(user_id=None):
 
 
 def _property_query_slim():
-    """List view — join client only. Skips the inspection selectinload so the
-    list endpoint doesn't pull every inspection row for every property."""
-    return Property.query.options(joinedload(Property.client))
+    """List view — join client only, skip inspection rows, defer blob columns.
+
+    defer(overview_photo) means the base64 photo TEXT is never fetched from the
+    DB at all (not just stripped from the response). Client logo blobs follow
+    the same pattern — they're not needed on the list page.
+    """
+    return Property.query.options(
+        defer(Property.overview_photo),
+        joinedload(Property.client).options(
+            defer(Client.logo),
+            defer(Client.logo_inverted),
+        ),
+    )
 
 
 def _property_query_eager():

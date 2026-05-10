@@ -368,6 +368,7 @@ def _setup_database():
         'CREATE INDEX IF NOT EXISTS idx_inspections_status       ON inspections(status)',
         'CREATE INDEX IF NOT EXISTS idx_inspections_conduct_date ON inspections(conduct_date)',
         'CREATE INDEX IF NOT EXISTS idx_inspections_created_at   ON inspections(created_at)',
+        'CREATE INDEX IF NOT EXISTS idx_inspections_updated_at   ON inspections(updated_at)',
         'CREATE INDEX IF NOT EXISTS idx_properties_client_id     ON properties(client_id)',
     ]
     for idx_sql in _indexes:

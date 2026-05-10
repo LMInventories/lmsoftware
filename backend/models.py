@@ -99,7 +99,7 @@ class Property(db.Model):
     __tablename__ = 'properties'
 
     id                = db.Column(db.Integer, primary_key=True)
-    client_id         = db.Column(db.Integer, db.ForeignKey('clients.id'), nullable=False)
+    client_id         = db.Column(db.Integer, db.ForeignKey('clients.id'), nullable=False, index=True)
     address           = db.Column(db.Text, nullable=False)
     property_type     = db.Column(db.String(50))
     bedrooms          = db.Column(db.Integer)
@@ -163,13 +163,13 @@ class Inspection(db.Model):
     __tablename__ = 'inspections'
 
     id                      = db.Column(db.Integer, primary_key=True)
-    property_id             = db.Column(db.Integer, db.ForeignKey('properties.id'), nullable=False)
+    property_id             = db.Column(db.Integer, db.ForeignKey('properties.id'), nullable=False, index=True)
     inspection_type         = db.Column(db.String(50), nullable=False)
-    status                  = db.Column(db.String(20), default='created')
+    status                  = db.Column(db.String(20), default='created', index=True)
     source_inspection_id    = db.Column(db.Integer, db.ForeignKey('inspections.id'), nullable=True)
 
-    inspector_id            = db.Column(db.Integer, db.ForeignKey('users.id'))
-    typist_id               = db.Column(db.Integer, db.ForeignKey('users.id'))
+    inspector_id            = db.Column(db.Integer, db.ForeignKey('users.id'), index=True)
+    typist_id               = db.Column(db.Integer, db.ForeignKey('users.id'), index=True)
     template_id             = db.Column(db.Integer, db.ForeignKey('templates.id'))
     # Per-inspection typist mode — overrides clerk-level setting so clerks can
     # choose AI Instant / AI by Room / Human Typist per report, not globally.
@@ -189,7 +189,7 @@ class Inspection(db.Model):
     deposit_ref             = db.Column(db.String(255))      # scheme certificate / registration number
     depositary_tenancy_id   = db.Column(db.String(255))      # ID returned by The Depositary API after push
     depositary_pushed_at    = db.Column(db.DateTime)
-    conduct_date            = db.Column(db.DateTime)
+    conduct_date            = db.Column(db.DateTime, index=True)
     conduct_time_preference = db.Column(db.String(50))
     scheduled_date          = db.Column(db.DateTime)
     key_location            = db.Column(db.String(255))

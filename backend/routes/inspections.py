@@ -1,8 +1,8 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from models import db, Inspection, Property, User, Template, Section, Item
+from models import db, Inspection, Property, Client, User, Template, Section, Item
 from permissions import get_current_user, require_admin_or_manager, filter_inspections_for_user, is_admin_or_manager
-from sqlalchemy.orm import joinedload, selectinload
+from sqlalchemy.orm import joinedload, selectinload, defer
 from datetime import datetime
 import json
 import re
@@ -173,8 +173,23 @@ def get_inspections():
     # Eager-load all relationships accessed in the list serialiser in a single
     # query (4 JOINs) instead of issuing 4 lazy-load queries per inspection.
     # Without this, 50 inspections → 200+ round trips → intermittent timeouts.
+    #
+    # defer() prevents SQLAlchemy from including large TEXT columns in the
+    # SELECT. report_data alone can be several MB per row — loading it for
+    # every inspection in the list would transfer GBs from the DB for no
+    # reason. Client.logo / logo_inverted are base64 blobs that appear in
+    # every JOIN row and are similarly never needed by the list serialiser.
     eager = Inspection.query.options(
-        joinedload(Inspection.property).joinedload(Property.client),
+        defer(Inspection.report_data),
+        joinedload(Inspection.property).options(
+            defer(Property.overview_photo),
+            joinedload(Property.client).options(
+                defer(Client.logo),
+                defer(Client.logo_inverted),
+                defer(Client.report_disclaimer),
+                defer(Client.email_notifications),
+            ),
+        ),
         joinedload(Inspection.inspector),
         joinedload(Inspection.typist),
     )

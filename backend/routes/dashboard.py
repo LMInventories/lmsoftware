@@ -3,7 +3,7 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 from models import db, Inspection, Client, Property, User
 from datetime import datetime, date
 from sqlalchemy import or_, func
-from sqlalchemy.orm import joinedload, selectinload
+from sqlalchemy.orm import joinedload, selectinload, defer
 import time
 
 dashboard_bp = Blueprint('dashboard', __name__)
@@ -100,13 +100,21 @@ def get_dashboard_stats():
         total_users       = None
         total_inspections = _base_inspection_query().count()
 
-    # Shared eager-load options for the 3 list queries below.
-    # Without this, accessing i.property / i.property.client / i.inspector / i.typist
-    # triggers a lazy-load query per inspection — 4 × N extra round trips.
-    # selectinload (SELECT…IN) is used instead of joinedload to avoid a conflict
-    # with the explicit Property JOIN that the 'client' role filter already adds.
+    # Shared eager-load options for the list queries below.
+    # selectinload avoids a conflict with the Property JOIN the 'client' role
+    # filter adds. defer() strips large TEXT blobs from the SELECT — report_data
+    # alone can be MB per row and is never needed by the dashboard serialiser.
     _eager = [
-        selectinload(Inspection.property).selectinload(Property.client),
+        defer(Inspection.report_data),
+        selectinload(Inspection.property).options(
+            defer(Property.overview_photo),
+            selectinload(Property.client).options(
+                defer(Client.logo),
+                defer(Client.logo_inverted),
+                defer(Client.report_disclaimer),
+                defer(Client.email_notifications),
+            ),
+        ),
         selectinload(Inspection.inspector),
         selectinload(Inspection.typist),
     ]

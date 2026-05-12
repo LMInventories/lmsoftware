@@ -480,34 +480,39 @@ async function submitSaveAsTemplate() {
   }
 }
 
-// ── Server-side PDF preview (admin/manager — no email sent) ────────
+// ── Server-side PDF export ───────────────────────────────────────────
 const pdfPreviewing = ref(false)
 async function previewServerPdf() {
   if (pdfPreviewing.value) return
   pdfPreviewing.value = true
   try {
     const resp = await api.previewPdf(inspection.value.id)
-    // Check if the response is actually a PDF (not a JSON error wrapped in a blob)
+    // When the server returns an error (4xx/5xx with responseType:'blob'),
+    // the blob MIME type will be 'application/json' — decode it to get the message.
     if (resp.data.type === 'application/json') {
-      const text = await resp.data.text()
+      const text   = await resp.data.text()
       const parsed = JSON.parse(text)
       throw new Error(parsed.error || 'Server error')
     }
-    const blob   = new Blob([resp.data], { type: 'application/pdf' })
-    const url    = URL.createObjectURL(blob)
-    // Use a programmatic anchor click — not blocked by popup blockers the way
-    // window.open() is when called from an async function.
-    const a      = document.createElement('a')
-    a.href       = url
-    a.target     = '_blank'
-    a.rel        = 'noopener'
+    // Derive filename from Content-Disposition header (set by the backend).
+    const disposition = resp.headers?.['content-disposition'] || ''
+    const match = disposition.match(/filename="?([^";\n]+)"?/)
+    const fname = match ? match[1] : `report_${inspection.value.id}.pdf`
+
+    // Use a.download (not target='_blank') — browsers block window.open() and
+    // _blank anchor clicks that happen after an async gap (user gesture is lost).
+    // Downloads are never subject to popup blocking.
+    const url = URL.createObjectURL(resp.data)
+    const a   = document.createElement('a')
+    a.href     = url
+    a.download = fname
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
-    setTimeout(() => URL.revokeObjectURL(url), 10_000)
+    setTimeout(() => URL.revokeObjectURL(url), 5_000)
   } catch (err) {
-    console.error('PDF preview error:', err)
-    toast.error(err.message || 'PDF generation failed — check console for details')
+    console.error('PDF export error:', err)
+    toast.error(err.message || 'PDF generation failed — check the console for details')
   } finally {
     pdfPreviewing.value = false
   }

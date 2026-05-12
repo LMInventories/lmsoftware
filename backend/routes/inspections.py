@@ -1186,24 +1186,46 @@ def apply_pdf_import(inspection_id):
 #   Copy checkOutCondition (or inventoryCondition) → condition for the new CI.
 #   Fixed sections are passed through as-is.
 # ─────────────────────────────────────────────────────────────────────────────
+_AS_INVENTORY_RE = re.compile(r'^as\s+inventory\+?[,\s]*', re.IGNORECASE)
+_TRIVIAL_CI_RE   = re.compile(r'^(?:in\s+)?good\s+order[.,!\s]*$', re.IGNORECASE)
+
+
 def _combine_conditions(inv_cond, co_cond, fallback=''):
     """
-    Build a combined condition string for a new Check In seeded from a Check Out.
-    Shows both the original Check In condition and the Check Out condition, labelled,
-    so the new clerk can see the full history in one field.
+    Merge CI and CO conditions into a single condition string for a new Check In.
+
+    - Strips the CO-specific "As Inventory+" prefix (meaning "same as original, plus...").
+    - Drops trivial CI defaults ("In good order", "Good order") when CO has real content.
+    - Combines CI + CO extras when CI has meaningful content and CO adds to it.
+    - Preserves CI as-is when CO recorded no change (empty or just "As Inventory+").
+    - Falls back to `fallback` only when both CI and CO are empty.
     """
     inv = (inv_cond or '').strip()
     co  = (co_cond  or '').strip()
-    parts = []
-    if inv:
-        parts.append(f'Check In: {inv}')
-    if co:
-        parts.append(f'Check Out: {co}')
-    if not parts:
-        fb = (fallback or '').strip()
-        if fb:
-            return fb
-    return '\n'.join(parts)
+
+    # Strip "As Inventory+" (and "As Inventory,") prefix — CO-specific shorthand
+    co_clean = _AS_INVENTORY_RE.sub('', co).strip().strip(',').strip()
+
+    inv_trivial = bool(_TRIVIAL_CI_RE.match(inv)) if inv else False
+    include_inv = bool(inv) and not (inv_trivial and co_clean)
+    include_co  = bool(co_clean)
+
+    if include_inv and include_co:
+        # Append CO extras after CI; lowercase the CO continuation
+        co_part = co_clean[0].lower() + co_clean[1:] if co_clean[0].isupper() else co_clean
+        result  = f'{inv}, {co_part}'
+    elif include_inv:
+        result = inv
+    elif include_co:
+        result = co_clean
+    else:
+        # Nothing meaningful from either — keep CI as-is (e.g. "In good order" when
+        # CO recorded no change), or use the raw fallback.
+        if inv:
+            return inv
+        return (fallback or '').strip()
+
+    return result[0].upper() + result[1:] if result else result
 
 
 def _transform_report_data(source_type, target_type, raw, include_photos=False):

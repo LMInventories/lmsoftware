@@ -899,18 +899,12 @@ class _PDFBuilder:
         logo_max_h = footer_h - 8*mm      # max logo height within bar
         logo_max_w = pw - 2*margin        # full-width for centred logo
 
-        # invert_logo: per-client toggle — when on, swap to the company-wide
-        # inverted/white logo (stored in system settings, not per-client).
+        # invert_logo drives both the logo choice and text colour as one linked mode:
+        #   dark  (True)  → inverted/white logo + white text for dark/coloured backgrounds
+        #   light (False) → standard logo + near-black text for light backgrounds
         invert_logo       = bool(cl.get('invert_logo'))
         logo_inverted_url = self.sys_settings.get('logo_inverted', '')
-
-        # Footer text colour — per-client, defaults to white so it shows on
-        # coloured backgrounds.  Fully independent of the logo toggle.
-        _ftc_hex = (cl.get('report_footer_text_color') or '#FFFFFF').lstrip('#')
-        try:
-            footer_text_color = colors.HexColor(f'#{_ftc_hex}')
-        except Exception:
-            footer_text_color = colors.white
+        footer_text_color = colors.white if invert_logo else colors.HexColor('#0F172A')
 
         # ── Centred: company logo (from system settings) + company email ─────
         company_logo_url = self.sys_settings.get('logo', '')
@@ -981,6 +975,7 @@ class _PDFBuilder:
         from reportlab.lib.enums import TA_CENTER
         from reportlab.lib import colors as _rl_colors
         import io
+        import base64
 
         uw = self._uw()
 
@@ -1701,6 +1696,7 @@ def _client_dict(client) -> dict:
         'report_body_text_color':   client.report_body_text_color or '#1e293b',
         'report_orientation':       client.report_orientation or 'portrait',
         'report_photo_settings':    client.report_photo_settings or '',
+        'invert_logo':              bool(client.invert_logo),
     }
 
 

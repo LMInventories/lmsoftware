@@ -1032,7 +1032,10 @@ onMounted(() => {
 
           <div class="card-footer">
             <span class="card-created">Created {{ new Date(inspection.created_at).toLocaleDateString('en-GB') }}</span>
-            <button v-if="authStore.isAdmin || authStore.isManager" @click.stop="deleteInspection(inspection.id)" class="btn-delete-sm">✕</button>
+            <div class="card-footer-right">
+              <span v-if="inspection.reference_number" class="card-ref">{{ inspection.reference_number }}</span>
+              <button v-if="authStore.isAdmin || authStore.isManager" @click.stop="deleteInspection(inspection.id)" class="btn-delete-sm">✕</button>
+            </div>
           </div>
         </div>
         <div v-if="filteredInspections.length === 0" class="empty-state">
@@ -1878,6 +1881,8 @@ onMounted(() => {
 }
 
 .card-created { font-size: 10px; color: #cbd5e1; }
+.card-footer-right { display: flex; align-items: center; gap: 6px; }
+.card-ref { font-size: 10px; color: #94a3b8; font-weight: 500; }
 
 .btn-delete-sm {
   background: none;

@@ -197,7 +197,8 @@ async function load() {
           const tRes = await api.getTemplate(inspection.value.template_id)
           const loaded = tRes.data
           // For standalone types, reject a template that belongs to a different lifecycle type
-          if (itype === 'midterm' && loaded?.inspection_type !== 'midterm') {
+          const standaloneTypes = ['midterm', 'heads_up', 'damage_report']
+          if (standaloneTypes.includes(itype) && loaded?.inspection_type !== itype) {
             // Wrong template (e.g. inherited check_in template) — fall through to type search
           } else {
             template.value = loaded
@@ -240,10 +241,13 @@ async function load() {
 
     actionCatalogue.value  = aRes?.data?.actions || []
 
-    // Midterm inspections use their own configurable section set
+    // Standalone types use their own configurable section sets
     if (inspection.value?.inspection_type === 'midterm') {
       const msRes = await api.getMidtermSections().catch(() => null)
       fixedSectionsRaw.value = msRes?.data || []
+    } else if (inspection.value?.inspection_type === 'heads_up') {
+      const huRes = await api.getHeadsUpSections().catch(() => null)
+      fixedSectionsRaw.value = huRes?.data || []
     } else {
       fixedSectionsRaw.value = fsRes?.data || []
     }
@@ -1835,7 +1839,7 @@ const cleanlinessOpts = [
   'Not Clean'
 ]
 
-const typeLabel       = computed(() => ({ check_in:'Check In', check_out:'Check Out', interim:'Interim Inspection', inventory:'Inventory', damage_report:'Damage Report', midterm:'Midterm Inspection' })[inspection.value?.inspection_type] ?? (inspection.value?.inspection_type?.replace(/_/g,' ') ?? ''))
+const typeLabel       = computed(() => ({ check_in:'Check In', check_out:'Check Out', interim:'Interim Inspection', inventory:'Inventory', damage_report:'Damage Report', midterm:'Midterm Inspection', heads_up:'Heads Up Report' })[inspection.value?.inspection_type] ?? (inspection.value?.inspection_type?.replace(/_/g,' ') ?? ''))
 const isCheckOut      = computed(() => inspection.value?.inspection_type === 'check_out')
 const isDamageReport  = computed(() => inspection.value?.inspection_type === 'damage_report')
 const savedTime  = computed(() => lastSaved.value ? lastSaved.value.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' }) : null)
@@ -2045,7 +2049,7 @@ async function moveToReview() {
         </button>
         <!-- Nav body: visible on desktop always, collapsible on mobile -->
         <div class="mobile-nav-body" :class="{ 'nav-open': mobileNavOpen }">
-          <div v-if="template">
+          <div v-if="template || fixedSections.length">
             <div v-if="fixedSections.length" class="nav-grp">
               <p class="nav-lbl">Report Sections</p>
               <button v-for="s in fixedSections" :key="s.id" class="nav-btn" :class="{ active: activeId===s.id }" @click="scrollTo(s.id); mobileNavOpen=false">
@@ -2059,7 +2063,7 @@ async function moveToReview() {
               </button>
             </div>
           </div>
-          <div v-else class="sidebar-warn">
+          <div v-else-if="inspection.inspection_type === 'check_out'" class="sidebar-warn">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="1.5"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
             <p>No Check In report found for this property.</p>
           </div>
@@ -2067,7 +2071,7 @@ async function moveToReview() {
       </nav>
 
       <main class="main" @scroll="onScroll">
-        <div v-if="!template && !['check_out', 'midterm', 'damage_report'].includes(inspection.inspection_type)" class="empty-state">
+        <div v-if="!template && !['check_out', 'midterm', 'heads_up', 'damage_report'].includes(inspection.inspection_type)" class="empty-state">
           <h3>No template assigned</h3>
           <p>This inspection has no template assigned. Go back and assign one.</p>
           <button class="btn-ghost" @click="router.push(`/inspections/${inspection.id}`)">← Back to Overview</button>

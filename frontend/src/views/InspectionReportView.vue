@@ -73,6 +73,12 @@ const unsaved      = ref(false)
 const activeId     = ref(null)
 const mobileNavOpen = ref(false)
 
+// Room preset picker (midterm only)
+const presets             = ref([])
+const showRoomPicker      = ref(false)
+const roomPickerSearch    = ref('')
+const roomPickerSelected  = ref([])
+
 const showPhotoModal = ref(false)
 const photoUploading = ref(false)
 const currentPhoto   = ref(null)
@@ -243,8 +249,12 @@ async function load() {
 
     // Standalone types use their own configurable section sets
     if (inspection.value?.inspection_type === 'midterm') {
-      const msRes = await api.getMidtermSections().catch(() => null)
+      const [msRes, prRes] = await Promise.all([
+        api.getMidtermSections().catch(() => null),
+        api.getSectionPresets().catch(() => null),
+      ])
       fixedSectionsRaw.value = msRes?.data || []
+      presets.value = prRes?.data || []
     } else if (inspection.value?.inspection_type === 'heads_up') {
       const huRes = await api.getHeadsUpSections().catch(() => null)
       fixedSectionsRaw.value = huRes?.data || []
@@ -1448,8 +1458,28 @@ const rooms = computed(() => {
       sections:     [],   // items are stored as _extra in reportData
     }))
 
+  // Preset rooms — only for midterm, stored in reportData._presetRooms
+  const presetRooms = inspection.value?.inspection_type === 'midterm'
+    ? (reportData.value._presetRooms || [])
+        .filter(r => !hiddenRooms.includes(String(r.id)))
+        .map(r => ({
+          id:           r.id,
+          name:         roomNames[r.id] ?? r.name,
+          _isPreset:    true,
+          section_type: 'room',
+          sections:     (r.items || []).map(item => ({
+            id:              item.id,
+            name:            item.name || '',
+            label:           item.name || '',
+            hasDescription:  true,
+            hasCondition:    item.requires_condition !== false,
+            answerOptions:   [],
+          })),
+        }))
+    : []
+
   // Merge all room sources and sort by _roomOrder if the mobile app recorded one
-  let allRooms = [...templateRooms, ...importedRooms, ...customRooms]
+  let allRooms = [...templateRooms, ...importedRooms, ...customRooms, ...presetRooms]
   const roomOrder = reportData.value._roomOrder
   if (roomOrder && roomOrder.length) {
     allRooms = allRooms.slice().sort((a, b) => {
@@ -1682,6 +1712,13 @@ function cancelRenameRoom() {
 // Adds the room id to _hiddenRooms in reportData. The room data is preserved
 // so it can be recovered if needed — it's just excluded from rendering and PDF.
 function hideRoom(room) {
+  if (room._isPreset) {
+    if (!confirm(`Remove "${getRoomName(room)}" from this report?`)) return
+    reportData.value._presetRooms = (reportData.value._presetRooms || []).filter(r => r.id !== room.id)
+    delete reportData.value[room.id]
+    unsaved.value = true
+    return
+  }
   const label = getRoomName(room)
   if (!confirm(`Hide "${label}" from this report?\n\nThe room's data is preserved — you can restore it by contacting support.`)) return
   if (!reportData.value._hiddenRooms) reportData.value._hiddenRooms = []
@@ -1690,6 +1727,46 @@ function hideRoom(room) {
     reportData.value._hiddenRooms.push(id)
   }
   unsaved.value = true
+}
+
+// ── Room preset picker ────────────────────────────────────────────────
+const filteredRoomPresets = computed(() => {
+  const q = roomPickerSearch.value.toLowerCase().trim()
+  return q ? presets.value.filter(p => p.name.toLowerCase().includes(q)) : presets.value
+})
+function openRoomPicker() {
+  roomPickerSearch.value = ''
+  roomPickerSelected.value = []
+  showRoomPicker.value = true
+}
+function toggleRoomPreset(preset) {
+  const idx = roomPickerSelected.value.findIndex(s => s.preset.id === preset.id)
+  if (idx >= 0) roomPickerSelected.value.splice(idx, 1)
+  else roomPickerSelected.value.push({ preset, customName: preset.name })
+}
+function isRoomPresetSelected(preset) {
+  return roomPickerSelected.value.some(s => s.preset.id === preset.id)
+}
+function addSelectedRooms() {
+  const ts = Date.now()
+  const newRooms = roomPickerSelected.value.map((sel, si) => {
+    const id = `pr_${ts}_${si}`
+    return {
+      id,
+      name:     sel.customName || sel.preset.name,
+      presetId: sel.preset.id,
+      items:    (sel.preset.items || []).map((item, i) => ({
+        id:                 `${id}_${i}`,
+        name:               item.name || '',
+        requires_condition: item.requires_condition !== false,
+        requires_photo:     item.requires_photo !== false,
+      })),
+    }
+  })
+  if (!reportData.value._presetRooms) reportData.value._presetRooms = []
+  reportData.value._presetRooms.push(...newRooms)
+  unsaved.value = true
+  showRoomPicker.value = false
 }
 
 function getItemActions(roomId, itemId) {
@@ -2060,6 +2137,11 @@ async function moveToReview() {
               <p class="nav-lbl">Rooms</p>
               <button v-for="r in rooms" :key="r.id" class="nav-btn" :class="{ active: activeId===r.id }" @click="scrollTo(r.id); mobileNavOpen=false">
                 <span class="dot" :class="{ done: sectionStarted(r.id) }"></span>{{ r.name }}
+              </button>
+            </div>
+            <div v-if="inspection.inspection_type === 'midterm' && canEdit" class="nav-grp">
+              <button class="nav-btn nav-btn-add-room" @click="openRoomPicker(); mobileNavOpen=false">
+                + Add Room
               </button>
             </div>
           </div>
@@ -2517,7 +2599,7 @@ async function moveToReview() {
                   v-if="canEdit"
                   class="room-hide-btn"
                   @click.stop="hideRoom(room)"
-                  title="Hide this room from the report"
+                  :title="room._isPreset ? 'Remove this room from the report' : 'Hide this room from the report'"
                 >
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
                 </button>
@@ -3035,6 +3117,14 @@ async function moveToReview() {
           </div>
           </template>
 
+          <!-- Add Room button — midterm only -->
+          <div v-if="inspection.inspection_type === 'midterm' && canEdit" class="add-preset-room-bar">
+            <button class="add-preset-room-btn" @click="openRoomPicker">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              Add Room from Preset
+            </button>
+          </div>
+
           <div class="foot">
             <button class="btn-ghost" @click="exit">← Back to Overview</button>
             <button class="btn-save-lg" :disabled="saving" @click="save()">{{ saving ? 'Saving…' : '💾  Save Report' }}</button>
@@ -3042,6 +3132,75 @@ async function moveToReview() {
         </div>
       </main>
     </div>
+
+    <!-- ROOM PRESET PICKER -->
+    <Teleport to="body">
+      <div v-if="showRoomPicker" class="modal-overlay" @click.self="showRoomPicker = false">
+        <div class="modal modal-preset-picker">
+          <div class="modal-header">
+            <h2>Add Rooms</h2>
+            <button @click="showRoomPicker = false" class="btn-close">✕</button>
+          </div>
+          <div class="modal-body">
+            <input
+              v-model="roomPickerSearch"
+              type="text"
+              placeholder="Search presets…"
+              class="preset-search"
+              autofocus
+            />
+            <div v-if="presets.length === 0" class="picker-empty">
+              No room presets saved yet. Use the template editor to save room sections as presets.
+            </div>
+            <div v-else-if="filteredRoomPresets.length === 0" class="picker-empty">
+              No presets matching "{{ roomPickerSearch }}"
+            </div>
+            <div v-else class="picker-list">
+              <div
+                v-for="preset in filteredRoomPresets"
+                :key="preset.id"
+                class="picker-row"
+                :class="{ selected: isRoomPresetSelected(preset) }"
+                @click="toggleRoomPreset(preset)"
+              >
+                <div class="picker-check">
+                  <div class="check-box" :class="{ checked: isRoomPresetSelected(preset) }">
+                    <span v-if="isRoomPresetSelected(preset)">✓</span>
+                  </div>
+                </div>
+                <div class="picker-info">
+                  <div class="picker-name">{{ preset.name }}</div>
+                  <div class="picker-meta">
+                    {{ preset.item_count }} item{{ preset.item_count !== 1 ? 's' : '' }}
+                    <span v-if="preset.description" class="picker-desc"> · {{ preset.description }}</span>
+                  </div>
+                  <div class="picker-items-preview">
+                    <span v-for="(item, i) in (preset.items || []).slice(0, 4)" :key="i" class="preview-chip">{{ item.name }}</span>
+                    <span v-if="(preset.items || []).length > 4" class="preview-chip more">+{{ preset.items.length - 4 }} more</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div v-if="roomPickerSelected.length > 0" class="rename-panel">
+              <div class="rename-panel-title">
+                {{ roomPickerSelected.length }} room{{ roomPickerSelected.length !== 1 ? 's' : '' }} selected — rename if needed:
+              </div>
+              <div v-for="(sel, i) in roomPickerSelected" :key="sel.preset.id" class="rename-row">
+                <span class="rename-original">{{ sel.preset.name }}</span>
+                <span class="rename-arrow">→</span>
+                <input v-model="roomPickerSelected[i].customName" type="text" class="rename-input" :placeholder="sel.preset.name" />
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button @click="showRoomPicker = false" class="btn-secondary">Cancel</button>
+            <button @click="addSelectedRooms" class="btn-primary" :disabled="roomPickerSelected.length === 0">
+              Add {{ roomPickerSelected.length > 0 ? roomPickerSelected.length : '' }} Room{{ roomPickerSelected.length !== 1 ? 's' : '' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
 
     <!-- ITEM PHOTO VIEWER LIGHTBOX -->
     <div
@@ -3597,6 +3756,7 @@ async function moveToReview() {
 .nav-grp{margin-bottom:4px}.nav-lbl{padding:12px 14px 5px;font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:1.2px;color:#2d4a6b}
 .nav-btn{display:flex;align-items:center;gap:9px;width:100%;padding:8px 14px;background:none;border:none;border-left:3px solid transparent;font-size:12.5px;font-weight:500;color:#4b6282;text-align:left;cursor:pointer;transition:all 0.12s}
 .nav-btn:hover{background:rgba(255,255,255,0.03);color:#64748b}.nav-btn.active{background:rgba(99,102,241,0.1);color:#a5b4fc;border-left-color:#6366f1;font-weight:600}
+.nav-btn-add-room{color:#6366f1;font-weight:600;font-size:12px;padding:6px 14px;border-left:none}.nav-btn-add-room:hover{color:#818cf8;background:rgba(99,102,241,0.08)}
 .dot{width:7px;height:7px;border-radius:50%;background:transparent;border:1.5px solid #2d4a6b;flex-shrink:0;transition:all 0.2s}.dot.done{background:#22c55e;border-color:#22c55e}
 .sidebar-warn{padding:20px 14px;display:flex;flex-direction:column;align-items:flex-start;gap:10px}.sidebar-warn p{font-size:12px;color:#4b6282;line-height:1.5}
 
@@ -3751,6 +3911,8 @@ async function moveToReview() {
 .answer-opt-btn:disabled{opacity:0.55;cursor:default}
 
 /* Foot */
+.add-preset-room-bar{display:flex;justify-content:center;padding:8px 0}
+.add-preset-room-btn{display:flex;align-items:center;gap:8px;padding:10px 24px;background:white;border:1.5px dashed #c7d2fe;border-radius:8px;color:#6366f1;font-size:13px;font-weight:600;cursor:pointer;transition:all 0.15s}.add-preset-room-btn:hover{background:#e0e7ff;border-color:#818cf8}
 .foot{display:flex;align-items:center;justify-content:space-between;padding:20px 0}
 .btn-ghost{padding:10px 20px;background:white;border:1px solid #e2e8f0;border-radius:7px;font-size:14px;font-weight:600;color:#475569;cursor:pointer;transition:all 0.15s;font-family:inherit}
 .btn-ghost:hover{background:#f8fafc}
@@ -3773,6 +3935,43 @@ async function moveToReview() {
 
 /* Photo modal */
 .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:100}
+/* ── Room preset picker modal ───────────────────────────────────────── */
+.modal-preset-picker{background:white;border-radius:12px;width:520px;max-width:95vw;max-height:85vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.2)}
+.modal-preset-picker .modal-header{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid #e5e7eb}
+.modal-preset-picker .modal-header h2{font-size:16px;font-weight:700;color:#1e293b}
+.btn-close{background:none;border:none;font-size:18px;color:#94a3b8;cursor:pointer;width:28px;height:28px;border-radius:4px;line-height:1}
+.btn-close:hover{background:#f1f5f9;color:#374151}
+.modal-preset-picker .modal-body{padding:16px 20px;overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:12px}
+.modal-preset-picker .modal-footer{display:flex;justify-content:flex-end;gap:10px;padding:14px 20px;border-top:1px solid #e5e7eb;background:#f8fafc;border-radius:0 0 12px 12px}
+.preset-search{width:100%;padding:8px 12px;border:1px solid #cbd5e1;border-radius:7px;font-size:13px;box-sizing:border-box}
+.preset-search:focus{outline:none;border-color:#6366f1}
+.picker-empty{text-align:center;padding:24px;color:#94a3b8;font-size:13px}
+.picker-list{display:flex;flex-direction:column;gap:4px}
+.picker-row{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border-radius:8px;cursor:pointer;border:1.5px solid transparent;transition:all 0.12s}
+.picker-row:hover{background:#f8fafc;border-color:#e2e8f0}
+.picker-row.selected{background:#eef2ff;border-color:#c7d2fe}
+.picker-check{flex-shrink:0;padding-top:1px}
+.check-box{width:18px;height:18px;border:2px solid #cbd5e1;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:white;transition:all 0.12s}
+.check-box.checked{background:#6366f1;border-color:#6366f1}
+.picker-info{flex:1;min-width:0}
+.picker-name{font-size:13px;font-weight:600;color:#1e293b}
+.picker-meta{font-size:11px;color:#94a3b8;margin-top:2px}
+.picker-desc{color:#64748b}
+.picker-items-preview{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
+.preview-chip{padding:2px 7px;background:#f1f5f9;border-radius:4px;font-size:10.5px;color:#64748b}
+.preview-chip.more{color:#94a3b8}
+.rename-panel{border-top:1px solid #e5e7eb;padding-top:12px}
+.rename-panel-title{font-size:12px;font-weight:600;color:#64748b;margin-bottom:8px}
+.rename-row{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.rename-original{font-size:12px;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px}
+.rename-arrow{color:#cbd5e1;flex-shrink:0}
+.rename-input{flex:1;padding:5px 9px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px}
+.rename-input:focus{outline:none;border-color:#6366f1}
+.btn-primary{padding:8px 18px;background:#6366f1;color:white;border:none;border-radius:7px;font-size:13px;font-weight:600;cursor:pointer}
+.btn-primary:hover:not(:disabled){background:#4f46e5}
+.btn-primary:disabled{opacity:0.5;cursor:not-allowed}
+.btn-secondary{padding:8px 16px;background:white;color:#64748b;border:1px solid #cbd5e1;border-radius:7px;font-size:13px;font-weight:600;cursor:pointer}
+.btn-secondary:hover{background:#f1f5f9}
 .photo-modal{background:white;border-radius:12px;width:520px;max-width:95vw;box-shadow:0 20px 60px rgba(0,0,0,0.2);overflow:hidden}
 .photo-modal-hd{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid #f1f5f9}
 .photo-modal-hd h3{font-size:15px;font-weight:700;color:#0f172a}

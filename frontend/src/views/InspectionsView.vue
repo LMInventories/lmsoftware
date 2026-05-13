@@ -129,6 +129,8 @@ watch(
     historyLoading.value = true
     try {
       const res = await api.getPropertyHistory(propId)
+      // Guard: type may have changed while the request was in-flight
+      if (form.value.inspection_type !== iType) return
       propertyHistory.value = res.data
 
       if (iType === 'check_out') {
@@ -1306,7 +1308,7 @@ onMounted(() => {
           <!-- ── End columns ─────────────────────────────────────────── -->
 
           <!-- ── Lifecycle suggestion banner (full-width below cols) ─── -->
-          <div v-if="historyLoading && form.property_id && form.inspection_type !== 'damage_report'" class="lc-loading">
+          <div v-if="historyLoading && form.property_id && !['damage_report','midterm','heads_up'].includes(form.inspection_type)" class="lc-loading">
             <span class="lc-spinner"></span> Checking property history…
           </div>
 

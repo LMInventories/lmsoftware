@@ -301,7 +301,7 @@ def create_inspection():
     # Standalone types (midterm, damage_report) are not part of the
     # check_in → check_out lifecycle and must never inherit a source
     # inspection's template — that would silently assign the wrong template type.
-    STANDALONE_TYPES = {'midterm', 'damage_report'}
+    STANDALONE_TYPES = {'midterm', 'damage_report', 'heads_up'}
     is_standalone = inspection_type in STANDALONE_TYPES
 
     template_id = data.get('template_id')
@@ -381,6 +381,25 @@ def create_inspection():
             print(f'[sheets] non-fatal: {err}')
     except Exception as _sheet_exc:
         print(f'[sheets] non-fatal exception: {_sheet_exc}')
+
+    # ── Auto-create linked Heads-Up Report ───────────────────────────────
+    if data.get('create_heads_up') and inspection_type != 'heads_up':
+        try:
+            hu_status = 'assigned' if data.get('inspector_id') else 'created'
+            hu = Inspection(
+                property_id    = inspection.property_id,
+                inspector_id   = inspection.inspector_id,
+                inspection_type = 'heads_up',
+                status         = hu_status,
+                conduct_date   = inspection.conduct_date,
+                conduct_time_preference = inspection.conduct_time_preference,
+                reference_number = inspection.reference_number,
+            )
+            db.session.add(hu)
+            db.session.commit()
+            _bust_dashboard()
+        except Exception as _hu_exc:
+            print(f'[heads_up] auto-create failed (non-fatal): {_hu_exc}')
 
     return jsonify(inspection_detail(inspection)), 201
 

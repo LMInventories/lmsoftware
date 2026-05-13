@@ -104,7 +104,8 @@ const form = ref({
   time_hour: '09',
   time_minute: '00',
   source_inspection_id: null,
-  include_photos: false
+  include_photos: false,
+  create_heads_up: false
 })
 
 // ── Lifecycle suggestion state ─────────────────────────────────────────
@@ -837,7 +838,8 @@ async function handleSubmit() {
       reference_number: form.value.reference_number || null,
       conduct_time_preference: timePreference,
       source_inspection_id: form.value.source_inspection_id || null,
-      include_photos: form.value.include_photos || false
+      include_photos: form.value.include_photos || false,
+      create_heads_up: form.value.create_heads_up || false
     }
 
     if (form.value.conduct_date) {
@@ -846,7 +848,7 @@ async function handleSubmit() {
 
     await api.createInspection(payload)
 
-    toast.success('Inspection created')
+    toast.success(form.value.create_heads_up ? 'Inspection and Heads Up Report created' : 'Inspection created')
     showModal.value = false
     fetchInspections()
   } catch (error) {
@@ -1272,6 +1274,15 @@ onMounted(() => {
                 <label>Tenant Email(s)</label>
                 <input v-model="form.tenant_email" type="text" placeholder="tenant@example.com, tenant2@example.com" />
                 <p class="helper-text">💡 Separate multiple addresses with commas</p>
+              </div>
+
+              <!-- Heads-Up Report -->
+              <div class="form-group">
+                <label class="lc-checkbox">
+                  <input type="checkbox" v-model="form.create_heads_up" />
+                  <span>Create Heads Up Report</span>
+                </label>
+                <p class="helper-text">Automatically creates a linked Heads-Up Report for this property</p>
               </div>
 
               <!-- Reference Number -->

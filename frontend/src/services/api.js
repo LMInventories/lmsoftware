@@ -230,6 +230,10 @@ const api = {
   getMidtermSections()         { return http.get('/api/midterm-sections') },
   updateMidtermSections(data)  { return http.put('/api/midterm-sections', data) },
 
+  // ── Heads-Up Report sections ──────────────────────────────────────────────
+  getHeadsUpSections()         { return http.get('/api/heads-up-sections') },
+  updateHeadsUpSections(data)  { return http.put('/api/heads-up-sections', data) },
+
   // ── AI proxy ──────────────────────────────────────────────────────────────
   claudeProxy(payload) {
     return http.post('/api/ai/claude', payload, { timeout: 120000 })

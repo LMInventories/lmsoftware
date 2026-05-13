@@ -258,3 +258,89 @@ def update_midterm_sections():
         return jsonify({'error': 'Expected a list'}), 400
     _save_midterm_setting(cleaned)
     return jsonify(cleaned)
+
+
+# ── Heads-Up Report Sections ─────────────────────────────────────────────────
+# Standalone section set for Heads-Up Reports (inspection_type='heads_up').
+# Stored under SystemSetting key 'heads_up_sections'.
+
+heads_up_sections_bp = Blueprint('heads_up_sections', __name__)
+
+DEFAULT_HEADS_UP_SECTIONS = [
+    {
+        "name": "Property Overview",
+        "enabled": True,
+        "columns": ["name", "answer", "additional_notes"],
+        "items": [
+            {"name": "Evidence of damp or mould?",             "answer": "", "additional_notes": ""},
+            {"name": "Evidence of pest infestation?",          "answer": "", "additional_notes": ""},
+            {"name": "Damage beyond fair wear and tear?",      "answer": "", "additional_notes": ""},
+            {"name": "Evidence of unauthorised occupants?",    "answer": "", "additional_notes": ""},
+            {"name": "Evidence of smoking inside?",            "answer": "", "additional_notes": ""},
+            {"name": "Evidence of pets (if not permitted)?",   "answer": "", "additional_notes": ""},
+        ]
+    },
+    {
+        "name": "Safety",
+        "enabled": True,
+        "columns": ["name", "answer", "additional_notes"],
+        "items": [
+            {"name": "Smoke alarms present and tested?",           "answer": "", "additional_notes": ""},
+            {"name": "Carbon monoxide alarm present (if required)?", "answer": "", "additional_notes": ""},
+            {"name": "Obvious fire hazards present?",              "answer": "", "additional_notes": ""},
+            {"name": "Emergency exits clear and accessible?",      "answer": "", "additional_notes": ""},
+        ]
+    },
+    {
+        "name": "Maintenance",
+        "enabled": True,
+        "columns": ["name", "answer", "additional_notes"],
+        "items": [
+            {"name": "Any outstanding maintenance issues?",         "answer": "", "additional_notes": ""},
+            {"name": "Windows/doors functioning correctly?",        "answer": "", "additional_notes": ""},
+            {"name": "Plumbing issues observed?",                   "answer": "", "additional_notes": ""},
+            {"name": "Electrical issues observed?",                 "answer": "", "additional_notes": ""},
+        ]
+    },
+]
+
+
+def _get_heads_up_setting():
+    s = SystemSetting.query.filter_by(key='heads_up_sections').first()
+    if not s or not s.value:
+        return DEFAULT_HEADS_UP_SECTIONS
+    try:
+        return json.loads(s.value)
+    except Exception:
+        return DEFAULT_HEADS_UP_SECTIONS
+
+
+def _save_heads_up_setting(sections):
+    s = SystemSetting.query.filter_by(key='heads_up_sections').first()
+    if not s:
+        s = SystemSetting(key='heads_up_sections')
+        db.session.add(s)
+    s.value = json.dumps(sections)
+    db.session.commit()
+
+
+@heads_up_sections_bp.route('', methods=['OPTIONS'])
+def heads_up_preflight():
+    return '', 204
+
+
+@heads_up_sections_bp.route('', methods=['GET'])
+@jwt_required()
+def get_heads_up_sections():
+    return jsonify(_get_heads_up_setting())
+
+
+@heads_up_sections_bp.route('', methods=['PUT'])
+@jwt_required()
+def update_heads_up_sections():
+    data = request.get_json(force=True)
+    cleaned = _sanitise_sections(data)
+    if cleaned is None:
+        return jsonify({'error': 'Expected a list'}), 400
+    _save_heads_up_setting(cleaned)
+    return jsonify(cleaned)

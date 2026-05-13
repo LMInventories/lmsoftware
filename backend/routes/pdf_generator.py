@@ -300,6 +300,8 @@ class _PDFBuilder:
         itype = getattr(inspection, 'inspection_type', '') or ''
         if itype == 'midterm':
             self.fixed_sections = _load_midterm_sections()
+        elif itype == 'heads_up':
+            self.fixed_sections = _load_heads_up_sections()
         else:
             self.fixed_sections = _load_fixed_sections()
 
@@ -391,12 +393,16 @@ class _PDFBuilder:
         itype = inspection.inspection_type or ''
         self.is_check_out    = itype == 'check_out'
         self.is_damage_report = itype == 'damage_report'
+        self.is_heads_up     = itype == 'heads_up'
+        self.is_midterm      = itype == 'midterm'
         self.type_label   = {
             'check_in':      'Inventory & Check In',
             'check_out':     'Check Out',
             'interim':       'Interim Inspection',
             'inventory':     'Inventory Report',
             'damage_report': 'Damage Report',
+            'midterm':       'Midterm Inspection',
+            'heads_up':      'Heads Up Report',
         }.get(itype, 'Inspection Report')
 
         self._init_styles()
@@ -713,12 +719,17 @@ class _PDFBuilder:
         story = []
         story += [NextPageTemplate('cover')]
         story += self._cover()
+        if self.is_heads_up:
+            # Heads-Up Reports: cover then sections only — no disclaimer, rooms, or action summary
+            story += self._fixed_sections()
+            return story
         story += self._contents(page_map=page_map)
         story += self._disclaimer()
         if self.is_check_out and self.act_pos == 'top':
             story += self._action_summary()
         story += self._fixed_sections()
-        story += self._rooms()
+        if not self.is_midterm:
+            story += self._rooms()
         if self.is_check_out and self.act_pos == 'bottom':
             story += self._action_summary()
         story += self._signatures_page()
@@ -1676,6 +1687,45 @@ def _load_midterm_sections() -> list:
     return result
 
 
+def _load_heads_up_sections() -> list:
+    """
+    Load Heads-Up Report sections from system_settings (key='heads_up_sections').
+    Uses the same id / row-id scheme as _load_fixed_sections.
+    """
+    try:
+        from models import SystemSetting
+        from routes.fixed_sections import DEFAULT_HEADS_UP_SECTIONS
+        s = SystemSetting.query.filter_by(key='heads_up_sections').first()
+        sections = json.loads(s.value) if (s and s.value) else DEFAULT_HEADS_UP_SECTIONS
+    except Exception:
+        try:
+            from routes.fixed_sections import DEFAULT_HEADS_UP_SECTIONS
+            sections = DEFAULT_HEADS_UP_SECTIONS
+        except Exception:
+            sections = []
+
+    result = []
+    sec_idx = 0
+    import re
+    for raw in sections:
+        if not raw.get('enabled', True):
+            continue
+        cols     = raw.get('columns', [])
+        sec_type = _infer_type(cols, raw.get('name', ''))
+        slug     = re.sub(r'[^a-z0-9]', '_', raw['name'].lower())
+        rd_key   = f'fs_{sec_idx}_{slug}'
+        rows     = [_adapt_item(item, sec_type, sec_idx, ri) for ri, item in enumerate(raw.get('items') or [])]
+        result.append({
+            'id':      rd_key,
+            'name':    raw['name'],
+            'type':    sec_type,
+            'columns': cols,
+            'rows':    rows,
+        })
+        sec_idx += 1
+    return result
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # ORM → dict helpers + recipient builder
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1735,7 +1785,7 @@ def _get_report_recipients(inspection) -> list:
         addr = addr.strip().lower()
         if addr and addr not in recipients:
             recipients.append(addr)
-    if inspection.tenant_email:
+    if inspection.tenant_email and inspection.inspection_type not in ('heads_up', 'midterm'):
         tenant = inspection.tenant_email.strip().lower()
         if tenant and tenant not in recipients:
             recipients.append(tenant)

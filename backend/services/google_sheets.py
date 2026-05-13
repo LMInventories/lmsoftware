@@ -39,6 +39,8 @@ def append_inspection_row(inspection) -> tuple[bool, Optional[str]]:
     Returns (True, None) on success, (False, error_message) on any failure.
     Safe to call fire-and-forget — never raises.
     """
+    if getattr(inspection, 'inspection_type', None) == 'heads_up':
+        return True, None
     try:
         return _append(inspection)
     except Exception as exc:

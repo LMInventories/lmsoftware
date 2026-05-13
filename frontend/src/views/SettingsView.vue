@@ -9,6 +9,7 @@ import EmailsSettings         from '../components/settings/EmailsSettings.vue'
 import IntegrationsSettings   from '../components/settings/IntegrationsSettings.vue'
 import FixedSectionsSettings   from './settings/FixedSectionsSettings.vue'
 import MidtermSectionsSettings from './settings/MidtermSectionsSettings.vue'
+import HeadsUpSectionsSettings from './settings/HeadsUpSectionsSettings.vue'
 
 const activeTab = ref(localStorage.getItem('settings_tab') || 'general')
 function setTab(id) { activeTab.value = id; localStorage.setItem('settings_tab', id) }
@@ -19,7 +20,8 @@ const tabs = [
   { id: 'actions',        label: 'Actions'        },
   { id: 'templates',      label: 'Templates'      },
   { id: 'fixed-sections',   label: 'Fixed Sections'   },
-  { id: 'midterm-sections', label: 'Midterm Sections' },
+  { id: 'midterm-sections',  label: 'Midterm Sections'  },
+  { id: 'headsup-sections', label: 'Heads-Up Sections' },
   { id: 'transcription',    label: 'Transcription'    },
   { id: 'emails',         label: 'Emails'         },
   { id: 'integrations',   label: 'Integrations'   },
@@ -53,7 +55,8 @@ const tabs = [
         <ActionsSettings        v-if="activeTab === 'actions'"         />
         <TemplatesSettings      v-if="activeTab === 'templates'"       />
         <FixedSectionsSettings   v-if="activeTab === 'fixed-sections'"   />
-        <MidtermSectionsSettings v-if="activeTab === 'midterm-sections'" />
+        <MidtermSectionsSettings v-if="activeTab === 'midterm-sections'"  />
+        <HeadsUpSectionsSettings v-if="activeTab === 'headsup-sections'" />
         <TranscriptionSettings  v-if="activeTab === 'transcription'"   />
         <EmailsSettings         v-if="activeTab === 'emails'"          />
         <IntegrationsSettings   v-if="activeTab === 'integrations'"    />

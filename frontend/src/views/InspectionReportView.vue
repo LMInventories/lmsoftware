@@ -2201,7 +2201,7 @@ async function moveToReview() {
           </div>
         </div>
 
-        <div v-if="template">
+        <div v-if="template || fixedSections.length">
 
           <template v-if="actionSummaryPosition === 'top'">
           <!-- ═══ ACTION SUMMARY (Check Out only) ════════════════════ -->

@@ -65,10 +65,12 @@ def _build_row(inspection) -> list:
     client = prop.client if prop else None
     client_name = ''
     if client:
-        client_name = (client.company or client.name or '').strip()
+        full = (client.company or client.name or '').strip()
+        client_name = full.split()[0] if full else ''
 
-    # Clerk
-    clerk_name = inspection.inspector.name if inspection.inspector else ''
+    # Clerk — first name only
+    clerk_full = inspection.inspector.name if inspection.inspector else ''
+    clerk_name = clerk_full.split()[0] if clerk_full else ''
 
     # Date — prefer conduct_date, fall back to scheduled_date
     date_obj = inspection.conduct_date or inspection.scheduled_date

@@ -124,7 +124,7 @@ watch(
     if (!propId) return
 
     // Standalone types — no lifecycle lookup needed
-    if (iType === 'damage_report' || iType === 'midterm') return
+    if (iType === 'damage_report' || iType === 'midterm' || iType === 'heads_up') return
 
     historyLoading.value = true
     try {
@@ -1175,6 +1175,7 @@ onMounted(() => {
                   <option value="interim">Interim Inspection</option>
                   <option value="inventory">Inventory</option>
                   <option value="damage_report">Damage Report</option>
+                  <option value="heads_up">Heads Up Report</option>
                 </select>
               </div>
 
@@ -1227,7 +1228,15 @@ onMounted(() => {
               <div class="col-section-title">Assignment &amp; Contact</div>
 
               <!-- Template -->
-              <div class="form-group">
+              <div class="form-group" v-if="form.inspection_type === 'midterm'">
+                <label>Template</label>
+                <p class="helper-text">Midterm reports use sections configured in <strong>Settings → Midterm Sections</strong>. No room template required.</p>
+              </div>
+              <div class="form-group" v-else-if="form.inspection_type === 'heads_up'">
+                <label>Template</label>
+                <p class="helper-text">Heads Up Reports use sections configured in <strong>Settings → Heads-Up Sections</strong>. No room template required.</p>
+              </div>
+              <div class="form-group" v-else>
                 <label>Template</label>
                 <select v-model="form.template_id">
                   <option :value="null">Use default for this type</option>

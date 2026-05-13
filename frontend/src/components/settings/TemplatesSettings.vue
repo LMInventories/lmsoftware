@@ -180,6 +180,7 @@ onMounted(fetchTemplates)
               <option value="midterm">Midterm Inspection</option>
               <option value="interim">Interim</option>
               <option value="inventory">Inventory</option>
+              <option value="heads_up">Heads Up Report</option>
             </select>
           </div>
         </div>

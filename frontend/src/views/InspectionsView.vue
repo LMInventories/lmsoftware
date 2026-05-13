@@ -1019,23 +1019,26 @@ onMounted(() => {
             <div v-if="inspection.client_name" class="card-client">{{ inspection.client_name }}</div>
 
             <div class="card-assignments">
-              <div v-if="inspection.inspector_name" class="assign-row">
-                <span class="assign-role">Clerk</span>
-                <span class="assign-name">{{ inspection.inspector_name }}</span>
+              <div class="assign-left">
+                <div v-if="inspection.inspector_name" class="assign-row">
+                  <span class="assign-role">Clerk</span>
+                  <span class="assign-name">{{ inspection.inspector_name }}</span>
+                </div>
+                <div v-if="inspection.typist_name" class="assign-row">
+                  <span class="assign-role">Typist</span>
+                  <span class="assign-name">{{ inspection.typist_name }}</span>
+                </div>
               </div>
-              <div v-if="inspection.typist_name" class="assign-row">
-                <span class="assign-role">Typist</span>
-                <span class="assign-name">{{ inspection.typist_name }}</span>
+              <div v-if="inspection.reference_number" class="assign-row assign-ref">
+                <span class="assign-role">Ref</span>
+                <span class="assign-name">{{ inspection.reference_number }}</span>
               </div>
             </div>
           </div>
 
           <div class="card-footer">
             <span class="card-created">Created {{ new Date(inspection.created_at).toLocaleDateString('en-GB') }}</span>
-            <div class="card-footer-right">
-              <span v-if="inspection.reference_number" class="card-ref">{{ inspection.reference_number }}</span>
-              <button v-if="authStore.isAdmin || authStore.isManager" @click.stop="deleteInspection(inspection.id)" class="btn-delete-sm">✕</button>
-            </div>
+            <button v-if="authStore.isAdmin || authStore.isManager" @click.stop="deleteInspection(inspection.id)" class="btn-delete-sm">✕</button>
           </div>
         </div>
         <div v-if="filteredInspections.length === 0" class="empty-state">
@@ -1847,6 +1850,14 @@ onMounted(() => {
 
 .card-assignments {
   display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+}
+
+.assign-left {
+  display: flex;
   flex-direction: column;
   gap: 3px;
 }
@@ -1881,8 +1892,6 @@ onMounted(() => {
 }
 
 .card-created { font-size: 10px; color: #cbd5e1; }
-.card-footer-right { display: flex; align-items: center; gap: 6px; }
-.card-ref { font-size: 10px; color: #94a3b8; font-weight: 500; }
 
 .btn-delete-sm {
   background: none;

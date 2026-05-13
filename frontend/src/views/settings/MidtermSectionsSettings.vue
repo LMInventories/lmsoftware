@@ -1,7 +1,7 @@
 
 .form-textarea { min-height: 80px; resize: vertical; font-family: inherit; }
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import api from '../../services/api'
 
 // ── Column definitions (all 9 available types) ────────────────────────────────
@@ -62,9 +62,14 @@ function markDirty() { dirty.value = true }
 async function load() {
   loading.value = true
   try {
-    const res = await api.getMidtermSections()
-    sections.value = (res.data || []).map(normalise)
+    const [msRes, prRes] = await Promise.all([
+      api.getMidtermSections(),
+      api.getSectionPresets().catch(() => ({ data: [] })),
+    ])
+    sections.value = (msRes.data || []).map(normalise)
     if (sections.value.length > 0) expanded.value[0] = true
+    presets.value = (prRes.data || []).map(normalisePreset)
+    if (presets.value.length > 0) selectedPreset.value = 0
   } catch (e) {
     console.error(e); alert('Failed to load midterm sections')
   } finally {
@@ -231,6 +236,106 @@ function moveItemDown(si, ii) {
   markDirty()
 }
 
+// ── Room Presets ──────────────────────────────────────────────────────────────
+const presets         = ref([])
+const selectedPreset  = ref(null)   // index
+const presetDirty     = ref(false)
+const presetSaving    = ref(false)
+const showCreatePreset = ref(false)
+const createPresetName = ref('')
+const createPresetLoading = ref(false)
+
+const currentPreset = computed(() =>
+  selectedPreset.value !== null ? presets.value[selectedPreset.value] : null
+)
+
+function normalisePreset(p) {
+  return {
+    id:    p.id,
+    name:  p.name || '',
+    items: (p.items || []).map(item => ({ name: item.name || '' })),
+  }
+}
+
+function selectPreset(i) {
+  if (presetDirty.value && !confirm('You have unsaved changes to this preset. Discard them?')) return
+  selectedPreset.value = i
+  presetDirty.value = false
+}
+
+function addPresetItem() {
+  currentPreset.value.items.push({ name: '' })
+  presetDirty.value = true
+}
+
+function removePresetItem(i) {
+  currentPreset.value.items.splice(i, 1)
+  presetDirty.value = true
+}
+
+function movePresetItemUp(i) {
+  if (i === 0) return
+  const arr = currentPreset.value.items
+  ;[arr[i - 1], arr[i]] = [arr[i], arr[i - 1]]
+  presetDirty.value = true
+}
+
+function movePresetItemDown(i) {
+  const arr = currentPreset.value.items
+  if (i >= arr.length - 1) return
+  ;[arr[i], arr[i + 1]] = [arr[i + 1], arr[i]]
+  presetDirty.value = true
+}
+
+async function savePreset() {
+  if (!currentPreset.value) return
+  presetSaving.value = true
+  try {
+    const payload = {
+      name:  currentPreset.value.name.trim(),
+      items: currentPreset.value.items
+        .map((item, idx) => ({ name: item.name.trim(), description: '', requires_condition: true, requires_photo: true, order_index: idx }))
+        .filter(item => item.name),
+    }
+    await api.updateSectionPreset(currentPreset.value.id, payload)
+    presetDirty.value = false
+  } catch (e) {
+    console.error(e); alert('Failed to save preset')
+  } finally {
+    presetSaving.value = false
+  }
+}
+
+async function createPreset() {
+  const name = createPresetName.value.trim()
+  if (!name) return
+  createPresetLoading.value = true
+  try {
+    const res = await api.createSectionPreset({ name, category: 'room', items: [] })
+    presets.value.push(normalisePreset(res.data))
+    selectedPreset.value = presets.value.length - 1
+    presetDirty.value = false
+    showCreatePreset.value = false
+    createPresetName.value = ''
+  } catch (e) {
+    console.error(e); alert('Failed to create preset')
+  } finally {
+    createPresetLoading.value = false
+  }
+}
+
+async function deletePreset(i) {
+  if (!confirm(`Delete preset "${presets.value[i].name}"? This cannot be undone.`)) return
+  try {
+    await api.deleteSectionPreset(presets.value[i].id)
+    presets.value.splice(i, 1)
+    if (selectedPreset.value >= presets.value.length) selectedPreset.value = presets.value.length - 1
+    presetDirty.value = false
+  } catch (e) {
+    console.error(e); alert('Failed to delete preset')
+  }
+}
+
 onMounted(load)
 </script>
 
@@ -393,8 +498,127 @@ onMounted(load)
       <p class="fs-hint">
         Disabled sections are hidden from midterm reports but not deleted. Changes apply system-wide on save.
       </p>
+
+      <!-- ── Room Presets ──────────────────────────────────────────────────── -->
+      <div class="presets-divider">
+        <div class="presets-divider-line"></div>
+        <span class="presets-divider-label">Room Presets</span>
+        <div class="presets-divider-line"></div>
+      </div>
+      <p class="fs-hint" style="margin-bottom:16px">
+        Room templates added to Midterm reports via the <strong>Add Room</strong> picker in Edit Report.
+      </p>
+
+      <div class="presets-layout">
+
+        <!-- Left: list -->
+        <div class="presets-list">
+          <div
+            v-for="(p, i) in presets"
+            :key="p.id"
+            class="preset-list-item"
+            :class="{ active: selectedPreset === i }"
+            @click="selectPreset(i)"
+          >
+            <div class="preset-list-body">
+              <div class="preset-list-name">{{ p.name }}</div>
+              <div class="preset-list-meta">{{ p.items.length }} item{{ p.items.length !== 1 ? 's' : '' }}</div>
+            </div>
+            <button class="preset-list-del" @click.stop="deletePreset(i)" title="Delete">✕</button>
+          </div>
+          <div v-if="presets.length === 0" class="preset-list-empty">No presets yet</div>
+          <button class="preset-list-add" @click="showCreatePreset = true">+ New Preset</button>
+        </div>
+
+        <!-- Right: editor -->
+        <div v-if="currentPreset" class="preset-editor-panel">
+          <div class="preset-editor-hd">
+            <input
+              v-model="currentPreset.name"
+              class="preset-name-input"
+              placeholder="Preset name"
+              @input="presetDirty = true"
+            />
+            <button class="btn-save-preset" :disabled="presetSaving || !presetDirty" @click="savePreset">
+              {{ presetSaving ? 'Saving…' : presetDirty ? 'Save' : 'Saved ✓' }}
+            </button>
+          </div>
+
+          <table class="preset-items-table">
+            <thead>
+              <tr>
+                <th class="col-ord"></th>
+                <th>Item / Question</th>
+                <th class="col-del-h"></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(item, i) in currentPreset.items" :key="i">
+                <td class="col-ord">
+                  <div class="ord-col">
+                    <button class="btn-icon-sm" @click="movePresetItemUp(i)"   :disabled="i === 0">↑</button>
+                    <button class="btn-icon-sm" @click="movePresetItemDown(i)" :disabled="i === currentPreset.items.length - 1">↓</button>
+                  </div>
+                </td>
+                <td>
+                  <input
+                    v-model="item.name"
+                    class="preset-item-input"
+                    type="text"
+                    placeholder="e.g. Damage to walls?"
+                    @input="presetDirty = true"
+                  />
+                </td>
+                <td class="col-del-h">
+                  <button class="btn-icon-sm danger" @click="removePresetItem(i)">✕</button>
+                </td>
+              </tr>
+              <tr v-if="currentPreset.items.length === 0">
+                <td colspan="3" class="items-empty">No items yet — add one below.</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <button class="btn-add-item" @click="addPresetItem">＋ Add Item</button>
+        </div>
+
+        <div v-else-if="presets.length === 0" class="preset-editor-empty">
+          Create a preset to get started.
+        </div>
+      </div>
+
     </div>
   </div>
+
+  <!-- ── Create preset modal ───────────────────────────────────────────────── -->
+  <Teleport to="body">
+    <div v-if="showCreatePreset" class="modal-overlay" @click.self="showCreatePreset = false">
+      <div class="modal">
+        <div class="modal-header">
+          <h2>New Room Preset</h2>
+          <button @click="showCreatePreset = false" class="btn-close">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Preset name *</label>
+            <input
+              v-model="createPresetName"
+              type="text"
+              placeholder="e.g. Midterm Bedroom"
+              autofocus
+              @keyup.enter="createPreset"
+            />
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-secondary" @click="showCreatePreset = false">Cancel</button>
+          <button class="btn-primary" :disabled="createPresetLoading || !createPresetName.trim()" @click="createPreset">
+            {{ createPresetLoading ? 'Creating…' : 'Create' }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </Teleport>
 
   <!-- ── Item add / edit modal ─────────────────────────────────────────────── -->
   <Teleport to="body">
@@ -721,4 +945,45 @@ onMounted(load)
   font-weight: 600; cursor: pointer; width: 100%;
 }
 .btn-secondary-sm:hover { background: #f1f5f9; }
+
+/* ── Room Presets section ─────────────────────────────────────────────────── */
+.presets-divider {
+  display: flex; align-items: center; gap: 12px; margin: 32px 0 16px;
+}
+.presets-divider-line { flex: 1; height: 1px; background: #e5e7eb; }
+.presets-divider-label { font-size: 12px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.8px; white-space: nowrap; }
+
+.presets-layout { display: grid; grid-template-columns: 200px 1fr; gap: 16px; align-items: start; margin-bottom: 8px; }
+
+.presets-list { border: 1.5px solid #e5e7eb; border-radius: 10px; overflow: hidden; background: white; }
+.preset-list-item { display: flex; align-items: center; padding: 10px 12px; cursor: pointer; border-bottom: 1px solid #f1f5f9; transition: background 0.12s; }
+.preset-list-item:hover { background: #f8fafc; }
+.preset-list-item.active { background: #eef2ff; border-left: 3px solid #6366f1; padding-left: 9px; }
+.preset-list-body { flex: 1; min-width: 0; }
+.preset-list-name { font-size: 12.5px; font-weight: 600; color: #1e293b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.preset-list-meta { font-size: 11px; color: #94a3b8; margin-top: 1px; }
+.preset-list-del { background: none; border: none; color: #d1d5db; font-size: 12px; cursor: pointer; padding: 2px 4px; border-radius: 4px; flex-shrink: 0; }
+.preset-list-del:hover { background: #fee2e2; color: #dc2626; }
+.preset-list-empty { padding: 16px 12px; font-size: 12px; color: #94a3b8; text-align: center; border-bottom: 1px solid #f1f5f9; }
+.preset-list-add { width: 100%; padding: 9px; background: none; border: none; color: #6366f1; font-size: 12.5px; font-weight: 600; cursor: pointer; text-align: center; transition: background 0.12s; }
+.preset-list-add:hover { background: #f5f3ff; }
+
+.preset-editor-panel { border: 1.5px solid #e5e7eb; border-radius: 10px; background: white; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.preset-editor-hd { display: flex; gap: 10px; align-items: center; }
+.preset-name-input { flex: 1; padding: 7px 11px; border: 1px solid #cbd5e1; border-radius: 7px; font-size: 14px; font-weight: 600; font-family: inherit; color: #1e293b; }
+.preset-name-input:focus { outline: none; border-color: #6366f1; }
+.btn-save-preset { padding: 7px 16px; background: #6366f1; color: white; border: none; border-radius: 7px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; transition: background 0.15s; }
+.btn-save-preset:hover:not(:disabled) { background: #4f46e5; }
+.btn-save-preset:disabled { background: #a5b4fc; cursor: default; }
+
+.preset-items-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.preset-items-table th { padding: 6px 10px; text-align: left; font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.4px; border-bottom: 1.5px solid #e5e7eb; background: #f8fafc; }
+.preset-items-table td { padding: 5px 8px; border-bottom: 1px solid #f1f5f9; vertical-align: middle; }
+.preset-items-table tr:last-child td { border-bottom: none; }
+.col-ord { width: 44px; }
+.col-del-h { width: 32px; }
+.ord-col { display: flex; flex-direction: column; gap: 1px; }
+.preset-item-input { width: 100%; padding: 5px 8px; border: 1px solid #e5e7eb; border-radius: 5px; font-size: 13px; font-family: inherit; box-sizing: border-box; }
+.preset-item-input:focus { outline: none; border-color: #6366f1; }
+.preset-editor-empty { display: flex; align-items: center; justify-content: center; padding: 40px; color: #94a3b8; font-size: 13px; border: 1.5px dashed #e5e7eb; border-radius: 10px; }
 </style>

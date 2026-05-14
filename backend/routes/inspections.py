@@ -383,6 +383,16 @@ def create_inspection():
     except Exception as _sheet_exc:
         print(f'[sheets] non-fatal exception: {_sheet_exc}')
 
+    # ── Google Calendar event (fire-and-forget) ──────────────────────────
+    try:
+        from services.google_calendar import push_calendar_event, is_calendar_connected
+        if is_calendar_connected() and inspection.conduct_date:
+            ok, result = push_calendar_event(inspection)
+            if not ok:
+                print(f'[calendar] non-fatal: {result}')
+    except Exception as _cal_exc:
+        print(f'[calendar] non-fatal exception: {_cal_exc}')
+
     # ── Auto-create linked Heads-Up Report ───────────────────────────────
     if data.get('create_heads_up') and inspection_type != 'heads_up':
         try:
@@ -566,6 +576,27 @@ def update_inspection(inspection_id):
     db.session.commit()
     _bust_dashboard()
 
+    # ── Sync Google Sheets + Calendar when scheduling fields change ─────────
+    _SYNC_FIELDS = {'conduct_date', 'inspector_id', 'inspection_type',
+                    'tenant_name', 'conduct_time_preference', 'reference_number'}
+    if any(k in data for k in _SYNC_FIELDS):
+        try:
+            from services.google_sheets import sync_inspection_row
+            ok, err = sync_inspection_row(inspection)
+            if not ok:
+                print(f'[sheets] non-fatal: {err}')
+        except Exception as _sheet_exc:
+            print(f'[sheets] non-fatal exception: {_sheet_exc}')
+
+        try:
+            from services.google_calendar import push_calendar_event, is_calendar_connected
+            if is_calendar_connected() and inspection.conduct_date:
+                ok, result = push_calendar_event(inspection)
+                if not ok:
+                    print(f'[calendar] non-fatal: {result}')
+        except Exception as _cal_exc:
+            print(f'[calendar] non-fatal exception: {_cal_exc}')
+
     # ── Generate PDF and email in a background thread ────────────────────────
     # Runs after commit and completely outside the HTTP request so the client
     # gets an immediate 200 and the worker is never killed by a slow PDF build.
@@ -727,6 +758,15 @@ def delete_inspection(inspection_id):
     if not is_admin_or_manager(user):
         return jsonify({'error': 'Forbidden'}), 403
     inspection = Inspection.query.get_or_404(inspection_id)
+
+    # ── Delete Google Calendar event if one was created ──────────────────────
+    if inspection.calendar_event_id:
+        try:
+            from services.google_calendar import delete_calendar_event
+            delete_calendar_event(inspection.calendar_event_id)
+        except Exception as _cal_exc:
+            print(f'[calendar] delete error (non-fatal): {_cal_exc}')
+
     db.session.delete(inspection)
     db.session.commit()
     _bust_dashboard()

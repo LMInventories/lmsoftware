@@ -189,6 +189,7 @@ class Inspection(db.Model):
     deposit_ref             = db.Column(db.String(255))      # scheme certificate / registration number
     depositary_tenancy_id   = db.Column(db.String(255))      # ID returned by The Depositary API after push
     depositary_pushed_at    = db.Column(db.DateTime)
+    calendar_event_id       = db.Column(db.String(255))      # Google Calendar event ID after push
     conduct_date            = db.Column(db.DateTime, index=True)
     conduct_time_preference = db.Column(db.String(50))
     scheduled_date          = db.Column(db.DateTime)

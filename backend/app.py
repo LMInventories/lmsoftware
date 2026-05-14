@@ -308,6 +308,11 @@ def _setup_database():
             _alter_column(f"inspections.{_col}",
                           f"ALTER TABLE inspections ADD COLUMN {_col} {_ddl}")
 
+    # inspections.calendar_event_id — Google Calendar event ID stored after push
+    if not column_exists('inspections', 'calendar_event_id'):
+        _alter_column("inspections.calendar_event_id",
+                      "ALTER TABLE inspections ADD COLUMN calendar_event_id VARCHAR(255)")
+
     # items.answer_options — JSON array of selectable answers for question-type template items
     if not column_exists('items', 'answer_options'):
         _alter_column("items.answer_options",

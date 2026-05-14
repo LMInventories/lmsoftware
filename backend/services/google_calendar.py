@@ -73,12 +73,20 @@ def _build_event(inspection) -> dict:
     end_date_str = (inspection.conduct_date + timedelta(days=1)).strftime('%Y-%m-%d')
 
     event: dict = {
-        'summary':     summary,
-        'description': description,
-        'start':       {'date': date_str},
-        'end':         {'date': end_date_str},
+        'summary':               summary,
+        'description':           description,
+        'start':                 {'date': date_str},
+        'end':                   {'date': end_date_str},
+        'guestsCanModify':       False,
+        'guestsCanSeeOtherGuests': False,
     }
 
+    # Add the assigned clerk as a silent attendee so the event appears in
+    # their calendar without sending any invitation email.
+    # sendUpdates=none on the API call is what suppresses the email;
+    # the attendee entry is what makes the event visible on their calendar.
+    # Admins see all events as the organiser; clerks only see their own
+    # because they're only added as attendee on inspections assigned to them.
     if inspection.inspector and inspection.inspector.email:
         event['attendees'] = [{'email': inspection.inspector.email}]
 
@@ -109,10 +117,12 @@ def push_calendar_event(inspection) -> tuple[bool, str]:
         was_update  = bool(inspection.calendar_event_id)
 
         if was_update:
-            url    = f'{_CALENDAR_EVENTS_URL}/{urllib.parse.quote(inspection.calendar_event_id, safe="")}'
+            url    = (f'{_CALENDAR_EVENTS_URL}/{urllib.parse.quote(inspection.calendar_event_id, safe="")}'
+                      f'?sendUpdates=none')
             result = _api_request('PUT', url, access_token, body=body_bytes)
         else:
-            result = _api_request('POST', _CALENDAR_EVENTS_URL, access_token, body=body_bytes)
+            result = _api_request('POST', f'{_CALENDAR_EVENTS_URL}?sendUpdates=none',
+                                  access_token, body=body_bytes)
 
         event_id = result.get('id', inspection.calendar_event_id or '')
 
@@ -160,7 +170,7 @@ def delete_calendar_event(event_id: str) -> bool:
         return False
 
     try:
-        url = f'{_CALENDAR_EVENTS_URL}/{urllib.parse.quote(event_id, safe="")}'
+        url = f'{_CALENDAR_EVENTS_URL}/{urllib.parse.quote(event_id, safe="")}?sendUpdates=none'
         req = urllib.request.Request(
             url,
             headers={'Authorization': f'Bearer {access_token}'},

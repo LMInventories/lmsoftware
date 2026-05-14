@@ -132,22 +132,22 @@ onMounted(() => { checkApiKeys(); loadUsage() })
           <div class="cost-card total">
             <span class="cost-label">Total Cost</span>
             <span class="cost-value">{{ formatGBP(usage.total_cost_gbp) }}</span>
-            <span class="cost-sub">{{ usage.total_calls }} calls · {{ usage.audio_minutes }} mins audio</span>
+            <span class="cost-sub">{{ usage.inspections ? usage.inspections.length : 0 }} inspection{{ usage.inspections?.length !== 1 ? 's' : '' }} · {{ usage.audio_minutes }} mins audio</span>
           </div>
           <div class="cost-card whisper">
             <span class="cost-label">OpenAI Whisper</span>
             <span class="cost-value">{{ formatGBP(usage.whisper_cost_gbp) }}</span>
-            <span class="cost-sub">{{ usage.audio_minutes }} mins transcribed</span>
+            <span class="cost-sub">{{ usage.audio_minutes }} mins · {{ (usage.item_calls || 0) + (usage.room_calls || 0) + (usage.full_calls || 0) }} clips</span>
           </div>
           <div class="cost-card claude">
-            <span class="cost-label">Claude Haiku</span>
-            <span class="cost-value">{{ formatGBP(usage.claude_cost_gbp) }}</span>
-            <span class="cost-sub">{{ usage.item_calls }} item · {{ usage.full_calls }} full · {{ usage.photo_calls || 0 }} photo</span>
+            <span class="cost-label">Claude AI</span>
+            <span class="cost-value">{{ formatGBP((usage.claude_cost_gbp || 0) + (usage.photo_cost_gbp || 0)) }}</span>
+            <span class="cost-sub">{{ (usage.item_calls || 0) + (usage.room_calls || 0) }} fill · {{ usage.photo_calls || 0 }} photo (Opus)</span>
           </div>
         </div>
 
         <p class="usage-disclaimer">
-          ⚠️ Estimates only. Whisper at $0.006/min, Claude Haiku at $0.80/$4.00 per 1M tokens, converted at £1 = $1.27. Verify actual charges in your provider billing dashboards above.
+          Estimates only. Whisper-1 at $0.006/min · Claude Haiku (transcription fill) at $0.80/$4.00 per 1M tokens · Claude Opus (photo classification) at $15/$75 per 1M tokens · converted at £1 = $1.27. Verify actual charges in your provider billing dashboards above.
         </p>
 
         <!-- Inspection-grouped accordion -->
@@ -163,25 +163,35 @@ onMounted(() => { checkApiKeys(); loadUsage() })
             <button class="insp-row" @click="toggleInsp(insp.inspection_id ?? 'unlinked')">
               <span class="insp-chevron" :class="{ open: expandedInsp.has(insp.inspection_id ?? 'unlinked') }">›</span>
               <span class="insp-date">{{ formatDate(insp.latest_at) }}</span>
-              <span class="insp-addr">{{ insp.property_address }}</span>
+              <span class="insp-addr">
+                {{ insp.property_address }}
+                <span v-if="insp.inspection_type" class="insp-type-badge">{{ insp.inspection_type }}</span>
+                <span v-if="insp.reference_number" class="insp-ref">{{ insp.reference_number }}</span>
+              </span>
               <span class="insp-total">{{ formatGBP(insp.total_cost_gbp) }}</span>
             </button>
 
             <!-- Expanded breakdown -->
             <div v-if="expandedInsp.has(insp.inspection_id ?? 'unlinked')" class="insp-breakdown">
-              <div class="breakdown-row" v-if="insp.transcription_calls > 0">
+              <div class="breakdown-row" v-if="insp.audio_minutes > 0">
                 <span class="breakdown-icon">🎙️</span>
-                <span class="breakdown-label">AI Transcription</span>
-                <span class="breakdown-meta">{{ insp.transcription_calls }} call{{ insp.transcription_calls !== 1 ? 's' : '' }} · {{ insp.audio_minutes }} mins</span>
-                <span class="breakdown-cost">{{ formatGBP(insp.transcription_cost_gbp) }}</span>
+                <span class="breakdown-label">Whisper transcription</span>
+                <span class="breakdown-meta">{{ insp.audio_minutes }} mins · {{ (insp.item_calls || 0) + (insp.room_calls || 0) }} clip{{ ((insp.item_calls || 0) + (insp.room_calls || 0)) !== 1 ? 's' : '' }}</span>
+                <span class="breakdown-cost">{{ formatGBP(insp.whisper_cost_gbp) }}</span>
+              </div>
+              <div class="breakdown-row" v-if="(insp.item_calls || 0) + (insp.room_calls || 0) > 0">
+                <span class="breakdown-icon">🤖</span>
+                <span class="breakdown-label">Claude Haiku (fill)</span>
+                <span class="breakdown-meta">{{ (insp.item_calls || 0) + (insp.room_calls || 0) }} call{{ ((insp.item_calls || 0) + (insp.room_calls || 0)) !== 1 ? 's' : '' }}</span>
+                <span class="breakdown-cost">{{ formatGBP(insp.claude_cost_gbp) }}</span>
               </div>
               <div class="breakdown-row" v-if="insp.photo_calls > 0">
                 <span class="breakdown-icon">📷</span>
-                <span class="breakdown-label">AI Photo Reassignment</span>
+                <span class="breakdown-label">Claude Opus (photo sort)</span>
                 <span class="breakdown-meta">{{ insp.photo_calls }} photo{{ insp.photo_calls !== 1 ? 's' : '' }}</span>
                 <span class="breakdown-cost">{{ formatGBP(insp.photo_cost_gbp) }}</span>
               </div>
-              <div class="breakdown-row breakdown-empty" v-if="insp.transcription_calls === 0 && insp.photo_calls === 0">
+              <div class="breakdown-row breakdown-empty" v-if="insp.audio_minutes === 0 && insp.photo_calls === 0">
                 <span class="breakdown-label" style="color:#94a3b8">No calls recorded</span>
               </div>
             </div>
@@ -299,7 +309,9 @@ onMounted(() => { checkApiKeys(); loadUsage() })
 }
 .insp-chevron.open { transform: rotate(90deg); }
 .insp-date { font-size: 12px; color: #94a3b8; white-space: nowrap; flex-shrink: 0; min-width: 80px; }
-.insp-addr { flex: 1; font-size: 14px; font-weight: 500; color: #1e293b; text-align: left; }
+.insp-addr { flex: 1; font-size: 14px; font-weight: 500; color: #1e293b; text-align: left; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.insp-type-badge { font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 10px; background: #ede9fe; color: #6d28d9; white-space: nowrap; }
+.insp-ref { font-size: 11px; color: #94a3b8; white-space: nowrap; }
 .insp-total { font-size: 15px; font-weight: 700; color: #1e293b; flex-shrink: 0; }
 
 .insp-breakdown { border-top: 1px solid #f1f5f9; background: #f8fafc; padding: 4px 0 6px; }

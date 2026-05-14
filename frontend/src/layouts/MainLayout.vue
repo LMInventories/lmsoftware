@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import api from '../services/api'
@@ -83,6 +83,37 @@ function logout() {
   closeUserPopup()
 }
 
+// ── Integration health banner ─────────────────────────────────────────────
+const integrationIssues   = ref([])
+const bannerDismissed     = ref(false)
+const showBanner = computed(() =>
+  !bannerDismissed.value &&
+  integrationIssues.value.length > 0 &&
+  (authStore.isAdmin || authStore.isManager)
+)
+
+async function checkIntegrationHealth() {
+  if (!authStore.isAdmin && !authStore.isManager) return
+  try {
+    const res = await api.http.get('/api/google/health')
+    integrationIssues.value = res.data.issues || []
+  } catch {
+    // Non-fatal — silently skip if the endpoint isn't reachable
+  }
+}
+
+let _healthTimer = null
+
+onMounted(() => {
+  checkIntegrationHealth()
+  // Re-check every 30 minutes in case a token expires mid-session
+  _healthTimer = setInterval(checkIntegrationHealth, 30 * 60 * 1000)
+})
+
+onUnmounted(() => {
+  clearInterval(_healthTimer)
+})
+
 function navigate(path) {
   router.push(path)
   drawerOpen.value = false
@@ -162,6 +193,25 @@ function navigate(path) {
 
     <!-- ══ MAIN CONTENT ══════════════════════════════════════════════ -->
     <main class="main-content" :class="{ 'main-fullscreen': isFullscreen }">
+
+      <!-- Integration health banner — shown to admin/manager when a connection is broken -->
+      <TransitionGroup name="banner-slide" tag="div" class="integration-banners">
+        <div
+          v-for="issue in (showBanner ? integrationIssues : [])"
+          :key="issue.key"
+          class="integration-banner"
+        >
+          <span class="banner-icon">⚠</span>
+          <span class="banner-text">{{ issue.message }}</span>
+          <router-link to="/settings?tab=integrations" class="banner-link">
+            Reconnect →
+          </router-link>
+          <button class="banner-dismiss" @click="bannerDismissed = true" aria-label="Dismiss">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+      </TransitionGroup>
+
       <router-view />
     </main>
 
@@ -602,6 +652,64 @@ function navigate(path) {
   .drawer-divider { height: 1px; background: #f1f5f9; margin: 6px 0; }
   .drawer-logout { color: #dc2626; }
   .drawer-logout:hover { background: #fef2f2; }
+}
+
+/* ── Integration health banner ─────────────────────────────────────── */
+.integration-banners { display: flex; flex-direction: column; gap: 0; }
+
+.integration-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  border-left: 4px solid #f59e0b;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #78350f;
+}
+.banner-icon { font-size: 15px; flex-shrink: 0; }
+.banner-text { flex: 1; font-weight: 500; }
+.banner-link {
+  font-weight: 700;
+  color: #b45309;
+  text-decoration: none;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.banner-link:hover { text-decoration: underline; }
+.banner-dismiss {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #92400e;
+  opacity: 0.6;
+  padding: 2px;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  border-radius: 4px;
+  transition: opacity 0.15s;
+}
+.banner-dismiss:hover { opacity: 1; }
+
+.banner-slide-enter-active, .banner-slide-leave-active {
+  transition: all 0.25s ease;
+  overflow: hidden;
+}
+.banner-slide-enter-from, .banner-slide-leave-to {
+  opacity: 0;
+  max-height: 0;
+  margin-bottom: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+.banner-slide-enter-to, .banner-slide-leave-from {
+  opacity: 1;
+  max-height: 80px;
+  margin-bottom: 16px;
 }
 
 /* ── Transitions ───────────────────────────────────────────────────── */

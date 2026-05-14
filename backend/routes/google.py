@@ -219,6 +219,7 @@ def is_connected() -> bool:
 
 @google_bp.route('', methods=['OPTIONS'])
 @google_bp.route('/auth', methods=['OPTIONS'])
+@google_bp.route('/health', methods=['OPTIONS'])
 @google_bp.route('/status', methods=['OPTIONS'])
 @google_bp.route('/disconnect', methods=['OPTIONS'])
 def handle_options():
@@ -312,6 +313,44 @@ def google_callback():
         print(f'[google] userinfo fetch failed (non-fatal): {e}')
 
     return redirect(_frontend_url('/settings?tab=integrations&google=connected'))
+
+
+@google_bp.route('/health', methods=['GET'])
+@jwt_required()
+def google_health():
+    """
+    Lightweight integration health check — reads DB state only, no live token call.
+    Returns a list of issues for the admin/manager notification banner.
+    Only reports a problem when a Google-dependent feature is configured but
+    the connection has been lost (tokens cleared after invalid_grant).
+    """
+    from models import SystemSetting
+    from permissions import get_current_user, is_admin_or_manager
+
+    user = get_current_user()
+    if not is_admin_or_manager(user):
+        return jsonify({'issues': []}), 200
+
+    def _get(key):
+        row = SystemSetting.query.filter_by(key=key).first()
+        return (row.value or '').strip() if row else ''
+
+    issues = []
+
+    google_connected = bool(_get('google_access_token') and _get('google_refresh_token'))
+
+    if not google_connected:
+        # Only warn when at least one Google feature is actively configured,
+        # so a user who never set up Google doesn't see a spurious warning.
+        sheet_configured = bool(_get('google_master_sheet_id'))
+        if sheet_configured:
+            issues.append({
+                'key':     'google',
+                'label':   'Google',
+                'message': 'Google disconnected — Sheets, Drive and Calendar sync are paused.',
+            })
+
+    return jsonify({'issues': issues})
 
 
 @google_bp.route('/status', methods=['GET'])

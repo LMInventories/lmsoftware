@@ -143,8 +143,11 @@ def _detect_edit_mode(transcript: str):
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
-def _whisper_transcribe(audio_bytes: bytes, mime_type: str) -> str:
-    """Send audio bytes to OpenAI Whisper, return transcript string."""
+def _whisper_transcribe(audio_bytes: bytes, mime_type: str) -> tuple[str, float]:
+    """
+    Send audio bytes to OpenAI Whisper, return (transcript, duration_seconds).
+    Uses verbose_json to get actual duration rather than estimating from byte count.
+    """
     import openai
 
     client = openai.OpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
@@ -165,7 +168,7 @@ def _whisper_transcribe(audio_bytes: bytes, mime_type: str) -> str:
     # Strip codec suffix e.g. "audio/webm;codecs=opus" → "audio/webm"
     mime_base = mime_type.split(';')[0].strip().lower() if mime_type else 'audio/webm'
     ext = ext_map.get(mime_base, 'webm')
-    print(f'[transcribe/item] mime_base: {repr(mime_base)} → ext: {ext}')
+    print(f'[transcribe] mime_base: {repr(mime_base)} → ext: {ext}')
 
     with tempfile.NamedTemporaryFile(suffix=f'.{ext}', delete=False) as tmp:
         tmp.write(audio_bytes)
@@ -177,7 +180,7 @@ def _whisper_transcribe(audio_bytes: bytes, mime_type: str) -> str:
                 model='whisper-1',
                 file=f,
                 language='en',
-                response_format='text',
+                response_format='verbose_json',
                 prompt=(
                     'UK property inventory inspection dictation. '
                     'Speaker describes item appearance and condition. '
@@ -191,8 +194,9 @@ def _whisper_transcribe(audio_bytes: bytes, mime_type: str) -> str:
                     'Transcribe all words accurately, including technical property terms.'
                 )
             )
-        raw_transcript = str(response).strip()
-        return _correct_transcript(raw_transcript)
+        raw_transcript = str(response.text).strip()
+        duration_seconds = float(response.duration or 0)
+        return _correct_transcript(raw_transcript), duration_seconds
     finally:
         os.unlink(tmp_path)
 
@@ -566,7 +570,7 @@ def transcribe_item():
         return jsonify({'error': 'Invalid base64 audio data'}), 400
 
     try:
-        raw_transcript = _whisper_transcribe(audio_bytes, mime_type)
+        raw_transcript, audio_secs = _whisper_transcribe(audio_bytes, mime_type)
 
         if not raw_transcript:
             return jsonify({'error': 'No speech detected in recording'}), 422
@@ -594,7 +598,7 @@ def transcribe_item():
                 call_type     = 'item',
                 inspection_id = int(data.get('inspectionId')) if data.get('inspectionId') else None,
                 user_id       = int(get_jwt_identity()),
-                audio_seconds = len(audio_bytes) / 16000,  # rough estimate
+                audio_seconds = audio_secs,
                 input_tokens  = filled_msg.usage.input_tokens  if filled_msg and filled_msg.usage else 0,
                 output_tokens = filled_msg.usage.output_tokens if filled_msg and filled_msg.usage else 0,
                 section_type  = section_type,
@@ -768,66 +772,73 @@ def transcribe_usage():
     from datetime import datetime, timedelta
     from models import Inspection
 
-    # Period filter
-    period = request.args.get('period', '30')  # days
+    period = request.args.get('period', '30')
     since  = datetime.utcnow() - timedelta(days=int(period))
+    rows   = TranscriptionUsage.query.filter(TranscriptionUsage.created_at >= since).all()
 
-    rows = TranscriptionUsage.query.filter(TranscriptionUsage.created_at >= since).all()
+    # ── Pricing constants ──────────────────────────────────────────────────
+    USD_TO_GBP            = 0.79
+    WHISPER_PER_MIN_USD   = 0.006          # Whisper-1 ($0.006/min)
+    HAIKU_IN_PER_1M_USD   = 0.80           # claude-haiku-4-5 input
+    HAIKU_OUT_PER_1M_USD  = 4.00           # claude-haiku-4-5 output
+    # Photo classification uses claude-opus-4-5 — apply Opus-tier pricing
+    OPUS_IN_PER_1M_USD    = 15.00          # claude-opus-4-5 input
+    OPUS_OUT_PER_1M_USD   = 75.00          # claude-opus-4-5 output
 
-    USD_TO_GBP           = 0.79
-    WHISPER_PER_MIN_USD  = 0.006
-    HAIKU_IN_PER_1M_USD  = 0.80
-    HAIKU_OUT_PER_1M_USD = 4.00
+    def _row_cost_usd(r):
+        """Compute USD cost for a single usage row using the correct model pricing."""
+        if r.call_type == 'photo':
+            # Vision + Opus pricing
+            return (r.input_tokens  / 1_000_000) * OPUS_IN_PER_1M_USD  + \
+                   (r.output_tokens / 1_000_000) * OPUS_OUT_PER_1M_USD
+        else:
+            # Whisper + Haiku pricing (item / room / full)
+            whisper = (r.audio_seconds / 60) * WHISPER_PER_MIN_USD
+            claude  = (r.input_tokens  / 1_000_000) * HAIKU_IN_PER_1M_USD + \
+                      (r.output_tokens / 1_000_000) * HAIKU_OUT_PER_1M_USD
+            return whisper + claude
 
-    def _cost_gbp(seconds, in_tok, out_tok):
-        w = (seconds / 60) * WHISPER_PER_MIN_USD
-        c = (in_tok  / 1_000_000) * HAIKU_IN_PER_1M_USD + \
-            (out_tok / 1_000_000) * HAIKU_OUT_PER_1M_USD
-        return round((w + c) * USD_TO_GBP, 4)
+    # ── Overall summary ────────────────────────────────────────────────────
+    item_count  = sum(1 for r in rows if r.call_type == 'item')
+    room_count  = sum(1 for r in rows if r.call_type == 'room')
+    full_count  = sum(1 for r in rows if r.call_type == 'full')
+    photo_count = sum(1 for r in rows if r.call_type == 'photo')
 
-    # --- overall summary ---
-    total_seconds = sum(r.audio_seconds for r in rows)
-    total_in      = sum(r.input_tokens  for r in rows)
-    total_out     = sum(r.output_tokens for r in rows)
-    item_count    = sum(1 for r in rows if r.call_type == 'item')
-    full_count    = sum(1 for r in rows if r.call_type == 'full')
-    photo_count   = sum(1 for r in rows if r.call_type == 'photo')
-
-    # transcription rows only (item + full) for whisper cost
-    trans_rows = [r for r in rows if r.call_type in ('item', 'full')]
-    trans_secs = sum(r.audio_seconds   for r in trans_rows)
-    trans_in   = sum(r.input_tokens    for r in trans_rows)
-    trans_out  = sum(r.output_tokens   for r in trans_rows)
-
+    trans_rows = [r for r in rows if r.call_type in ('item', 'room', 'full')]
     photo_rows = [r for r in rows if r.call_type == 'photo']
-    photo_in   = sum(r.input_tokens  for r in photo_rows)
-    photo_out  = sum(r.output_tokens for r in photo_rows)
 
-    whisper_usd = (trans_secs / 60) * WHISPER_PER_MIN_USD
-    trans_claude_usd = (trans_in  / 1_000_000) * HAIKU_IN_PER_1M_USD + \
-                       (trans_out / 1_000_000) * HAIKU_OUT_PER_1M_USD
-    photo_usd   = (photo_in  / 1_000_000) * HAIKU_IN_PER_1M_USD + \
-                  (photo_out / 1_000_000) * HAIKU_OUT_PER_1M_USD
-    total_usd   = whisper_usd + trans_claude_usd + photo_usd
-    total_gbp   = round(total_usd * USD_TO_GBP, 4)
+    total_audio_secs = sum(r.audio_seconds for r in trans_rows)
 
-    # --- group by inspection ---
+    whisper_usd     = sum((r.audio_seconds / 60) * WHISPER_PER_MIN_USD for r in trans_rows)
+    haiku_usd       = sum((r.input_tokens / 1_000_000) * HAIKU_IN_PER_1M_USD +
+                          (r.output_tokens / 1_000_000) * HAIKU_OUT_PER_1M_USD
+                          for r in trans_rows)
+    photo_opus_usd  = sum((r.input_tokens / 1_000_000) * OPUS_IN_PER_1M_USD +
+                          (r.output_tokens / 1_000_000) * OPUS_OUT_PER_1M_USD
+                          for r in photo_rows)
+    total_usd = whisper_usd + haiku_usd + photo_opus_usd
+
+    # ── Group by inspection ────────────────────────────────────────────────
     from collections import defaultdict
     by_insp = defaultdict(lambda: {
-        'trans_seconds': 0, 'trans_in': 0, 'trans_out': 0,
+        'trans_seconds': 0.0,
+        'trans_in': 0, 'trans_out': 0,
         'photo_in': 0, 'photo_out': 0,
-        'trans_calls': 0, 'photo_calls': 0,
+        'item_calls': 0, 'room_calls': 0, 'photo_calls': 0,
         'latest_at': None,
     })
 
     for r in rows:
-        key = r.inspection_id  # may be None
+        key = r.inspection_id
         g   = by_insp[key]
-        if r.call_type in ('item', 'full'):
+        if r.call_type in ('item', 'room', 'full'):
             g['trans_seconds'] += r.audio_seconds
             g['trans_in']      += r.input_tokens
             g['trans_out']     += r.output_tokens
-            g['trans_calls']   += 1
+            if r.call_type == 'item':
+                g['item_calls'] += 1
+            else:
+                g['room_calls'] += 1
         elif r.call_type == 'photo':
             g['photo_in']    += r.input_tokens
             g['photo_out']   += r.output_tokens
@@ -835,50 +846,63 @@ def transcribe_usage():
         if g['latest_at'] is None or r.created_at > g['latest_at']:
             g['latest_at'] = r.created_at
 
-    # Fetch addresses for known inspection_ids
+    # Fetch inspection details for known IDs
     known_ids = [k for k in by_insp if k is not None]
-    insp_map  = {}
+    insp_meta = {}   # id → {address, type, reference}
     if known_ids:
         insp_objs = Inspection.query.filter(Inspection.id.in_(known_ids)).all()
         for insp in insp_objs:
             addr = (insp.property.address if insp.property else None) or f'Inspection #{insp.id}'
-            insp_map[insp.id] = addr
+            insp_meta[insp.id] = {
+                'address':    addr,
+                'type':       (insp.inspection_type or '').replace('_', ' ').title(),
+                'reference':  insp.reference_number or '',
+            }
 
     inspections_list = []
     for insp_id, g in sorted(by_insp.items(),
                               key=lambda x: x[1]['latest_at'] or datetime.min,
                               reverse=True):
-        w_usd   = (g['trans_seconds'] / 60) * WHISPER_PER_MIN_USD
-        tc_usd  = (g['trans_in']  / 1_000_000) * HAIKU_IN_PER_1M_USD + \
-                  (g['trans_out'] / 1_000_000) * HAIKU_OUT_PER_1M_USD
-        pc_usd  = (g['photo_in']  / 1_000_000) * HAIKU_IN_PER_1M_USD + \
-                  (g['photo_out'] / 1_000_000) * HAIKU_OUT_PER_1M_USD
-        trans_cost = round((w_usd + tc_usd) * USD_TO_GBP, 4)
-        photo_cost = round(pc_usd * USD_TO_GBP, 4)
-        total_cost = round((w_usd + tc_usd + pc_usd) * USD_TO_GBP, 4)
+        w_usd  = (g['trans_seconds'] / 60) * WHISPER_PER_MIN_USD
+        hk_usd = (g['trans_in']  / 1_000_000) * HAIKU_IN_PER_1M_USD + \
+                 (g['trans_out'] / 1_000_000) * HAIKU_OUT_PER_1M_USD
+        op_usd = (g['photo_in']  / 1_000_000) * OPUS_IN_PER_1M_USD  + \
+                 (g['photo_out'] / 1_000_000) * OPUS_OUT_PER_1M_USD
+
+        meta = insp_meta.get(insp_id, {}) if insp_id else {}
 
         inspections_list.append({
-            'inspection_id':         insp_id,
-            'property_address':      insp_map.get(insp_id, 'Unknown property') if insp_id else 'Unlinked calls',
-            'total_cost_gbp':        total_cost,
-            'transcription_cost_gbp': trans_cost,
-            'photo_cost_gbp':        photo_cost,
-            'transcription_calls':   g['trans_calls'],
-            'photo_calls':           g['photo_calls'],
-            'audio_minutes':         round(g['trans_seconds'] / 60, 1),
-            'latest_at':             g['latest_at'].isoformat() if g['latest_at'] else None,
+            'inspection_id':          insp_id,
+            'property_address':       meta.get('address', 'Unknown property') if insp_id else 'Unlinked calls',
+            'inspection_type':        meta.get('type', ''),
+            'reference_number':       meta.get('reference', ''),
+            'total_cost_gbp':         round((w_usd + hk_usd + op_usd) * USD_TO_GBP, 4),
+            'whisper_cost_gbp':       round(w_usd  * USD_TO_GBP, 4),
+            'claude_cost_gbp':        round(hk_usd * USD_TO_GBP, 4),
+            'photo_cost_gbp':         round(op_usd * USD_TO_GBP, 4),
+            'transcription_cost_gbp': round((w_usd + hk_usd) * USD_TO_GBP, 4),
+            'item_calls':             g['item_calls'],
+            'room_calls':             g['room_calls'],
+            'photo_calls':            g['photo_calls'],
+            'audio_minutes':          round(g['trans_seconds'] / 60, 1),
+            'latest_at':              g['latest_at'].isoformat() if g['latest_at'] else None,
         })
+
+    # Sort most expensive first (secondary sort = most recent)
+    inspections_list.sort(key=lambda x: x['total_cost_gbp'], reverse=True)
 
     return jsonify({
         'period_days':      int(period),
         'item_calls':       item_count,
+        'room_calls':       room_count,
         'full_calls':       full_count,
         'photo_calls':      photo_count,
         'total_calls':      len(rows),
-        'audio_minutes':    round(total_seconds / 60, 1),
-        'whisper_cost_gbp': round(whisper_usd * USD_TO_GBP, 4),
-        'claude_cost_gbp':  round((trans_claude_usd + photo_usd) * USD_TO_GBP, 4),
-        'total_cost_gbp':   total_gbp,
+        'audio_minutes':    round(total_audio_secs / 60, 1),
+        'whisper_cost_gbp': round(whisper_usd   * USD_TO_GBP, 4),
+        'claude_cost_gbp':  round(haiku_usd     * USD_TO_GBP, 4),
+        'photo_cost_gbp':   round(photo_opus_usd * USD_TO_GBP, 4),
+        'total_cost_gbp':   round(total_usd     * USD_TO_GBP, 4),
         'inspections':      inspections_list,
     })
 
@@ -1189,10 +1213,10 @@ The "_delete" flag is only included when the clerk says "Not Applicable" for tha
     raw = message.content[0].text.strip()
     raw = raw.replace('```json', '').replace('```', '').strip()
     try:
-        return json.loads(_sanitise_json(raw))
+        return json.loads(_sanitise_json(raw)), message
     except json.JSONDecodeError:
         print(f'[_claude_fill_room] JSON parse error: {raw[:200]}')
-        return {}
+        return {}, message
 
 
 def _claude_fill_room_checkout(transcript: str, section_name: str, items: list) -> dict:
@@ -1274,10 +1298,10 @@ Example output:
     raw = message.content[0].text.strip()
     raw = raw.replace('```json', '').replace('```', '').strip()
     try:
-        return json.loads(_sanitise_json(raw))
+        return json.loads(_sanitise_json(raw)), message
     except json.JSONDecodeError:
         print(f'[_claude_fill_room_checkout] JSON parse error: {raw[:200]}')
-        return {}
+        return {}, message
 
 
 def _claude_fill_room_damage(transcript: str, section_name: str, items: list, processed_ids: list = None) -> dict:
@@ -1394,10 +1418,10 @@ Return ONLY valid JSON — no markdown, no extra text.
     raw = message.content[0].text.strip()
     raw = raw.replace('```json', '').replace('```', '').strip()
     try:
-        return json.loads(_sanitise_json(raw))
+        return json.loads(_sanitise_json(raw)), message
     except json.JSONDecodeError:
         print(f'[_claude_fill_room_damage] JSON parse error: {raw[:200]}')
-        return {}
+        return {}, message
 
 
 def _claude_fill_fixed_section(transcript: str, section_name: str, section_type: str, items: list) -> dict:
@@ -1546,10 +1570,10 @@ Return ONLY valid JSON matching that shape — no markdown, no extra text, real 
     raw = message.content[0].text.strip()
     raw = raw.replace('```json', '').replace('```', '').strip()
     try:
-        return json.loads(_sanitise_json(raw))
+        return json.loads(_sanitise_json(raw)), message
     except json.JSONDecodeError:
         print(f'[_claude_fill_fixed_section] JSON parse error: {raw[:200]}')
-        return {}
+        return {}, message
 
 
 @transcribe_bp.route('/room', methods=['POST'])
@@ -1592,6 +1616,7 @@ def transcribe_room():
     is_check_out       = bool(data.get('isCheckOut', False))
     is_damage_report   = bool(data.get('isDamageReport', False))
     processed_item_ids = data.get('processedItemIds') or []
+    inspection_id      = int(data['inspectionId']) if data.get('inspectionId') else None
 
     if not clips:
         return jsonify({'error': 'No audio clips provided'}), 400
@@ -1603,8 +1628,9 @@ def transcribe_room():
     if not os.environ.get('ANTHROPIC_API_KEY'):
         return jsonify({'error': 'ANTHROPIC_API_KEY not configured on server'}), 503
 
-    # Transcribe each clip with Whisper, then join
+    # Transcribe each clip with Whisper, collect actual durations
     transcripts = []
+    total_audio_secs = 0.0
     for i, clip in enumerate(clips):
         audio_b64 = clip.get('audio')
         mime_type = clip.get('mimeType', 'audio/m4a')
@@ -1612,9 +1638,10 @@ def transcribe_room():
             continue
         try:
             audio_bytes = base64.b64decode(audio_b64)
-            text = _whisper_transcribe(audio_bytes, mime_type)
+            text, secs = _whisper_transcribe(audio_bytes, mime_type)
             if text:
                 transcripts.append(text.strip())
+                total_audio_secs += secs
         except Exception as e:
             print(f'[transcribe/room] clip {i} whisper error: {e}')
 
@@ -1625,16 +1652,32 @@ def transcribe_room():
     try:
         if section_type == 'room':
             if is_check_out:
-                filled = _claude_fill_room_checkout(full_transcript, section_name, items)
+                filled, fill_msg = _claude_fill_room_checkout(full_transcript, section_name, items)
             elif is_damage_report:
-                filled = _claude_fill_room_damage(full_transcript, section_name, items, processed_item_ids or None)
+                filled, fill_msg = _claude_fill_room_damage(full_transcript, section_name, items, processed_item_ids or None)
             else:
-                filled = _claude_fill_room(full_transcript, section_name, items, processed_item_ids or None)
+                filled, fill_msg = _claude_fill_room(full_transcript, section_name, items, processed_item_ids or None)
         else:
-            filled = _claude_fill_fixed_section(full_transcript, section_name, section_type, items)
+            filled, fill_msg = _claude_fill_fixed_section(full_transcript, section_name, section_type, items)
     except Exception as e:
         print(f'[transcribe/room] claude error: {e}')
         return jsonify({'error': f'AI fill error: {str(e)}'}), 500
+
+    # Log usage — previously missing for room-mode transcriptions
+    try:
+        usage_log = TranscriptionUsage(
+            call_type     = 'room',
+            inspection_id = inspection_id,
+            user_id       = int(get_jwt_identity()),
+            audio_seconds = total_audio_secs,
+            input_tokens  = fill_msg.usage.input_tokens  if fill_msg and fill_msg.usage else 0,
+            output_tokens = fill_msg.usage.output_tokens if fill_msg and fill_msg.usage else 0,
+            section_type  = section_type,
+        )
+        db.session.add(usage_log)
+        db.session.commit()
+    except Exception:
+        pass  # never let logging break the response
 
     return jsonify({
         'transcript': full_transcript,

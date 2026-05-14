@@ -1,59 +1,91 @@
-import os
+"""
+routes/address_lookup.py
+────────────────────────
+Free UK address lookup — no API keys required.
+
+Backends:
+  postcodes.io  — postcode validation and admin-area metadata (free, no auth)
+  Nominatim     — address search and structured geocoding (free, no auth)
+                  Usage policy requires a descriptive User-Agent header.
+
+Endpoints:
+  GET /api/address/find/<postcode>  → { postcode, addresses: [{line1, line2, line3, city, county, postcode}] }
+  GET /api/address/autocomplete?q=  → { suggestions: [{address, url}] }
+  GET /api/address/get?url=         → { line1, line2, line3, city, county, postcode }
+
+The 'url' field in autocomplete suggestions carries a Nominatim OSM reference
+("<OsmType><osm_id>", e.g. "N123456789") so /get can resolve the full address.
+"""
+
+import re
 import requests
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required
 
 address_lookup_bp = Blueprint('address_lookup', __name__)
 
-GOOGLE_API_KEY   = os.environ.get('GOOGLE_PLACES_API_KEY', '')
-PLACES_BASE      = 'https://maps.googleapis.com/maps/api/place'
-GEOCODE_BASE     = 'https://maps.googleapis.com/maps/api/geocode/json'
+_NOMINATIM_BASE    = 'https://nominatim.openstreetmap.org'
+_POSTCODES_IO_BASE = 'https://api.postcodes.io'
+
+# Nominatim usage policy requires a meaningful User-Agent identifying the application.
+_UA = 'InspectPro/1.0 (property inspection management; contact=support@lminventories.co.uk)'
+
+_PC_RE = re.compile(r'^[A-Z]{1,2}[0-9][0-9A-Z]?\s?[0-9][A-Z]{2}$', re.I)
+
+# Trailing suffixes that Nominatim appends to UK display_names — strip these for cleaner dropdown labels.
+_UK_SUFFIXES = (
+    ', England, United Kingdom',
+    ', Scotland, United Kingdom',
+    ', Wales, United Kingdom',
+    ', Northern Ireland, United Kingdom',
+    ', United Kingdom',
+)
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-def _component(components, *types):
-    """Return the long_name of the first address component matching any of the given types."""
-    for c in components:
-        if any(t in c.get('types', []) for t in types):
-            return c.get('long_name', '').strip()
-    return ''
+def _norm_pc(postcode: str) -> str:
+    """Uppercase and insert the canonical space before the inward code."""
+    pc = postcode.replace(' ', '').upper()
+    return f'{pc[:-3]} {pc[-3:]}' if len(pc) >= 5 else pc
 
 
-def _parse_place_details(components):
-    """
-    Map Google address_components to our internal format.
+def _parse_nominatim(addr: dict) -> dict:
+    """Map a Nominatim address object to our internal {line1, line2, line3, city, county, postcode}."""
+    house_number = addr.get('house_number', '')
+    house_name   = addr.get('house_name', '')
+    road         = (addr.get('road') or addr.get('pedestrian')
+                    or addr.get('footway') or addr.get('path') or '')
 
-    Google types used:
-      street_number   → house / flat number
-      subpremise      → flat / unit within a building
-      route           → street name
-      postal_town     → city (UK-specific; falls back to locality)
-      locality        → town/city fallback
-      administrative_area_level_2 → county
-      postal_code     → postcode
-    """
-    subpremise     = _component(components, 'subpremise')
-    street_number  = _component(components, 'street_number')
-    route          = _component(components, 'route')
-    postal_town    = _component(components, 'postal_town')
-    locality       = _component(components, 'locality')
-    county         = _component(components, 'administrative_area_level_2')
-    postcode       = _component(components, 'postal_code')
+    if house_name:
+        line1 = f'{house_name}, {road}' if road else house_name
+    elif house_number and road:
+        line1 = f'{house_number} {road}'
+    else:
+        line1 = road or house_name or ''
 
-    # Build line1: "Flat 3, 10 High Street"  or just "10 High Street"
-    number_part = ' '.join(filter(None, [street_number, route]))
-    line1 = ', '.join(filter(None, [subpremise, number_part])) if subpremise else number_part
-    city  = postal_town or locality
+    line2 = (addr.get('suburb') or addr.get('neighbourhood')
+             or addr.get('quarter') or addr.get('hamlet') or '')
+
+    city  = (addr.get('city') or addr.get('town')
+             or addr.get('village') or addr.get('municipality') or '')
+
+    county = addr.get('county') or addr.get('state_district') or ''
 
     return {
-        'line1':    line1,
-        'line2':    '',
+        'line1':    line1.strip(),
+        'line2':    line2.strip(),
         'line3':    '',
-        'city':     city,
-        'county':   county,
-        'postcode': postcode,
+        'city':     city.strip(),
+        'county':   county.strip(),
+        'postcode': addr.get('postcode', '').strip(),
     }
+
+
+def _trim_display(display_name: str) -> str:
+    """Remove trailing UK region/country noise from a Nominatim display_name."""
+    for suffix in _UK_SUFFIXES:
+        if display_name.endswith(suffix):
+            return display_name[:-len(suffix)]
+    return display_name
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -62,91 +94,127 @@ def _parse_place_details(components):
 @jwt_required()
 def find_by_postcode(postcode):
     """
-    Geocode a UK postcode via Google Geocoding API and return the result.
-    GET /api/address/find/SW1A1AA
-    Response: { postcode, addresses: [{ line1, line2, line3, city, county, postcode }] }
-
-    Note: Google doesn't provide a list of individual properties per postcode
-    (that requires AddressBase / Royal Mail PAF).  We return the best geocoded
-    match for the postcode so the form can at least pre-fill city/county.
-    The autocomplete endpoint is the primary address-entry path.
+    Look up UK addresses for a given postcode.
+    GET /api/address/find/SW1A2AA
+    Response: { postcode, addresses: [{line1, line2, line3, city, county, postcode}] }
     """
-    if not GOOGLE_API_KEY:
-        return jsonify({'error': 'Address lookup not configured'}), 503
+    pc = _norm_pc(postcode)
 
-    pc = postcode.replace(' ', '').upper()
+    # 1. Validate postcode and collect admin-area fallbacks from postcodes.io
+    fallback_city   = ''
+    fallback_county = ''
     try:
-        res = requests.get(
-            GEOCODE_BASE,
+        r = requests.get(
+            f'{_POSTCODES_IO_BASE}/postcodes/{pc.replace(" ", "")}',
+            timeout=6,
+        )
+        if r.status_code == 200:
+            result = r.json().get('result') or {}
+            fallback_city   = result.get('admin_district') or result.get('parish') or ''
+            fallback_county = result.get('admin_county') or result.get('admin_district') or ''
+        elif r.status_code == 404:
+            return jsonify({'postcode': pc, 'addresses': []}), 200
+    except Exception as e:
+        print(f'[address] postcodes.io error: {e}')
+
+    # 2. Search Nominatim for addresses that carry this postcode
+    addresses = []
+    try:
+        r = requests.get(
+            f'{_NOMINATIM_BASE}/search',
             params={
-                'address':    pc,
-                'components': 'country:GB',
-                'key':        GOOGLE_API_KEY,
+                'postalcode':     pc,
+                'countrycodes':   'gb',
+                'addressdetails': 1,
+                'format':         'json',
+                'limit':          40,
             },
+            headers={'User-Agent': _UA},
             timeout=8,
         )
-        if res.status_code != 200:
-            return jsonify({'postcode': pc, 'addresses': []}), 200
-
-        data = res.json()
-        addresses = []
-        for result in data.get('results', []):
-            addr = _parse_place_details(result.get('address_components', []))
-            addresses.append(addr)
-
-        return jsonify({'postcode': pc, 'addresses': addresses})
-
-    except requests.Timeout:
-        return jsonify({'error': 'Address lookup timed out'}), 504
+        if r.status_code == 200:
+            seen = set()
+            for item in r.json():
+                addr = _parse_nominatim(item.get('address', {}))
+                # Skip results with no usable street line
+                if not addr['line1']:
+                    continue
+                # Fill blanks from postcodes.io metadata
+                if not addr['postcode']:
+                    addr['postcode'] = pc
+                if not addr['city']:
+                    addr['city'] = fallback_city
+                if not addr['county']:
+                    addr['county'] = fallback_county
+                key = (addr['line1'].lower(), addr['city'].lower())
+                if key not in seen:
+                    seen.add(key)
+                    addresses.append(addr)
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        print(f'[address] Nominatim postcode search error: {e}')
+
+    # 3. Fallback: if Nominatim returned nothing, synthesise one entry from postcodes.io data
+    #    so the user can at least pre-fill city/county/postcode and type the street manually.
+    if not addresses:
+        addresses.append({
+            'line1':    '',
+            'line2':    '',
+            'line3':    '',
+            'city':     fallback_city,
+            'county':   fallback_county,
+            'postcode': pc,
+        })
+
+    return jsonify({'postcode': pc, 'addresses': addresses})
 
 
 @address_lookup_bp.route('/autocomplete', methods=['GET'])
 @jwt_required()
 def autocomplete():
     """
-    Autocomplete a UK address using Google Places Autocomplete.
+    Autocomplete a UK address using Nominatim free-text search.
     GET /api/address/autocomplete?q=10+Downing+Street
-    Response: { suggestions: [{ address, url }] }
+    Response: { suggestions: [{address, url}] }
 
-    'url' carries the Google place_id so /get can resolve the full address.
+    'url' is a Nominatim OSM reference (e.g. "N123456789").
+    Pass it to /get?url=… to resolve the full structured address.
     """
-    if not GOOGLE_API_KEY:
-        return jsonify({'error': 'Address lookup not configured'}), 503
-
     q = request.args.get('q', '').strip()
     if not q or len(q) < 3:
         return jsonify({'suggestions': []}), 200
 
     try:
-        res = requests.get(
-            f'{PLACES_BASE}/autocomplete/json',
+        r = requests.get(
+            f'{_NOMINATIM_BASE}/search',
             params={
-                'input':      q,
-                'key':        GOOGLE_API_KEY,
-                'components': 'country:gb',
-                'types':      'address',
-                'language':   'en-GB',
+                'q':              q,
+                'countrycodes':   'gb',
+                'addressdetails': 1,
+                'format':         'json',
+                'limit':          10,
             },
+            headers={'User-Agent': _UA},
             timeout=8,
         )
-        if res.status_code != 200:
+        if r.status_code != 200:
             return jsonify({'suggestions': []}), 200
 
-        data = res.json()
-        if data.get('status') not in ('OK', 'ZERO_RESULTS'):
-            # Surface API-level errors (e.g. REQUEST_DENIED) for easier debugging
-            return jsonify({'suggestions': [], 'api_status': data.get('status')}), 200
-
         suggestions = []
-        for p in data.get('predictions', []):
-            suggestions.append({
-                'address': p.get('description', ''),
-                'url':     p.get('place_id', ''),
-            })
+        seen = set()
+        for item in r.json():
+            display = _trim_display(item.get('display_name', ''))
+            if not display or display in seen:
+                continue
+            seen.add(display)
 
-        return jsonify({'suggestions': suggestions[:10]})
+            # Build OSM reference: first letter of type (N/W/R) + numeric ID
+            osm_type = (item.get('osm_type') or '')[:1].upper()  # node→N, way→W, relation→R
+            osm_id   = str(item.get('osm_id', ''))
+            osm_ref  = f'{osm_type}{osm_id}' if osm_type and osm_id else ''
+
+            suggestions.append({'address': display, 'url': osm_ref})
+
+        return jsonify({'suggestions': suggestions})
 
     except requests.Timeout:
         return jsonify({'error': 'Autocomplete timed out'}), 504
@@ -158,37 +226,33 @@ def autocomplete():
 @jwt_required()
 def get_address_by_id():
     """
-    Resolve a full structured address from a Google place_id.
-    GET /api/address/get?url=<place_id>
+    Resolve a full structured address from a Nominatim OSM reference.
+    GET /api/address/get?url=N123456789
     Response: { line1, line2, line3, city, county, postcode }
     """
-    if not GOOGLE_API_KEY:
-        return jsonify({'error': 'Address lookup not configured'}), 503
-
-    place_id = request.args.get('url', '').strip()
-    if not place_id:
+    osm_ref = request.args.get('url', '').strip()
+    if not osm_ref:
         return jsonify({'error': 'url parameter required'}), 400
 
     try:
-        res = requests.get(
-            f'{PLACES_BASE}/details/json',
+        r = requests.get(
+            f'{_NOMINATIM_BASE}/lookup',
             params={
-                'place_id': place_id,
-                'key':      GOOGLE_API_KEY,
-                'fields':   'address_components',
-                'language': 'en-GB',
+                'osm_ids':        osm_ref,
+                'addressdetails': 1,
+                'format':         'json',
             },
+            headers={'User-Agent': _UA},
             timeout=8,
         )
-        if res.status_code != 200:
-            return jsonify({'error': f'Place details failed ({res.status_code})'}), res.status_code
+        if r.status_code != 200:
+            return jsonify({'error': f'Nominatim lookup failed ({r.status_code})'}), r.status_code
 
-        data = res.json()
-        if data.get('status') != 'OK':
-            return jsonify({'error': f'Place not found: {data.get("status")}'}), 404
+        results = r.json()
+        if not results:
+            return jsonify({'error': 'Address not found'}), 404
 
-        components = data['result'].get('address_components', [])
-        return jsonify(_parse_place_details(components))
+        return jsonify(_parse_nominatim(results[0].get('address', {})))
 
     except requests.Timeout:
         return jsonify({'error': 'Address fetch timed out'}), 504

@@ -207,6 +207,7 @@ def get_inspections():
         'typist_name': i.typist.name if i.typist else None,
         'inspection_type': i.inspection_type,
         'status': i.status,
+        'reference_number': i.reference_number,
         'source_inspection_id': i.source_inspection_id,
         'conduct_date': i.conduct_date.isoformat() if i.conduct_date else None,
         'conduct_time_preference': i.conduct_time_preference,

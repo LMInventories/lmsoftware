@@ -149,6 +149,14 @@ def _refresh_access_token(refresh_token: str) -> Optional[str]:
         req = urllib.request.Request(_TOKEN_URL, data=payload, method='POST')
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        print(f'[google] token refresh failed: {e}')
+        if e.code == 400:
+            # invalid_grant — refresh token was revoked or expired; clear stored
+            # tokens so the next status check accurately shows disconnected
+            print('[google] clearing stored tokens (invalid_grant)')
+            _clear_tokens()
+        return None
     except Exception as e:
         print(f'[google] token refresh failed: {e}')
         return None
@@ -313,13 +321,13 @@ def google_status():
     Return the current Google connection state.
     Called by IntegrationsSettings.vue on mount and after OAuth redirect.
     """
-    tokens  = _load_tokens()
-    scopes  = tokens.get('google_scopes', '')
-    connected = bool(
-        tokens.get('google_access_token') and tokens.get('google_refresh_token')
-    )
+    # Validate the token (auto-refreshes if expired; auto-clears if invalid_grant)
+    valid_token = get_valid_access_token()
+    # Re-load after potential refresh/clear so email/scopes reflect current state
+    tokens = _load_tokens()
+    scopes = tokens.get('google_scopes', '')
     return jsonify({
-        'connected':     connected,
+        'connected':     valid_token is not None,
         'email':         tokens.get('google_email', ''),
         'has_drive':     'drive' in scopes,
         'has_calendar':  'calendar' in scopes,

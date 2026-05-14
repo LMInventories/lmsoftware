@@ -455,9 +455,12 @@ function handleConnect(integration) {
           <!-- Google connected badge (shown under description for connected Google cards) -->
           <div
             v-if="integration.googleOAuth && googleStatus.connected && googleStatus[integration.scopeKey]"
-            class="int-connected-badge"
+            class="int-connected-row"
           >
-            ✓ Connected as {{ googleStatus.email }}
+            <span class="int-connected-badge">✓ Connected as {{ googleStatus.email }}</span>
+            <button class="int-reauth-btn" @click.stop="connectGoogle" title="Re-run the Google sign-in if the connection is broken">
+              Reconnect →
+            </button>
           </div>
 
           <!-- CTA -->
@@ -687,11 +690,28 @@ h2 { font-size: 18px; font-weight: 700; color: #0f172a; margin: 0 0 6px; }
   display: flex; align-items: center; gap: 5px;
 }
 
+.int-connected-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
 .int-connected-badge {
   font-size: 11px; font-weight: 600; color: #166534;
   background: #dcfce7; border: 1px solid #bbf7d0;
   border-radius: 6px; padding: 5px 9px;
 }
+.int-reauth-btn {
+  padding: 4px 10px;
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  border-radius: 5px;
+  font-size: 11px; font-weight: 600;
+  color: #475569;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.int-reauth-btn:hover { border-color: #6366f1; color: #6366f1; }
 
 .int-btn {
   margin-top: 4px; padding: 7px 14px;

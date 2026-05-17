@@ -88,6 +88,329 @@ def _correct_transcript(text: str) -> str:
     return text
 
 
+# ── Inspection vocabulary dictionaries ────────────────────────────────────
+# Injected into AI prompts so the model reliably recognises condition signals
+# and description terms across all property inspection item types.
+
+_CONDITION_WORDS = """
+══════════════════════════════════════════════════════
+CONDITION VOCABULARY — all recognised condition signals
+══════════════════════════════════════════════════════
+Everything below signals CONDITION, not description.
+Once any of these appears, everything from that word onwards is condition.
+
+State grades:
+  In good order / Good order / In very good order / In excellent order / As new / As inventory / As found
+  In fair order / Fair order / Some wear / Light wear / Light surface wear / Fair wear and tear
+  In poor order / Poor order / Heavily worn / Well worn
+
+Magnitude qualifiers (appear before a defect word — the whole phrase is condition):
+  Light / Slight / Minor / Superficial / Moderate / Heavy / Severe / Extensive / Significant / Notable
+
+Surface defects:
+  Scuff / Scuffs / Scuffed / Scuffing / Light scuffing / Scuff mark / Scuff marks
+  Scratch / Scratches / Scratched / Scratching / Light scratching / Surface scratching / Light surface scratching
+  Mark / Marks / Marked / Marking / Light marking / Light marks / Light surface marks
+  Chip / Chips / Chipped / Chipping / Small chip / Large chip
+  Crack / Cracks / Cracked / Cracking / Hairline crack / Fine crack / Stress crack / Crazing
+  Dent / Dents / Dented / Denting
+  Gouge / Gouges / Gouged / Nick / Nicks / Nicked / Notch / Notches / Score / Scored
+  Hole / Holes / Small hole / Large hole
+
+Finish defects:
+  Stain / Stains / Stained / Staining / Light staining / Tide mark / Water mark / Water stain
+  Burn / Burns / Burned / Burnt / Burn mark / Scorch / Scorched / Scorching / Scorch mark
+  Discolouration / Discoloured / Yellowing / Yellowed / Fading / Faded / Bleached
+
+Surface deterioration:
+  Peeling / Peeled / Peel / Paint peeling / Flaking / Flaked / Flake
+  Bubbling / Bubbled / Blistering / Blistered
+  Warping / Warped / Bowing / Bowed / Buckling / Buckled
+  Sagging / Sagged / Splitting / Split / Tearing / Torn / Fraying / Frayed
+
+Soiling:
+  Dirty / Soiled / Grimy / Greasy / Dusty
+  Mould / Mouldy / Mold / Mildew / Mildewed / Black mould
+  Damp / Dampness / Water damage / Water ingress
+  Limescale / Lime scale / Scale / Scaling / Scale build-up / Ingrained dirt
+
+Metal defects:
+  Rust / Rusted / Rusty / Rusting / Corrosion / Corroded / Corroding / Tarnished / Tarnishing / Pitting / Pitted
+
+Hardware / fitting defects:
+  Loose / Slightly loose / Very loose / Coming loose
+  Tight / Stiff / Sticky / Binding / Catching / Difficult to operate / Sticking / Stuck / Seized / Jammed
+  Missing / Absent / Not present
+  Broken / Snapped / Fractured / Shattered
+  Bent / Misaligned / Off-square / Dropped / Dropped hinge
+  Rattling / Rattle / Squeaking / Squeak / Creaking / Creak / Damaged / Worn / Heavily worn
+
+Grout & silicone:
+  Cracked grout / Missing grout / Discoloured grout / Mouldy grout
+  Failed silicone / Cracked silicone / Discoloured silicone / Mouldy silicone / Deteriorating silicone
+
+Functional observations (always condition, never description):
+  Tested / Tested for power / Tested for function / Tested and working / Working / Not working
+  Appears working / Appears complete / Appear complete / Appears functional / Operated / Does not operate
+  Note / Noted / Please note / Worth noting
+"""
+
+_DESCRIPTION_VOCABULARY = """
+══════════════════════════════════════════════════════
+DESCRIPTION VOCABULARY — recognised terms by item type
+══════════════════════════════════════════════════════
+Use this as a reference to correctly parse description content.
+Always use the clerk's exact words — this list shows what typical descriptions contain.
+
+DOORS & FRAMES:
+  white painted / painted / stained / varnished / lacquered / natural / bare wood / MDF / solid wood /
+  hollow core / pine / oak / hardwood / softwood / composite / fire door / FD30 / FD60 /
+  flush / panelled / two-panel / four-panel / six-panel / glazed / part-glazed / frosted glass /
+  half-glazed / fully glazed / stable door / bi-fold / sliding / French doors / double door / single door /
+  architrave / door frame / door lining / door stop / threshold / draught excluder / UPVC frame /
+  timber frame / aluminium frame
+
+DOOR FITTINGS:
+  lever handle / knob handle / D-handle / pull handle / bar handle / chrome / brushed chrome /
+  satin chrome / brushed nickel / brass / antique brass / gold / black / pewter / white / stainless steel /
+  latch / deadlock / mortice lock / rim lock / night latch / Yale lock / multipoint lock /
+  euro cylinder / thumb turn / bathroom lock / WC lock / privacy lock /
+  barrel bolt / flush bolt / security bolt / chain / door chain / door knob / escutcheon /
+  kicking plate / kick plate / finger plate / push plate / self-closing mechanism /
+  magnetic catch / roller catch / ball catch
+
+CEILING:
+  smooth plaster / plastered / artex / textured / Artex / coving / cornicing / cornice / ceiling rose /
+  polystyrene tiles / suspended / plasterboard / painted / white / cream / emulsion /
+  loft hatch / loft access / trap door / attic hatch / access panel / bulkhead / boxed-in /
+  recessed / flat / vaulted / sloped / pitched / slanted
+
+LIGHTING:
+  pendant light / pendant fitting / ceiling light / ceiling fitting / light fitting / wall light /
+  spotlight / recessed spotlight / recessed light / downlight / batten light / strip light /
+  fluorescent light / LED strip / track lighting / chandelier / lantern / reading light /
+  PIR light / motion sensor light / lampshade / shade / diffuser / glass shade / fabric shade /
+  drum shade / globe / flex / rose / pull cord / dimmer switch / bulb / LED bulb /
+  bayonet / BC / screw fit / GU10 / halogen
+
+WALLS:
+  painted / emulsion / matt emulsion / silk emulsion / satin / gloss / painted plaster /
+  wallpaper / patterned wallpaper / plain wallpaper / woodchip / vinyl wallpaper /
+  feature wall / tiled / part-tiled / panelled / tongue and groove / wainscot /
+  dado rail / picture rail / artex / textured finish / smooth plaster / dry-lined / skim coat /
+  white / cream / magnolia / off-white / grey / light grey / beige / neutral
+
+WINDOWS & FRAMES:
+  UPVC / timber / softwood / hardwood / oak / pine / aluminium / steel / composite /
+  painted / white / brown / anthracite / grey / black / natural / stained / varnished /
+  double glazed / triple glazed / single glazed / obscure / frosted / safety glass / toughened glass /
+  sealed unit / misted unit / Georgian bar / leaded glass /
+  handle / espagnolette handle / locking handle / sash lock / cockspur handle /
+  stay / casement stay / sash lift / friction stay / trickle vent / ventilator /
+  casement / sash / sash and case / tilt and turn / bay window / bow window /
+  skylight / Velux / roof light / dormer / fixed light / transom / fanlight
+
+CURTAINS & BLINDS:
+  curtain / curtains / pair of curtains / single curtain / tab top / eyelet / pencil pleat /
+  pinch pleat / ring top / voile / net curtain / lining / unlined / blackout / thermal /
+  curtain rail / curtain pole / wooden pole / metal pole / chrome pole / track / pelmet /
+  valance / bay pole / fascia / finial / bracket / ring / runner /
+  roller blind / Roman blind / Venetian blind / vertical blind / pleated blind / cellular blind /
+  blackout blind / wooden blind / timber blind / aluminium blind / fabric blind /
+  fabric / linen / cotton / polyester / velvet / patterned / plain / striped / floral
+
+HEATING:
+  radiator / panel radiator / column radiator / towel radiator / heated towel rail /
+  ladder towel rail / single panel / double panel / single convector / double convector /
+  compact radiator / low surface temperature / LST radiator /
+  TRV / thermostatic radiator valve / lock shield valve / wheelhead / manual valve /
+  electric panel heater / storage heater / underfloor heating / UFH / thermostat /
+  combi boiler / water cylinder / pressurised cylinder / immersion heater /
+  boiler cupboard / airing cupboard / room thermostat / Hive / Nest / smart thermostat
+
+BUILT-IN STORAGE:
+  fitted wardrobe / built-in wardrobe / wardrobe / sliding wardrobe / sliding door wardrobe /
+  fitted cupboard / built-in cupboard / alcove cupboard / understairs cupboard / airing cupboard /
+  larder cupboard / pantry / linen cupboard / fitted shelving / alcove shelving / fitted bookcase /
+  shelf / shelves / hanging rail / hanging space / rail / hook / hooks / drawer / drawers /
+  sliding door / mirrored door / mirror door / internal light / basket / wire basket / divider /
+  white / painted / MDF / pine / gloss / matt / mirror / mirrored / smoked mirror / glass
+
+SWITCHES & SOCKETS:
+  single socket / double socket / twin socket / USB socket / USB-A / USB-C /
+  coaxial socket / TV aerial socket / telephone socket / data socket / ethernet socket /
+  satellite socket / shaver socket / shaver point /
+  light switch / single switch / double switch / dimmer switch / timer switch /
+  pull cord / ceiling pull cord / isolator switch / extractor fan switch / fused spur /
+  consumer unit / fuse box / MCB / RCD / RCBO / circuit breaker / fuse board /
+  electric meter / gas meter / smart meter /
+  white / chrome / brushed chrome / nickel / brushed nickel / brass / black / stainless steel / flat plate
+
+WOODWORK:
+  skirting board / skirting / architrave / door architrave / window board / window sill /
+  window reveal / dado rail / picture rail / coving / cornice / beading / ovolo / torus /
+  ogee / bullnose / half-round / chamfered / pencil round / quad / Scotia / batten /
+  shelf / shelving / mantelpiece / mantel / chimney breast / fireplace surround /
+  painted / gloss / satinwood / eggshell / primer / undercoat / white / cream /
+  wood-stained / varnished / natural / bare / stripped / MDF / pine / hardwood
+
+FLOORING:
+  carpet / fitted carpet / carpet tile / laminate / laminate flooring / engineered wood /
+  engineered hardwood / solid hardwood / parquet / parquet flooring / herringbone /
+  luxury vinyl tile / LVT / vinyl / sheet vinyl / safety vinyl /
+  ceramic tile / floor tile / porcelain tile / encaustic tile / quarry tile / stone tile /
+  slate / travertine / marble / natural stone / resin / polished concrete /
+  underlay / gripper rod / threshold / door bar / transition strip / metal threshold /
+  silver threshold / brass threshold / inlay / border / rug / mat / doormat
+
+FURNITURE:
+  bed / single bed / double bed / king size bed / super king bed / divan / bed frame / headboard /
+  ottoman / chest of drawers / dressing table / bedside table / bedside cabinet / wardrobe /
+  free-standing wardrobe / mirror / full-length mirror / blanket box / bunk bed /
+  sofa / two-seater sofa / three-seater sofa / corner sofa / L-shaped sofa /
+  armchair / chair / recliner / footstool / coffee table / side table / occasional table /
+  TV unit / media unit / entertainment unit / bookcase / shelving unit / sideboard /
+  display cabinet / dining table / dining chair / dining set / desk / office chair / filing cabinet /
+  coat rack / coat stand / hat stand / umbrella stand / picture / artwork / print / clock /
+  wood / solid wood / pine / oak / walnut / beech / MDF / painted / lacquered /
+  upholstered / fabric / leather / faux leather / velvet / rattan / wicker / metal / steel / glass
+
+SINK & TAPS:
+  ceramic sink / stainless steel sink / butler sink / Belfast sink / farmhouse sink /
+  single bowl sink / double bowl sink / 1.5 bowl sink / inset sink / undermount sink /
+  drainer / draining board / integral draining board / waste / plug hole /
+  kitchen tap / mixer tap / single lever tap / two-handle tap / pillar tap / monobloc tap /
+  pullout tap / spray tap / boiling water tap / filter tap / Quooker /
+  Grohe / Hansgrohe / Franke / Armitage Shanks /
+  chrome / brushed chrome / brushed nickel / black / brushed brass / gold / gunmetal / white
+
+KITCHEN WALL UNITS:
+  wall unit / wall cabinet / wall cupboard / eye-level unit / larder unit /
+  single door wall unit / double door wall unit / corner wall unit / glass door unit /
+  display unit / wine rack / plate rack / open shelf unit /
+  shelf / shelves / door / doors / glass door / soft-close hinge / bar handle / knob /
+  integrated handle / push-to-open / push latch
+
+KITCHEN BASE UNITS:
+  base unit / base cabinet / floor unit / cupboard / larder unit / larder cupboard /
+  pan drawer / drawer pack / three-drawer pack / four-drawer pack / corner base unit /
+  pull-out unit / carousel / lazy Susan / sink unit / hob unit / tall unit / tower unit /
+  oven housing / oven tower / pantry unit / integrated appliance unit /
+  shelf / shelves / door / doors / drawer / drawers / soft-close drawer / soft-close door /
+  bar handle / D-handle / knob / integrated handle / push-to-open /
+  gloss / matt / satin / handleless / shaker / slab / in-frame / painted /
+  white / grey / cream / navy / sage green / blue / black / walnut effect / oak effect / high gloss /
+  plinth / kickboard / kick board / toe kick / plinth panel /
+  white carcass / grey carcass / birch carcass
+
+WORKTOPS:
+  laminate worktop / laminate / solid wood worktop / oak worktop / beech worktop / walnut worktop /
+  bamboo worktop / granite worktop / granite / marble worktop / marble /
+  quartz worktop / quartz / Corian / solid surface / composite worktop /
+  ceramic worktop / porcelain worktop / stainless steel worktop / compact laminate /
+  upstand / splashback / matching upstand / worktop upstand /
+  square edge / post-formed edge / bullnose edge / bevelled edge / waterfall edge / mitre joint / end cap
+
+SMOKE ALARMS:
+  smoke alarm / smoke detector / optical smoke alarm / ionisation smoke alarm /
+  heat alarm / heat detector / combined smoke and heat alarm / interlinked alarm /
+  mains-powered alarm / battery-powered alarm / sealed battery alarm / 10-year alarm /
+  Aico / Kidde / FireAngel / BRK / First Alert / Nest Protect / Google Nest /
+  Honeywell / Hochiki / EI Electronics / ESP / Ei650 / Ei3016
+
+CARBON MONOXIDE ALARMS:
+  carbon monoxide alarm / CO alarm / CO detector / carbon monoxide detector /
+  combined smoke and CO alarm / interlinked CO alarm / mains CO alarm / battery CO alarm /
+  Aico / Kidde / FireAngel / BRK / First Alert / Nest Protect / Google Nest /
+  Honeywell / Ei208 / Ei3018
+
+WASH BASINS:
+  wash basin / basin / pedestal basin / hand basin / semi-pedestal basin /
+  wall-mounted basin / countertop basin / vessel basin / inset basin / undermount basin /
+  corner basin / cloakroom basin / small basin /
+  ceramic / vitreous china / china / white /
+  basin tap / mixer tap / monobloc / pillar tap / single lever / waterfall tap /
+  pop-up waste / plug and chain waste / slotted waste / overflow /
+  Grohe / Hansgrohe / Armitage Shanks / Ideal Standard / Roca / Duravit / Villeroy & Boch /
+  pedestal / half pedestal / cloakroom shelf / vanity unit / mirror cabinet
+
+TOILETS:
+  toilet / WC / close coupled WC / back to wall WC / wall-hung WC / wall-hung toilet /
+  floor-standing WC / low-level WC / high-level WC /
+  concealed cistern / slimline cistern / compact WC / cloakroom WC /
+  cistern / pan / seat / seat and cover / soft-close seat / quick-release seat /
+  flush button / dual flush / flush plate / flush handle / flush lever / overflow pipe /
+  Ideal Standard / Armitage Shanks / Roca / Duravit / Villeroy & Boch /
+  RAK Ceramics / Geberit / Grohe / Hansgrohe / VitrA /
+  white / cream / ceramic / vitreous china
+
+BATH & TAPS:
+  bath / bathtub / roll top bath / freestanding bath / slipper bath / straight bath /
+  single-ended bath / double-ended bath / P-shaped bath / L-shaped bath / corner bath /
+  whirlpool bath / shower bath / bath panel / side panel / end panel /
+  bath tap / bath taps / bath mixer / bath filler / floor-standing bath tap /
+  wall-mounted bath tap / overflow filler / deck-mounted / freestanding tap / pillar tap /
+  shower handset / bath shower mixer / shower attachment / telephone handset /
+  acrylic / steel enamel / cast iron / stone resin / solid surface /
+  Ideal Standard / Armitage Shanks / Carron / Trojan / BC Designs / Victoria and Albert /
+  Duravit / Villeroy & Boch / Roca / Hudson Reed / Grohe / Hansgrohe / Crosswater
+
+SHOWER & SCREENS:
+  shower enclosure / shower cubicle / walk-in shower / walk-in enclosure /
+  wet room / corner shower / quadrant shower / offset quadrant / rectangular enclosure /
+  pivot door / sliding door / hinged door / bi-fold door / frameless / semi-frameless / framed /
+  shower tray / stone resin tray / acrylic tray / ceramic tray / low-profile tray /
+  flush tray / wetroom former / linear drain / central drain /
+  shower screen / bath screen / fixed screen / folding screen / hinged screen /
+  shower head / fixed head / rainfall head / ceiling-mounted head / handset / shower handset /
+  hose / slide rail / shower bar / thermostatic valve / thermostatic shower /
+  mixer shower / electric shower / digital shower / smart shower /
+  Mira / Triton / Aqualisa / Grohe / Hansgrohe / Crosswater / Hudson Reed /
+  Matki / Lakes / Kudos / Roman / Daryl / Bristan / Roca / Ideal Standard / Merlyn / April
+
+APPLIANCES (built-in & free-standing):
+  oven / built-in oven / single oven / double oven / multifunction oven /
+  fan oven / electric oven / gas oven / pyrolytic oven / steam oven / warming drawer /
+  hob / gas hob / electric hob / induction hob / ceramic hob / solid plate hob /
+  four burner / five burner / six burner / gas burner / burner / zone / ring /
+  extractor / extractor fan / cooker hood / chimney hood / island hood /
+  integrated extractor / canopy / air recirculation / ducted / carbon filter / grease filter /
+  dishwasher / integrated dishwasher / freestanding dishwasher / slimline dishwasher /
+  washing machine / integrated washing machine / washer-dryer / tumble dryer /
+  condenser dryer / heat pump dryer / vented dryer / integrated dryer /
+  fridge / refrigerator / fridge-freezer / American fridge-freezer / freezer /
+  chest freezer / larder fridge / wine cooler / wine fridge / integrated fridge /
+  integrated fridge-freezer / integrated freezer / under-counter fridge /
+  microwave / combination microwave / grill microwave / built-in microwave /
+  integrated coffee machine / plate warmer /
+  Bosch / Siemens / Samsung / LG / Hotpoint / Indesit / Beko / Zanussi /
+  AEG / Miele / Neff / Whirlpool / Smeg / Rangemaster / Lacanche / Falcon / Aga / Rayburn /
+  Fisher & Paykel / Haier / Hisense / Electrolux / Liebherr / Sub-Zero / Wolf / Viking /
+  Gaggenau / Bauknecht / Candy / Hoover / Stoves / Britannia / Leisure / Blomberg / Lamona /
+  Baumatic / Bertazzoni / CDA
+
+SMALL APPLIANCES:
+  kettle / toaster / air fryer / blender / food processor / coffee machine / espresso machine /
+  Nespresso / Dolce Gusto / stand mixer / hand mixer / hand blender / stick blender /
+  bread maker / rice cooker / slow cooker / instant pot / pressure cooker / steamer /
+  juicer / smoothie maker / sandwich maker / griddle / waffle maker / deep fat fryer /
+  electric grill / health grill / George Foreman / vacuum cleaner / steam cleaner / steam mop /
+  robot vacuum / iron / steam iron / clothes steamer / fan / tower fan / pedestal fan / desk fan /
+  oil-filled radiator / fan heater / dehumidifier / air purifier / humidifier /
+  Kenwood / Breville / Dualit / Russell Hobbs / DeLonghi / KitchenAid / Dyson / Shark /
+  Morphy Richards / Tefal / Philips / Braun / Sage / Nutribullet / Vitamix / Magimix / Cuisinart
+
+BATHROOM ACCESSORIES:
+  towel rail / towel ring / towel bar / robe hook / coat hook /
+  toilet roll holder / toothbrush holder / soap dish / soap dispenser /
+  shower basket / corner shelf / glass shelf / mirror / bathroom mirror / medicine cabinet /
+  shaver socket / shaver light / extractor fan / bathroom cabinet / vanity unit /
+  under-sink unit / toilet brush / toilet brush holder /
+  chrome / brushed chrome / nickel / brushed nickel / brass / antique brass /
+  black / gunmetal / gold / white / stainless steel
+"""
+
+
 # ── Edit-mode detection ────────────────────────────────────────────────────
 # Clerks can prefix a recording with trigger phrases to amend existing fields
 # rather than filling only-if-empty.
@@ -352,13 +675,25 @@ Return ONLY valid JSON, no markdown:
 Extract description and condition from the transcript exactly as you would for a normal item,
 then return the result inside a "_subs" array with a single entry.
 
-Condition signal phrases: "in good order", "in fair order", "in poor order", "good order", "as new", "as inventory"
-Functional observations ("appear complete", "tested", "appears working") are always condition.
+Condition signal phrases — everything from the first match onwards is CONDITION, not description:
+  State:   "in good order", "in fair order", "in poor order", "good order", "as new", "as inventory"
+  Defect:  "loose", "slightly loose", "tight", "stiff", "sticky", "missing", "broken",
+           "light scuffing", "light marking", "light scratching", "light staining",
+           "chipped", "cracked", "scratched", "damaged", "worn", "faded",
+           "rattling", "squeaking", "bent", "rusted"
+  Functional: "tested", "appears working", "appear complete", "appears"
+
+Defect words are ALWAYS condition even when they appear without a preceding "in … order" phrase.
+  Example: "chrome doorstop, slightly loose"
+    → description: "Chrome doorstop"   condition: "Slightly loose"
+  Example: "white door handle, missing screw"
+    → description: "White door handle"   condition: "Missing screw"
+
 If no condition is mentioned, default condition to "In good order".
 Use \n to separate multiple components within description or condition.
 
 Return ONLY valid JSON, no markdown:
-{"_subs": [{"description": "...", "condition": "In good order"}]}"""
+{"_subs": [{"description": "...", "condition": "..."}]}"""
         else:
             field_instructions = """Extract and structure this into:
 - description: the physical appearance (material, colour, size, style, finish)
@@ -404,7 +739,7 @@ MULTI-COMPONENT FORMATTING:
     CORRECT:   "In good order\\nLight indentations to tiles\\nLight wear to carpet"
     INCORRECT: "In good order, light indentations to tiles, light wear to carpet"
 - When in doubt: if you'd use a comma between two ideas, use \\n instead
-
+""" + _CONDITION_WORDS + """
 Return ONLY valid JSON, no markdown:
 {"description": "...", "condition": "..."}"""
 
@@ -1016,6 +1351,8 @@ CONDITION SIGNAL PHRASES — these close the current element's description:
   Defect phrases: "light scuffing", "light scratching", "light marking", "light staining",
                   "chipped", "cracked", "stained", "marked", "damaged", "worn", "faded",
                   "scratched", "some wear", "fair wear and tear",
+                  "loose", "slightly loose", "tight", "stiff", "sticky", "missing",
+                  "broken", "rattling", "squeaking", "bent", "rusted", "corroded",
                   "scuff to", "chip to", "crack to", "stain to", "mark to", "scratch to"
 
 ══════════════════════════════════════════════════════
@@ -1037,6 +1374,33 @@ They tell you WHERE the defect is. They are NEVER the start of a new element.
 
 A new element ONLY starts when a NEW DESCRIPTIVE TERM appears (material, colour, surface,
 quantity) AFTER the condition has fully closed.
+
+══════════════════════════════════════════════════════
+STRICT CHAPTER HEADING RULE — prevents content bleeding between items
+══════════════════════════════════════════════════════
+A chapter heading switch can ONLY occur at the START of a new passage — when the clerk
+says an item name as a STANDALONE utterance AFTER the previous item's description and
+condition have both been fully assigned.
+
+Words matching another item's name that appear WITHIN an item's description or condition
+are NEVER treated as a chapter heading switch. They are content for the CURRENT item only.
+
+  ✓ CORRECT: "Built-in storage. White painted door and frame, in good order."
+      → Built-in storage: description="White painted door and frame"  condition="In good order"
+      → "door and frame" is part of the Built-in storage description.
+        It does NOT open the "Door & Frame" item, even though those words appear in the item list.
+
+  ✗ WRONG: treating "door and frame" inside a Built-in storage passage as a heading for
+      the separate "Door & Frame" item — this bleeds content into the wrong item.
+
+  ✓ CORRECT: "Built-in storage. White painted door and frame, in good order.
+              Door and frame. White painted timber door. In good order."
+      → The second "Door and frame" opens a CLEARLY ISOLATED new passage after Built-in
+        storage's condition has closed — this correctly switches to the Door & Frame item.
+
+The test: an item name is only a chapter heading when it is the FIRST content after a
+condition fully closes (or the very start of the transcript). Any item-name words
+encountered before that point stay inside the current item's content.
 
 ══════════════════════════════════════════════════════
 NOT APPLICABLE — delete command
@@ -1162,9 +1526,17 @@ The clerk may amend or extend an already-described item using these commands:
   "Return to [item name], add to condition, [new text]"
   "Return to [item name], amend, [new text]"  — overwrite both fields
   "Return to [item name], add, [new text]"    — append to both fields
-  "Return to [item name], add sub-item [description and condition]"
+  "Return to [item name], add sub item [description and condition]"   (also accepted: "add sub-item")
       → creates a new _subs entry on the named item; parse description/condition using the
          same sub-item rules. Do NOT include _descAction or _condAction — only output _subs.
+      → For the sub-item content, split description from condition using the same condition
+         signal phrases listed above — including defect words such as "loose", "broken",
+         "missing", "stiff", "tight" etc. which are always condition, not description.
+
+  Example: "Return to Contents, add sub item, chrome doorstop, slightly loose."
+    → Locate the item named "Contents" and append a sub-item:
+       _subs: [{{"description": "Chrome doorstop", "condition": "Slightly loose"}}]
+    ("slightly loose" is a defect observation → condition, not description)
 
 When you detect any amendment phrase, include these optional action flags in that item's JSON:
   "_descAction": "overwrite"  → caller will replace the existing description
@@ -1175,6 +1547,9 @@ When you detect any amendment phrase, include these optional action flags in tha
 If no amendment phrase — omit the action flags entirely (default behaviour = fill only if empty).
 "Amend [item]" with no field specified → set BOTH _descAction and _condAction to "overwrite".
 "Add to [item]" with no field specified → set BOTH _descAction and _condAction to "append".
+
+{_CONDITION_WORDS}
+{_DESCRIPTION_VOCABULARY}
 
 Return ONLY valid JSON — no markdown, no extra text.
 Items without sub-items use the flat shape. Items WITH sub-items include the "_subs" array.

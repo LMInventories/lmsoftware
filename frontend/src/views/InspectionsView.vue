@@ -1,9 +1,10 @@
 <script setup>
-import { ref, onMounted, computed, watch } from 'vue'
+import { ref, onMounted, computed, watch, watchEffect } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import api from '../services/api'
 import { useToast } from '../composables/useToast'
 import { useAuthStore } from '../stores/auth'
+import { usePdfImportJobs } from '../composables/usePdfImportJobs'
 import FullCalendar from '@fullcalendar/vue3'
 
 const toast = useToast()
@@ -197,6 +198,16 @@ const pdfImportParsed      = ref(null)   // { rooms, fixedSections }
 const pdfImportError       = ref('')
 const pdfImportSaving      = ref(false)
 const pdfImportParsing     = ref(false)
+const pdfImportJobKey      = ref('')          // local key for composable tracking (no inspection yet)
+const pdfImportFullTemplate = ref(null)        // fetched template with sections/items
+const pdfRoomMapping       = ref({})           // pdfRoomName → templateSectionId | 'new'
+const pdfImportJobs        = usePdfImportJobs()
+
+const templateRoomSections = computed(() =>
+  pdfImportFullTemplate.value
+    ? (pdfImportFullTemplate.value.sections || []).filter(s => s.section_type === 'room')
+    : []
+)
 
 function openPdfImportModal() {
   pdfImportStep.value = 1
@@ -214,6 +225,9 @@ function openPdfImportModal() {
   pdfImportError.value = ''
   pdfImportSaving.value = false
   pdfImportParsing.value = false
+  pdfImportJobKey.value = ''
+  pdfImportFullTemplate.value = null
+  pdfRoomMapping.value = {}
   showPdfImportModal.value = true
 }
 
@@ -373,38 +387,92 @@ async function runPdfImportParse() {
   if (!pdfImportFile.value) { toast.warning('Please select a PDF file'); return }
   pdfImportParsing.value = true
   pdfImportError.value = ''
+  pdfImportFullTemplate.value = null
+
+  // Generate a unique local key for tracking this job (no inspection ID yet)
+  pdfImportJobKey.value = Date.now().toString(36) + Math.random().toString(36).slice(2)
+
   try {
-    // POST the PDF — returns a job_id immediately (background thread does the work)
-    const startRes = await api.pdfImport(pdfImportFile.value)
-    const jobId = startRes.data.job_id
+    // Fetch template structure so the AI knows exactly which rooms/items to map to
+    let templateStructure = null
+    const tid = pdfImportForm.value.template_id
+    if (tid) {
+      try {
+        const tRes = await api.getTemplate(tid)
+        pdfImportFullTemplate.value = tRes.data
+        const rooms = (tRes.data.sections || [])
+          .filter(s => s.section_type === 'room')
+          .map(s => ({
+            id: s.id,
+            name: s.name,
+            items: (s.items || []).map(i => ({ id: i.id, name: i.name })),
+          }))
+        if (rooms.length) templateStructure = JSON.stringify(rooms)
+      } catch {
+        // Continue without template — AI will still extract rooms/items
+      }
+    }
+
+    // POST the PDF — background thread does the AI work, returns job_id immediately
+    const startRes = await api.pdfImport(pdfImportFile.value, templateStructure)
+    const jobId = startRes.data?.job_id
     if (!jobId) throw new Error('No job ID returned from server')
 
-    // Poll every 2 seconds until done
-    const MAX_POLLS = 150  // 5 minutes max
-    for (let i = 0; i < MAX_POLLS; i++) {
-      await new Promise(r => setTimeout(r, 2000))
-      const statusRes = await api.pdfImportStatus(jobId)
-      const { status, result, error } = statusRes.data
-
-      if (status === 'done') {
-        pdfImportParsed.value = result
-        pdfImportParsed.value._fileName = pdfImportFileName.value
-        pdfImportStep.value = 3
-        return
-      }
-      if (status === 'error') throw new Error(error || 'AI parsing failed')
-      if (status === 'not_found') throw new Error('Job expired — please try again')
-      // status === 'processing' — keep polling
-    }
-    throw new Error('Timed out waiting for AI — please try again')
+    // Register with the singleton composable — polling happens globally
+    pdfImportJobs.registerJob(jobId, pdfImportJobKey.value, pdfImportFileName.value)
+    toast.info('PDF is being analysed in the background — we\'ll update this screen when it\'s ready.', 6000)
+    // pdfImportParsing stays true; watchEffect below advances to step 3 on completion
 
   } catch (e) {
     console.error('PDF parse error:', e)
-    pdfImportError.value = 'AI parsing failed: ' + (e.message || 'unknown error')
-  } finally {
+    pdfImportError.value = 'Failed to start PDF analysis: ' + (e.message || 'unknown error')
     pdfImportParsing.value = false
   }
 }
+
+// When the background job completes, advance to step 3 and build room mappings
+watchEffect(() => {
+  if (!pdfImportJobKey.value) return
+  const completed = pdfImportJobs.getCompletedJob(pdfImportJobKey.value)
+  if (!completed) return
+
+  pdfImportJobs.clearCompletedJob(pdfImportJobKey.value)
+  pdfImportParsed.value = completed.result
+  if (pdfImportParsed.value) pdfImportParsed.value._fileName = completed.filename
+  pdfImportParsing.value = false
+  buildInitialRoomMapping()
+  pdfImportStep.value = 3
+})
+
+function buildInitialRoomMapping() {
+  if (!pdfImportParsed.value) return
+  const sections = templateRoomSections.value
+  const normalise = s => s.toLowerCase().replace(/[^a-z0-9]/g, '')
+  const mapping = {}
+
+  for (const pdfRoom of (pdfImportParsed.value.rooms || [])) {
+    const pdfNorm = normalise(pdfRoom.name)
+    // Exact match first, then partial containment
+    let best = sections.find(s => normalise(s.name) === pdfNorm)
+    if (!best) {
+      best = sections.find(s => {
+        const tn = normalise(s.name)
+        return tn.includes(pdfNorm) || pdfNorm.includes(tn)
+      })
+    }
+    mapping[pdfRoom.name] = best ? String(best.id) : 'new'
+  }
+  pdfRoomMapping.value = mapping
+}
+
+// Which template section IDs have more than one PDF room pointing at them (merge candidates)
+const mergedSections = computed(() => {
+  const counts = {}
+  for (const secId of Object.values(pdfRoomMapping.value)) {
+    if (secId && secId !== 'new') counts[secId] = (counts[secId] || 0) + 1
+  }
+  return counts  // secId → count of rooms mapping to it
+})
 
 async function savePdfImportInspection() {
   if (!pdfImportForm.value.property_id) { toast.warning('Please select a property'); return }
@@ -426,7 +494,12 @@ async function savePdfImportInspection() {
     const newId = createRes.data?.id || createRes.data?.inspection?.id
 
     if (pdfImportParsed.value && newId) {
-      await api.applyPdfImport(newId, pdfImportParsed.value)
+      // Build explicit room mapping array from the user's selections
+      const roomMappings = Object.entries(pdfRoomMapping.value).map(([pdfRoomName, templateSectionId]) => ({
+        pdfRoomName,
+        templateSectionId: templateSectionId === 'new' ? null : parseInt(templateSectionId, 10),
+      }))
+      await api.applyPdfImport(newId, { ...pdfImportParsed.value, roomMappings })
     }
 
     toast.success('Backdated Check In created successfully')
@@ -1516,29 +1589,52 @@ onMounted(() => {
             </div>
           </div>
 
-          <!-- Step 3: Review & Save -->
+          <!-- Step 3: Room Mapping & Save -->
           <div v-if="pdfImportStep === 3 && pdfImportParsed">
-            <div class="pdf-review-summary">
-              <div class="pdf-review-stat">
-                <span class="pdf-review-num">{{ pdfImportParsed.rooms?.length || 0 }}</span>
-                <span class="pdf-review-lbl">Rooms found</span>
+            <div class="pdf-mapping-header">
+              <div class="pdf-mapping-stats">
+                <span class="pdf-mapping-stat-badge">{{ pdfImportParsed.rooms?.length || 0 }} rooms</span>
+                <span class="pdf-mapping-stat-badge">{{ pdfImportParsed.rooms?.reduce((n, r) => n + (r.items?.length || 0), 0) || 0 }} items</span>
               </div>
-              <div class="pdf-review-stat">
-                <span class="pdf-review-num">{{ pdfImportParsed.rooms?.reduce((n, r) => n + (r.items?.length || 0), 0) || 0 }}</span>
-                <span class="pdf-review-lbl">Items extracted</span>
-              </div>
-              <div class="pdf-review-stat">
-                <span class="pdf-review-num">{{ Object.keys(pdfImportParsed.fixedSections || {}).length }}</span>
-                <span class="pdf-review-lbl">Fixed sections</span>
+              <p class="pdf-mapping-intro">
+                Match each PDF room to a room in your template.
+                <template v-if="!templateRoomSections.length">
+                  <em>No template selected — all rooms will be imported as new rooms.</em>
+                </template>
+              </p>
+            </div>
+
+            <div class="pdf-room-map-list">
+              <div
+                v-for="room in (pdfImportParsed.rooms || [])"
+                :key="room.name"
+                class="pdf-room-map-row"
+                :class="{ 'pdf-room-map-merging': mergedSections[pdfRoomMapping[room.name]] > 1 }"
+              >
+                <div class="pdf-room-map-left">
+                  <div class="pdf-room-map-name">{{ room.name }}</div>
+                  <div class="pdf-room-map-count">{{ room.items?.length || 0 }} item{{ room.items?.length === 1 ? '' : 's' }}</div>
+                </div>
+                <div class="pdf-room-map-arrow">→</div>
+                <div class="pdf-room-map-right">
+                  <select v-model="pdfRoomMapping[room.name]" class="pdf-room-map-select input-field">
+                    <option value="new">＋ Import as new room</option>
+                    <option
+                      v-for="sec in templateRoomSections"
+                      :key="sec.id"
+                      :value="String(sec.id)"
+                    >{{ sec.name }}</option>
+                  </select>
+                  <span
+                    v-if="mergedSections[pdfRoomMapping[room.name]] > 1"
+                    class="pdf-merge-badge"
+                    :title="`${mergedSections[pdfRoomMapping[room.name]]} rooms will be merged into this section`"
+                  >⟺ Merge</span>
+                </div>
               </div>
             </div>
-            <div class="pdf-review-rooms">
-              <div v-for="room in (pdfImportParsed.rooms || [])" :key="room.name" class="pdf-review-room">
-                <div class="pdf-review-room-name">{{ room.name }}</div>
-                <div class="pdf-review-items">{{ room.items?.length || 0 }} items</div>
-              </div>
-            </div>
-            <p class="pdf-review-note">✓ Review looks correct? Click Save to create the backdated Check In with this data.</p>
+
+            <p class="pdf-review-note" style="margin-top:12px">✓ Adjust the mappings above, then save.</p>
             <div class="modal-footer">
               <button type="button" @click="pdfImportStep = 2" class="btn-secondary" :disabled="pdfImportSaving">← Re-upload</button>
               <button type="button" @click="savePdfImportInspection" :disabled="pdfImportSaving" class="btn-primary">
@@ -2729,5 +2825,69 @@ onMounted(() => {
   color: #b45309;
   margin: 5px 0 0 23px;
   line-height: 1.4;
+}
+
+/* ── Step 3 room-mapping UI ──────────────────────────────────────────────── */
+.pdf-mapping-header { margin-bottom: 12px; }
+.pdf-mapping-stats  { display: flex; gap: 8px; margin-bottom: 8px; }
+.pdf-mapping-stat-badge {
+  background: #ede9fe;
+  color: #4f46e5;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 9px;
+  border-radius: 20px;
+  letter-spacing: 0.3px;
+}
+.pdf-mapping-intro {
+  font-size: 12px;
+  color: #64748b;
+  margin: 0;
+  line-height: 1.5;
+}
+.pdf-room-map-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.pdf-room-map-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+.pdf-room-map-left  { flex: 0 0 140px; min-width: 0; }
+.pdf-room-map-name  { font-size: 13px; font-weight: 700; color: #1e293b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pdf-room-map-count { font-size: 11px; color: #94a3b8; margin-top: 1px; }
+.pdf-room-map-arrow { flex-shrink: 0; font-size: 16px; color: #94a3b8; }
+.pdf-room-map-right { flex: 1; min-width: 0; }
+.pdf-room-map-select {
+  width: 100%;
+  font-size: 13px;
+  padding: 5px 8px;
+  margin: 0;
+}
+.pdf-room-map-merging {
+  background: #fefce8;
+  border-color: #fbbf24;
+}
+.pdf-merge-badge {
+  display: inline-block;
+  margin-top: 4px;
+  background: #fef3c7;
+  color: #92400e;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 20px;
+  border: 1px solid #fcd34d;
+  letter-spacing: 0.3px;
+  cursor: default;
 }
 </style>

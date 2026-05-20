@@ -1131,8 +1131,9 @@ def apply_pdf_import(inspection_id):
     if not parsed:
         return jsonify({'error': 'No parsed data provided'}), 400
 
-    pdf_rooms = parsed.get('rooms') or []
-    pdf_fixed = parsed.get('fixedSections') or {}
+    pdf_rooms    = parsed.get('rooms') or []
+    pdf_fixed    = parsed.get('fixedSections') or {}
+    room_mappings = parsed.get('roomMappings') or []   # [{pdfRoomName, templateSectionId|null}]
 
     # ── Resolve template (create from PDF if none assigned) ───────────────
     template = None
@@ -1143,38 +1144,127 @@ def apply_pdf_import(inspection_id):
         template = _build_template_from_pdf(pdf_rooms, inspection)
         inspection.template_id = template.id
 
-    # ── Build report_data keyed by real DB section/item IDs ───────────────
-    report_data = {}
+    # ── Build room-name → section lookup from explicit mappings ───────────
+    # room_mappings from frontend: [{pdfRoomName: str, templateSectionId: int|null}]
+    # templateSectionId=null means "import as new room"
+    explicit_map = {}   # pdf_room_name → TemplateSection | None-sentinel
+    for m in room_mappings:
+        rname = m.get('pdfRoomName', '')
+        sid   = m.get('templateSectionId')    # int or null
+        if rname:
+            if sid:
+                sec = next((s for s in template.sections if s.id == int(sid)), None)
+                explicit_map[rname] = sec  # None if not found — treat as new
+            else:
+                explicit_map[rname] = 'new'   # sentinel: import as-is
 
     db_room_sections = [s for s in template.sections if s.section_type == 'room']
 
+    # ── Build report_data keyed by real DB section/item IDs ───────────────
+    report_data = {}
+    _new_room_counter = 0   # for generating stable keys for unmapped rooms
+
     for pdf_room in pdf_rooms:
-        matched_sec = _fuzzy_match_section(pdf_room['name'], db_room_sections)
-        if not matched_sec:
-            continue
-        sec_key = str(matched_sec.id)
-        report_data[sec_key] = {}
-        for pdf_item in (pdf_room.get('items') or []):
-            matched_item = _fuzzy_match_item(pdf_item.get('label', ''), matched_sec.items)
-            if not matched_item:
-                continue
-            item_entry = {
-                'description': pdf_item.get('description') or '',
-                'condition':   pdf_item.get('condition')   or '',
+        room_name = pdf_room.get('name', '')
+
+        # Resolve the target section
+        if room_name in explicit_map:
+            target_sec = explicit_map[room_name]   # TemplateSection | 'new' | None
+        else:
+            # No explicit mapping — fall back to fuzzy match for backwards compat
+            target_sec = _fuzzy_match_section(room_name, db_room_sections)
+
+        if target_sec == 'new' or target_sec is None:
+            # Import as a free-form room — store under a stable generated key
+            # so the data isn't silently lost even if no template section matches
+            _new_room_counter += 1
+            sec_key = f'_imported_room_{_new_room_counter}'
+            report_data[sec_key] = {
+                '_name':    room_name,
+                '_isNew':   True,
             }
-            # Carry across sub-items (e.g. Contents list)
-            pdf_subs = pdf_item.get('_subs')
-            if isinstance(pdf_subs, list) and pdf_subs:
-                built_subs = []
-                for sub in pdf_subs:
-                    sid = 'sub_' + str(int(time.time() * 1000)) + '_' + ''.join(random.choices(string.ascii_lowercase, k=4))
-                    built_subs.append({
-                        '_sid':        sid,
-                        'description': sub.get('description') or '',
-                        'condition':   sub.get('condition')   or '',
-                    })
-                item_entry['_subs'] = built_subs
-            report_data[sec_key][str(matched_item.id)] = item_entry
+            for pdf_item in (pdf_room.get('items') or []):
+                item_key = 'item_' + str(int(time.time() * 1000)) + '_' + ''.join(random.choices(string.ascii_lowercase, k=4))
+                item_entry = {
+                    '_label':      pdf_item.get('label', ''),
+                    'description': pdf_item.get('description') or '',
+                    'condition':   pdf_item.get('condition')   or '',
+                }
+                report_data[sec_key][item_key] = item_entry
+            print(f'[apply-pdf-import] room "{room_name}" → new room ({sec_key})')
+            continue
+
+        # target_sec is a TemplateSection — map items into it
+        sec_key = str(target_sec.id)
+        if sec_key not in report_data:
+            report_data[sec_key] = {}
+
+        for pdf_item in (pdf_room.get('items') or []):
+            matched_item = _fuzzy_match_item(pdf_item.get('label', ''), target_sec.items)
+            if not matched_item:
+                # Store unmatched items as extras so data isn't silently lost
+                extra_key = '_extra_' + ''.join(random.choices(string.ascii_lowercase, k=6))
+                report_data[sec_key][extra_key] = {
+                    '_label':      pdf_item.get('label', ''),
+                    'description': pdf_item.get('description') or '',
+                    'condition':   pdf_item.get('condition')   or '',
+                }
+                continue
+
+            new_desc = (pdf_item.get('description') or '').strip()
+            new_cond = (pdf_item.get('condition')   or '').strip()
+            item_key  = str(matched_item.id)
+
+            if item_key in report_data[sec_key]:
+                # ── Merge into an already-populated item (rooms were merged) ──
+                existing = report_data[sec_key][item_key]
+                old_desc = (existing.get('description') or '').strip()
+                old_cond = (existing.get('condition')   or '').strip()
+
+                # Concatenate distinct values; skip if the incoming text is
+                # identical to (or contained in) what's already there.
+                if new_desc and new_desc not in old_desc:
+                    existing['description'] = (old_desc + '\n' + new_desc).strip() if old_desc else new_desc
+                if new_cond and new_cond not in old_cond:
+                    existing['condition'] = (old_cond + '\n' + new_cond).strip() if old_cond else new_cond
+
+                # Merge sub-items (append, deduplicate by description)
+                pdf_subs = pdf_item.get('_subs')
+                if isinstance(pdf_subs, list) and pdf_subs:
+                    existing_subs = existing.get('_subs') or []
+                    existing_descs = {s.get('description', '') for s in existing_subs}
+                    for sub in pdf_subs:
+                        sub_desc = sub.get('description', '')
+                        if sub_desc not in existing_descs:
+                            sid = 'sub_' + str(int(time.time() * 1000)) + '_' + ''.join(random.choices(string.ascii_lowercase, k=4))
+                            existing_subs.append({
+                                '_sid':        sid,
+                                'description': sub_desc,
+                                'condition':   sub.get('condition') or '',
+                            })
+                            existing_descs.add(sub_desc)
+                    if existing_subs:
+                        existing['_subs'] = existing_subs
+            else:
+                # First time we see this item — write directly
+                item_entry = {
+                    'description': new_desc,
+                    'condition':   new_cond,
+                }
+                pdf_subs = pdf_item.get('_subs')
+                if isinstance(pdf_subs, list) and pdf_subs:
+                    built_subs = []
+                    for sub in pdf_subs:
+                        sid = 'sub_' + str(int(time.time() * 1000)) + '_' + ''.join(random.choices(string.ascii_lowercase, k=4))
+                        built_subs.append({
+                            '_sid':        sid,
+                            'description': sub.get('description') or '',
+                            'condition':   sub.get('condition')   or '',
+                        })
+                    item_entry['_subs'] = built_subs
+                report_data[sec_key][item_key] = item_entry
+
+        print(f'[apply-pdf-import] room "{room_name}" → section {target_sec.id} ({target_sec.name})')
 
     # ── Fixed sections — keyed with the same IDs the frontend computes ────
     #

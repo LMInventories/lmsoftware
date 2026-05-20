@@ -1131,78 +1131,150 @@ def apply_pdf_import(inspection_id):
     if not parsed:
         return jsonify({'error': 'No parsed data provided'}), 400
 
-    pdf_rooms    = parsed.get('rooms') or []
-    pdf_fixed    = parsed.get('fixedSections') or {}
-    room_mappings = parsed.get('roomMappings') or []   # [{pdfRoomName, templateSectionId|null}]
+    pdf_rooms     = parsed.get('rooms') or []
+    pdf_fixed     = parsed.get('fixedSections') or {}
+    room_mappings = parsed.get('roomMappings') or []
+    # room_mappings: [{pdfRoomName: str, templateSectionId: int|null}]
+    # templateSectionId is the ID of a Section in *any* check-in template.
+    # null / missing → import as a free-form new room.
 
-    # ── Resolve template (create from PDF if none assigned) ───────────────
-    template = None
-    if inspection.template_id:
-        template = Template.query.get(inspection.template_id)
-
-    if not template:
-        template = _build_template_from_pdf(pdf_rooms, inspection)
-        inspection.template_id = template.id
-
-    # ── Build room-name → section lookup from explicit mappings ───────────
-    # room_mappings from frontend: [{pdfRoomName: str, templateSectionId: int|null}]
-    # templateSectionId=null means "import as new room"
-    explicit_map = {}   # pdf_room_name → TemplateSection | None-sentinel
+    # ── Resolve each PDF room to a source Section (from any template) ─────
+    # Build pdf_room_name → Section (or None for "new room")
+    source_section_map = {}   # pdf_room_name → Section | None
     for m in room_mappings:
         rname = m.get('pdfRoomName', '')
-        sid   = m.get('templateSectionId')    # int or null
-        if rname:
-            if sid:
-                sec = next((s for s in template.sections if s.id == int(sid)), None)
-                explicit_map[rname] = sec  # None if not found — treat as new
-            else:
-                explicit_map[rname] = 'new'   # sentinel: import as-is
+        sid   = m.get('templateSectionId')
+        if not rname:
+            continue
+        if sid:
+            sec = Section.query.options(selectinload(Section.items)).get(int(sid))
+            source_section_map[rname] = sec   # None if ID doesn't exist
+        else:
+            source_section_map[rname] = None   # explicit "new room"
 
-    db_room_sections = [s for s in template.sections if s.section_type == 'room']
+    # ── Build a composite template from the selected sections ─────────────
+    # Each selected Section is *copied* into a new template so the inspection
+    # has its own template record (consistent with existing patterns, renders correctly).
+    # Sections that map to the same source section are deduplicated.
 
-    # ── Build report_data keyed by real DB section/item IDs ───────────────
+    # Ordered list of unique source sections (preserving pdf_rooms order)
+    seen_src_ids = set()
+    ordered_src_sections = []   # (src_section | None, canonical_pdf_name)
+    new_room_names = []         # pdf room names with no template section
+    for pdf_room in pdf_rooms:
+        rname = pdf_room.get('name', '')
+        src   = source_section_map.get(rname, None)   # None → new room
+        if src is None:
+            new_room_names.append(rname)
+        elif src.id not in seen_src_ids:
+            seen_src_ids.add(src.id)
+            ordered_src_sections.append(src)
+
+    prop     = inspection.property
+    tpl_name = 'PDF Import'
+    if prop and getattr(prop, 'address', None):
+        tpl_name = f'PDF Import – {prop.address}'
+
+    composite = Template(
+        name=tpl_name,
+        inspection_type='check_in',
+        content='{}',
+        is_default=False,
+        is_transient=True,   # hidden from Templates UI; functional for this inspection only
+    )
+    db.session.add(composite)
+    db.session.flush()
+
+    # Copy each source section + its items into the composite template
+    # Track: source_section.id → new Section (in composite)
+    src_to_new_sec = {}
+    order = 0
+    for src_sec in ordered_src_sections:
+        new_sec = Section(
+            template_id  = composite.id,
+            name         = src_sec.name,
+            section_type = 'room',
+            order_index  = order,
+        )
+        db.session.add(new_sec)
+        db.session.flush()
+        for jdx, src_item in enumerate(src_sec.items or []):
+            db.session.add(Item(
+                section_id       = new_sec.id,
+                name             = src_item.name,
+                description      = src_item.description or '',
+                requires_photo   = src_item.requires_photo,
+                requires_condition = src_item.requires_condition,
+                order_index      = jdx,
+            ))
+        src_to_new_sec[src_sec.id] = new_sec
+        order += 1
+
+    # Add free-form sections for "new room" entries
+    new_room_sec_map = {}   # pdf_room_name → new Section
+    for rname in new_room_names:
+        new_sec = Section(
+            template_id  = composite.id,
+            name         = rname,
+            section_type = 'room',
+            order_index  = order,
+        )
+        db.session.add(new_sec)
+        db.session.flush()
+        new_room_sec_map[rname] = new_sec
+        order += 1
+
+    db.session.flush()
+    db.session.expire(composite, ['sections'])
+
+    inspection.template_id = composite.id
+
+    # ── Build report_data keyed by the NEW composite section/item IDs ─────
+    # We need fresh item lookups since items were just inserted
+    # Reload the new sections with their items
+    for src_id, new_sec in src_to_new_sec.items():
+        db.session.refresh(new_sec)
+    for new_sec in new_room_sec_map.values():
+        db.session.refresh(new_sec)
+
     report_data = {}
-    _new_room_counter = 0   # for generating stable keys for unmapped rooms
 
     for pdf_room in pdf_rooms:
         room_name = pdf_room.get('name', '')
+        src_sec   = source_section_map.get(room_name)   # original source Section | None
 
-        # Resolve the target section
-        if room_name in explicit_map:
-            target_sec = explicit_map[room_name]   # TemplateSection | 'new' | None
-        else:
-            # No explicit mapping — fall back to fuzzy match for backwards compat
-            target_sec = _fuzzy_match_section(room_name, db_room_sections)
-
-        if target_sec == 'new' or target_sec is None:
-            # Import as a free-form room — store under a stable generated key
-            # so the data isn't silently lost even if no template section matches
-            _new_room_counter += 1
-            sec_key = f'_imported_room_{_new_room_counter}'
-            report_data[sec_key] = {
-                '_name':    room_name,
-                '_isNew':   True,
-            }
+        if src_sec is None:
+            # "New room" — write items into the composite new-room section
+            target_new_sec = new_room_sec_map.get(room_name)
+            if not target_new_sec:
+                continue
+            sec_key = str(target_new_sec.id)
+            if sec_key not in report_data:
+                report_data[sec_key] = {}
             for pdf_item in (pdf_room.get('items') or []):
                 item_key = 'item_' + str(int(time.time() * 1000)) + '_' + ''.join(random.choices(string.ascii_lowercase, k=4))
-                item_entry = {
+                report_data[sec_key][item_key] = {
                     '_label':      pdf_item.get('label', ''),
                     'description': pdf_item.get('description') or '',
                     'condition':   pdf_item.get('condition')   or '',
                 }
-                report_data[sec_key][item_key] = item_entry
-            print(f'[apply-pdf-import] room "{room_name}" → new room ({sec_key})')
+            print(f'[apply-pdf-import] room "{room_name}" → new composite section {target_new_sec.id}')
             continue
 
-        # target_sec is a TemplateSection — map items into it
-        sec_key = str(target_sec.id)
+        # Mapped to a source section → use the copied composite section
+        new_sec  = src_to_new_sec.get(src_sec.id)
+        if not new_sec:
+            continue
+        sec_key  = str(new_sec.id)
         if sec_key not in report_data:
             report_data[sec_key] = {}
 
+        # Reload items for the new section (just inserted)
+        new_items = Item.query.filter_by(section_id=new_sec.id).all()
+
         for pdf_item in (pdf_room.get('items') or []):
-            matched_item = _fuzzy_match_item(pdf_item.get('label', ''), target_sec.items)
+            matched_item = _fuzzy_match_item(pdf_item.get('label', ''), new_items)
             if not matched_item:
-                # Store unmatched items as extras so data isn't silently lost
                 extra_key = '_extra_' + ''.join(random.choices(string.ascii_lowercase, k=6))
                 report_data[sec_key][extra_key] = {
                     '_label':      pdf_item.get('label', ''),
@@ -1216,29 +1288,24 @@ def apply_pdf_import(inspection_id):
             item_key  = str(matched_item.id)
 
             if item_key in report_data[sec_key]:
-                # ── Merge into an already-populated item (rooms were merged) ──
+                # ── Merge (two PDF rooms mapped to the same section) ──────
                 existing = report_data[sec_key][item_key]
                 old_desc = (existing.get('description') or '').strip()
                 old_cond = (existing.get('condition')   or '').strip()
-
-                # Concatenate distinct values; skip if the incoming text is
-                # identical to (or contained in) what's already there.
                 if new_desc and new_desc not in old_desc:
                     existing['description'] = (old_desc + '\n' + new_desc).strip() if old_desc else new_desc
                 if new_cond and new_cond not in old_cond:
                     existing['condition'] = (old_cond + '\n' + new_cond).strip() if old_cond else new_cond
-
-                # Merge sub-items (append, deduplicate by description)
+                # Merge sub-items
                 pdf_subs = pdf_item.get('_subs')
                 if isinstance(pdf_subs, list) and pdf_subs:
-                    existing_subs = existing.get('_subs') or []
+                    existing_subs  = existing.get('_subs') or []
                     existing_descs = {s.get('description', '') for s in existing_subs}
                     for sub in pdf_subs:
                         sub_desc = sub.get('description', '')
                         if sub_desc not in existing_descs:
-                            sid = 'sub_' + str(int(time.time() * 1000)) + '_' + ''.join(random.choices(string.ascii_lowercase, k=4))
                             existing_subs.append({
-                                '_sid':        sid,
+                                '_sid':        'sub_' + str(int(time.time() * 1000)) + '_' + ''.join(random.choices(string.ascii_lowercase, k=4)),
                                 'description': sub_desc,
                                 'condition':   sub.get('condition') or '',
                             })
@@ -1246,25 +1313,17 @@ def apply_pdf_import(inspection_id):
                     if existing_subs:
                         existing['_subs'] = existing_subs
             else:
-                # First time we see this item — write directly
-                item_entry = {
-                    'description': new_desc,
-                    'condition':   new_cond,
-                }
+                item_entry = {'description': new_desc, 'condition': new_cond}
                 pdf_subs = pdf_item.get('_subs')
                 if isinstance(pdf_subs, list) and pdf_subs:
-                    built_subs = []
-                    for sub in pdf_subs:
-                        sid = 'sub_' + str(int(time.time() * 1000)) + '_' + ''.join(random.choices(string.ascii_lowercase, k=4))
-                        built_subs.append({
-                            '_sid':        sid,
-                            'description': sub.get('description') or '',
-                            'condition':   sub.get('condition')   or '',
-                        })
-                    item_entry['_subs'] = built_subs
+                    item_entry['_subs'] = [{
+                        '_sid':        'sub_' + str(int(time.time() * 1000)) + '_' + ''.join(random.choices(string.ascii_lowercase, k=4)),
+                        'description': sub.get('description') or '',
+                        'condition':   sub.get('condition')   or '',
+                    } for sub in pdf_subs]
                 report_data[sec_key][item_key] = item_entry
 
-        print(f'[apply-pdf-import] room "{room_name}" → section {target_sec.id} ({target_sec.name})')
+        print(f'[apply-pdf-import] room "{room_name}" → composite sec {new_sec.id} ({new_sec.name})')
 
     # ── Fixed sections — keyed with the same IDs the frontend computes ────
     #
@@ -1313,13 +1372,13 @@ def apply_pdf_import(inspection_id):
 
     room_count = len(pdf_rooms)
     item_count = sum(len(r.get('items') or []) for r in pdf_rooms)
-    print(f'[apply-pdf-import] inspection {inspection_id}: {room_count} rooms, {item_count} items, template {template.id}')
+    print(f'[apply-pdf-import] inspection {inspection_id}: {room_count} rooms, {item_count} items, composite template {composite.id}')
 
     return jsonify({
         'message': f'PDF imported: {room_count} rooms, {item_count} items',
         'room_count': room_count,
         'item_count': item_count,
-        'template_id': template.id,
+        'template_id': composite.id,
     }), 200
 
 

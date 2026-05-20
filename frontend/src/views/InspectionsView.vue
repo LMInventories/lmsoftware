@@ -198,25 +198,39 @@ const pdfImportParsed      = ref(null)   // { rooms, fixedSections }
 const pdfImportError       = ref('')
 const pdfImportSaving      = ref(false)
 const pdfImportParsing     = ref(false)
-const pdfImportJobKey      = ref('')          // local key for composable tracking (no inspection yet)
-const pdfImportFullTemplate = ref(null)        // fetched template with sections/items
-const pdfRoomMapping       = ref({})           // pdfRoomName → templateSectionId | 'new'
-const pdfImportJobs        = usePdfImportJobs()
+const pdfImportJobKey       = ref('')          // local key for composable tracking (no inspection yet)
+const pdfImportFullTemplate = ref(null)         // kept for compat — not used in new flow
+const pdfRoomMapping        = ref({})           // pdfRoomName → sectionId (from any template) | 'new'
+const allCheckInTemplates   = ref([])           // [{id, name, sections:[{id,name,items}]}]
+const pdfImportJobs         = usePdfImportJobs()
 
-const templateRoomSections = computed(() =>
-  pdfImportFullTemplate.value
-    ? (pdfImportFullTemplate.value.sections || []).filter(s => s.section_type === 'room')
-    : []
-)
+// Flat list of all room sections across all check-in templates, with template metadata
+const allTemplateSections = computed(() => {
+  const out = []
+  for (const tpl of allCheckInTemplates.value) {
+    for (const sec of (tpl.sections || [])) {
+      if (sec.section_type === 'room') out.push({ ...sec, templateId: tpl.id, templateName: tpl.name })
+    }
+  }
+  return out
+})
+
+// Which template sections have more than one PDF room pointing at them (merge indicator)
+const mergedSections = computed(() => {
+  const counts = {}
+  for (const secId of Object.values(pdfRoomMapping.value)) {
+    if (secId && secId !== 'new') counts[secId] = (counts[secId] || 0) + 1
+  }
+  return counts
+})
 
 function openPdfImportModal() {
   pdfImportStep.value = 1
   pdfImportForm.value = {
-    client_id: authStore.isClient ? authStore.user.client_id : null,
-    property_id: null,
-    conduct_date: '',
+    client_id:       authStore.isClient ? authStore.user.client_id : null,
+    property_id:     null,
+    conduct_date:    '',
     conductDateDisplay: '',
-    template_id: null,
     suppress_emails: true,
   }
   pdfImportFile.value = null
@@ -227,6 +241,7 @@ function openPdfImportModal() {
   pdfImportParsing.value = false
   pdfImportJobKey.value = ''
   pdfImportFullTemplate.value = null
+  allCheckInTemplates.value = []
   pdfRoomMapping.value = {}
   showPdfImportModal.value = true
 }
@@ -239,8 +254,6 @@ const filteredPdfProperties = computed(() => {
   if (!pdfImportForm.value.client_id) return properties.value
   return properties.value.filter(p => p.client_id === pdfImportForm.value.client_id)
 })
-
-const filteredPdfTemplates = computed(() => templates.value.filter(t => t.inspection_type === 'check_in'))
 
 function onPdfImportConductDateInput(e) {
   let v = e.target.value.replace(/[^0-9]/g, '')
@@ -387,38 +400,18 @@ async function runPdfImportParse() {
   if (!pdfImportFile.value) { toast.warning('Please select a PDF file'); return }
   pdfImportParsing.value = true
   pdfImportError.value = ''
-  pdfImportFullTemplate.value = null
 
   // Generate a unique local key for tracking this job (no inspection ID yet)
   pdfImportJobKey.value = Date.now().toString(36) + Math.random().toString(36).slice(2)
 
   try {
-    // Fetch template structure so the AI knows exactly which rooms/items to map to
-    let templateStructure = null
-    const tid = pdfImportForm.value.template_id
-    if (tid) {
-      try {
-        const tRes = await api.getTemplate(tid)
-        pdfImportFullTemplate.value = tRes.data
-        const rooms = (tRes.data.sections || [])
-          .filter(s => s.section_type === 'room')
-          .map(s => ({
-            id: s.id,
-            name: s.name,
-            items: (s.items || []).map(i => ({ id: i.id, name: i.name })),
-          }))
-        if (rooms.length) templateStructure = JSON.stringify(rooms)
-      } catch {
-        // Continue without template — AI will still extract rooms/items
-      }
-    }
-
-    // POST the PDF — background thread does the AI work, returns job_id immediately
-    const startRes = await api.pdfImport(pdfImportFile.value, templateStructure)
+    // POST the PDF without template context — AI extracts all rooms/items as-found.
+    // Room → template-section matching happens in step 3 after the user confirms mappings.
+    const startRes = await api.pdfImport(pdfImportFile.value)
     const jobId = startRes.data?.job_id
     if (!jobId) throw new Error('No job ID returned from server')
 
-    // Register with the singleton composable — polling happens globally
+    // Register with the singleton composable — polling happens globally in the background
     pdfImportJobs.registerJob(jobId, pdfImportJobKey.value, pdfImportFileName.value)
     toast.info('PDF is being analysed in the background — we\'ll update this screen when it\'s ready.', 6000)
     // pdfImportParsing stays true; watchEffect below advances to step 3 on completion
@@ -430,7 +423,7 @@ async function runPdfImportParse() {
   }
 }
 
-// When the background job completes, advance to step 3 and build room mappings
+// When the background job completes, load all template sections then advance to step 3
 watchEffect(() => {
   if (!pdfImportJobKey.value) return
   const completed = pdfImportJobs.getCompletedJob(pdfImportJobKey.value)
@@ -439,40 +432,41 @@ watchEffect(() => {
   pdfImportJobs.clearCompletedJob(pdfImportJobKey.value)
   pdfImportParsed.value = completed.result
   if (pdfImportParsed.value) pdfImportParsed.value._fileName = completed.filename
+  // async work is offloaded so watchEffect stays synchronous
+  _loadTemplatesAndAdvance()
+})
+
+async function _loadTemplatesAndAdvance() {
+  // Fetch every check-in template WITH its full section + item structure.
+  // We need these to populate the per-room mapping dropdowns in step 3.
+  try {
+    const checkInTpls = templates.value.filter(t => t.inspection_type === 'check_in')
+    const fetched     = await Promise.all(checkInTpls.map(t => api.getTemplate(t.id)))
+    allCheckInTemplates.value = fetched.map(r => r.data)
+  } catch {
+    allCheckInTemplates.value = []
+  }
   pdfImportParsing.value = false
   buildInitialRoomMapping()
   pdfImportStep.value = 3
-})
+}
 
 function buildInitialRoomMapping() {
   if (!pdfImportParsed.value) return
-  const sections = templateRoomSections.value
+  const sections = allTemplateSections.value     // flat list across ALL check-in templates
   const normalise = s => s.toLowerCase().replace(/[^a-z0-9]/g, '')
   const mapping = {}
 
   for (const pdfRoom of (pdfImportParsed.value.rooms || [])) {
     const pdfNorm = normalise(pdfRoom.name)
-    // Exact match first, then partial containment
+    // 1. Exact normalised match
     let best = sections.find(s => normalise(s.name) === pdfNorm)
-    if (!best) {
-      best = sections.find(s => {
-        const tn = normalise(s.name)
-        return tn.includes(pdfNorm) || pdfNorm.includes(tn)
-      })
-    }
+    // 2. Partial containment (e.g. "Kitchen/Diner" → "Kitchen")
+    if (!best) best = sections.find(s => { const tn = normalise(s.name); return tn.includes(pdfNorm) || pdfNorm.includes(tn) })
     mapping[pdfRoom.name] = best ? String(best.id) : 'new'
   }
   pdfRoomMapping.value = mapping
 }
-
-// Which template section IDs have more than one PDF room pointing at them (merge candidates)
-const mergedSections = computed(() => {
-  const counts = {}
-  for (const secId of Object.values(pdfRoomMapping.value)) {
-    if (secId && secId !== 'new') counts[secId] = (counts[secId] || 0) + 1
-  }
-  return counts  // secId → count of rooms mapping to it
-})
 
 async function savePdfImportInspection() {
   if (!pdfImportForm.value.property_id) { toast.warning('Please select a property'); return }
@@ -481,7 +475,6 @@ async function savePdfImportInspection() {
     const payload = {
       property_id:          pdfImportForm.value.property_id,
       inspection_type:      'check_in',
-      template_id:          pdfImportForm.value.template_id || null,
       status:               'complete',
       source_inspection_id: null,
       // SUPPRESS sentinel tells the backend not to send client emails for this inspection
@@ -1507,13 +1500,6 @@ onMounted(() => {
               </div>
               <div class="modal-col">
                 <div class="col-section-title">Options</div>
-                <div class="form-group">
-                  <label>Template</label>
-                  <select v-model="pdfImportForm.template_id">
-                    <option :value="null">Use default check-in template</option>
-                    <option v-for="t in filteredPdfTemplates" :key="t.id" :value="t.id">{{ t.name }}{{ t.is_default ? ' ★' : '' }}</option>
-                  </select>
-                </div>
                 <div class="pdf-suppress-row">
                   <label class="pdf-suppress-label">
                     <input type="checkbox" v-model="pdfImportForm.suppress_emails" />
@@ -1523,7 +1509,7 @@ onMounted(() => {
                 </div>
                 <div class="pdf-step1-info">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-                  <span>The inspection will be created as a completed Check In backdated to the date you enter. You can then start a Check Out against it.</span>
+                  <span>The inspection will be created as a completed Check In backdated to the date you enter. In the next step you'll match each PDF room to one of your template rooms — no need to pick a template upfront.</span>
                 </div>
               </div>
             </div>
@@ -1593,14 +1579,12 @@ onMounted(() => {
           <div v-if="pdfImportStep === 3 && pdfImportParsed">
             <div class="pdf-mapping-header">
               <div class="pdf-mapping-stats">
-                <span class="pdf-mapping-stat-badge">{{ pdfImportParsed.rooms?.length || 0 }} rooms</span>
-                <span class="pdf-mapping-stat-badge">{{ pdfImportParsed.rooms?.reduce((n, r) => n + (r.items?.length || 0), 0) || 0 }} items</span>
+                <span class="pdf-mapping-stat-badge">{{ pdfImportParsed.rooms?.length || 0 }} rooms found</span>
+                <span class="pdf-mapping-stat-badge">{{ pdfImportParsed.rooms?.reduce((n, r) => n + (r.items?.length || 0), 0) || 0 }} items extracted</span>
               </div>
               <p class="pdf-mapping-intro">
-                Match each PDF room to a room in your template.
-                <template v-if="!templateRoomSections.length">
-                  <em>No template selected — all rooms will be imported as new rooms.</em>
-                </template>
+                Match each room from the PDF to a room in one of your templates. The room's item list will be used to accurately populate the report. Rooms matched to the same template room will be merged.
+                <em v-if="!allTemplateSections.length" class="pdf-mapping-warn"> No check-in templates found — rooms will be imported as-is.</em>
               </p>
             </div>
 
@@ -1619,11 +1603,18 @@ onMounted(() => {
                 <div class="pdf-room-map-right">
                   <select v-model="pdfRoomMapping[room.name]" class="pdf-room-map-select input-field">
                     <option value="new">＋ Import as new room</option>
-                    <option
-                      v-for="sec in templateRoomSections"
-                      :key="sec.id"
-                      :value="String(sec.id)"
-                    >{{ sec.name }}</option>
+                    <!-- Grouped by template so the user can see where each room comes from -->
+                    <optgroup
+                      v-for="tpl in allCheckInTemplates"
+                      :key="tpl.id"
+                      :label="tpl.name"
+                    >
+                      <option
+                        v-for="sec in (tpl.sections || []).filter(s => s.section_type === 'room')"
+                        :key="sec.id"
+                        :value="String(sec.id)"
+                      >{{ sec.name }}</option>
+                    </optgroup>
                   </select>
                   <span
                     v-if="mergedSections[pdfRoomMapping[room.name]] > 1"
@@ -2845,6 +2836,7 @@ onMounted(() => {
   margin: 0;
   line-height: 1.5;
 }
+.pdf-mapping-warn { color: #b45309; font-style: normal; font-weight: 600; }
 .pdf-room-map-list {
   display: flex;
   flex-direction: column;

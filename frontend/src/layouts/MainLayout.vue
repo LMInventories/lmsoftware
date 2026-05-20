@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import api from '../services/api'
+import { usePdfImportJobs } from '../composables/usePdfImportJobs'
 
 const router    = useRouter()
 const route     = useRoute()
@@ -118,6 +119,9 @@ function navigate(path) {
   router.push(path)
   drawerOpen.value = false
 }
+
+// ── PDF import progress indicator ─────────────────────────────────────
+const pdfImportJobs = usePdfImportJobs()
 </script>
 
 <template>
@@ -148,6 +152,13 @@ function navigate(path) {
           <span class="icon">👤</span><span class="nav-label">Users</span>
         </router-link>
         <div class="nav-divider"></div>
+
+        <!-- PDF import progress indicator -->
+        <div v-if="pdfImportJobs.activeJobs.value.length > 0" class="nav-import-indicator" :title="sidebarCollapsed ? 'Importing PDF…' : undefined">
+          <span class="import-pulse"></span>
+          <span class="nav-label">Importing PDF…</span>
+        </div>
+
         <router-link to="/settings" class="nav-item" v-if="authStore.isAdmin || authStore.isManager" :title="sidebarCollapsed ? 'Settings' : undefined">
           <span class="icon">⚙️</span><span class="nav-label">Settings</span>
         </router-link>
@@ -402,6 +413,30 @@ function navigate(path) {
 
 .nav-divider { height: 1px; background: rgba(255,255,255,0.1); margin: 10px 8px; }
 .collapsed .nav-divider { margin: 10px 4px; }
+
+/* ── PDF import indicator ── */
+.nav-import-indicator {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 12px; border-radius: 8px;
+  color: #93c5fd; font-size: 13px; font-weight: 500;
+  background: rgba(59,130,246,0.12);
+  margin-bottom: 2px;
+  white-space: nowrap; overflow: hidden;
+}
+.collapsed .nav-import-indicator { justify-content: center; padding: 9px 0; }
+.collapsed .nav-import-indicator .nav-label { opacity: 0; width: 0; overflow: hidden; }
+
+.import-pulse {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: #60a5fa; flex-shrink: 0;
+  box-shadow: 0 0 0 0 rgba(96,165,250,0.7);
+  animation: import-pulse-anim 1.5s ease-in-out infinite;
+}
+@keyframes import-pulse-anim {
+  0%   { box-shadow: 0 0 0 0 rgba(96,165,250,0.7); }
+  70%  { box-shadow: 0 0 0 7px rgba(96,165,250,0); }
+  100% { box-shadow: 0 0 0 0 rgba(96,165,250,0); }
+}
 
 /* ── Sidebar footer / user button ── */
 .sidebar-footer {

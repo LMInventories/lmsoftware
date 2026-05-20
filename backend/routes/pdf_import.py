@@ -4,7 +4,7 @@ pdf_import.py — Parse a PDF inspection report with Claude.
 Architecture: background thread + polling.
   POST /pdf-import  — accepts the PDF, starts a daemon thread, returns {job_id} immediately
                       (completes in < 1 second — immune to gunicorn worker timeouts)
-  GET  /pdf-import-status/<job_id> — returns {status: processing|done|error, result?, error?}
+  GET  /pdf-import-status/<job_id> — returns {status: processing|done|error, result?, error?, progress?}
 
 The daemon thread calls Anthropic (no time pressure) and writes the result to a temp file.
 Both gunicorn workers share the same filesystem, so any worker can serve the status poll.
@@ -53,13 +53,66 @@ Template structure to match against:
 __TEMPLATE_STRUCTURE__
 
 ═══════════════════════════════════════
-GOLDEN RULE — COPY, DO NOT REWRITE
+GOLDEN RULE — COPY & FORMAT
 ═══════════════════════════════════════
 Copy text from the PDF VERBATIM into description and condition fields.
-• Do NOT summarise, paraphrase, abbreviate, or reformat anything.
+• Do NOT summarise, paraphrase, abbreviate, or reformat the content itself.
 • Do NOT merge sentences or remove any words.
-• If the PDF spans multiple lines for one item, join them with \\n (a literal newline character in the JSON string).
+• Capitalise the first letter of each line; convert ALL-CAPS PDF text to Sentence case
+  (e.g. "WHITE PAINTED PANEL DOOR" → "White painted panel door").
+• Preserve already-mixed-case text verbatim (e.g. "uPVC" stays "uPVC").
 • Preserve every detail exactly as written — this is a legal document.
+
+═══════════════════════════════════════
+LINE BREAKS
+═══════════════════════════════════════
+• Each physically distinct element gets its own line using \\n within the description string.
+• Example: "White painted panel door\\nWhite painted door frame" (two separate physical elements).
+• Comma-separated lists of DIFFERENT physical elements → split to \\n.
+• But: "white painted, smooth finish" describing ONE element stays on one line.
+• If the PDF spans multiple lines for one item, join them with \\n.
+
+═══════════════════════════════════════
+CONDITION IDENTIFICATION
+═══════════════════════════════════════
+These words signal CONDITION — split the text at the first condition word:
+  everything before → description; everything from that word onwards → condition.
+
+Condition signal words:
+  In good order / good order / in fair order / in poor order / as new / as found / as inventory
+  Scuff / scratch / mark / chip / crack / dent / stain / burn / peel / flake / warp
+  Loose / tight / sticky / missing / broken / damaged / worn / fading / discoloured / mouldy
+  Slight / minor / moderate / heavy / severe / light [defect word]
+  Tested / working / not working
+  Good clean condition / good condition / fair condition / poor condition
+
+Examples:
+  "White painted panel door. Good clean condition." → description: "White painted panel door", condition: "Good clean condition"
+  "Carpet, beige twist pile. Minor wear to threshold." → description: "Carpet, beige twist pile", condition: "Minor wear to threshold"
+
+═══════════════════════════════════════
+COMPOUND ITEM SPLITTING
+═══════════════════════════════════════
+Many PDF reports use ONE heading for content that maps to MULTIPLE template items.
+When you see a compound PDF heading, check the template for separate matching items and split:
+
+  "Door/Frame/Fittings" or "Door, Frame & Fittings"
+    → "Door & Frame" (panel + frame content) + "Door Fittings" (handles, locks, latches, hinges)
+
+  "Walls & Ceiling" or "Walls/Ceiling"
+    → "Walls" (wall surfaces) + "Ceiling" (ceiling surface)
+
+  "Windows/Frame/Fittings" or "Window, Frame & Fittings"
+    → "Windows" or "Window" (glazing, glass) + "Window Fittings" (handles, stays, locks, restrictors)
+
+  "Floor/Skirting" or "Floor & Skirting"
+    → "Floor" (floor covering) + "Skirting Board" or "Skirting" (skirting boards)
+
+  "Light/Fittings" or "Light Fittings"
+    → "Light Fittings" (single item — do NOT split unless template has distinct items)
+
+Rule: If the template has only ONE matching item for a compound heading, do NOT split — put everything in that one item.
+Rule: If the template has MULTIPLE matching items, distribute the relevant content to each.
 
 ═══════════════════════════════════════
 MATCHING ALGORITHM — READ THIS CAREFULLY
@@ -87,15 +140,15 @@ Process the PDF line by line, for each room section:
 ═══════════════════════════════════════
 FIELD RULES
 ═══════════════════════════════════════
-- label: EXACT label from the template where matched; otherwise use the PDF heading text as-is
-- description: Copy verbatim from PDF. Multi-line → join with \\n. Empty string if not present.
-- condition: Copy verbatim from PDF (CHECK IN column only — ignore Check Out). Empty string if not present.
-- _subs: Array present only when the item has sub-items. Each sub-item has only "description" and "condition" (both verbatim).
+- label: EXACT label from the template where matched; otherwise use the PDF heading text, sentence-cased
+- description: Verbatim from PDF, sentence-cased, multi-line elements joined with \\n. Empty string if not present.
+- condition: Verbatim from PDF, sentence-cased (CHECK IN column only — ignore Check Out). Empty string if not present.
+- _subs: Array present only when the item has sub-items. Each sub-item has only "description" and "condition" (both verbatim, sentence-cased).
 
 ═══════════════════════════════════════
 FIXED SECTIONS
 ═══════════════════════════════════════
-Extract these if present in the PDF. Copy all text verbatim.
+Extract these if present in the PDF. Copy all text verbatim (sentence-cased).
 - condition_summary: overall condition notes
 - keys: key types and quantities handed over
 - meter_readings: gas/electric/water meter readings with location/serial
@@ -108,16 +161,21 @@ Return ONLY valid JSON — no markdown, no explanation:
       "name": "Lounge",
       "items": [
         {
-          "label": "Door, Frame & Furniture",
-          "description": "White painted solid panel door with chrome lever handle\\nDoor frame painted white",
+          "label": "Door & Frame",
+          "description": "White painted solid panel door\\nWhite painted door frame",
           "condition": "Good clean condition throughout"
+        },
+        {
+          "label": "Door Fittings",
+          "description": "Chrome lever handle\\nChrome hinges x3",
+          "condition": "Good order"
         },
         {
           "label": "Contents",
           "description": "",
           "condition": "",
           "_subs": [
-            { "description": "Bedside Table — oak veneer with single drawer", "condition": "Good order, minor surface scratch to top" },
+            { "description": "Bedside table — oak veneer with single drawer", "condition": "Good order, minor surface scratch to top" },
             { "description": "Wardrobe — white gloss, double door with hanging rail", "condition": "Good clean condition" }
           ]
         }
@@ -139,13 +197,52 @@ Template structure (for label matching):
 __TEMPLATE_STRUCTURE__
 
 ═══════════════════════════════════════
-GOLDEN RULE — COPY, DO NOT REWRITE
+GOLDEN RULE — COPY & FORMAT
 ═══════════════════════════════════════
 Copy text from the PDF VERBATIM into description and condition fields.
-• Do NOT summarise, paraphrase, abbreviate, or reformat anything.
+• Do NOT summarise, paraphrase, abbreviate, or reformat the content itself.
 • Do NOT merge sentences or remove any words.
-• If the PDF spans multiple lines for one item, join them with \\n.
+• Capitalise the first letter of each line; convert ALL-CAPS PDF text to Sentence case
+  (e.g. "WHITE PAINTED PANEL DOOR" → "White painted panel door").
+• Preserve already-mixed-case text verbatim (e.g. "uPVC" stays "uPVC").
 • Preserve every detail exactly as written — this is a legal document.
+
+═══════════════════════════════════════
+LINE BREAKS
+═══════════════════════════════════════
+• Each physically distinct element gets its own line using \\n within the description string.
+• Example: "White painted panel door\\nWhite painted door frame" (two separate physical elements).
+• Comma-separated lists of DIFFERENT physical elements → split to \\n.
+• But: "white painted, smooth finish" describing ONE element stays on one line.
+
+═══════════════════════════════════════
+CONDITION IDENTIFICATION
+═══════════════════════════════════════
+Split text at the first condition signal word:
+  everything before → description; everything from that word onwards → condition.
+
+Condition signal words:
+  In good order / good order / in fair order / in poor order / as new / as found / as inventory
+  Scuff / scratch / mark / chip / crack / dent / stain / burn / peel / flake / warp
+  Loose / tight / sticky / missing / broken / damaged / worn / fading / discoloured / mouldy
+  Slight / minor / moderate / heavy / severe / light [defect word]
+  Tested / working / not working / good clean condition / good condition / fair condition / poor condition
+
+═══════════════════════════════════════
+COMPOUND ITEM SPLITTING
+═══════════════════════════════════════
+When you see a compound PDF heading, check the template for separate matching items and split:
+
+  "Door/Frame/Fittings" or "Door, Frame & Fittings"
+    → "Door & Frame" (panel + frame) + "Door Fittings" (handles, locks, latches)
+  "Walls & Ceiling" or "Walls/Ceiling"
+    → "Walls" (wall surfaces) + "Ceiling" (ceiling surface)
+  "Windows/Frame/Fittings"
+    → "Windows" (glazing) + "Window Fittings" (handles, stays, locks)
+  "Floor/Skirting" or "Floor & Skirting"
+    → "Floor" (floor covering) + "Skirting Board" (skirting boards)
+
+If the template has only ONE matching item for a compound heading — do NOT split, put everything there.
 
 ═══════════════════════════════════════
 HOW TO IDENTIFY ROOMS AND ITEMS
@@ -155,14 +252,14 @@ Room headings are typically short, standalone lines like:
 After a room heading, each distinct line or pair of lines is an ITEM within that room.
 
 For each item:
-- label: the item heading (e.g. "Door, Frame & Furniture", "Walls & Ceiling", "Floor", "Contents")
-- description: the text describing the item (e.g. material, colour, type) — copy verbatim
-- condition: condition text from the CHECK IN column — copy verbatim (ignore Check Out column if present)
+- label: the item heading, sentence-cased (e.g. "Door & Frame", "Walls & Ceiling", "Floor", "Contents")
+- description: text describing the item (material, colour, type) — verbatim, sentence-cased, multi-element → \\n
+- condition: condition text from the CHECK IN column — verbatim, sentence-cased (ignore Check Out column)
 - _subs: if the item has sub-entries listed beneath it (e.g. individual contents items), put each as { description, condition }
 
 If a line starts with the parent item name followed by a dash, colon, or slash, it is a sub-item:
   "Contents - Bedside Table: Oak veneer / In good order"
-  → parent = "Contents", sub = { description: "Bedside Table: Oak veneer", condition: "In good order" }
+  → parent = "Contents", sub = { description: "Bedside table — oak veneer", condition: "In good order" }
 
 ═══════════════════════════════════════
 FIXED SECTIONS
@@ -179,8 +276,9 @@ Return ONLY valid JSON — no markdown, no explanation, no trailing text:
     {
       "name": "Entrance Hall",
       "items": [
-        { "label": "Door, Frame & Furniture", "description": "White painted solid panel door with chrome handle", "condition": "Good clean condition" },
-        { "label": "Walls & Ceiling", "description": "Painted white throughout", "condition": "Good order, minor scuff to wall near door" },
+        { "label": "Door & Frame", "description": "White painted solid panel door\\nWhite painted door frame", "condition": "Good clean condition" },
+        { "label": "Door Fittings", "description": "Chrome lever handle\\nChrome hinges x3", "condition": "Good order" },
+        { "label": "Walls & Ceiling", "description": "Painted white throughout\\nSmooth plaster ceiling", "condition": "Good order, minor scuff to wall near door" },
         { "label": "Contents", "description": "", "condition": "",
           "_subs": [
             { "description": "Coat hooks x4 — chrome", "condition": "Good order" }
@@ -337,7 +435,8 @@ def _merge_results(results):
 
 # ── Background worker ─────────────────────────────────────────────────────────
 
-def _run_import_job(job_id, api_key, extracted_text, pdf_b64, template_structure, use_text_mode):
+def _run_import_job(job_id, api_key, extracted_text, pdf_b64, template_structure,
+                    use_text_mode, inspection_id, filename):
     """Runs in a daemon thread. Writes result to a temp file when complete."""
     try:
         from anthropic import Anthropic
@@ -346,6 +445,12 @@ def _run_import_job(job_id, api_key, extracted_text, pdf_b64, template_structure
         if not use_text_mode:
             # Document mode: send raw PDF — no chunking possible
             print('[pdf-import] job ' + job_id + ' document mode (single call)')
+            _write_job(job_id, {
+                'status': 'processing',
+                'progress': 'Analysing PDF with AI…',
+                'inspection_id': inspection_id,
+                'filename': filename,
+            })
             prompt = PROMPT_TEMPLATE.replace('__TEMPLATE_STRUCTURE__', template_structure)
             messages = [
                 {
@@ -361,6 +466,12 @@ def _run_import_job(job_id, api_key, extracted_text, pdf_b64, template_structure
         elif len(extracted_text) <= CHUNK_THRESHOLD:
             # Small PDF — single call
             print('[pdf-import] job ' + job_id + ' text mode, single call (' + str(len(extracted_text)) + ' chars)')
+            _write_job(job_id, {
+                'status': 'processing',
+                'progress': 'Analysing PDF with AI…',
+                'inspection_id': inspection_id,
+                'filename': filename,
+            })
             prompt = PROMPT_TEMPLATE.replace('__TEMPLATE_STRUCTURE__', template_structure)
             messages = [{'role': 'user', 'content': prompt + '\n\n---\nPDF TEXT CONTENT:\n' + extracted_text}]
             parsed = _call_claude(client, messages, MAX_TOKENS_SINGLE)
@@ -373,6 +484,12 @@ def _run_import_job(job_id, api_key, extracted_text, pdf_b64, template_structure
             results = []
             for i, chunk in enumerate(chunks):
                 print('[pdf-import] job ' + job_id + ' chunk ' + str(i + 1) + '/' + str(len(chunks)) + ' (' + str(len(chunk)) + ' chars)')
+                _write_job(job_id, {
+                    'status': 'processing',
+                    'progress': 'Analysing chunk ' + str(i + 1) + ' of ' + str(len(chunks)) + '…',
+                    'inspection_id': inspection_id,
+                    'filename': filename,
+                })
                 chunk_prompt = (
                     CHUNK_PROMPT_TEMPLATE
                     .replace('__TEMPLATE_STRUCTURE__', template_structure)
@@ -400,17 +517,32 @@ def _run_import_job(job_id, api_key, extracted_text, pdf_b64, template_structure
         mode = 'text' if use_text_mode else 'document'
         print('[pdf-import] job ' + job_id + ' done: ' + str(room_count) + ' rooms, ' + str(item_count) + ' items (mode=' + mode + ')')
 
-        _write_job(job_id, {'status': 'done', 'result': parsed})
+        _write_job(job_id, {
+            'status': 'done',
+            'result': parsed,
+            'inspection_id': inspection_id,
+            'filename': filename,
+        })
 
     except json.JSONDecodeError as e:
         print('[pdf-import] job ' + job_id + ' JSON error: ' + str(e))
-        _write_job(job_id, {'status': 'error', 'error': 'Claude returned invalid JSON: ' + str(e)})
+        _write_job(job_id, {
+            'status': 'error',
+            'error': 'Claude returned invalid JSON: ' + str(e),
+            'inspection_id': inspection_id,
+            'filename': filename,
+        })
 
     except Exception as e:
         import traceback
         print('[pdf-import] job ' + job_id + ' error: ' + str(e))
         print(traceback.format_exc())
-        _write_job(job_id, {'status': 'error', 'error': str(e)})
+        _write_job(job_id, {
+            'status': 'error',
+            'error': str(e),
+            'inspection_id': inspection_id,
+            'filename': filename,
+        })
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -434,13 +566,17 @@ def pdf_import():
         if not raw_bytes:
             return jsonify({'error': 'Uploaded file is empty'}), 400
         template_structure = request.form.get('templateStructure') or 'No template - infer structure from PDF'
-        print('[pdf-import] received file via multipart: ' + repr(file_obj.filename) + ', ' + str(len(raw_bytes)) + ' bytes')
+        inspection_id = request.form.get('inspectionId') or ''
+        filename = file_obj.filename or 'report.pdf'
+        print('[pdf-import] received file via multipart: ' + repr(filename) + ', ' + str(len(raw_bytes)) + ' bytes, inspection_id=' + repr(inspection_id))
     else:
         data = request.get_json(silent=True)
         if not data:
             return jsonify({'error': 'No data provided'}), 400
         pdf_b64 = data.get('pdf')
         template_structure = data.get('templateStructure') or 'No template - infer structure from PDF'
+        inspection_id = data.get('inspectionId') or ''
+        filename = data.get('filename') or 'report.pdf'
         if not pdf_b64:
             return jsonify({'error': 'No PDF data provided'}), 400
         raw_bytes = base64.b64decode(pdf_b64)
@@ -454,11 +590,17 @@ def pdf_import():
 
     # Start background job and return immediately
     job_id = str(uuid.uuid4())
-    _write_job(job_id, {'status': 'processing'})
+    _write_job(job_id, {
+        'status': 'processing',
+        'progress': 'Starting…',
+        'inspection_id': inspection_id,
+        'filename': filename,
+    })
 
     thread = threading.Thread(
         target=_run_import_job,
-        args=(job_id, api_key, extracted_text, pdf_b64, template_structure, use_text_mode),
+        args=(job_id, api_key, extracted_text, pdf_b64, template_structure,
+              use_text_mode, inspection_id, filename),
         daemon=True,
     )
     thread.start()
@@ -480,10 +622,25 @@ def pdf_import_status(job_id):
 
     status = job.get('status')
     if status == 'processing':
-        return jsonify({'status': 'processing'})
+        return jsonify({
+            'status': 'processing',
+            'progress': job.get('progress', ''),
+            'inspection_id': job.get('inspection_id', ''),
+            'filename': job.get('filename', ''),
+        })
     elif status == 'done':
         _delete_job(job_id)
-        return jsonify({'status': 'done', 'result': job['result']})
+        return jsonify({
+            'status': 'done',
+            'result': job['result'],
+            'inspection_id': job.get('inspection_id', ''),
+            'filename': job.get('filename', ''),
+        })
     else:
         _delete_job(job_id)
-        return jsonify({'status': 'error', 'error': job.get('error', 'Unknown error')})
+        return jsonify({
+            'status': 'error',
+            'error': job.get('error', 'Unknown error'),
+            'inspection_id': job.get('inspection_id', ''),
+            'filename': job.get('filename', ''),
+        })

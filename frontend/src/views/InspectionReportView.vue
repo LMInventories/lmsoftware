@@ -2,6 +2,7 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useToast } from '../composables/useToast'
+import { usePdfImportJobs } from '../composables/usePdfImportJobs'
 import api from '../services/api'
 import { useAuthStore } from '../stores/auth'
 import CheckOutActionPicker from '../components/CheckOutActionPicker.vue'
@@ -299,15 +300,48 @@ function _initRecordings(saved) {
 const sourceReportData = ref({})
 
 // ── PDF Import state (used when no Check In source is found) ──────────
+const pdfImportJobs = usePdfImportJobs()
+
 const pdfImport = ref({
-  show:     false,
-  file:     null,
-  fileName: '',
-  loading:  false,
-  error:    '',
-  preview:  null,
-  applied:  false,
+  show:               false,
+  file:               null,
+  fileName:           '',
+  submitting:         false,   // true only while the initial POST is in flight
+  loading:            false,   // kept for cloud picker download compat
+  error:              '',
+  preview:            null,
+  applied:            false,
+  backgroundJobPending: false, // true while global tracker has an active job for this inspection
 })
+
+// ── Room mapping state ─────────────────────────────────────────────────
+const roomMapping = ref({
+  show:    false,
+  mapping: {},   // pdfRoomName → { templateRoomId: string|'new', templateRoomName: string }
+})
+
+// Watch for a completed background job for this inspection and auto-load the preview
+watch(
+  () => inspection.value?.id ? pdfImportJobs.getCompletedJob(inspection.value.id) : null,
+  (completedJob) => {
+    if (completedJob && !pdfImport.value.applied) {
+      pdfImport.value.preview              = completedJob.result
+      pdfImport.value.backgroundJobPending = false
+      pdfImportJobs.clearCompletedJob(inspection.value.id)
+      toast.info('PDF import ready — review and apply below.')
+    }
+  },
+  { immediate: true }
+)
+
+// Sync backgroundJobPending with the global tracker whenever inspection loads
+watch(
+  () => inspection.value?.id,
+  (id) => {
+    if (id) pdfImport.value.backgroundJobPending = pdfImportJobs.isJobPending(id)
+  },
+  { immediate: true }
+)
 
 async function onPdfSelected(e) {
   const file = e.target?.files?.[0] || e.dataTransfer?.files?.[0]
@@ -322,9 +356,9 @@ async function onPdfSelected(e) {
 
 async function runPdfImport() {
   if (!pdfImport.value.file) return
-  pdfImport.value.loading = true
-  pdfImport.value.error   = ''
-  pdfImport.value.preview = null
+  pdfImport.value.submitting = true
+  pdfImport.value.error      = ''
+  pdfImport.value.preview    = null
 
   try {
     const templateStructure = template.value ? JSON.stringify({
@@ -336,28 +370,21 @@ async function runPdfImport() {
         .map(r => ({ id: r.id, name: r.name, items: (r.sections || r.items || []).map(i => ({ id: i.id, label: i.label })) }))
     }, null, 2) : 'No template — infer structure from PDF'
 
-    // Start the background job — backend returns {job_id} immediately
-    const startRes = await api.pdfImport(pdfImport.value.file, templateStructure)
+    // Start the background job — returns {job_id} immediately, processing continues server-side
+    const startRes = await api.pdfImport(pdfImport.value.file, templateStructure, inspection.value?.id)
     const jobId = startRes.data?.job_id
     if (!jobId) throw new Error('Server did not return a job ID')
 
-    // Poll until the job finishes (3-second intervals, 3-minute timeout)
-    let parsed = null
-    for (let attempt = 0; attempt < 60; attempt++) {
-      await new Promise(r => setTimeout(r, 3000))
-      const statusRes = await api.pdfImportStatus(jobId)
-      const { status, result, error } = statusRes.data
-      if (status === 'done')  { parsed = result; break }
-      if (status === 'error') throw new Error(error || 'AI parsing failed on server')
-    }
-    if (!parsed) throw new Error('Import timed out — please try again')
+    // Register with global tracker — polling happens in background; user can navigate away
+    pdfImportJobs.registerJob(jobId, inspection.value?.id, pdfImport.value.fileName)
+    pdfImport.value.backgroundJobPending = true
+    toast.info('PDF import started — we\'ll notify you when it\'s ready. You can navigate away.', 6000)
 
-    pdfImport.value.preview = parsed
   } catch (err) {
     console.error('PDF import error:', err)
-    pdfImport.value.error = 'Import failed: ' + (err.response?.data?.error || err.message)
+    pdfImport.value.error = 'Failed to start import: ' + (err.response?.data?.error || err.message)
   } finally {
-    pdfImport.value.loading = false
+    pdfImport.value.submitting = false
   }
 }
 
@@ -497,7 +524,40 @@ async function openGoogleDrivePicker() {
   }
 }
 
-async function applyPdfImport() {
+// ── Room mapping modal ────────────────────────────────────────────────
+
+function openRoomMappingModal() {
+  const parsed = pdfImport.value.preview
+  if (!parsed) return
+
+  const templateRooms = (template.value?.sections || []).filter(s => s.section_type === 'room')
+
+  // Build AI-suggested mapping using the same fuzzy logic as applyPdfImport
+  const mapping = {}
+  for (const importedRoom of (parsed.rooms || [])) {
+    const normImport = importedRoom.name.toLowerCase().replace(/[^a-z0-9]/g, '')
+    const match = templateRooms.find(r => {
+      const normT = r.name.toLowerCase().replace(/[^a-z0-9]/g, '')
+      return normT.includes(normImport) || normImport.includes(normT)
+    })
+    mapping[importedRoom.name] = match
+      ? { templateRoomId: String(match.id), templateRoomName: match.name }
+      : { templateRoomId: 'new', templateRoomName: importedRoom.name }
+  }
+
+  roomMapping.value = { show: true, mapping }
+}
+
+function closeRoomMappingModal() {
+  roomMapping.value.show = false
+}
+
+async function applyWithMapping() {
+  await applyPdfImport(roomMapping.value.mapping)
+  roomMapping.value.show = false
+}
+
+async function applyPdfImport(confirmedMapping) {
   const parsed = pdfImport.value.preview
   if (!parsed) return
 
@@ -522,13 +582,20 @@ async function applyPdfImport() {
   let unmatchedCount = 0
 
   for (const importedRoom of (parsed.rooms || [])) {
-    const normImport = importedRoom.name.toLowerCase().replace(/[^a-z0-9]/g,'')
-
-    // Fuzzy match: room names share a meaningful substring
-    const match = templateRooms.find(r => {
-      const normTemplate = r.name.toLowerCase().replace(/[^a-z0-9]/g,'')
-      return normTemplate.includes(normImport) || normImport.includes(normTemplate)
-    })
+    // Use confirmed mapping if provided (from room mapping modal), otherwise fall back to fuzzy
+    let match = null
+    if (confirmedMapping && confirmedMapping[importedRoom.name]) {
+      const mapped = confirmedMapping[importedRoom.name]
+      if (mapped.templateRoomId && mapped.templateRoomId !== 'new') {
+        match = templateRooms.find(r => String(r.id) === String(mapped.templateRoomId))
+      }
+    } else {
+      const normImport = importedRoom.name.toLowerCase().replace(/[^a-z0-9]/g,'')
+      match = templateRooms.find(r => {
+        const normTemplate = r.name.toLowerCase().replace(/[^a-z0-9]/g,'')
+        return normTemplate.includes(normImport) || normImport.includes(normTemplate)
+      })
+    }
 
     if (match) {
       // ── Matched room → map items to template item IDs ──────────────
@@ -2167,60 +2234,69 @@ async function moveToReview() {
             <h2 class="pdf-import-title">No linked Check In found</h2>
             <p class="pdf-import-sub">Import a Check In / Inventory report from another system to use as the reference for this Check Out.</p>
 
-            <!-- Drop zone -->
-            <label class="pdf-dropzone"
-              :class="{ 'pdf-dropzone-has': pdfImport.fileName, 'pdf-dropzone-loading': pdfImport.loading }"
-              @dragover.prevent
-              @drop.prevent="onPdfSelected">
-              <div v-if="!pdfImport.fileName" class="pdf-dz-inner">
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
-                <p>Drop PDF here or <span class="pdf-dz-link">browse</span></p>
-                <p class="pdf-dz-hint">Check In or Inventory report from any system</p>
+            <!-- Background job in progress banner -->
+            <div v-if="pdfImport.backgroundJobPending" class="pdf-bg-banner">
+              <svg class="spin-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>
+              <div>
+                <strong>Import in progress</strong>
+                <p>The PDF is being analysed in the background. You can navigate away — we'll notify you when it's ready.</p>
               </div>
-              <div v-else class="pdf-dz-inner pdf-dz-has">
-                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-                <p class="pdf-dz-name">{{ pdfImport.fileName }}</p>
-                <p class="pdf-dz-hint">Click to choose a different file</p>
-              </div>
-              <input type="file" accept="application/pdf" style="display:none" @change="onPdfSelected" />
-            </label>
-
-            <!-- Cloud pickers -->
-            <div class="pdf-cloud-row">
-              <span class="pdf-cloud-or">or pick from</span>
-
-              <!-- Google Drive -->
-              <button type="button" class="btn-cloud btn-gdrive"
-                :disabled="pdfImport.loading"
-                @click="openGoogleDrivePicker">
-                <!-- Google Drive triangle logo -->
-                <svg width="16" height="14" viewBox="0 0 87.3 78" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                  <path d="M6.6 66.85l3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3l13.75-23.8H0c0 1.55.4 3.1 1.2 4.5z" fill="#0066DA"/>
-                  <path d="M43.65 25L29.9 1.2C28.55.4 27 0 25.4 0H6.9c-1.6 0-3.15.45-4.5 1.2L27.8 45z" fill="#00AC47"/>
-                  <path d="M73.55 76.8c1.35-.8 2.5-1.9 3.3-3.3l1.6-2.75 7.65-13.25c.8-1.4 1.2-2.95 1.2-4.5H59.8l5.85 11.5z" fill="#EA4335"/>
-                  <path d="M43.65 25l13.75-23.8c-1.35-.8-2.9-1.2-4.5-1.2H34.4c-1.6 0-3.15.45-4.5 1.2z" fill="#00832D"/>
-                  <path d="M59.8 53H27.5L13.75 76.8c1.35.8 2.9 1.2 4.5 1.2h50.8c1.6 0 3.15-.45 4.5-1.2z" fill="#2684FC"/>
-                  <path d="M73.4 26.5l-12.7-22c-.8-1.4-1.95-2.5-3.3-3.3L43.65 25l16.15 28H87.25c0-1.55-.4-3.1-1.2-4.5z" fill="#FFBA00"/>
-                </svg>
-                Google Drive
-              </button>
-
-              <!-- Dropbox -->
-              <button type="button" class="btn-cloud btn-dropbox"
-                :disabled="pdfImport.loading"
-                @click="openDropboxPicker">
-                <!-- Dropbox logo -->
-                <svg width="16" height="14" viewBox="0 0 528 444" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                  <path fill="#0061FF" d="M132 0L0 88l132 88 132-88zm264 0L264 88l132 88 132-88zM0 264l132 88 132-88-132-88zm396-88l132 88-132 88-132-88zM132 373l132 71 132-71-132-88z"/>
-                </svg>
-                Dropbox
-              </button>
             </div>
+
+            <!-- Drop zone (hidden while background job is pending) -->
+            <template v-if="!pdfImport.backgroundJobPending">
+              <label class="pdf-dropzone"
+                :class="{ 'pdf-dropzone-has': pdfImport.fileName, 'pdf-dropzone-loading': pdfImport.loading }"
+                @dragover.prevent
+                @drop.prevent="onPdfSelected">
+                <div v-if="!pdfImport.fileName" class="pdf-dz-inner">
+                  <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+                  <p>Drop PDF here or <span class="pdf-dz-link">browse</span></p>
+                  <p class="pdf-dz-hint">Check In or Inventory report from any system</p>
+                </div>
+                <div v-else class="pdf-dz-inner pdf-dz-has">
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                  <p class="pdf-dz-name">{{ pdfImport.fileName }}</p>
+                  <p class="pdf-dz-hint">Click to choose a different file</p>
+                </div>
+                <input type="file" accept="application/pdf" style="display:none" @change="onPdfSelected" />
+              </label>
+
+              <!-- Cloud pickers -->
+              <div class="pdf-cloud-row">
+                <span class="pdf-cloud-or">or pick from</span>
+
+                <!-- Google Drive -->
+                <button type="button" class="btn-cloud btn-gdrive"
+                  :disabled="pdfImport.loading || pdfImport.submitting"
+                  @click="openGoogleDrivePicker">
+                  <svg width="16" height="14" viewBox="0 0 87.3 78" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                    <path d="M6.6 66.85l3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3l13.75-23.8H0c0 1.55.4 3.1 1.2 4.5z" fill="#0066DA"/>
+                    <path d="M43.65 25L29.9 1.2C28.55.4 27 0 25.4 0H6.9c-1.6 0-3.15.45-4.5 1.2L27.8 45z" fill="#00AC47"/>
+                    <path d="M73.55 76.8c1.35-.8 2.5-1.9 3.3-3.3l1.6-2.75 7.65-13.25c.8-1.4 1.2-2.95 1.2-4.5H59.8l5.85 11.5z" fill="#EA4335"/>
+                    <path d="M43.65 25l13.75-23.8c-1.35-.8-2.9-1.2-4.5-1.2H34.4c-1.6 0-3.15.45-4.5 1.2z" fill="#00832D"/>
+                    <path d="M59.8 53H27.5L13.75 76.8c1.35.8 2.9 1.2 4.5 1.2h50.8c1.6 0 3.15-.45 4.5-1.2z" fill="#2684FC"/>
+                    <path d="M73.4 26.5l-12.7-22c-.8-1.4-1.95-2.5-3.3-3.3L43.65 25l16.15 28H87.25c0-1.55-.4-3.1-1.2-4.5z" fill="#FFBA00"/>
+                  </svg>
+                  Google Drive
+                </button>
+
+                <!-- Dropbox -->
+                <button type="button" class="btn-cloud btn-dropbox"
+                  :disabled="pdfImport.loading || pdfImport.submitting"
+                  @click="openDropboxPicker">
+                  <svg width="16" height="14" viewBox="0 0 528 444" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                    <path fill="#0061FF" d="M132 0L0 88l132 88 132-88zm264 0L264 88l132 88 132-88zM0 264l132 88 132-88-132-88zm396-88l132 88-132 88-132-88zM132 373l132 71 132-71-132-88z"/>
+                  </svg>
+                  Dropbox
+                </button>
+              </div>
+            </template>
 
             <!-- Error -->
             <p v-if="pdfImport.error" class="pdf-error">⚠ {{ pdfImport.error }}</p>
 
-            <!-- Preview of parsed data -->
+            <!-- Preview of parsed data (arrives from background job or inline) -->
             <div v-if="pdfImport.preview" class="pdf-preview">
               <div class="pdf-preview-hd">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
@@ -2257,31 +2333,102 @@ async function moveToReview() {
             <!-- Actions -->
             <div class="pdf-import-actions">
               <button class="btn-ghost" @click="router.push(`/inspections/${inspection.id}`)">← Back</button>
-              <button v-if="!pdfImport.preview" class="btn-pdf-parse"
-                :disabled="!pdfImport.file || pdfImport.loading"
-                @click="runPdfImport">
-                <template v-if="pdfImport.loading">
-                  <svg class="spin-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>
-                  Analysing PDF…
-                </template>
-                <template v-else>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                  Analyse PDF
-                </template>
-              </button>
+              <template v-if="!pdfImport.preview && !pdfImport.backgroundJobPending">
+                <button class="btn-pdf-parse"
+                  :disabled="!pdfImport.file || pdfImport.submitting || pdfImport.loading"
+                  @click="runPdfImport">
+                  <template v-if="pdfImport.submitting">
+                    <svg class="spin-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>
+                    Sending…
+                  </template>
+                  <template v-else>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                    Analyse PDF
+                  </template>
+                </button>
+              </template>
               <template v-if="pdfImport.preview">
                 <button class="btn-ghost" @click="pdfImport.preview = null; pdfImport.file = null; pdfImport.fileName = ''">
                   Try different file
                 </button>
-                <button class="btn-pdf-apply" @click="applyPdfImport">
+                <button class="btn-pdf-apply" @click="openRoomMappingModal">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-                  Use this data
+                  Review &amp; Apply
                 </button>
               </template>
             </div>
 
           </div>
         </div>
+
+        <!-- ══ ROOM MAPPING MODAL ══════════════════════════════════════ -->
+        <Transition name="rm-modal-fade">
+          <div v-if="roomMapping.show" class="rm-overlay" @click.self="closeRoomMappingModal">
+            <div class="rm-modal">
+
+              <div class="rm-modal-hd">
+                <div class="rm-modal-hd-left">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+                  <h3 class="rm-modal-title">Match PDF Rooms to Template</h3>
+                </div>
+                <button class="rm-modal-close" @click="closeRoomMappingModal">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+              </div>
+
+              <p class="rm-modal-hint">Review the AI-suggested matches below. You can change any mapping using the dropdowns, then click Confirm.</p>
+
+              <div class="rm-modal-body">
+                <div v-for="pdfRoom in (pdfImport.preview?.rooms || [])" :key="pdfRoom.name" class="rm-row">
+                  <div class="rm-pdf-room">
+                    <span class="rm-pdf-label">PDF</span>
+                    <strong class="rm-pdf-name">{{ pdfRoom.name }}</strong>
+                    <span class="rm-item-count">{{ (pdfRoom.items || []).length }} items</span>
+                  </div>
+                  <svg class="rm-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+                  <div class="rm-template-side">
+                    <select
+                      class="rm-select"
+                      :value="roomMapping.mapping[pdfRoom.name]?.templateRoomId || 'new'"
+                      @change="e => {
+                        const tid = e.target.value
+                        const tr = (template?.sections || []).find(s => String(s.id) === tid)
+                        roomMapping.mapping = {
+                          ...roomMapping.mapping,
+                          [pdfRoom.name]: {
+                            templateRoomId: tid,
+                            templateRoomName: tr ? tr.name : pdfRoom.name
+                          }
+                        }
+                      }"
+                    >
+                      <option value="new">+ Add as new room</option>
+                      <option
+                        v-for="tr in (template?.sections || []).filter(s => s.section_type === 'room')"
+                        :key="tr.id"
+                        :value="String(tr.id)"
+                      >{{ tr.name }}</option>
+                    </select>
+                    <span v-if="roomMapping.mapping[pdfRoom.name]?.templateRoomId !== 'new'" class="rm-matched-badge">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                      Matched
+                    </span>
+                    <span v-else class="rm-new-badge">New room</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="rm-modal-ft">
+                <button class="btn-ghost" @click="closeRoomMappingModal">Cancel</button>
+                <button class="btn-pdf-apply" @click="applyWithMapping">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  Confirm &amp; Apply
+                </button>
+              </div>
+
+            </div>
+          </div>
+        </Transition>
 
         <div v-if="template || fixedSections.length">
 
@@ -4323,6 +4470,83 @@ async function moveToReview() {
 .btn-cloud:hover:not(:disabled){ border-color:#6366f1;color:#4f46e5;background:#fafafe; }
 .btn-cloud:active:not(:disabled){ background:#f5f3ff; }
 .btn-cloud:disabled{ opacity:0.45;cursor:not-allowed; }
+
+/* Background job banner */
+.pdf-bg-banner{
+  display:flex;align-items:flex-start;gap:14px;
+  background:#eff6ff;border:1px solid #bfdbfe;border-left:4px solid #3b82f6;
+  border-radius:9px;padding:16px 18px;
+}
+.pdf-bg-banner svg{ flex-shrink:0;margin-top:2px;color:#2563eb }
+.pdf-bg-banner strong{ font-size:14px;font-weight:700;color:#1e40af;display:block;margin-bottom:3px }
+.pdf-bg-banner p{ font-size:13px;color:#1d4ed8;margin:0;line-height:1.5 }
+
+/* ═══════════════════════════════════════════════════════════════════ */
+/* ROOM MAPPING MODAL                                                   */
+/* ═══════════════════════════════════════════════════════════════════ */
+.rm-overlay{
+  position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:1200;
+  display:flex;align-items:center;justify-content:center;padding:20px;
+}
+.rm-modal{
+  background:white;border-radius:14px;width:min(680px,96vw);max-height:88vh;
+  display:flex;flex-direction:column;overflow:hidden;
+  box-shadow:0 20px 60px rgba(0,0,0,0.22);
+}
+.rm-modal-hd{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:18px 20px;border-bottom:1px solid #e2e8f0;flex-shrink:0;
+}
+.rm-modal-hd-left{ display:flex;align-items:center;gap:10px }
+.rm-modal-title{ font-size:16px;font-weight:700;color:#0f172a;margin:0 }
+.rm-modal-close{
+  width:30px;height:30px;background:#f1f5f9;border:none;border-radius:50%;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;color:#64748b;
+  flex-shrink:0;transition:background 0.15s;
+}
+.rm-modal-close:hover{ background:#e2e8f0 }
+.rm-modal-hint{
+  font-size:13px;color:#64748b;padding:12px 20px 0;margin:0;flex-shrink:0;line-height:1.5;
+}
+.rm-modal-body{
+  flex:1;overflow-y:auto;padding:12px 20px 4px;display:flex;flex-direction:column;gap:10px;
+}
+.rm-row{
+  display:flex;align-items:center;gap:12px;
+  background:#f8fafc;border:1px solid #e2e8f0;border-radius:9px;padding:12px 14px;
+}
+.rm-pdf-room{ display:flex;align-items:center;gap:8px;flex:1;min-width:0 }
+.rm-pdf-label{
+  font-size:10px;font-weight:700;color:#6366f1;background:#eef2ff;border:1px solid #c7d2fe;
+  border-radius:4px;padding:1px 6px;flex-shrink:0;text-transform:uppercase;letter-spacing:0.04em;
+}
+.rm-pdf-name{ font-size:13px;font-weight:700;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis }
+.rm-item-count{ font-size:11px;color:#94a3b8;white-space:nowrap;flex-shrink:0 }
+.rm-arrow{ flex-shrink:0 }
+.rm-template-side{ display:flex;align-items:center;gap:8px;flex-shrink:0 }
+.rm-select{
+  padding:7px 10px;border:1px solid #cbd5e1;border-radius:7px;font-size:13px;
+  font-family:inherit;background:white;color:#0f172a;cursor:pointer;
+  transition:border-color 0.15s;max-width:200px;
+}
+.rm-select:focus{ outline:none;border-color:#6366f1;box-shadow:0 0 0 3px rgba(99,102,241,0.1) }
+.rm-matched-badge{
+  display:flex;align-items:center;gap:4px;font-size:11px;font-weight:700;
+  color:#16a34a;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:5px;
+  padding:2px 8px;white-space:nowrap;
+}
+.rm-new-badge{
+  font-size:11px;font-weight:700;color:#9333ea;background:#faf5ff;border:1px solid #e9d5ff;
+  border-radius:5px;padding:2px 8px;white-space:nowrap;
+}
+.rm-modal-ft{
+  display:flex;align-items:center;justify-content:flex-end;gap:10px;
+  padding:16px 20px;border-top:1px solid #f1f5f9;flex-shrink:0;
+}
+
+/* Room mapping modal transition */
+.rm-modal-fade-enter-active,.rm-modal-fade-leave-active{ transition:opacity 0.18s }
+.rm-modal-fade-enter-from,.rm-modal-fade-leave-to{ opacity:0 }
 
 /* ═══════════════════════════════════════════════════════════════════ */
 /* PHOTO GRID (View All)                                               */

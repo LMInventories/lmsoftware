@@ -553,39 +553,48 @@ onMounted(() => fetchClients())
         <div class="preview-sub">Updates as you change settings</div>
 
         <div class="cover-preview" :style="{ '--brand': effectiveColor }">
-          <div class="cp-top">
-            <div class="cp-logo">
-              <img v-if="selectedClient.logo" :src="selectedClient.logo" :alt="selectedClient.name" class="cp-logo-img" />
-              <span v-else class="cp-logo-init">{{ clientInitials }}</span>
-            </div>
-            <div class="cp-type">Check In Report</div>
+
+          <!-- 1. Header bar — full-bleed brand colour, client logo centred -->
+          <div class="cp-header">
+            <img v-if="selectedClient.logo" :src="selectedClient.logo" :alt="selectedClient.name" class="cp-header-img" />
+            <span v-else class="cp-header-init">{{ clientInitials }}</span>
           </div>
+
+          <!-- 2. Property photo — full width placeholder -->
           <div class="cp-photo">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
             <span>Property photo</span>
           </div>
-          <div class="cp-grid">
-            <div class="cp-cell">
-              <div class="cp-lbl">Address</div>
+
+          <!-- 3. Report type label — centred below photo, body text colour -->
+          <div class="cp-type" :style="{ color: form.report_body_text_color }">Check In Report</div>
+
+          <!-- 4. Info rows — centred, label + value, thin dividers between (matches real cover) -->
+          <div class="cp-rows">
+            <div class="cp-divider"></div>
+            <div class="cp-row">
+              <div class="cp-lbl">ADDRESS</div>
               <div class="cp-val" :style="{ color: form.report_body_text_color }">12 Example St, London</div>
             </div>
-            <div class="cp-cell">
-              <div class="cp-lbl">Date</div>
+            <div class="cp-divider"></div>
+            <div class="cp-row">
+              <div class="cp-lbl">DATE</div>
               <div class="cp-val" :style="{ color: form.report_body_text_color }">{{ today }}</div>
             </div>
-            <div class="cp-cell">
-              <div class="cp-lbl">Inspector</div>
+            <div class="cp-divider"></div>
+            <div class="cp-row">
+              <div class="cp-lbl">CLERK</div>
               <div class="cp-val" :style="{ color: form.report_body_text_color }">Robyn Lee</div>
             </div>
-            <div class="cp-cell">
-              <div class="cp-lbl">Reference</div>
-              <div class="cp-val" :style="{ color: form.report_body_text_color }">CHK-2026-0001</div>
-            </div>
+            <div class="cp-divider"></div>
           </div>
+
+          <!-- 5. Footer bar — brand colour, company name + email centred (matches real cover) -->
           <div class="cp-footer">
             <span :style="{ color: footerTextColor }">L&amp;M Inventories</span>
-            <span :style="{ color: footerTextColor }">info@example.com</span>
+            <span :style="{ color: footerTextColor }">info@lminventories.co.uk</span>
           </div>
+
         </div>
 
         <!-- Section header preview -->
@@ -611,9 +620,9 @@ onMounted(() => fetchClients())
             @click.prevent="$router.push('/clients')"
             class="client-settings-pill"
             :style="{
-              background: brandColor + '18',
-              color: brandColor,
-              borderColor: brandColor + '40'
+              background: effectiveColor + '18',
+              color: effectiveColor,
+              borderColor: effectiveColor + '40'
             }"
           >Client Settings</a>
         </div>
@@ -1215,32 +1224,32 @@ onMounted(() => fetchClients())
   font-size: 10px;
 }
 
-.cp-top {
+/* 1. Header bar — full-bleed brand colour, client logo centred */
+.cp-header {
   background: var(--brand);
-  padding: 12px 14px 10px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-}
-
-.cp-logo {
-  width: 34px;
-  height: 34px;
-  border-radius: 6px;
-  background: rgba(255,255,255,0.2);
+  height: 46px;
   display: flex;
   align-items: center;
   justify-content: center;
-  overflow: hidden;
+  padding: 6px 12px;
 }
 
-.cp-logo-img { width: 100%; height: 100%; object-fit: contain; }
-.cp-logo-init { font-size: 11px; font-weight: 700; color: white; }
-.cp-type { font-size: 8px; font-weight: 700; color: rgba(255,255,255,0.8); text-transform: uppercase; letter-spacing: 0.1em; }
+.cp-header-img {
+  max-height: 34px;
+  max-width: 100%;
+  object-fit: contain;
+}
 
+.cp-header-init {
+  font-size: 15px;
+  font-weight: 700;
+  color: white;
+  letter-spacing: 0.04em;
+}
+
+/* 2. Property photo placeholder — full width */
 .cp-photo {
-  height: 50px;
+  height: 58px;
   background: #f1f5f9;
   display: flex;
   flex-direction: column;
@@ -1251,20 +1260,49 @@ onMounted(() => fetchClients())
   font-size: 9px;
 }
 
-.cp-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1px;
+/* 3. Report type label — centred, below photo */
+.cp-type {
+  text-align: center;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 7px 8px 3px;
+}
+
+/* 4. Info rows — centred stacked rows with dividers (matches real cover layout) */
+.cp-rows {
+  padding: 0 10px;
+}
+
+.cp-divider {
+  height: 1px;
   background: #f1f5f9;
 }
 
-.cp-cell { background: white; padding: 6px 8px; }
-.cp-lbl { font-size: 7px; color: #94a3b8; margin-bottom: 2px; font-weight: 600; }
-.cp-val { font-size: 9px; font-weight: 600; }
+.cp-row {
+  text-align: center;
+  padding: 3px 0;
+}
 
+.cp-lbl {
+  font-size: 6px;
+  font-weight: 700;
+  color: #94a3b8;
+  letter-spacing: 0.07em;
+  margin-bottom: 1px;
+}
+
+.cp-val {
+  font-size: 8px;
+  font-weight: 600;
+}
+
+/* 5. Footer — brand colour, company name + email centred (stacked) */
 .cp-footer {
   display: flex;
-  justify-content: space-between;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
   padding: 6px 10px;
   font-size: 7px;
   font-weight: 600;

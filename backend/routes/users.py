@@ -117,7 +117,7 @@ def delete_user(user_id):
 @jwt_required()
 def change_password():
     user_id = get_jwt_identity()
-    user = User.query.get(int(user_id))
+    user = db.session.get(User, int(user_id))
     if not user:
         return jsonify({'error': 'User not found'}), 404
     data = request.json

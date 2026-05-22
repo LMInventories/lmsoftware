@@ -49,7 +49,7 @@ def generate_inspection_pdf(inspection_id: int) -> bytes:
     Generate a PDF for the given inspection and return raw bytes.
     Raises ValueError if the inspection doesn't exist.
     """
-    inspection = Inspection.query.get(inspection_id)
+    inspection = db.session.get(Inspection, inspection_id)
     if not inspection:
         raise ValueError(f'Inspection {inspection_id} not found')
 

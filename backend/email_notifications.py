@@ -123,7 +123,7 @@ def trigger_inspection_notification(event, inspection):
     try:
         from routes.email_service import send_inspection_notification
         client   = inspection.client if hasattr(inspection, 'client') else \
-                   Client.query.get(inspection.property.client_id) if inspection.property else None
+                   db.session.get(Client, inspection.property.client_id) if inspection.property else None
         prop     = inspection.property
         if not client or not client.email:
             return

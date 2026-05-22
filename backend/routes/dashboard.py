@@ -11,12 +11,12 @@ dashboard_bp = Blueprint('dashboard', __name__)
 # ── Dashboard response cache ──────────────────────────────────────────────────
 # Dashboard data (counts, recent activity, upcoming) changes only when someone
 # creates or updates an inspection — not on every page view. Caching per user
-# for 30 seconds means:
+# for 5 minutes means:
 #   • First load: normal DB query (~200–500ms)
-#   • Every subsequent load within 30 s: instant response from memory
+#   • Every subsequent load within 5 min: instant response from memory
 # The cache is keyed by user_id so each user sees their own scoped data.
 # Note: each gunicorn worker has its own cache dict; data can be up to
-# 30 s stale in the rare case two workers are used back-to-back. Acceptable.
+# 5 min stale in the rare case two workers are used back-to-back. Acceptable.
 _CACHE: dict = {}
 _CACHE_TTL = 300  # seconds (5 minutes)
 
@@ -49,7 +49,7 @@ def invalidate_dashboard_cache(user_id: int | str | None = None):
 @jwt_required()
 def get_dashboard_stats():
     user_id = get_jwt_identity()
-    current_user = User.query.get(int(user_id))
+    current_user = db.session.get(User, int(user_id))
     role = current_user.role if current_user else None
 
     # Return cached response if fresh

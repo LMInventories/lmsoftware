@@ -25,7 +25,7 @@ Usage (called automatically from routes/inspections.py on check_out complete):
 import json
 import urllib.request
 import urllib.error
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -201,7 +201,7 @@ def push_checkout(inspection, pdf_bytes: bytes | None = None) -> tuple[bool, str
             try:
                 from models import db
                 inspection.depositary_tenancy_id = str(tenancy_id)
-                inspection.depositary_pushed_at  = datetime.utcnow()
+                inspection.depositary_pushed_at  = datetime.now(timezone.utc)
                 db.session.commit()
             except Exception as e:
                 print(f'[depositary] warning: could not save tenancy_id back to inspection: {e}')

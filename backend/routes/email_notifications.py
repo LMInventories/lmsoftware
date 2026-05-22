@@ -153,7 +153,7 @@ def trigger_inspection_notification(event, inspection):
     try:
         from routes.email_service import send_inspection_notification
         client   = inspection.client if hasattr(inspection, 'client') else \
-                   Client.query.get(inspection.property.client_id) if inspection.property else None
+                   db.session.get(Client, inspection.property.client_id) if inspection.property else None
         prop     = inspection.property
         if not client or not client.email:
             return
@@ -205,7 +205,7 @@ def trigger_typist_assignment(inspection):
     """
     try:
         from routes.email_service import send_typist_assignment
-        typist = inspection.typist if getattr(inspection, 'typist', None) else                  User.query.get(inspection.typist_id) if inspection.typist_id else None
+        typist = inspection.typist if getattr(inspection, 'typist', None) else                  db.session.get(User, inspection.typist_id) if inspection.typist_id else None
         if not typist or not typist.email:
             return
         prop   = inspection.property
@@ -345,6 +345,54 @@ def _send_all_clerk_summaries():
     return sent, errors
 
 
+# ── Transient template cleanup ───────────────────────────────────────────────
+
+def purge_orphaned_transient_templates(min_age_days: int = 7) -> int:
+    """
+    Delete is_transient templates that are no longer referenced by any inspection.
+
+    Transient templates are auto-generated when a PDF is imported.  They are
+    kept only so that the inspection can render its report structure; once the
+    inspection is deleted (or the template was created but never attached) the
+    template is dead weight.
+
+    Safety guards:
+    • Only templates older than *min_age_days* (default 7) are touched.
+    • A template still referenced by at least one Inspection is never removed,
+      even if it is marked is_transient.
+
+    Returns the number of templates deleted.
+    """
+    from datetime import timezone, timedelta
+    from models import db, Template, Inspection
+    from sqlalchemy import exists
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=min_age_days)
+
+    # Subquery: template IDs still used by at least one inspection
+    referenced = db.session.query(Inspection.template_id).filter(
+        Inspection.template_id.isnot(None)
+    ).subquery()
+
+    orphans = (
+        db.session.query(Template)
+        .filter(
+            Template.is_transient == True,
+            Template.created_at < cutoff,
+            ~Template.id.in_(referenced),
+        )
+        .all()
+    )
+
+    count = len(orphans)
+    for t in orphans:
+        db.session.delete(t)
+    if count:
+        db.session.commit()
+        print(f'[cleanup] purged {count} orphaned transient template(s)')
+    return count
+
+
 # ── APScheduler registration ──────────────────────────────────────────────────
 
 def schedule_clerk_summaries(app):
@@ -409,10 +457,23 @@ def schedule_clerk_summaries(app):
         from apscheduler.triggers.interval import IntervalTrigger
         scheduler.add_job(_keepalive_job, IntervalTrigger(minutes=8))
 
+        # ── Transient template purge ──────────────────────────────────────────
+        # Runs at 03:00 each night. Deletes orphaned PDF-import templates that
+        # are no longer attached to any inspection and are at least 7 days old.
+        def _cleanup_job():
+            with app.app_context():
+                try:
+                    purge_orphaned_transient_templates()
+                except Exception as e:
+                    print(f'[cleanup] transient template purge error: {e}')
+
+        scheduler.add_job(_cleanup_job, CronTrigger(hour=3, minute=0, timezone='Europe/London'))
+
         scheduler.start()
         print(f'[email] clerk summary scheduler started — fires at {hour:02d}:{minute:02d} Europe/London')
         print(f'[email] confirmation email scheduler started — fires at 08:00 Europe/London')
         print('[email] keep-alive ping scheduled every 8 minutes')
+        print('[cleanup] transient template purge scheduled — fires at 03:00 Europe/London')
         return scheduler
     except ImportError:
         print('[email] APScheduler not installed — scheduled emails disabled. Run: pip install apscheduler')

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_sqlalchemy import SQLAlchemy
 import json
@@ -17,7 +17,7 @@ class User(db.Model):
     role               = db.Column(db.String(20), nullable=False)  # admin, manager, clerk, typist, client
     color              = db.Column(db.String(7), default='#6366f1')
     is_ai              = db.Column(db.Boolean, default=False, nullable=False)
-    created_at         = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at         = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     reset_token        = db.Column(db.String(100), nullable=True)
     reset_token_expiry = db.Column(db.DateTime, nullable=True)
     client_id          = db.Column(db.Integer, db.ForeignKey('clients.id'), nullable=True)
@@ -68,7 +68,7 @@ class Client(db.Model):
     report_orientation          = db.Column(db.String(20))    # 'portrait' | 'landscape'
     invert_logo                 = db.Column(db.Boolean, default=False)  # swap to inverted logo on PDF cover footer
     report_footer_text_color    = db.Column(db.String(7))    # colour of company name + email text in PDF cover footer
-    created_at            = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at            = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     email_notifications   = db.Column(db.Text)
 
     properties = db.relationship('Property', backref='client', lazy=True, cascade='all, delete-orphan')
@@ -82,6 +82,7 @@ class Client(db.Model):
             'company':               self.company,
             'address':               self.address,
             'logo':                  self.logo,
+            'logo_inverted':         self.logo_inverted,
             'primary_color':         self.primary_color,
             'report_disclaimer':     self.report_disclaimer,
             'report_color_override':  self.report_color_override,
@@ -116,7 +117,7 @@ class Property(db.Model):
     meter_water       = db.Column(db.String(255))
     notes             = db.Column(db.Text)
     overview_photo    = db.Column(db.Text)                 # base64 encoded
-    created_at        = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at        = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     inspections = db.relationship('Inspection', backref='property', lazy=True, cascade='all, delete-orphan')
 
@@ -203,8 +204,8 @@ class Inspection(db.Model):
     # Once True, subsequent complete->active->complete cycles skip the auto email
     # so clients only receive it once.  Manual 'Share PDF' is unaffected.
     completion_email_sent = db.Column(db.Boolean, default=False, nullable=False)
-    created_at  = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at  = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at  = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at  = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     inspector = db.relationship('User', foreign_keys=[inspector_id], backref='inspections_as_inspector')
     typist    = db.relationship('User', foreign_keys=[typist_id],    backref='inspections_as_typist')
@@ -262,8 +263,8 @@ class Template(db.Model):
     # These are functional (inspections reference them) but are hidden from the
     # Templates management UI so they don't clutter the list.
     is_transient    = db.Column(db.Boolean, default=False)
-    created_at      = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at      = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at      = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at      = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     sections = db.relationship(
         'Section', backref='template', lazy=True,
@@ -294,7 +295,7 @@ class Section(db.Model):
     section_type = db.Column(db.String(50), default='room')   # 'room' | 'fixed'
     order_index  = db.Column(db.Integer, default=0)
     is_required  = db.Column(db.Boolean, default=False)
-    created_at   = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at   = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     items = db.relationship(
         'Item', backref='section', lazy=True,
@@ -325,7 +326,7 @@ class Item(db.Model):
     requires_condition = db.Column(db.Boolean, default=True)
     answer_options     = db.Column(db.Text, nullable=True, default='')   # JSON array, e.g. '["Yes","No","N/A"]'
     order_index        = db.Column(db.Integer, default=0)
-    created_at         = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at         = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     def to_dict(self):
         return {
@@ -352,7 +353,7 @@ class SectionPreset(db.Model):
     description = db.Column(db.Text, default='')
     category    = db.Column(db.String(50), default='room')  # 'room' | 'fixed'
     items_json  = db.Column(db.Text, default='[]')          # JSON snapshot of items
-    created_at  = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at  = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     def to_dict(self):
         items = json.loads(self.items_json) if self.items_json else []
@@ -367,11 +368,19 @@ class SectionPreset(db.Model):
         }
 
 
+# ── Transcription cost constants ──────────────────────────────────────────────
+# Update these when OpenAI / Anthropic change their pricing.
+USD_TO_GBP           = 0.79
+WHISPER_PER_MIN_USD  = 0.006
+HAIKU_IN_PER_1M_USD  = 0.80
+HAIKU_OUT_PER_1M_USD = 4.00
+
+
 class TranscriptionUsage(db.Model):
     __tablename__ = 'transcription_usage'
 
     id            = db.Column(db.Integer, primary_key=True)
-    created_at    = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    created_at    = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     call_type     = db.Column(db.String(20), nullable=False)  # 'item' | 'full'
     inspection_id = db.Column(db.Integer, db.ForeignKey('inspections.id', ondelete='SET NULL'), nullable=True)
     user_id       = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
@@ -381,11 +390,6 @@ class TranscriptionUsage(db.Model):
     section_type  = db.Column(db.String(30), default='room')
 
     def to_dict(self):
-        USD_TO_GBP           = 0.79
-        WHISPER_PER_MIN_USD  = 0.006
-        HAIKU_IN_PER_1M_USD  = 0.80
-        HAIKU_OUT_PER_1M_USD = 4.00
-
         whisper_usd = (self.audio_seconds / 60) * WHISPER_PER_MIN_USD
         claude_usd  = (self.input_tokens  / 1_000_000) * HAIKU_IN_PER_1M_USD + \
                       (self.output_tokens / 1_000_000) * HAIKU_OUT_PER_1M_USD

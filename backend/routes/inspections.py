@@ -315,7 +315,7 @@ def create_inspection():
 
         # Inherit from source inspection's template ONLY for lifecycle types
         if not template_id and not is_standalone and data.get('source_inspection_id'):
-            source_insp = Inspection.query.get(data['source_inspection_id'])
+            source_insp = db.session.get(Inspection, data['source_inspection_id'])
             if source_insp and source_insp.template_id:
                 template_id = source_insp.template_id
 
@@ -335,7 +335,7 @@ def create_inspection():
     # ── Seed from source inspection (lifecycle types only) ───────────────
     # Only attempt transform when the source has actual report_data saved.
     if source_id:
-        source = Inspection.query.get(source_id)
+        source = db.session.get(Inspection, source_id)
         if source and source.report_data:
             transformed = _transform_report_data(
                 source_type=source.inspection_type,
@@ -446,6 +446,36 @@ def update_inspection(inspection_id):
             return jsonify({'error': 'Typists can only update report data and status'}), 403
         if 'status' in data and data['status'] not in ('processing', 'review'):
             return jsonify({'error': 'Typists can only move inspection to review'}), 403
+
+    # ── Conflict detection ────────────────────────────────────────────────────
+    # The mobile app sends `client_updated_at` = the server's updated_at timestamp
+    # from when it last downloaded or successfully synced this inspection.
+    # If the DB has a newer updated_at, another device has pushed changes since
+    # then — reject with 409 so the client can re-download before overwriting.
+    client_updated_at_str = data.get('client_updated_at')
+    if client_updated_at_str and inspection.updated_at:
+        try:
+            client_updated_at = datetime.fromisoformat(client_updated_at_str.replace('Z', '+00:00'))
+            # Normalise both sides to naive UTC for comparison (DB stores naive UTC)
+            server_updated_at = inspection.updated_at
+            if server_updated_at.tzinfo is None:
+                # Legacy naive datetime — treat as UTC
+                from datetime import timezone as _tz
+                server_updated_at = server_updated_at.replace(tzinfo=_tz.utc)
+            if client_updated_at.tzinfo is None:
+                from datetime import timezone as _tz
+                client_updated_at = client_updated_at.replace(tzinfo=_tz.utc)
+            if server_updated_at > client_updated_at:
+                return jsonify({
+                    'error': (
+                        'This inspection was updated on another device or the web '
+                        'since you last synced it. Please re-download it to get the '
+                        'latest version before syncing your changes.'
+                    )
+                }), 409
+        except (ValueError, TypeError) as _cua_err:
+            # Malformed timestamp — skip conflict check rather than blocking sync
+            print(f'[conflict] could not parse client_updated_at: {_cua_err}')
 
     going_complete = (
         'status' in data and
@@ -614,8 +644,8 @@ def update_inspection(inspection_id):
         def _generate_and_send():
             with _app.app_context():
                 try:
-                    from models import Inspection as _Inspection
-                    insp   = _Inspection.query.get(_insp_id)
+                    from models import db as _db, Inspection as _Inspection
+                    insp   = _db.session.get(_Inspection, _insp_id)
                     if not insp:
                         print(f'[pdf] inspection {_insp_id} not found in background thread')
                         return
@@ -680,7 +710,7 @@ def update_inspection(inspection_id):
                                     from utils.s3 import is_configured as s3_ok, upload_bytes, presign_get, new_key
                                     if s3_ok():
                                         import datetime as _dt
-                                        _key = f"reports/inspection-{_insp_id}-{_dt.datetime.utcnow().strftime('%Y%m%d%H%M%S')}.pdf"
+                                        _key = f"reports/inspection-{_insp_id}-{_dt.datetime.now(_dt.timezone.utc).strftime('%Y%m%d%H%M%S')}.pdf"
                                         upload_bytes(pdf_bytes, _key, content_type='application/pdf')
                                         _pdf_dl_url = presign_get(_key, expires=604800)  # 7 days (AWS S3 maximum)
                                         print(f'[pdf] S3 upload OK — presigned URL generated (7-day expiry)')
@@ -745,7 +775,10 @@ def update_inspection(inspection_id):
         # The 30-second timeout in _send() prevents it from hanging forever.
         threading.Thread(target=_generate_and_send, daemon=False).start()
 
-    return jsonify({'message': 'Inspection updated'})
+    return jsonify({
+        'message':    'Inspection updated',
+        'updated_at': inspection.updated_at.isoformat() if inspection.updated_at else None,
+    })
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -896,9 +929,9 @@ def share_pdf(inspection_id):
         with _app.app_context():
             try:
                 from routes.pdf_generator import generate_inspection_pdf as _gen_pdf
-                from models import Inspection as _Insp
+                from models import db as _db2, Inspection as _Insp
                 from routes.email_service import send_report_complete
-                insp   = _Insp.query.get(_insp_id)
+                insp   = _db2.session.get(_Insp, _insp_id)
                 client = insp.property.client if insp.property else None
                 prop   = insp.property
 
@@ -929,7 +962,7 @@ def share_pdf(inspection_id):
                         from utils.s3 import is_configured as s3_ok, upload_bytes, presign_get
                         if s3_ok():
                             import datetime as _dt
-                            _key = f"reports/inspection-{_insp_id}-{_dt.datetime.utcnow().strftime('%Y%m%d%H%M%S')}.pdf"
+                            _key = f"reports/inspection-{_insp_id}-{_dt.datetime.now(_dt.timezone.utc).strftime('%Y%m%d%H%M%S')}.pdf"
                             upload_bytes(_pdf_bytes, _key, content_type='application/pdf')
                             _pdf_dl_url = presign_get(_key, expires=604800)  # 7 days
                             print(f'[share-pdf] S3 upload OK — presigned URL generated')
@@ -1112,12 +1145,246 @@ def _build_template_from_pdf(pdf_rooms, inspection):
     return template
 
 
+# ── AI redistribution ────────────────────────────────────────────────────────
+#
+# Second AI pass: takes the composite template structure and all extracted PDF
+# content, then redistributes every piece of information to the correct
+# template section/item — including splitting compound PDF items (e.g.
+# "Walls" description that mentions skirting → Walls + Woodwork items).
+#
+# Returns a report_data dict keyed by composite section/item IDs.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_REDISTRIBUTION_PROMPT = """You are a UK property inventory expert. Your task is to redistribute extracted PDF content into a specific template for a Check In report.
+
+COMPOSITE TEMPLATE STRUCTURE (your target — use these exact IDs):
+__TEMPLATE_JSON__
+
+EXTRACTED PDF CONTENT (raw, as the AI read the PDF):
+__PDF_CONTENT_JSON__
+
+═══════════════════════════════════════
+YOUR TASK
+═══════════════════════════════════════
+Read ALL extracted PDF content and assign every piece of information to the most appropriate template section and item. A single PDF entry may need to be SPLIT across multiple template items. Never leave content unassigned if a suitable template item exists.
+
+═══════════════════════════════════════
+LABEL NORMALISATION — PDF labels vary; map them to these exact template item names
+═══════════════════════════════════════
+
+PDF label variants                                  → Template item name
+──────────────────────────────────────────────────────────────────────────
+"Door & Frame", "Door/Frame", "Door/Frame/Threshold" → "Door and Frame"
+"Door Fittings", "Door/Fittings"                    → "Door Fittings"
+"Windows & Frames", "Windows/Frames", "Window(s)/Sill",
+  "Window & Sill", "Windows/Sill"                   → "Windows & Frames"
+"Curtains & Blinds", "Curtains/Blinds"              → "Curtains & Blinds"
+"Switches & Sockets", "Switches/Sockets"            → "Switches / Sockets"
+"Smoke/Carbon Alarms", "Smoke & Carbon Alarms",
+  "Smoke Alarms"                                    → "Smoke/Carbon Alarms"
+"Built-in Storage", "Built In Storage"              → "Built-In Storage"
+"Shower & Screens", "Shower & Screen",
+  "Shower/Screen"                                   → "Shower & Screen"
+"Bath & Taps", "Bath/Taps"                         → "Bath & Taps"
+"Sink & Taps", "Sink/Taps"                         → "Sink & Taps"
+"Wash Basin", "Basin"                              → "Wash Basin"
+"Wall Units", "Wall Mounted Units"                 → "Wall Units"
+"Base Units", "Base Mounted Units"                 → "Base Units"
+"Worktop", "Work Surface"                          → "Worktop"
+"Boundaries", "Garden Boundaries"                  → "Boundaries"
+
+If the PDF label does not appear above, use semantic similarity to the nearest template item name.
+
+═══════════════════════════════════════
+COMPOUND HEADING SPLITTING — when a PDF item covers multiple template items
+═══════════════════════════════════════
+
+These PDF heading patterns MUST be split across separate template items:
+
+A) "Door/Frame/Threshold", "Door, Frame & Fittings", "Door/Frame/Fittings":
+   • Door panel + frame material/description → "Door and Frame"
+   • Handles, locks, hinges, letterbox, knocker, spy hole, latch, bolt → "Door Fittings"
+
+B) "Walls" (or "Walls/Skirting", "Wall Surfaces") when the description mentions skirting:
+   • Painted/plastered wall surface text → "Walls"
+   • Any skirting board, architrave, picture rail, dado rail, coving or exposed timber text → "Woodwork"
+   Example: PDF "Walls" description = "White painted walls. White painted skirting boards."
+     → Walls: "White painted walls"
+     → Woodwork: "White painted skirting boards"
+
+C) "Window(s)/Sill", "Windows & Sill", "Windows/Frame/Fittings":
+   • Glazing, frames, sills, window material → "Windows & Frames"
+   • Window handles, stays, restrictors, locks (if the template has a separate Window Fittings item) → Window Fittings
+
+D) "Walls/Ceiling" or "Walls & Ceiling":
+   • Wall surface → "Walls"
+   • Ceiling surface → "Ceiling"
+
+E) "Floor/Skirting", "Floor & Skirting":
+   • Floor covering → "Flooring"
+   • Skirting/architrave → "Woodwork"
+
+═══════════════════════════════════════
+SEMANTIC SPLITTING RULES — what content belongs where
+═══════════════════════════════════════
+
+WALLS items (template "Walls"):
+  ✓ Painted/plastered wall surfaces, wallpaper, wall tiles (non-splashback)
+  ✗ NOT skirting boards, architraves, picture rails → those go to Woodwork
+  ✗ NOT ceiling → goes to Ceiling
+
+WOODWORK items (template "Woodwork"):
+  ✓ Skirting boards, architraves, picture rails, dado rails, door stop beading
+  ✓ Exposed painted timber that is not a door/frame/floor
+  ✓ Coving if described as part of the woodwork finish
+  ✓ Banisters/handrails on stairs (if no separate item exists)
+
+DOOR AND FRAME items (template "Door and Frame"):
+  ✓ Door panel (material, colour, paint finish, glass inserts)
+  ✓ Door frame / surround / architrave attached to the door
+  ✗ NOT handles, locks, hinges, letter box, knocker, spy hole → Door Fittings
+
+DOOR FITTINGS items (template "Door Fittings"):
+  ✓ Handles (lever/knob), hinges, latch, mortice lock, Yale lock, bolt lock
+  ✓ Letterbox, door knocker, door number, spy hole
+  ✓ Door chain, door stop
+
+WINDOWS & FRAMES items (template "Windows & Frames"):
+  ✓ Window frame material and colour (uPVC, timber, aluminium)
+  ✓ Window panes/glazing, sills (internal and external), trickle vents
+  ✓ Window handles, integrated locks, restrictors
+  ✓ Any item labelled "Window(s)/Sill" in the PDF in its entirety
+
+CURTAINS & BLINDS items (template "Curtains & Blinds"):
+  ✓ Curtains, curtain poles/tracks/rings
+  ✓ Roller blinds, Venetian blinds, Roman blinds, wand, pull cord, acorns
+
+HEATING items (template "Heating"):
+  ✓ Radiators, electric panel heaters, underfloor heating manifold
+  ✓ Thermostatic radiator valves (TRVs) if described with the radiator
+
+BUILT-IN STORAGE items (template "Built-In Storage"):
+  ✓ Built-in wardrobes, airing cupboards, understairs cupboards
+  ✓ Fitted shelving units, meter cupboards integrated into the room
+
+SMOKE/CARBON ALARMS items (template "Smoke/Carbon Alarms"):
+  ✓ Smoke alarms, heat alarms, carbon monoxide alarms
+  ✓ Combined CO/smoke detectors
+
+APPLIANCE ITEMS (template sections with items like Extractor, Hob, Oven, Boiler,
+  Washing Machine, Dishwasher, Fridge-Freezer):
+  ✓ Match each appliance to its named template item exactly
+  ✓ Include make, model, serial number in description; condition issues in condition
+
+GARDEN / EXTERNAL ITEMS:
+  ✓ "Boundaries" → walls, fences, gates, hedges forming the garden perimeter
+  ✓ "Flooring" (in garden) → paving, patio, decking, lawn/turf, gravel
+  ✓ "Contents" (in garden) → bins, garden furniture, sheds
+
+═══════════════════════════════════════
+FORMATTING RULES
+═══════════════════════════════════════
+
+• Sentence case throughout: "WHITE PAINTED WALLS" → "White painted walls"
+• Preserve brand-specific capitalisation: uPVC, UPVC, GCH, Ideal, Hotpoint, Beko
+• Multi-element description: join with newline character (\\n)
+  e.g. "White painted door\\nWhite painted frame\\n2 x glass inserts"
+• Condition field: the assessment, defects, or "In good order" / "Good clean condition"
+  e.g. "Light scratches consistent with use", "Tested for power", "Appears complete"
+• If the PDF does not separate description from condition, split at the first condition
+  signal word/phrase: Good / Fair / Poor / As new / Scratch / Mark / Chip / Crack /
+  Worn / Loose / Missing / Damaged / Slight / Minor / Heavy / In good order /
+  Tested for power / Appears complete
+• If no defects are noted and condition is implied good, set condition to "In good order"
+
+═══════════════════════════════════════
+ROOM ASSIGNMENT
+═══════════════════════════════════════
+
+• Assign each PDF room's content to the matching template section (they are pre-matched — the sectionId in the template corresponds to the PDF room).
+• If the same template section appears multiple times in the template JSON (merged rooms), combine content from all matching PDF rooms into that one section, deduplicating where possible.
+
+═══════════════════════════════════════
+OUTPUT
+═══════════════════════════════════════
+Return ONLY valid JSON — no markdown fences, no explanation, no trailing text:
+{
+  "SECTION_ID": {
+    "ITEM_ID": {
+      "description": "...",
+      "condition": "..."
+    }
+  }
+}
+
+Rules:
+• Use the exact numeric string IDs from the template above
+• Only include sections and items that have actual content to fill
+• Every item must have both "description" and "condition" keys (use empty string "" if genuinely absent)
+• Do not invent content — only use what is in the extracted PDF"""
+
+
+def _ai_redistribute_items(composite_template, pdf_rooms):
+    """
+    Call Claude to redistribute all extracted PDF content into the composite
+    template's section/item structure. Returns a report_data dict ready to save,
+    or None on failure (caller should fall back to fuzzy matching).
+    """
+    import os
+    api_key = os.environ.get('ANTHROPIC_API_KEY')
+    if not api_key:
+        return None
+
+    # Build a clean template representation for the AI
+    template_json = []
+    for sec in (composite_template.sections or []):
+        if sec.section_type != 'room':
+            continue
+        sec_entry = {'sectionId': str(sec.id), 'name': sec.name, 'items': []}
+        for item in (sec.items or []):
+            sec_entry['items'].append({'itemId': str(item.id), 'name': item.name})
+        template_json.append(sec_entry)
+
+    # Build a clean PDF content representation for the AI
+    pdf_content = []
+    for room in pdf_rooms:
+        room_entry = {'room': room.get('name', ''), 'items': []}
+        for item in (room.get('items') or []):
+            room_entry['items'].append({
+                'label':       item.get('label', ''),
+                'description': item.get('description', ''),
+                'condition':   item.get('condition', ''),
+            })
+        pdf_content.append(room_entry)
+
+    prompt = _REDISTRIBUTION_PROMPT \
+        .replace('__TEMPLATE_JSON__', json.dumps(template_json, indent=2)) \
+        .replace('__PDF_CONTENT_JSON__', json.dumps(pdf_content, indent=2))
+
+    try:
+        from anthropic import Anthropic
+        client  = Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model='claude-sonnet-4-6',
+            max_tokens=8192,
+            messages=[{'role': 'user', 'content': prompt}],
+        )
+        raw = response.content[0].text.strip()
+        raw = raw.replace('```json', '').replace('```', '').strip()
+        redistributed = json.loads(raw)
+        print(f'[apply-pdf-import] AI redistribution returned {len(redistributed)} sections')
+        return redistributed
+    except Exception as e:
+        print(f'[apply-pdf-import] AI redistribution failed: {e}')
+        return None
+
+
 # POST /api/inspections/<id>/apply-pdf-import
 #
 # Stores Claude's parsed PDF data as the full report_data for the check-in.
-# If no template is assigned, creates one from the PDF structure.
-# Data is written to both the main report_data fields (so the check-in view
-# renders it) and to _importedSource (so check-out comparison columns work).
+# If redistributeItems=True in the body, makes a second AI call to intelligently
+# distribute content across the correct template items (splitting compound PDF
+# entries, moving skirting to Woodwork, etc.).
 # ─────────────────────────────────────────────────────────────────────────────
 @inspections_bp.route('/<int:inspection_id>/apply-pdf-import', methods=['POST'])
 @jwt_required()
@@ -1131,9 +1398,10 @@ def apply_pdf_import(inspection_id):
     if not parsed:
         return jsonify({'error': 'No parsed data provided'}), 400
 
-    pdf_rooms     = parsed.get('rooms') or []
-    pdf_fixed     = parsed.get('fixedSections') or {}
-    room_mappings = parsed.get('roomMappings') or []
+    pdf_rooms        = parsed.get('rooms') or []
+    pdf_fixed        = parsed.get('fixedSections') or {}
+    room_mappings    = parsed.get('roomMappings') or []
+    redistribute_items = bool(parsed.get('redistributeItems', False))
     # room_mappings: [{pdfRoomName: str, templateSectionId: int|null}]
     # templateSectionId is the ID of a Section in *any* check-in template.
     # null / missing → import as a free-form new room.
@@ -1229,17 +1497,50 @@ def apply_pdf_import(inspection_id):
 
     inspection.template_id = composite.id
 
-    # ── Build report_data keyed by the NEW composite section/item IDs ─────
-    # We need fresh item lookups since items were just inserted
-    # Reload the new sections with their items
+    # ── Reload composite sections so SQLAlchemy sees the new items ────────
     for src_id, new_sec in src_to_new_sec.items():
         db.session.refresh(new_sec)
     for new_sec in new_room_sec_map.values():
         db.session.refresh(new_sec)
+    db.session.refresh(composite)   # populate composite.sections
 
+    # ── AI redistribution (smart mode) ───────────────────────────────────
+    # When redistributeItems=True, ask Claude to map all extracted PDF content
+    # into the correct composite template items — splitting compound entries,
+    # moving skirting to Woodwork, fittings to Door Fittings, etc.
     report_data = {}
+    if redistribute_items:
+        ai_result = _ai_redistribute_items(composite, pdf_rooms)
+        if ai_result:
+            # The AI returns {sectionId: {itemId: {description, condition}}}
+            # Validate the IDs exist in the composite before accepting
+            valid_sec_ids  = {str(s.id) for s in (composite.sections or [])}
+            valid_item_ids = {str(i.id) for s in (composite.sections or []) for i in (s.items or [])}
+            for sec_id, items in ai_result.items():
+                if sec_id not in valid_sec_ids:
+                    continue
+                report_data[sec_id] = {}
+                for item_id, entry in items.items():
+                    if item_id not in valid_item_ids:
+                        continue
+                    if isinstance(entry, dict):
+                        report_data[sec_id][item_id] = {
+                            'description': (entry.get('description') or '').strip(),
+                            'condition':   (entry.get('condition')   or '').strip(),
+                        }
+            print(f'[apply-pdf-import] smart redistribution used — {len(report_data)} sections populated')
+        else:
+            print('[apply-pdf-import] AI redistribution failed/unavailable — falling back to fuzzy match')
+            redistribute_items = False   # fall through to fuzzy loop
+
+    if not redistribute_items:
+        # ── Fuzzy-match mode (PDF layout preserved) ───────────────────────
+        # Process pdf_rooms through the composite sections item-by-item
+        pass   # loop follows immediately below
 
     for pdf_room in pdf_rooms:
+        if redistribute_items:
+            break   # AI already filled report_data; skip fuzzy loop
         room_name = pdf_room.get('name', '')
         src_sec   = source_section_map.get(room_name)   # original source Section | None
 

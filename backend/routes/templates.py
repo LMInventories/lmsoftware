@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required
 from models import db, Template, Section, Item
+from permissions import require_admin_or_manager
 import copy
 
 templates_bp = Blueprint('templates', __name__)
@@ -18,6 +19,7 @@ templates_bp = Blueprint('templates', __name__)
 @templates_bp.route('/items/<int:item_id>', methods=['OPTIONS'])
 @templates_bp.route('/items/<int:item_id>/reorder', methods=['OPTIONS'])
 @templates_bp.route('/items/<int:item_id>/duplicate', methods=['OPTIONS'])
+@templates_bp.route('/transient/purge', methods=['OPTIONS'])
 def handle_options(**kwargs):
     return '', 204
 
@@ -100,6 +102,18 @@ def delete_template(template_id):
     db.session.delete(template)
     db.session.commit()
     return '', 204
+
+
+@templates_bp.route('/transient/purge', methods=['POST'])
+@jwt_required()
+@require_admin_or_manager
+def purge_transient_templates():
+    """Admin: manually trigger orphaned transient-template cleanup."""
+    from routes.email_notifications import purge_orphaned_transient_templates
+    min_age = int(request.get_json(silent=True, force=True).get('min_age_days', 7)) \
+              if request.content_length else 7
+    count = purge_orphaned_transient_templates(min_age_days=min_age)
+    return jsonify({'deleted': count})
 
 
 @templates_bp.route('/<int:template_id>/copy', methods=['POST'])

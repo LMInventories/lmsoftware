@@ -176,7 +176,7 @@ const api = {
   saveInspectionReport(id, data)     { return http.put(`/api/inspections/${id}/report`, data) },
   getLinkedCheckIn(id)               { return http.get(`/api/inspections/${id}/linked-checkin`) },
   getPropertyHistory(propertyId)     { return http.get(`/api/inspections/property/${propertyId}/history`) },
-  applyPdfImport(id, data)           { return http.post(`/api/inspections/${id}/apply-pdf-import`, data) },
+  applyPdfImport(id, data, cfg = {}) { return http.post(`/api/inspections/${id}/apply-pdf-import`, data, cfg) },
   sharePdf(id, emails)               { return http.post(`/api/inspections/${id}/share-pdf`, { emails }) },
   saveAsTemplate(id, data)           { return http.post(`/api/inspections/${id}/save_as_template`, data) },
 

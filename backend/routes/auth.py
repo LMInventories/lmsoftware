@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
-from models import User
+from models import db, User
 from werkzeug.security import check_password_hash
 
 auth_bp = Blueprint('auth', __name__)
@@ -44,7 +44,7 @@ def login():
 def get_current_user():
     user_id = get_jwt_identity()
     print(f"Getting current user: {user_id}")
-    user = User.query.get(int(user_id))
+    user = db.session.get(User, int(user_id))
 
     if not user:
         return jsonify({'error': 'User not found'}), 404
@@ -70,7 +70,7 @@ def refresh_token():
     never kicked out due to a transient network blip or an imminent expiry.
     """
     user_id = get_jwt_identity()
-    user = User.query.get(int(user_id))
+    user = db.session.get(User, int(user_id))
 
     if not user:
         return jsonify({'error': 'User not found'}), 404

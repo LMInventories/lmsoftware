@@ -15,7 +15,7 @@ import os
 import secrets
 import base64
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, request, jsonify, make_response
 from flask_jwt_extended import jwt_required, get_jwt_identity
@@ -31,7 +31,7 @@ TOKEN_EXPIRY_DAYS = 30
 # ── Helper ────────────────────────────────────────────────────────────────────
 
 def _inspection_or_404(inspection_id):
-    insp = Inspection.query.get(inspection_id)
+    insp = db.session.get(Inspection, inspection_id)
     if not insp:
         return None
     return insp
@@ -80,7 +80,7 @@ def save_signature(inspection_id):
         role           = role,
         signer_name    = data.get('signer_name', ''),
         signature_data = sig_data,
-        signed_at      = datetime.utcnow(),
+        signed_at      = datetime.now(timezone.utc),
         method         = 'in_person',
     )
     db.session.add(sig)
@@ -130,7 +130,7 @@ def send_signing_links(inspection_id):
             db.session.delete(old)
 
         token = secrets.token_urlsafe(32)
-        expires = datetime.utcnow() + timedelta(days=TOKEN_EXPIRY_DAYS)
+        expires = datetime.now(timezone.utc) + timedelta(days=TOKEN_EXPIRY_DAYS)
 
         sig = InspectionSignature(
             inspection_id    = inspection_id,
@@ -161,7 +161,7 @@ def signing_page(token):
     if not sig:
         return _signing_error('This signing link is invalid or has already been used.')
 
-    if sig.token_expires_at and datetime.utcnow() > sig.token_expires_at:
+    if sig.token_expires_at and datetime.now(timezone.utc) > sig.token_expires_at:
         return _signing_error('This signing link has expired. Please contact your agent to request a new one.')
 
     if sig.signed_at:
@@ -202,7 +202,7 @@ def submit_signature(token):
 
     if not sig:
         return jsonify({'error': 'Invalid token'}), 404
-    if sig.token_expires_at and datetime.utcnow() > sig.token_expires_at:
+    if sig.token_expires_at and datetime.now(timezone.utc) > sig.token_expires_at:
         return jsonify({'error': 'Link expired'}), 410
     if sig.signed_at:
         return jsonify({'error': 'Already signed'}), 409
@@ -214,7 +214,7 @@ def submit_signature(token):
 
     sig.signature_data = sig_data
     sig.signer_name    = data.get('signer_name', sig.signer_name or '')
-    sig.signed_at      = datetime.utcnow()
+    sig.signed_at      = datetime.now(timezone.utc)
     sig.ip_address     = request.remote_addr
     # Keep token in DB so the confirmation page still works, but null it so it
     # can't be re-used for another submission (unique constraint on non-null tokens

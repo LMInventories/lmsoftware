@@ -1104,11 +1104,11 @@ Rules:
 @jwt_required()
 def transcribe_usage():
     """Returns usage stats and cost estimates in GBP, grouped by inspection."""
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone
     from models import Inspection
 
     period = request.args.get('period', '30')
-    since  = datetime.utcnow() - timedelta(days=int(period))
+    since  = datetime.now(timezone.utc) - timedelta(days=int(period))
     rows   = TranscriptionUsage.query.filter(TranscriptionUsage.created_at >= since).all()
 
     # ── Pricing constants ──────────────────────────────────────────────────

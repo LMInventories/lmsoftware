@@ -177,6 +177,7 @@ const api = {
   getLinkedCheckIn(id)               { return http.get(`/api/inspections/${id}/linked-checkin`) },
   getPropertyHistory(propertyId)     { return http.get(`/api/inspections/property/${propertyId}/history`) },
   applyPdfImport(id, data, cfg = {}) { return http.post(`/api/inspections/${id}/apply-pdf-import`, data, cfg) },
+  applyPdfImportStatus(id, jobId)   { return http.get(`/api/inspections/${id}/apply-pdf-import-status/${jobId}`) },
   sharePdf(id, emails)               { return http.post(`/api/inspections/${id}/share-pdf`, { emails }) },
   saveAsTemplate(id, data)           { return http.post(`/api/inspections/${id}/save_as_template`, data) },
 

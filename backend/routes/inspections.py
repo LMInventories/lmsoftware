@@ -5,10 +5,12 @@ from permissions import get_current_user, require_admin_or_manager, filter_inspe
 from sqlalchemy.orm import joinedload, selectinload, defer
 from datetime import datetime
 import json
+import os
 import re
 import time
 import random
 import string
+import uuid as _uuid_mod
 
 # ── Inspections list cache ────────────────────────────────────────────────────
 # Keyed per user so role-based filtering is preserved.
@@ -52,6 +54,40 @@ def _bust_dashboard():
     except Exception:
         pass
     invalidate_inspections_cache()
+
+
+# ── Redistribution job store (file-based, same pattern as pdf_import.py) ─────
+# Background AI-redistribution jobs are tracked via JSON files in /tmp so the
+# status endpoint can check them without shared in-process state.
+_REDISTRIB_JOBS_DIR = '/tmp/redistribution_jobs'
+try:
+    os.makedirs(_REDISTRIB_JOBS_DIR, exist_ok=True)
+except Exception:
+    pass
+
+
+def _rj_path(job_id):
+    return os.path.join(_REDISTRIB_JOBS_DIR, job_id + '.json')
+
+
+def _rj_write(job_id, data):
+    with open(_rj_path(job_id), 'w') as _f:
+        json.dump(data, _f)
+
+
+def _rj_read(job_id):
+    try:
+        with open(_rj_path(job_id)) as _f:
+            return json.load(_f)
+    except FileNotFoundError:
+        return None
+
+
+def _rj_delete(job_id):
+    try:
+        os.remove(_rj_path(job_id))
+    except FileNotFoundError:
+        pass
 
 
 inspections_bp = Blueprint('inspections', __name__)
@@ -1410,199 +1446,53 @@ def _ai_redistribute_items(composite_template, pdf_rooms):
         return None
 
 
-# POST /api/inspections/<id>/apply-pdf-import
-#
-# Stores Claude's parsed PDF data as the full report_data for the check-in.
-# If redistributeItems=True in the body, makes a second AI call to intelligently
-# distribute content across the correct template items (splitting compound PDF
-# entries, moving skirting to Woodwork, etc.).
 # ─────────────────────────────────────────────────────────────────────────────
-@inspections_bp.route('/<int:inspection_id>/apply-pdf-import', methods=['POST'])
-@jwt_required()
-def apply_pdf_import(inspection_id):
-    user = get_current_user()
-    if not is_admin_or_manager(user):
-        return jsonify({'error': 'Forbidden'}), 403
+# Helpers used by apply_pdf_import (both sync and async paths)
+# ─────────────────────────────────────────────────────────────────────────────
 
-    inspection = Inspection.query.get_or_404(inspection_id)
-    parsed = request.json
-    if not parsed:
-        return jsonify({'error': 'No parsed data provided'}), 400
-
-    pdf_rooms        = parsed.get('rooms') or []
-    pdf_fixed        = parsed.get('fixedSections') or {}
-    room_mappings    = parsed.get('roomMappings') or []
-    redistribute_items = bool(parsed.get('redistributeItems', False))
-    # room_mappings: [{pdfRoomName: str, templateSectionId: int|null}]
-    # templateSectionId is the ID of a Section in *any* check-in template.
-    # null / missing → import as a free-form new room.
-
-    # ── Resolve each PDF room to a source Section (from any template) ─────
-    # Build pdf_room_name → Section (or None for "new room")
-    source_section_map = {}   # pdf_room_name → Section | None
-    for m in room_mappings:
-        rname = m.get('pdfRoomName', '')
-        sid   = m.get('templateSectionId')
-        if not rname:
-            continue
-        if sid:
-            sec = Section.query.options(selectinload(Section.items)).get(int(sid))
-            source_section_map[rname] = sec   # None if ID doesn't exist
-        else:
-            source_section_map[rname] = None   # explicit "new room"
-
-    # ── Build a composite template from the selected sections ─────────────
-    # Each selected Section is *copied* into a new template so the inspection
-    # has its own template record (consistent with existing patterns, renders correctly).
-    # Sections that map to the same source section are deduplicated.
-
-    # Ordered list of unique source sections (preserving pdf_rooms order)
-    seen_src_ids = set()
-    ordered_src_sections = []   # (src_section | None, canonical_pdf_name)
-    new_room_names = []         # pdf room names with no template section
-    for pdf_room in pdf_rooms:
-        rname = pdf_room.get('name', '')
-        src   = source_section_map.get(rname, None)   # None → new room
-        if src is None:
-            new_room_names.append(rname)
-        elif src.id not in seen_src_ids:
-            seen_src_ids.add(src.id)
-            ordered_src_sections.append(src)
-
-    prop     = inspection.property
-    tpl_name = 'PDF Import'
-    if prop and getattr(prop, 'address', None):
-        tpl_name = f'PDF Import – {prop.address}'
-
-    composite = Template(
-        name=tpl_name,
-        inspection_type='check_in',
-        content='{}',
-        is_default=False,
-        is_transient=True,   # hidden from Templates UI; functional for this inspection only
-    )
-    db.session.add(composite)
-    db.session.flush()
-
-    # Copy each source section + its items into the composite template
-    # Track: source_section.id → new Section (in composite)
-    src_to_new_sec = {}
-    order = 0
-    for src_sec in ordered_src_sections:
-        new_sec = Section(
-            template_id  = composite.id,
-            name         = src_sec.name,
-            section_type = 'room',
-            order_index  = order,
-        )
-        db.session.add(new_sec)
-        db.session.flush()
-        for jdx, src_item in enumerate(src_sec.items or []):
-            db.session.add(Item(
-                section_id       = new_sec.id,
-                name             = src_item.name,
-                description      = src_item.description or '',
-                requires_photo   = src_item.requires_photo,
-                requires_condition = src_item.requires_condition,
-                order_index      = jdx,
-            ))
-        src_to_new_sec[src_sec.id] = new_sec
-        order += 1
-
-    # Add free-form sections for "new room" entries
-    new_room_sec_map = {}   # pdf_room_name → new Section
-    for rname in new_room_names:
-        new_sec = Section(
-            template_id  = composite.id,
-            name         = rname,
-            section_type = 'room',
-            order_index  = order,
-        )
-        db.session.add(new_sec)
-        db.session.flush()
-        new_room_sec_map[rname] = new_sec
-        order += 1
-
-    db.session.flush()
-    db.session.expire(composite, ['sections'])
-
-    inspection.template_id = composite.id
-
-    # ── Reload composite sections so SQLAlchemy sees the new items ────────
-    for src_id, new_sec in src_to_new_sec.items():
-        db.session.refresh(new_sec)
-    for new_sec in new_room_sec_map.values():
-        db.session.refresh(new_sec)
-    db.session.refresh(composite)   # populate composite.sections
-
-    # ── AI redistribution (smart mode) ───────────────────────────────────
-    # When redistributeItems=True, ask Claude to map all extracted PDF content
-    # into the correct composite template items — splitting compound entries,
-    # moving skirting to Woodwork, fittings to Door Fittings, etc.
+def _build_report_data_fuzzy(
+    pdf_rooms,
+    pdf_room_to_src_sec_id,    # {room_name → src_sec_id | None}
+    src_id_to_new_sec_id,      # {src_sec_id → new_sec_id}
+    new_room_name_to_sec_id,   # {room_name → new_sec_id}
+):
+    """
+    Fuzzy-match extracted PDF rooms into composite template sections without AI.
+    Returns a partial report_data dict (no fixed sections or metadata yet).
+    Safe to call from both the request context and a background thread.
+    """
     report_data = {}
-    if redistribute_items:
-        ai_result = _ai_redistribute_items(composite, pdf_rooms)
-        if ai_result:
-            # The AI returns {sectionId: {itemId: {description, condition}}}
-            # Validate the IDs exist in the composite before accepting
-            valid_sec_ids  = {str(s.id) for s in (composite.sections or [])}
-            valid_item_ids = {str(i.id) for s in (composite.sections or []) for i in (s.items or [])}
-            for sec_id, items in ai_result.items():
-                if sec_id not in valid_sec_ids:
-                    continue
-                report_data[sec_id] = {}
-                for item_id, entry in items.items():
-                    if item_id not in valid_item_ids:
-                        continue
-                    if isinstance(entry, dict):
-                        report_data[sec_id][item_id] = {
-                            'description': (entry.get('description') or '').strip(),
-                            'condition':   (entry.get('condition')   or '').strip(),
-                        }
-            print(f'[apply-pdf-import] smart redistribution used — {len(report_data)} sections populated')
-        else:
-            print('[apply-pdf-import] AI redistribution failed/unavailable — falling back to fuzzy match')
-            redistribute_items = False   # fall through to fuzzy loop
-
-    if not redistribute_items:
-        # ── Fuzzy-match mode (PDF layout preserved) ───────────────────────
-        # Process pdf_rooms through the composite sections item-by-item
-        pass   # loop follows immediately below
-
     for pdf_room in pdf_rooms:
-        if redistribute_items:
-            break   # AI already filled report_data; skip fuzzy loop
-        room_name = pdf_room.get('name', '')
-        src_sec   = source_section_map.get(room_name)   # original source Section | None
+        room_name  = pdf_room.get('name', '')
+        src_sec_id = pdf_room_to_src_sec_id.get(room_name)   # int | None
 
-        if src_sec is None:
+        if src_sec_id is None:
             # "New room" — write items into the composite new-room section
-            target_new_sec = new_room_sec_map.get(room_name)
-            if not target_new_sec:
+            new_sec_id = new_room_name_to_sec_id.get(room_name)
+            if not new_sec_id:
                 continue
-            sec_key = str(target_new_sec.id)
+            sec_key = str(new_sec_id)
             if sec_key not in report_data:
                 report_data[sec_key] = {}
             for pdf_item in (pdf_room.get('items') or []):
-                item_key = 'item_' + str(int(time.time() * 1000)) + '_' + ''.join(random.choices(string.ascii_lowercase, k=4))
+                item_key = ('item_' + str(int(time.time() * 1000)) + '_'
+                            + ''.join(random.choices(string.ascii_lowercase, k=4)))
                 report_data[sec_key][item_key] = {
                     '_label':      pdf_item.get('label', ''),
                     'description': pdf_item.get('description') or '',
                     'condition':   pdf_item.get('condition')   or '',
                 }
-            print(f'[apply-pdf-import] room "{room_name}" → new composite section {target_new_sec.id}')
+            print(f'[apply-pdf-import] room "{room_name}" → new composite section {new_sec_id}')
             continue
 
-        # Mapped to a source section → use the copied composite section
-        new_sec  = src_to_new_sec.get(src_sec.id)
-        if not new_sec:
+        new_sec_id = src_id_to_new_sec_id.get(src_sec_id)
+        if not new_sec_id:
             continue
-        sec_key  = str(new_sec.id)
+        sec_key = str(new_sec_id)
         if sec_key not in report_data:
             report_data[sec_key] = {}
 
-        # Reload items for the new section (just inserted)
-        new_items = Item.query.filter_by(section_id=new_sec.id).all()
+        new_items = Item.query.filter_by(section_id=new_sec_id).all()
 
         for pdf_item in (pdf_room.get('items') or []):
             matched_item = _fuzzy_match_item(pdf_item.get('label', ''), new_items)
@@ -1617,10 +1507,9 @@ def apply_pdf_import(inspection_id):
 
             new_desc = (pdf_item.get('description') or '').strip()
             new_cond = (pdf_item.get('condition')   or '').strip()
-            item_key  = str(matched_item.id)
+            item_key = str(matched_item.id)
 
             if item_key in report_data[sec_key]:
-                # ── Merge (two PDF rooms mapped to the same section) ──────
                 existing = report_data[sec_key][item_key]
                 old_desc = (existing.get('description') or '').strip()
                 old_cond = (existing.get('condition')   or '').strip()
@@ -1628,7 +1517,6 @@ def apply_pdf_import(inspection_id):
                     existing['description'] = (old_desc + '\n' + new_desc).strip() if old_desc else new_desc
                 if new_cond and new_cond not in old_cond:
                     existing['condition'] = (old_cond + '\n' + new_cond).strip() if old_cond else new_cond
-                # Merge sub-items
                 pdf_subs = pdf_item.get('_subs')
                 if isinstance(pdf_subs, list) and pdf_subs:
                     existing_subs  = existing.get('_subs') or []
@@ -1637,7 +1525,8 @@ def apply_pdf_import(inspection_id):
                         sub_desc = sub.get('description', '')
                         if sub_desc not in existing_descs:
                             existing_subs.append({
-                                '_sid':        'sub_' + str(int(time.time() * 1000)) + '_' + ''.join(random.choices(string.ascii_lowercase, k=4)),
+                                '_sid':        ('sub_' + str(int(time.time() * 1000)) + '_'
+                                                + ''.join(random.choices(string.ascii_lowercase, k=4))),
                                 'description': sub_desc,
                                 'condition':   sub.get('condition') or '',
                             })
@@ -1649,26 +1538,26 @@ def apply_pdf_import(inspection_id):
                 pdf_subs = pdf_item.get('_subs')
                 if isinstance(pdf_subs, list) and pdf_subs:
                     item_entry['_subs'] = [{
-                        '_sid':        'sub_' + str(int(time.time() * 1000)) + '_' + ''.join(random.choices(string.ascii_lowercase, k=4)),
+                        '_sid':        ('sub_' + str(int(time.time() * 1000)) + '_'
+                                        + ''.join(random.choices(string.ascii_lowercase, k=4))),
                         'description': sub.get('description') or '',
                         'condition':   sub.get('condition')   or '',
                     } for sub in pdf_subs]
                 report_data[sec_key][item_key] = item_entry
 
-        print(f'[apply-pdf-import] room "{room_name}" → composite sec {new_sec.id} ({new_sec.name})')
+        print(f'[apply-pdf-import] room "{room_name}" → composite sec {new_sec_id} (fuzzy)')
 
-    # ── Fixed sections — keyed with the same IDs the frontend computes ────
-    #
-    # The frontend computes:
-    #   section ID : f"fs_{secIdx}_{name_slug}"    (secIdx = index among enabled sections)
-    #   row ID     : f"fs_{secIdx}_{rowIdx}"        (rowIdx = item's index within section)
-    # where secIdx counts only enabled sections (enabled !== false).
-    #
-    # We replicate that here so the report view finds the data.
-    global_fixed = _get_global_fixed_sections()
+    return report_data
+
+
+def _apply_pdf_fixed_sections(report_data, pdf_fixed, pdf_file_name):
+    """
+    Apply fixed sections (meter readings, keys, etc.) and import metadata to
+    report_data in-place.  Also stamps _importedSource and _importedFileName.
+    """
+    global_fixed  = _get_global_fixed_sections()
     enabled_fixed = [s for s in global_fixed if s.get('enabled', True) is not False]
 
-    # Build lookup: pdf_type → (secIdx, global_section)
     type_to_global = {}
     for sec_idx, gsec in enumerate(enabled_fixed):
         typ = _infer_fs_type(gsec.get('columns') or [])
@@ -1687,31 +1576,262 @@ def apply_pdf_import(inspection_id):
 
         report_data[sec_id] = {}
         for i, pdf_row in enumerate(pdf_rows):
-            # Guard: AI sometimes returns plain strings instead of dicts
             if not isinstance(pdf_row, dict):
                 pdf_row = {fields[0]: str(pdf_row)} if fields else {}
-            # Row ID mirrors the frontend: fs_{secIdx}_{rowIdx}
             row_id = f'fs_{sec_idx}_{i}'
             report_data[sec_id][row_id] = {f: pdf_row.get(f, '') for f in fields}
         print(f'[apply-pdf-import] fixed {pdf_type} → {sec_id}: {len(pdf_rows)} rows')
 
-    # ── Also store as _importedSource (check-out comparison fallback) ─────
     report_data['_importedSource']   = {k: v for k, v in report_data.items() if not k.startswith('_')}
-    report_data['_importedFileName'] = parsed.get('_fileName', '')
+    report_data['_importedFileName'] = pdf_file_name
 
-    inspection.report_data = json.dumps(report_data)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /api/inspections/<id>/apply-pdf-import
+#
+# Phase 1 (synchronous, fast): build composite template + copy sections/items,
+#   commit, then either:
+#   • keep-layout mode  → fuzzy-match + save report_data → 200 OK
+#   • smart mode        → start background thread for AI call → 202 Accepted + {job_id}
+#
+# GET /api/inspections/<id>/apply-pdf-import-status/<job_id>
+#   Poll the background job.  Returns {status: processing|done|error, ...}.
+# ─────────────────────────────────────────────────────────────────────────────
+@inspections_bp.route('/<int:inspection_id>/apply-pdf-import', methods=['POST'])
+@jwt_required()
+def apply_pdf_import(inspection_id):
+    user = get_current_user()
+    if not is_admin_or_manager(user):
+        return jsonify({'error': 'Forbidden'}), 403
+
+    inspection = Inspection.query.get_or_404(inspection_id)
+    parsed = request.json
+    if not parsed:
+        return jsonify({'error': 'No parsed data provided'}), 400
+
+    pdf_rooms          = parsed.get('rooms') or []
+    pdf_fixed          = parsed.get('fixedSections') or {}
+    room_mappings      = parsed.get('roomMappings') or []
+    redistribute_items = bool(parsed.get('redistributeItems', False))
+    pdf_file_name      = parsed.get('_fileName', '')
+
+    # ── Resolve each PDF room to a source Section (from any check-in template)
+    source_section_map = {}   # pdf_room_name → Section | None
+    for m in room_mappings:
+        rname = m.get('pdfRoomName', '')
+        sid   = m.get('templateSectionId')
+        if not rname:
+            continue
+        if sid:
+            sec = Section.query.options(selectinload(Section.items)).filter_by(id=int(sid)).first()
+            source_section_map[rname] = sec
+        else:
+            source_section_map[rname] = None   # explicit "new room"
+
+    # ── Build a composite template from the selected sections ─────────────
+    seen_src_ids = set()
+    ordered_src_sections = []
+    new_room_names = []
+    for pdf_room in pdf_rooms:
+        rname = pdf_room.get('name', '')
+        src   = source_section_map.get(rname, None)
+        if src is None:
+            new_room_names.append(rname)
+        elif src.id not in seen_src_ids:
+            seen_src_ids.add(src.id)
+            ordered_src_sections.append(src)
+
+    prop     = inspection.property
+    tpl_name = 'PDF Import'
+    if prop and getattr(prop, 'address', None):
+        tpl_name = f'PDF Import – {prop.address}'
+
+    composite = Template(
+        name=tpl_name,
+        inspection_type='check_in',
+        content='{}',
+        is_default=False,
+        is_transient=True,
+    )
+    db.session.add(composite)
+    db.session.flush()
+
+    src_to_new_sec = {}
+    order = 0
+    for src_sec in ordered_src_sections:
+        new_sec = Section(
+            template_id  = composite.id,
+            name         = src_sec.name,
+            section_type = 'room',
+            order_index  = order,
+        )
+        db.session.add(new_sec)
+        db.session.flush()
+        for jdx, src_item in enumerate(src_sec.items or []):
+            db.session.add(Item(
+                section_id         = new_sec.id,
+                name               = src_item.name,
+                description        = src_item.description or '',
+                requires_photo     = src_item.requires_photo,
+                requires_condition = src_item.requires_condition,
+                order_index        = jdx,
+            ))
+        src_to_new_sec[src_sec.id] = new_sec
+        order += 1
+
+    new_room_sec_map = {}
+    for rname in new_room_names:
+        new_sec = Section(
+            template_id  = composite.id,
+            name         = rname,
+            section_type = 'room',
+            order_index  = order,
+        )
+        db.session.add(new_sec)
+        db.session.flush()
+        new_room_sec_map[rname] = new_sec
+        order += 1
+
+    db.session.flush()
+    db.session.expire(composite, ['sections'])
+
+    inspection.template_id = composite.id
+
+    for src_id, new_sec in src_to_new_sec.items():
+        db.session.refresh(new_sec)
+    for new_sec in new_room_sec_map.values():
+        db.session.refresh(new_sec)
+    db.session.refresh(composite)
+
+    # ── Serialise structure as IDs (safe for cross-thread use) ────────────
+    composite_id            = composite.id
+    src_id_to_new_sec_id    = {sid: sec.id for sid, sec in src_to_new_sec.items()}
+    new_room_name_to_sec_id = {rn: sec.id  for rn, sec in new_room_sec_map.items()}
+    pdf_room_to_src_sec_id  = {
+        rn: (sec.id if sec else None)
+        for rn, sec in source_section_map.items()
+    }
+
+    # ── Phase 1 commit ────────────────────────────────────────────────────
+    # Commit the composite template + inspection link BEFORE starting any
+    # background thread so the thread sees committed data in a fresh session.
     db.session.commit()
 
     room_count = len(pdf_rooms)
     item_count = sum(len(r.get('items') or []) for r in pdf_rooms)
-    print(f'[apply-pdf-import] inspection {inspection_id}: {room_count} rooms, {item_count} items, composite template {composite.id}')
 
-    return jsonify({
-        'message': f'PDF imported: {room_count} rooms, {item_count} items',
-        'room_count': room_count,
-        'item_count': item_count,
-        'template_id': composite.id,
-    }), 200
+    # ── Keep-layout path (synchronous, no AI) ────────────────────────────
+    if not redistribute_items:
+        report_data = _build_report_data_fuzzy(
+            pdf_rooms,
+            pdf_room_to_src_sec_id,
+            src_id_to_new_sec_id,
+            new_room_name_to_sec_id,
+        )
+        _apply_pdf_fixed_sections(report_data, pdf_fixed, pdf_file_name)
+        inspection.report_data = json.dumps(report_data)
+        db.session.commit()
+        print(f'[apply-pdf-import] inspection {inspection_id}: {room_count} rooms, '
+              f'{item_count} items (keep-layout), template {composite_id}')
+        return jsonify({
+            'message':     f'PDF imported: {room_count} rooms, {item_count} items',
+            'room_count':  room_count,
+            'item_count':  item_count,
+            'template_id': composite_id,
+        }), 200
+
+    # ── Smart-redistribution path — background thread → 202 ──────────────
+    # We return immediately with a job_id; the frontend polls the status
+    # endpoint until done/error.  This avoids Gunicorn worker timeouts on
+    # large or complex PDFs where the Claude call can exceed 60 seconds.
+    job_id = str(_uuid_mod.uuid4())
+    _rj_write(job_id, {'status': 'processing'})
+
+    from flask import current_app
+    _app           = current_app._get_current_object()
+    _inspection_id = inspection_id   # close over int, not the ORM object
+
+    def _redistrib_thread():
+        with _app.app_context():
+            try:
+                from models import db as _db, Inspection as _Insp, Template as _Tpl
+
+                _composite = _db.session.get(_Tpl, composite_id)
+                _insp      = _db.session.get(_Insp, _inspection_id)
+                if not _composite or not _insp:
+                    _rj_write(job_id, {'status': 'error',
+                                       'error': 'Inspection or template not found in background thread'})
+                    return
+
+                ai_result = _ai_redistribute_items(_composite, pdf_rooms)
+
+                if ai_result:
+                    valid_sec_ids  = {str(s.id) for s in (_composite.sections or [])}
+                    valid_item_ids = {str(i.id) for s in (_composite.sections or [])
+                                      for i in (s.items or [])}
+                    report_data = {}
+                    for sec_id, items in ai_result.items():
+                        if sec_id not in valid_sec_ids:
+                            continue
+                        report_data[sec_id] = {}
+                        for item_id, entry in items.items():
+                            if item_id not in valid_item_ids:
+                                continue
+                            if isinstance(entry, dict):
+                                report_data[sec_id][item_id] = {
+                                    'description': (entry.get('description') or '').strip(),
+                                    'condition':   (entry.get('condition')   or '').strip(),
+                                }
+                    print(f'[apply-pdf-import] job {job_id}: AI redistribution — '
+                          f'{len(report_data)} sections populated')
+                else:
+                    print(f'[apply-pdf-import] job {job_id}: AI failed — falling back to fuzzy match')
+                    report_data = _build_report_data_fuzzy(
+                        pdf_rooms,
+                        pdf_room_to_src_sec_id,
+                        src_id_to_new_sec_id,
+                        new_room_name_to_sec_id,
+                    )
+
+                _apply_pdf_fixed_sections(report_data, pdf_fixed, pdf_file_name)
+                _insp.report_data = json.dumps(report_data)
+                _db.session.commit()
+
+                print(f'[apply-pdf-import] job {job_id} done: '
+                      f'{room_count} rooms, {item_count} items, template {composite_id}')
+                _rj_write(job_id, {
+                    'status':      'done',
+                    'room_count':  room_count,
+                    'item_count':  item_count,
+                    'template_id': composite_id,
+                })
+            except Exception as _e:
+                import traceback
+                print(f'[apply-pdf-import] job {job_id} error: {_e}')
+                traceback.print_exc()
+                _rj_write(job_id, {'status': 'error', 'error': str(_e)})
+
+    import threading
+    threading.Thread(target=_redistrib_thread, daemon=True).start()
+    print(f'[apply-pdf-import] inspection {inspection_id}: background job {job_id} started')
+    return jsonify({'job_id': job_id}), 202
+
+
+@inspections_bp.route('/<int:inspection_id>/apply-pdf-import-status/<job_id>', methods=['GET'])
+@jwt_required()
+def apply_pdf_import_status(inspection_id, job_id):
+    """Poll status of a background AI-redistribution job."""
+    user = get_current_user()
+    if not is_admin_or_manager(user):
+        return jsonify({'error': 'Forbidden'}), 403
+    if not job_id or len(job_id) > 40:
+        return jsonify({'error': 'Invalid job_id'}), 400
+    job = _rj_read(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found — it may have expired or never existed'}), 404
+    if job.get('status') in ('done', 'error'):
+        _rj_delete(job_id)   # clean up once the client has seen the result
+    return jsonify(job)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

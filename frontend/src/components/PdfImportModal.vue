@@ -312,6 +312,7 @@ async function save() {
   if (!form.value.property_id) { toast.warning('Please select a property'); return }
   saving.value = true
   try {
+    // ── 1. Create the inspection ──────────────────────────────────────────
     const payload = {
       property_id:           form.value.property_id,
       inspection_type:       'check_in',
@@ -331,18 +332,60 @@ async function save() {
         templateSectionId: templateSectionId === 'new' ? null : parseInt(templateSectionId, 10),
       }))
       const redistributeItems = !keepLayout.value
-      const timeout = redistributeItems ? 120_000 : 30_000
-      await api.applyPdfImport(newId, { ...parsed.value, roomMappings, redistributeItems }, { timeout })
+
+      // ── 2. POST apply-pdf-import (returns 200 or 202) ─────────────────
+      const applyRes = await api.applyPdfImport(
+        newId,
+        { ...parsed.value, roomMappings, redistributeItems },
+        { timeout: redistributeItems ? 60_000 : 30_000 },  // 60 s for phase-1 DB work
+      )
+
+      // ── 3. If 202 → poll until the background AI job finishes ─────────
+      if (applyRes.status === 202) {
+        const jobId = applyRes.data?.job_id
+        if (!jobId) throw new Error('Server returned 202 but no job_id')
+        await _pollRedistributionJob(newId, jobId)
+      }
     }
 
     toast.success('Backdated Check In created successfully')
     emit('saved')
   } catch (e) {
     console.error('Save PDF inspection error:', e)
-    toast.error('Failed to save inspection')
+    toast.error(e?.response?.data?.error || 'Failed to save inspection')
   } finally {
     saving.value = false
   }
+}
+
+/**
+ * Poll GET /apply-pdf-import-status/<jobId> until status is done or error.
+ * Resolves when done, rejects on error or timeout (5 minutes).
+ */
+function _pollRedistributionJob(inspectionId, jobId) {
+  return new Promise((resolve, reject) => {
+    const MAX_WAIT_MS  = 5 * 60 * 1000   // 5 min hard cap
+    const POLL_INTERVAL = 4_000           // check every 4 s
+    const started = Date.now()
+
+    const tick = async () => {
+      try {
+        if (Date.now() - started > MAX_WAIT_MS) {
+          reject(new Error('AI redistribution timed out after 5 minutes'))
+          return
+        }
+        const res = await api.applyPdfImportStatus(inspectionId, jobId)
+        const status = res.data?.status
+        if (status === 'done')  { resolve(res.data); return }
+        if (status === 'error') { reject(new Error(res.data?.error || 'AI redistribution failed')); return }
+        // Still processing — poll again
+        setTimeout(tick, POLL_INTERVAL)
+      } catch (e) {
+        reject(e)
+      }
+    }
+    setTimeout(tick, POLL_INTERVAL)
+  })
 }
 </script>
 

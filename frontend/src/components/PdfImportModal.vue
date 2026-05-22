@@ -479,66 +479,87 @@ async function save() {
           </div>
         </div>
 
-        <!-- ── Step 3: Room mapping & save ────────────────────────────── -->
+        <!-- ── Step 3: Mode picker + room mapping ─────────────────────── -->
         <div v-if="step === 3 && parsed">
-          <div class="pi-map-header">
-            <div class="pi-map-stats">
-              <span class="pi-map-stat-badge">{{ parsed.rooms?.length || 0 }} rooms found</span>
-              <span class="pi-map-stat-badge">{{ parsed.rooms?.reduce((n, r) => n + (r.items?.length || 0), 0) || 0 }} items extracted</span>
-            </div>
+
+          <!-- Extraction summary badges -->
+          <div class="pi-map-stats">
+            <span class="pi-map-stat-badge">{{ parsed.rooms?.length || 0 }} rooms found</span>
+            <span class="pi-map-stat-badge">{{ parsed.rooms?.reduce((n, r) => n + (r.items?.length || 0), 0) || 0 }} items extracted</span>
+          </div>
+
+          <!-- ── Mode cards (toggle at the top) ──────────────────────── -->
+          <div class="pi-mode-row">
+            <button
+              type="button"
+              class="pi-mode-card"
+              :class="{ 'pi-mode-card-active': !keepLayout }"
+              @click="keepLayout = false"
+            >
+              <div class="pi-mode-icon">✦</div>
+              <div class="pi-mode-text">
+                <span class="pi-mode-title">Smart redistribution</span>
+                <span class="pi-mode-hint">AI reads all content and places each item into the correct template section — splits compound entries (e.g. skirting out of Walls into Woodwork). Takes ~30 s.</span>
+              </div>
+            </button>
+            <button
+              type="button"
+              class="pi-mode-card"
+              :class="{ 'pi-mode-card-active': keepLayout }"
+              @click="keepLayout = true"
+            >
+              <div class="pi-mode-icon">▤</div>
+              <div class="pi-mode-text">
+                <span class="pi-mode-title">Keep PDF layout</span>
+                <span class="pi-mode-hint">Items stay exactly as extracted from the PDF — no AI redistribution. Fastest option; best when the PDF structure already matches your template.</span>
+              </div>
+            </button>
+          </div>
+
+          <!-- ── Room matching (only shown in Smart mode) ─────────────── -->
+          <template v-if="!keepLayout">
             <p class="pi-map-intro">
-              Match each room from the PDF to a room in one of your templates. Rooms matched to the same template room will be merged.
+              Match each room from the PDF to a room in one of your templates — the AI will place items into the correct sections within that room.
               <em v-if="!allTemplateSections.length" class="pi-map-warn"> No check-in templates found — rooms will be imported as-is.</em>
             </p>
-          </div>
 
-          <div class="pi-room-list">
-            <div
-              v-for="room in (parsed.rooms || [])"
-              :key="room.name"
-              class="pi-room-row"
-              :class="{ 'pi-room-merging': mergedSections[roomMapping[room.name]] > 1 }"
-            >
-              <div class="pi-room-left">
-                <div class="pi-room-name">{{ room.name }}</div>
-                <div class="pi-room-count">{{ room.items?.length || 0 }} item{{ room.items?.length === 1 ? '' : 's' }}</div>
-              </div>
-              <div class="pi-room-arrow">→</div>
-              <div class="pi-room-right">
-                <select v-model="roomMapping[room.name]" class="pi-room-select">
-                  <option value="new">＋ Import as new room</option>
-                  <optgroup v-for="tpl in allCheckInTemplates" :key="tpl.id" :label="tpl.name">
-                    <option
-                      v-for="sec in (tpl.sections || []).filter(s => s.section_type === 'room')"
-                      :key="sec.id"
-                      :value="String(sec.id)"
-                    >{{ sec.name }}</option>
-                  </optgroup>
-                </select>
-                <span
-                  v-if="mergedSections[roomMapping[room.name]] > 1"
-                  class="pi-merge-badge"
-                  :title="`${mergedSections[roomMapping[room.name]]} rooms will be merged into this section`"
-                >⟺ Merge</span>
+            <div class="pi-room-list">
+              <div
+                v-for="room in (parsed.rooms || [])"
+                :key="room.name"
+                class="pi-room-row"
+                :class="{ 'pi-room-merging': mergedSections[roomMapping[room.name]] > 1 }"
+              >
+                <div class="pi-room-left">
+                  <div class="pi-room-name">{{ room.name }}</div>
+                  <div class="pi-room-count">{{ room.items?.length || 0 }} item{{ room.items?.length === 1 ? '' : 's' }}</div>
+                </div>
+                <div class="pi-room-arrow">→</div>
+                <div class="pi-room-right">
+                  <select v-model="roomMapping[room.name]" class="pi-room-select">
+                    <option value="new">＋ Import as new room</option>
+                    <optgroup v-for="tpl in allCheckInTemplates" :key="tpl.id" :label="tpl.name">
+                      <option
+                        v-for="sec in (tpl.sections || []).filter(s => s.section_type === 'room')"
+                        :key="sec.id"
+                        :value="String(sec.id)"
+                      >{{ sec.name }}</option>
+                    </optgroup>
+                  </select>
+                  <span
+                    v-if="mergedSections[roomMapping[room.name]] > 1"
+                    class="pi-merge-badge"
+                    :title="`${mergedSections[roomMapping[room.name]]} rooms will be merged into this section`"
+                  >⟺ Merge</span>
+                </div>
               </div>
             </div>
-          </div>
+          </template>
 
-          <!-- Keep layout toggle -->
-          <div class="pi-keep-layout-row">
-            <label class="pi-keep-layout-label">
-              <div class="pi-toggle-wrap" :class="{ 'pi-toggle-on': keepLayout }">
-                <input type="checkbox" v-model="keepLayout" class="pi-toggle-input" />
-                <span class="pi-toggle-track"><span class="pi-toggle-thumb"></span></span>
-              </div>
-              <div class="pi-keep-layout-text">
-                <span class="pi-keep-layout-title">Keep imported PDF layout</span>
-                <span class="pi-keep-layout-hint">
-                  <template v-if="keepLayout">Items stay in their PDF rooms as extracted — no AI redistribution.</template>
-                  <template v-else>AI will read all content and redistribute items to the correct template sections. Takes ~30 seconds.</template>
-                </span>
-              </div>
-            </label>
+          <!-- ── Keep-layout summary ───────────────────────────────────── -->
+          <div v-else class="pi-layout-summary">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="9 12 11 14 15 10"/></svg>
+            {{ parsed.rooms?.length || 0 }} rooms will be imported exactly as extracted from the PDF, with no AI redistribution.
           </div>
 
           <div class="pi-footer">
@@ -549,7 +570,7 @@ async function save() {
                 {{ keepLayout ? 'Saving…' : 'Redistributing with AI…' }}
               </template>
               <template v-else>
-                {{ keepLayout ? 'Save Check In' : 'Redistribute &amp; Save Check In' }}
+                {{ keepLayout ? 'Save Check In' : 'Redistribute &amp; Save' }}
               </template>
             </button>
           </div>
@@ -768,30 +789,55 @@ async function save() {
   border: 1px solid #fcd34d; letter-spacing: 0.3px; cursor: default;
 }
 
-/* ── Keep-layout toggle ──────────────────────────────────────────────────── */
-.pi-keep-layout-row {
-  margin-top: 14px; background: #f8fafc;
-  border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 14px;
+/* ── Step 3 mode cards ───────────────────────────────────────────────────── */
+.pi-mode-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin: 12px 0 14px;
 }
-.pi-keep-layout-label { display: flex; align-items: flex-start; gap: 12px; cursor: pointer; }
-.pi-toggle-wrap       { flex-shrink: 0; padding-top: 2px; }
-.pi-toggle-input      { position: absolute; opacity: 0; width: 0; height: 0; }
-.pi-toggle-track {
-  display: block; width: 36px; height: 20px;
-  background: #cbd5e1; border-radius: 10px;
-  position: relative; transition: background 0.2s;
+.pi-mode-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 2px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, background 0.15s;
 }
-.pi-toggle-thumb {
-  position: absolute; top: 3px; left: 3px;
-  width: 14px; height: 14px;
-  background: #fff; border-radius: 50%;
-  transition: transform 0.2s; box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+.pi-mode-card:hover { border-color: #a5b4fc; background: #f5f3ff; }
+.pi-mode-card-active {
+  border-color: #6366f1;
+  background: #eef2ff;
 }
-.pi-toggle-on .pi-toggle-track { background: #6366f1; }
-.pi-toggle-on .pi-toggle-thumb { transform: translateX(16px); }
-.pi-keep-layout-text  { flex: 1; }
-.pi-keep-layout-title { display: block; font-size: 13px; font-weight: 700; color: #1e293b; }
-.pi-keep-layout-hint  { display: block; font-size: 11px; color: #64748b; margin-top: 2px; line-height: 1.5; }
+.pi-mode-icon {
+  font-size: 18px;
+  line-height: 1;
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: #6366f1;
+}
+.pi-mode-text   { display: flex; flex-direction: column; gap: 4px; }
+.pi-mode-title  { font-size: 13px; font-weight: 700; color: #1e293b; }
+.pi-mode-hint   { font-size: 11px; color: #64748b; line-height: 1.5; }
+
+/* ── Keep-layout summary (shown when layout mode is active) ───────────────── */
+.pi-layout-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 8px;
+  padding: 12px 16px;
+  font-size: 13px;
+  color: #15803d;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
 
 /* ── Footer ──────────────────────────────────────────────────────────────── */
 .pi-footer {

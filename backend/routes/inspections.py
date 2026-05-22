@@ -1169,8 +1169,37 @@ YOUR TASK
 Read ALL extracted PDF content and assign every piece of information to the most appropriate template section and item. A single PDF entry may need to be SPLIT across multiple template items. Never leave content unassigned if a suitable template item exists.
 
 ═══════════════════════════════════════
-LABEL NORMALISATION — PDF labels vary; map them to these exact template item names
+STEP 1 — MANDATORY KEYWORD SCAN (DO THIS FIRST, BEFORE ANY OTHER PROCESSING)
 ═══════════════════════════════════════
+Before you do ANYTHING else, scan every word of every PDF item's description and condition text for these trigger keywords. When a trigger keyword appears — even embedded inside a longer sentence, even if the PDF heading says something different — you MUST extract that text into the target template item. This overrides the PDF heading label.
+
+Trigger keyword(s)                                     → MUST go to template item
+──────────────────────────────────────────────────────────────────────────────────
+"skirting", "skirting board", "skirting boards"       → Woodwork
+"architrave", "architraves"                            → Woodwork
+"picture rail", "dado rail", "coving"                 → Woodwork
+"door stop beading", "beading", "exposed timber"      → Woodwork
+"banister", "handrail"                                → Woodwork
+"curtain", "curtain pole", "curtain track"            → Curtains & Blinds
+"blind", "blinds", "roller blind", "venetian"         → Curtains & Blinds
+"radiator", "rad ", "TRV", "thermostatic valve"       → Heating
+"smoke alarm", "heat alarm", "carbon monoxide",
+  "CO alarm", "CO detector"                           → Smoke/Carbon Alarms
+"socket", "sockets", "switch", "switches"             → Switches / Sockets
+"extractor fan", "extractor"                          → Extractor (if item exists)
+"intercom", "door entry"                              → Intercom (if item exists)
+
+HOW TO APPLY: Read the description sentence-by-sentence. If a sentence contains a trigger keyword, move ONLY that sentence (or the relevant clause) to the target item — do NOT move the entire description.
+
+Example:
+  PDF "Walls" description: "White painted walls to all elevations. White painted skirting boards and architraves."
+  → Walls item: description = "White painted walls to all elevations"
+  → Woodwork item: description = "White painted skirting boards and architraves"
+
+═══════════════════════════════════════
+STEP 2 — LABEL NORMALISATION
+═══════════════════════════════════════
+PDF labels vary; map them to these exact template item names:
 
 PDF label variants                                  → Template item name
 ──────────────────────────────────────────────────────────────────────────
@@ -1192,29 +1221,29 @@ PDF label variants                                  → Template item name
 "Base Units", "Base Mounted Units"                 → "Base Units"
 "Worktop", "Work Surface"                          → "Worktop"
 "Boundaries", "Garden Boundaries"                  → "Boundaries"
+"Contents", "Furnishings", "Furniture",
+  "Fixtures and Fittings", "F&F"                   → "Contents"
 
 If the PDF label does not appear above, use semantic similarity to the nearest template item name.
 
 ═══════════════════════════════════════
-COMPOUND HEADING SPLITTING — when a PDF item covers multiple template items
+STEP 3 — COMPOUND HEADING SPLITTING
 ═══════════════════════════════════════
-
 These PDF heading patterns MUST be split across separate template items:
 
 A) "Door/Frame/Threshold", "Door, Frame & Fittings", "Door/Frame/Fittings":
    • Door panel + frame material/description → "Door and Frame"
    • Handles, locks, hinges, letterbox, knocker, spy hole, latch, bolt → "Door Fittings"
 
-B) "Walls" (or "Walls/Skirting", "Wall Surfaces") when the description mentions skirting:
+B) "Walls" / "Walls/Skirting" / "Wall Surfaces" — ALWAYS check for skirting content:
    • Painted/plastered wall surface text → "Walls"
-   • Any skirting board, architrave, picture rail, dado rail, coving or exposed timber text → "Woodwork"
-   Example: PDF "Walls" description = "White painted walls. White painted skirting boards."
-     → Walls: "White painted walls"
-     → Woodwork: "White painted skirting boards"
+   • Any skirting board, architrave, picture rail, dado rail, coving or exposed timber → "Woodwork"
+   RULE: Even if the PDF label is just "Walls", you MUST scan the description for skirting
+   keywords (Step 1 above) and split the content. This is the most common missed split.
 
 C) "Window(s)/Sill", "Windows & Sill", "Windows/Frame/Fittings":
    • Glazing, frames, sills, window material → "Windows & Frames"
-   • Window handles, stays, restrictors, locks (if the template has a separate Window Fittings item) → Window Fittings
+   • Window handles, stays, restrictors, locks → Window Fittings (if item exists)
 
 D) "Walls/Ceiling" or "Walls & Ceiling":
    • Wall surface → "Walls"
@@ -1225,8 +1254,16 @@ E) "Floor/Skirting", "Floor & Skirting":
    • Skirting/architrave → "Woodwork"
 
 ═══════════════════════════════════════
-SEMANTIC SPLITTING RULES — what content belongs where
+STEP 4 — SEMANTIC ITEM RULES
 ═══════════════════════════════════════
+
+CONTENTS items (template "Contents"):
+  ✓ Furniture: sofas, chairs, tables, beds, wardrobes, chests of drawers, bookshelves
+  ✓ Soft furnishings: rugs, throws, cushions, lamp shades, picture frames
+  ✓ Mirrors, artwork, decorative items if not fixed to the wall
+  ✓ Any items listed under a "Contents" or "Furnishings" heading in the PDF
+  ✓ In garden rooms: bins, garden furniture, plant pots, BBQ
+  Note: if a PDF room has a "Contents" item, it MUST be mapped to the template "Contents" item
 
 WALLS items (template "Walls"):
   ✓ Painted/plastered wall surfaces, wallpaper, wall tiles (non-splashback)
@@ -1271,15 +1308,9 @@ SMOKE/CARBON ALARMS items (template "Smoke/Carbon Alarms"):
   ✓ Smoke alarms, heat alarms, carbon monoxide alarms
   ✓ Combined CO/smoke detectors
 
-APPLIANCE ITEMS (template sections with items like Extractor, Hob, Oven, Boiler,
-  Washing Machine, Dishwasher, Fridge-Freezer):
+APPLIANCE ITEMS (Extractor, Hob, Oven, Boiler, Washing Machine, Dishwasher, Fridge-Freezer):
   ✓ Match each appliance to its named template item exactly
   ✓ Include make, model, serial number in description; condition issues in condition
-
-GARDEN / EXTERNAL ITEMS:
-  ✓ "Boundaries" → walls, fences, gates, hedges forming the garden perimeter
-  ✓ "Flooring" (in garden) → paving, patio, decking, lawn/turf, gravel
-  ✓ "Contents" (in garden) → bins, garden furniture, sheds
 
 ═══════════════════════════════════════
 FORMATTING RULES

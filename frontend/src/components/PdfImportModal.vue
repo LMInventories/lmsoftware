@@ -319,6 +319,9 @@ async function save() {
       status:                'complete',
       source_inspection_id:  null,
       client_email_override: form.value.suppress_emails ? 'SUPPRESS' : undefined,
+      // Tells the backend this is a backdated PDF import — skip Google Sheets
+      // append and Calendar event (it's not a billable job completed by the company).
+      pdf_import:            true,
     }
     if (form.value.conduct_date) {
       payload.conduct_date = form.value.conduct_date + 'T00:00:00'

@@ -411,23 +411,31 @@ def create_inspection():
     _bust_dashboard()
 
     # ── Master sheet append (fire-and-forget) ────────────────────────────
-    try:
-        from services.google_sheets import append_inspection_row
-        ok, err = append_inspection_row(inspection)
-        if not ok:
-            print(f'[sheets] non-fatal: {err}')
-    except Exception as _sheet_exc:
-        print(f'[sheets] non-fatal exception: {_sheet_exc}')
+    # Skip for PDF imports: they are backdated reference inspections, not
+    # billable jobs completed by the company, so they must not appear in the
+    # scheduling/invoicing spreadsheet.
+    if data.get('pdf_import'):
+        print(f'[sheets] skipped — pdf_import flag set on inspection {inspection.id}')
+    else:
+        try:
+            from services.google_sheets import append_inspection_row
+            ok, err = append_inspection_row(inspection)
+            if not ok:
+                print(f'[sheets] non-fatal: {err}')
+        except Exception as _sheet_exc:
+            print(f'[sheets] non-fatal exception: {_sheet_exc}')
 
     # ── Google Calendar event (fire-and-forget) ──────────────────────────
-    try:
-        from services.google_calendar import push_calendar_event, is_calendar_connected
-        if is_calendar_connected() and inspection.conduct_date:
-            ok, result = push_calendar_event(inspection)
-            if not ok:
-                print(f'[calendar] non-fatal: {result}')
-    except Exception as _cal_exc:
-        print(f'[calendar] non-fatal exception: {_cal_exc}')
+    # Also skip for PDF imports — there is no scheduled visit to record.
+    if not data.get('pdf_import'):
+        try:
+            from services.google_calendar import push_calendar_event, is_calendar_connected
+            if is_calendar_connected() and inspection.conduct_date:
+                ok, result = push_calendar_event(inspection)
+                if not ok:
+                    print(f'[calendar] non-fatal: {result}')
+        except Exception as _cal_exc:
+            print(f'[calendar] non-fatal exception: {_cal_exc}')
 
     # ── Auto-create linked Heads-Up Report ───────────────────────────────
     if data.get('create_heads_up') and inspection_type != 'heads_up':

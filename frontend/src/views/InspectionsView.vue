@@ -341,7 +341,11 @@ const filteredProperties = computed(() => {
 
 const clerks = computed(() => users.value.filter(u => u.role === 'clerk'))
 const typists = computed(() => users.value.filter(u => u.role === 'typist'))
-const filteredTemplates = computed(() => templates.value.filter(t => t.inspection_type === form.value.inspection_type))
+const filteredTemplates = computed(() =>
+  form.value.inspection_type === 'damage_report'
+    ? templates.value
+    : templates.value.filter(t => t.inspection_type === form.value.inspection_type)
+)
 
 function convertDateToUKFormat(isoDate) {
   if (!isoDate) return ''

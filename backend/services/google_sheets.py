@@ -35,6 +35,17 @@ from typing import Optional
 
 _SHEETS_BASE = 'https://sheets.googleapis.com/v4/spreadsheets'
 
+# ── Client display-name mapping ───────────────────────────────────────────────
+# Maps the stored client company/name (lower-cased) → the label to write in the
+# Master Sheet.  Add new clients here as the business grows.
+# For any client not listed the full stored name is used as a safe fallback.
+_CLIENT_NAME_MAP: dict[str, str] = {
+    'yellands estates':   'Yellands',
+    'spencer james':      'Spencer James',
+    'hunters camberwell': 'Hunters Camberwell',
+    'hunters camden':     'Hunters Camden',
+}
+
 
 # ── Public entry point ────────────────────────────────────────────────────────
 
@@ -79,7 +90,7 @@ def _build_row(inspection) -> list:
     client_name = ''
     if client:
         full = (client.company or client.name or '').strip()
-        client_name = full.split()[0] if full else ''
+        client_name = _CLIENT_NAME_MAP.get(full.lower(), full) if full else ''
 
     clerk_full = inspection.inspector.name if inspection.inspector else ''
     clerk_name = clerk_full.split()[0] if clerk_full else ''

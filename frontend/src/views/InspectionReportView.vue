@@ -203,19 +203,26 @@ async function load() {
         if (inspection.value.template_id) {
           const tRes = await api.getTemplate(inspection.value.template_id)
           const loaded = tRes.data
-          // For standalone types, reject a template that belongs to a different lifecycle type
-          const standaloneTypes = ['midterm', 'heads_up', 'damage_report']
-          if (standaloneTypes.includes(itype) && loaded?.inspection_type !== itype) {
-            // Wrong template (e.g. inherited check_in template) — fall through to type search
+          // For strict standalone types (midterm, heads_up), reject a template that belongs
+          // to a different lifecycle type — those types use their own fixed section sets and
+          // a check_in template would cause incorrect room rendering.
+          // Damage reports are different: they have no matching template type of their own,
+          // so any assigned template is accepted regardless of its inspection_type.
+          const strictStandaloneTypes = ['midterm', 'heads_up']
+          if (strictStandaloneTypes.includes(itype) && loaded?.inspection_type !== itype) {
+            // Wrong template type — fall through to type search
           } else {
             template.value = loaded
           }
         }
-        // If no template loaded yet (none assigned, or wrong type), find one by inspection type
+        // If no template loaded yet (none assigned, or wrong type), find one by inspection type.
+        // Damage reports have no templates tagged with their own type, so fall back to all templates.
         if (!template.value) {
           const allTRes = await api.getTemplates()
-          const byType  = (allTRes.data || []).filter(t => t.inspection_type === itype)
-          const match   = byType.find(t => t.is_default) || byType[0]
+          const candidates = itype === 'damage_report'
+            ? (allTRes.data || [])
+            : (allTRes.data || []).filter(t => t.inspection_type === itype)
+          const match = candidates.find(t => t.is_default) || candidates[0]
           if (match) template.value = match
         }
       } catch { /* template unavailable — inspection still opens, rooms will be empty */ }

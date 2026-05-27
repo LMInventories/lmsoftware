@@ -296,6 +296,25 @@ def _setup_database():
         _alter_column("inspections.reference_number",
                       "ALTER TABLE inspections ADD COLUMN reference_number VARCHAR(100)")
 
+    # ── Backfill reference_number for existing inspections that have none ─────────
+    # New inspections now auto-receive INS-{id}; this one-time pass fills in any
+    # older records that were created before that logic was added.
+    try:
+        _backfill_sql = (
+            "UPDATE inspections SET reference_number = 'INS-' || CAST(id AS VARCHAR)"
+            " WHERE reference_number IS NULL OR reference_number = ''"
+        ) if not _is_sqlite() else (
+            "UPDATE inspections SET reference_number = 'INS-' || CAST(id AS TEXT)"
+            " WHERE reference_number IS NULL OR reference_number = ''"
+        )
+        result = db.session.execute(text(_backfill_sql))
+        if result.rowcount:
+            db.session.commit()
+            print(f'✅ Backfilled reference_number on {result.rowcount} inspection(s).')
+    except Exception as _bf_exc:
+        db.session.rollback()
+        print(f'[migration] reference_number backfill non-fatal: {_bf_exc}')
+
     # ── Deposit / Depositary fields ─────────────────────────────────────────────
     for _col, _ddl in [
         ('deposit_amount',        'NUMERIC(10,2)'),

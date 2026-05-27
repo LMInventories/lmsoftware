@@ -410,6 +410,13 @@ def create_inspection():
     db.session.commit()
     _bust_dashboard()
 
+    # ── Auto-assign reference number if none was provided ─────────────────
+    # The ID is only known after the first commit, so we persist it now so
+    # it appears in the Inspection Detail view (and everywhere else).
+    if not inspection.reference_number:
+        inspection.reference_number = f'INS-{inspection.id}'
+        db.session.commit()
+
     # ── Master sheet append (fire-and-forget) ────────────────────────────
     # Skip for PDF imports: they are backdated reference inspections, not
     # billable jobs completed by the company, so they must not appear in the

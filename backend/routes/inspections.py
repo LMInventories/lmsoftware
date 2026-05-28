@@ -1630,6 +1630,81 @@ def apply_pdf_import(inspection_id):
     redistribute_items = bool(parsed.get('redistributeItems', False))
     pdf_file_name      = parsed.get('_fileName', '')
 
+    # ── Keep-layout path: preserve exact PDF structure, ignore template mapping
+    if not redistribute_items:
+        prop     = inspection.property
+        tpl_name = 'PDF Import'
+        if prop and getattr(prop, 'address', None):
+            tpl_name = f'PDF Import – {prop.address}'
+
+        composite = Template(
+            name=tpl_name,
+            inspection_type='check_in',
+            content='{}',
+            is_default=False,
+            is_transient=True,
+        )
+        db.session.add(composite)
+        db.session.flush()
+
+        report_data = {}
+        for order_idx, pdf_room in enumerate(pdf_rooms):
+            room_name = pdf_room.get('name', '')
+            new_sec = Section(
+                template_id  = composite.id,
+                name         = room_name,
+                section_type = 'room',
+                order_index  = order_idx,
+            )
+            db.session.add(new_sec)
+            db.session.flush()
+
+            sec_key = str(new_sec.id)
+            report_data[sec_key] = {}
+
+            for item_idx, pdf_item in enumerate(pdf_room.get('items') or []):
+                item_label = pdf_item.get('label', '')
+                new_item = Item(
+                    section_id         = new_sec.id,
+                    name               = item_label,
+                    description        = '',
+                    requires_photo     = False,
+                    requires_condition = True,
+                    order_index        = item_idx,
+                )
+                db.session.add(new_item)
+                db.session.flush()
+
+                item_entry = {
+                    'description': pdf_item.get('description') or '',
+                    'condition':   pdf_item.get('condition')   or '',
+                }
+                pdf_subs = pdf_item.get('_subs')
+                if isinstance(pdf_subs, list) and pdf_subs:
+                    item_entry['_subs'] = [{
+                        '_sid':        ('sub_' + str(int(time.time() * 1000)) + '_'
+                                        + ''.join(random.choices(string.ascii_lowercase, k=4))),
+                        'description': sub.get('description') or '',
+                        'condition':   sub.get('condition')   or '',
+                    } for sub in pdf_subs]
+                report_data[sec_key][str(new_item.id)] = item_entry
+
+        inspection.template_id = composite.id
+        _apply_pdf_fixed_sections(report_data, {}, pdf_file_name)
+        inspection.report_data = json.dumps(report_data)
+        db.session.commit()
+
+        room_count = len(pdf_rooms)
+        item_count = sum(len(r.get('items') or []) for r in pdf_rooms)
+        print(f'[apply-pdf-import] inspection {inspection_id}: {room_count} rooms, '
+              f'{item_count} items (keep-layout), template {composite.id}')
+        return jsonify({
+            'message':     f'PDF imported: {room_count} rooms, {item_count} items',
+            'room_count':  room_count,
+            'item_count':  item_count,
+            'template_id': composite.id,
+        }), 200
+
     # ── Resolve each PDF room to a source Section (from any check-in template)
     source_section_map = {}   # pdf_room_name → Section | None
     for m in room_mappings:

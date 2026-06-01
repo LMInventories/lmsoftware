@@ -1959,12 +1959,31 @@ async function save(feedback = true) {
     const dataToSave = _rawRecordingsList.value.length
       ? { ...reportData.value, _recordings: _rawRecordingsList.value }
       : reportData.value
-    await api.updateInspection(inspection.value.id, { report_data: JSON.stringify(dataToSave) })
+    // report_data can be several MB — use a 2-minute timeout so a slow connection
+    // doesn't false-timeout after the server has already committed the write.
+    await api.updateInspection(
+      inspection.value.id,
+      { report_data: JSON.stringify(dataToSave) },
+      { timeout: 120000 },
+    )
     unsaved.value = false
     lastSaved.value = new Date()
     if (feedback) toast.success('Report saved')
-  } catch { toast.error('Save failed — please try again') }
-  finally { saving.value = false }
+  } catch (err) {
+    console.error('[save]', err)
+    if (err.response) {
+      // Server returned an explicit error code — the save definitively failed.
+      toast.error('Save failed — please try again')
+    } else if (feedback) {
+      // No response received (timeout or network drop). The server may have already
+      // committed the write; don't show a definitive failure alert.
+      toast.warning('Connection interrupted — please try saving again to confirm')
+    }
+    // For background autosaves (!feedback) with no response, stay silent —
+    // the next autosave interval will retry.
+  } finally {
+    saving.value = false
+  }
 }
 
 let timer = null

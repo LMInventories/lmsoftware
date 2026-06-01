@@ -658,9 +658,10 @@ Return ONLY valid JSON, no markdown:
     elif section_type == 'keys':
         field_instructions = """Put the complete transcript into the description field.
 Format rules:
-- Collection/return info goes on the first line (e.g. "Keys collected from and returned to agent")
-- Each key type goes on its own line using \n, formatted as "N x [key type]"
-  Example: "1 x Yale key\n1 x mailbox key\n2 x garage fob"
+- If the clerk mentions anything about collecting, receiving, handing over, or returning keys — regardless of who from or to — put this EXACTLY as spoken on the FIRST line. This line must always be included when the clerk says it.
+  Examples: "Keys collected from and returned to Yellands Estates", "Keys handed to tenant", "Keys received from landlord", "Keys collected from client and returned to office"
+- Each key type goes on its own line using \\n, formatted as "N x [key type]"
+  Example: "1 x Yale key\\n1 x Chubb key\\n2 x garage fob"
 - Convert spoken numbers to numerals: "one" → "1", "two" → "2"
 - Use "x" not "×" for quantities
 Return ONLY valid JSON, no markdown:
@@ -739,6 +740,13 @@ MULTI-COMPONENT FORMATTING:
     CORRECT:   "In good order\\nLight indentations to tiles\\nLight wear to carpet"
     INCORRECT: "In good order, light indentations to tiles, light wear to carpet"
 - When in doubt: if you'd use a comma between two ideas, use \\n instead
+
+APPLIANCE FORMATTING — for any appliance (washing machine, dishwasher, fridge, oven, hob, dryer, microwave, etc.):
+- Each attribute MUST be on its own line — NEVER merge them into a single line
+- Order: appliance type, then colour and brand, then model number, then serial number
+  CORRECT:   "Washing machine\\nWhite Indesit\\nModel number: WD1234\\nSerial number: AB5678"
+  INCORRECT: "White Indesit washing machine, model number WD1234, serial number AB5678"
+- Format spoken model/serial references as "Model number: X" and "Serial number: X"
 """ + _CONDITION_WORDS + """
 Return ONLY valid JSON, no markdown:
 {"description": "...", "condition": "..."}"""
@@ -1315,6 +1323,13 @@ FORMATTING NUMBERS AND QUANTITIES:
   ✗ INCORRECT: "White painted door, chrome lever handle, chrome letter box"
   This applies to both description and condition fields.
 
+APPLIANCE FORMATTING — for any appliance (washing machine, dishwasher, fridge, oven, hob, dryer, microwave, etc.):
+- Each attribute MUST be on its own line — NEVER merge them into a single line
+- Order: appliance type, then colour and brand, then model number, then serial number
+  ✓ CORRECT:   "Washing machine\nWhite Indesit\nModel number: WD1234\nSerial number: AB5678"
+  ✗ INCORRECT: "White Indesit washing machine, model number WD1234, serial number AB5678"
+- Format spoken model/serial references as "Model number: X" and "Serial number: X"
+
 SPLITTING description vs condition:
 - Condition signal phrases: "in good order", "in fair order", "in poor order", "good order",
   "fair order", "poor order", "as new", "as inventory", "in good condition"
@@ -1869,14 +1884,19 @@ def _claude_fill_fixed_section(transcript: str, section_name: str, section_type:
     elif section_type == 'keys':
         field_instructions = (
             'Extract key descriptions into "description". '
+            'If the clerk mentions anything about collecting, receiving, handing over, or returning keys — '
+            'regardless of who from or to — put this EXACTLY as spoken on the FIRST line. '
+            'This line must always be included when the clerk says it '
+            '(e.g. "Keys collected from and returned to Yellands Estates", "Keys handed to tenant", '
+            '"Keys received from landlord"). '
             'Each key TYPE must be on its own line — use the \\n escape sequence between them. '
-            'Format each line as "N x [key type]". '
+            'Format each key line as "N x [key type]". '
             'Convert spoken numbers to numerals ("two" → "2"). '
             'Use the EXACT words the clerk spoke.'
         )
         field_example = (
             '{\n'
-            '  "70": {"description": "2 x front door keys\\n1 x rear gate key\\n1 x window key"}\n'
+            '  "70": {"description": "Keys collected from and returned to Yellands Estates\\n1 x Yale key\\n1 x Chubb key\\n2 x fob"}\n'
             '}'
         )
     elif section_type == 'meter_readings':

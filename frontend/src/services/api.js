@@ -169,7 +169,7 @@ const api = {
   getInspections(params)             { return http.get('/api/inspections', { params }) },
   getInspection(id)                  { return http.get(`/api/inspections/${id}`) },
   createInspection(data)             { return http.post('/api/inspections', data) },
-  updateInspection(id, data)         { return http.put(`/api/inspections/${id}`, data) },
+  updateInspection(id, data, config) { return http.put(`/api/inspections/${id}`, data, config) },
   deleteInspection(id)               { return http.delete(`/api/inspections/${id}`) },
   updateInspectionStatus(id, status) { return http.patch(`/api/inspections/${id}/status`, { status }) },
   getInspectionReport(id)            { return http.get(`/api/inspections/${id}/report`) },

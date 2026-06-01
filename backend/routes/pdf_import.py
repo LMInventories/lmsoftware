@@ -209,8 +209,12 @@ FIXED SECTIONS
 ═══════════════════════════════════════
 Extract these if present in the PDF. Copy all text verbatim (sentence-cased).
 - condition_summary: overall condition notes
-- keys: key types and quantities handed over
-- meter_readings: gas/electric/water meter readings with location/serial
+- keys: key types and quantities handed over (name = key type, description = quantity and cut type)
+- meter_readings: gas/electric/water meter readings — SPLIT into three fields:
+    • name: type of meter only (e.g. "Gas Meter", "Electricity Meter", "Water Meter")
+    • locationSerial: WHERE the meter is located AND its serial number
+      (e.g. "Under stairs cupboard\nSerial No: 1234567") — DO NOT put the reading here
+    • reading: ONLY the numeric reading with unit (e.g. "12345.67 m³") — nothing else
 - cleaning_summary: cleanliness notes
 
 Return ONLY valid JSON — no markdown, no explanation:
@@ -244,7 +248,7 @@ Return ONLY valid JSON — no markdown, no explanation:
   "fixedSections": {
     "condition_summary": [{ "name": "General Condition", "condition": "Good overall condition throughout" }],
     "keys": [{ "name": "Front Door Key", "description": "2 x Yale, 1 x Deadlock" }],
-    "meter_readings": [{ "name": "Gas Meter", "locationSerial": "Under stairs / Serial 12345", "reading": "12345.6" }],
+    "meter_readings": [{ "name": "Gas Meter", "locationSerial": "Under stairs cupboard\nSerial No: 1234567", "reading": "12345.67 m³" }],
     "cleaning_summary": [{ "name": "General Cleanliness", "cleanliness": "Professionally Cleaned", "cleanlinessNotes": "" }]
   }
 }"""
@@ -325,7 +329,13 @@ FIXED SECTIONS
 ═══════════════════════════════════════
 If you see any of these sections in the text, extract them too:
 - Keys handed over → fixedSections.keys
+  Each entry: { "name": "key type", "description": "quantity and cut, e.g. 2 x Yale" }
 - Meter readings (gas/electric/water) → fixedSections.meter_readings
+  SPLIT each reading into three fields — do NOT put location or serial info into "reading":
+  { "name": "Gas Meter", "locationSerial": "Under stairs cupboard\nSerial No: 1234567", "reading": "12345.67 m³" }
+  • name: type of meter only
+  • locationSerial: location description + serial number (on separate lines if both present)
+  • reading: the numeric reading + unit ONLY
 - Overall condition notes → fixedSections.condition_summary
 - Cleanliness notes → fixedSections.cleaning_summary
 
@@ -474,23 +484,83 @@ def _extract_pdf_images(raw_bytes, job_id):
     return page_images
 
 
-def _map_images_to_rooms(page_texts, page_images):
+def _norm_room(s):
+    """Normalise a room name to bare alphanumeric for fuzzy matching."""
+    return re.sub(r'[^a-z0-9]', '', (s or '').lower())
+
+
+def _map_images_to_rooms(page_texts, page_images, claude_rooms=None):
     """
-    Associate extracted images with rooms using page-order heuristic:
-    images on a page belong to the most-recently-seen room header.
+    Associate extracted images with rooms using page-order heuristic.
+
+    When claude_rooms is supplied (list of {name, ...} dicts from Claude's output),
+    the function finds the first page where each room name appears in the PDF text
+    and uses that as the room-start marker.  This is much more reliable than the
+    regex approach because it uses the exact names Claude already extracted.
+
+    Falls back to the regex-based _ROOM_HEADER_RE heuristic if no Claude room
+    names can be located in the page texts.
 
     Returns:
-      room_photos : {room_name (title-cased): [{'url': str, 'ref': str|None}, ...]}
-      unmatched   : [{'url': str, 'ref': str|None}]  — photos before any room header is seen
+      room_photos : {room_name: [{'url': str, 'ref': str|None}, ...]}
+      unmatched   : [{'url': str, 'ref': str|None}]  — photos with no preceding room
     """
     if not page_images:
         return {}, []
 
+    all_pages = sorted(set(list(page_texts.keys()) + list(page_images.keys())))
+
+    # ── Try Claude-based mapping first ───────────────────────────────────
+    if claude_rooms:
+        # Build page → room_name map: the first page on which each room name appears
+        page_to_room: dict = {}
+        for room in claude_rooms:
+            rname = room.get('name', '')
+            if not rname:
+                continue
+            rname_norm = _norm_room(rname)
+            if not rname_norm:
+                continue
+            for page_num in sorted(page_texts.keys()):
+                text = page_texts[page_num]
+                for line in text.splitlines():
+                    stripped = line.strip()
+                    if not stripped or len(stripped) > 80:
+                        continue
+                    # Match if normalised line equals or contains the normalised room name
+                    # (or vice versa for abbreviated lines)
+                    line_norm = _norm_room(stripped)
+                    if line_norm and (
+                        line_norm == rname_norm
+                        or rname_norm in line_norm
+                        or line_norm in rname_norm
+                    ):
+                        if page_num not in page_to_room:
+                            page_to_room[page_num] = rname
+                        break
+                if page_num in page_to_room:
+                    break  # stop at first occurrence of this room
+
+        if page_to_room:
+            current_room = None
+            room_photos: dict = {}
+            unmatched = []
+            for page_num in all_pages:
+                if page_num in page_to_room:
+                    current_room = page_to_room[page_num]
+                entries = page_images.get(page_num, [])
+                if not entries:
+                    continue
+                if current_room:
+                    room_photos.setdefault(current_room, []).extend(entries)
+                else:
+                    unmatched.extend(entries)
+            return room_photos, unmatched
+
+    # ── Regex fallback ────────────────────────────────────────────────────
     current_room = None
     room_photos  = {}
     unmatched    = []
-    all_pages    = sorted(set(list(page_texts.keys()) + list(page_images.keys())))
-
     for page_num in all_pages:
         text = page_texts.get(page_num, '')
         for line in text.splitlines():
@@ -498,7 +568,6 @@ def _map_images_to_rooms(page_texts, page_images):
             if stripped and _ROOM_HEADER_RE.match(stripped):
                 current_room = stripped.title()
                 break
-
         entries = page_images.get(page_num, [])
         if not entries:
             continue
@@ -614,9 +683,11 @@ def _run_import_job(job_id, api_key, extracted_text, pdf_b64, template_structure
         from anthropic import Anthropic
         client = Anthropic(api_key=api_key)
 
-        # ── Image extraction (best-effort, before Claude call) ─────────────
-        room_photos     = {}
-        overview_photos = []   # images that appear before any room header
+        # ── Image extraction (before Claude, mapping deferred until after) ────
+        # We extract raw images here so S3 uploads happen before the Claude
+        # call (which can take 30-60 s).  Room mapping is done AFTER Claude
+        # because Claude's room names are far more reliable than the regex.
+        page_images = {}
         if raw_bytes:
             try:
                 _write_job(job_id, {
@@ -627,12 +698,9 @@ def _run_import_job(job_id, api_key, extracted_text, pdf_b64, template_structure
                 })
                 page_images = _extract_pdf_images(raw_bytes, job_id)
                 if page_images:
-                    pt = page_texts or {}
-                    room_photos, overview_photos = _map_images_to_rooms(pt, page_images)
-                    total = sum(len(v) for v in room_photos.values()) + len(overview_photos)
-                    print(f'[pdf-import] job {job_id}: extracted {total} photos '
-                          f'across {len(room_photos)} rooms '
-                          f'({len(overview_photos)} unmatched → overview)')
+                    total = sum(len(v) for v in page_images.values())
+                    print(f'[pdf-import] job {job_id}: extracted {total} raw images '
+                          f'across {len(page_images)} pages')
             except Exception as img_e:
                 print(f'[pdf-import] job {job_id} image extraction error: {img_e}')
 
@@ -706,23 +774,40 @@ def _run_import_job(job_id, api_key, extracted_text, pdf_b64, template_structure
 
             parsed = _merge_results(results)
 
-        # ── Attach extracted photos to matching rooms ──────────────────────
+        # ── Map images to rooms using Claude's room names (most reliable) ───
+        # Done AFTER Claude so we can use the actual room names Claude extracted,
+        # rather than guessing from regex on raw PDF text.
+        room_photos     = {}
+        overview_photos = []
+        if page_images:
+            try:
+                pt = page_texts or {}
+                room_photos, overview_photos = _map_images_to_rooms(
+                    pt, page_images, parsed.get('rooms', []),
+                )
+                total = sum(len(v) for v in room_photos.values()) + len(overview_photos)
+                print(f'[pdf-import] job {job_id}: mapped {total} photos → '
+                      f'{len(room_photos)} rooms, {len(overview_photos)} unmatched')
+            except Exception as map_e:
+                print(f'[pdf-import] job {job_id} photo mapping error: {map_e}')
+
+        # ── Attach photos to parsed rooms ─────────────────────────────────
         if room_photos or overview_photos:
             for room in parsed.get('rooms', []):
                 rname = room.get('name', '')
                 photos = room_photos.get(rname)
                 if not photos:
-                    # Fallback: partial / case-insensitive match
-                    rname_lower = rname.lower()
+                    # Normalised fallback — handles case/punctuation differences
+                    rname_norm = _norm_room(rname)
                     for rk, rp in room_photos.items():
-                        if rk.lower() in rname_lower or rname_lower in rk.lower():
+                        if _norm_room(rk) == rname_norm:
                             photos = rp
                             break
                 if photos:
                     room['_photos']    = [p['url'] for p in photos]
                     room['_photoRefs'] = [p.get('ref') for p in photos]
 
-            # Photos that appeared before any room heading go to the overview fallback
+            # Photos before any room heading go to the overview fallback
             if overview_photos:
                 parsed['_overviewPhotos'] = [p['url'] for p in overview_photos]
 

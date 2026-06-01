@@ -1662,14 +1662,45 @@ def _apply_pdf_fixed_sections(report_data, pdf_fixed, pdf_file_name):
             continue
         sec_idx, gsec = match
         sec_id = f'fs_{sec_idx}_{_fs_slug(gsec["name"])}'
-        fields = _FS_FIELD_MAP.get(pdf_type, ['condition'])
 
-        report_data[sec_id] = {}
-        for i, pdf_row in enumerate(pdf_rows):
-            if not isinstance(pdf_row, dict):
-                pdf_row = {fields[0]: str(pdf_row)} if fields else {}
-            row_id = f'fs_{sec_idx}_{i}'
-            report_data[sec_id][row_id] = {f: pdf_row.get(f, '') for f in fields}
+        if pdf_type == 'meter_readings':
+            # Meter readings use _extra rows so the name and both data fields
+            # are always visible regardless of predefined template items.
+            report_data[sec_id] = {'_extra': []}
+            for i, pdf_row in enumerate(pdf_rows):
+                if not isinstance(pdf_row, dict):
+                    pdf_row = {}
+                eid = f'pdf_fs_{sec_idx}_{i}'
+                report_data[sec_id]['_extra'].append({
+                    '_eid':          eid,
+                    'name':          pdf_row.get('name', ''),
+                    'locationSerial': pdf_row.get('locationSerial', ''),
+                    'reading':       pdf_row.get('reading', ''),
+                })
+
+        elif pdf_type == 'keys':
+            # Keys also use _extra so the key name and description are both shown.
+            report_data[sec_id] = {'_extra': []}
+            for i, pdf_row in enumerate(pdf_rows):
+                if not isinstance(pdf_row, dict):
+                    pdf_row = {}
+                eid = f'pdf_fs_{sec_idx}_{i}'
+                report_data[sec_id]['_extra'].append({
+                    '_eid':        eid,
+                    'name':        pdf_row.get('name', ''),
+                    'description': pdf_row.get('description', ''),
+                })
+
+        else:
+            # condition_summary, cleaning_summary, etc. — write to predefined row slots
+            fields = _FS_FIELD_MAP.get(pdf_type, ['condition'])
+            report_data[sec_id] = {}
+            for i, pdf_row in enumerate(pdf_rows):
+                if not isinstance(pdf_row, dict):
+                    pdf_row = {fields[0]: str(pdf_row)} if fields else {}
+                row_id = f'fs_{sec_idx}_{i}'
+                report_data[sec_id][row_id] = {f: pdf_row.get(f, '') for f in fields}
+
         print(f'[apply-pdf-import] fixed {pdf_type} → {sec_id}: {len(pdf_rows)} rows')
 
     report_data['_importedSource']   = {k: v for k, v in report_data.items() if not k.startswith('_')}

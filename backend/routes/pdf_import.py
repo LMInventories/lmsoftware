@@ -38,6 +38,21 @@ MAX_TOKENS_CHUNK  = 6144    # per-chunk ceiling
 MIN_IMAGE_PX      = 100     # skip images smaller than 100 px in either dimension
 MAX_IMAGES_TOTAL  = 150     # hard cap to avoid runaway S3 uploads
 
+# Headings that indicate fixed/admin sections of a UK inventory report (not rooms).
+# Images on pages whose first visible heading matches this pattern should NOT be
+# assigned to any room — they go to the overview fallback.
+_FIXED_SECTION_HEADING_RE = re.compile(
+    r'^(keys?\b|keys?\s*(issued|handed|received|given|schedule)?'
+    r'|utility\s+meter|meter\s+read|gas\s+meter|electricity\s+meter|electric'
+    r'|water\s+meter|sub[- ]?meter|communal\s+meter'
+    r'|cleaning\s*(summary|report|schedule|notes?)?'
+    r'|condition\s+summary|overall\s+condition'
+    r'|smoke|carbon|alarm|fire\s+door|health\s*(and|&)?\s*safety'
+    r'|check[- ]?out\s+(summary|notes?)?'
+    r'|schedule\s+of\s+condition)\s*$',
+    re.IGNORECASE,
+)
+
 # Patterns used to extract photo reference numbers from PDF text near images,
 # and to match those references in item description/condition text.
 _REF_RE = re.compile(
@@ -530,37 +545,83 @@ def _norm_room(s):
     return re.sub(r'[^a-z0-9]', '', (s or '').lower())
 
 
+def _is_fixed_section_page(text):
+    """
+    Return True if the page text starts with a fixed/admin section heading
+    (keys, meter readings, cleaning summary, etc.) rather than a room heading.
+    Only checks the first few lines to avoid false positives from body text.
+    """
+    for line in text.splitlines()[:8]:
+        stripped = line.strip()
+        if stripped and _FIXED_SECTION_HEADING_RE.match(stripped):
+            return True
+    return False
+
+
+def _room_name_on_page(rname_norm, page_text):
+    """
+    Return True if the page text contains a line that IS the room name.
+
+    Matching rules (tight, to avoid false positives from item descriptions):
+      1. Normalised line == normalised room name  (exact)
+      2. Normalised line STARTS WITH the room name and the extra suffix is short
+         (≤ 20 chars after stripping) — handles "Bedroom 1 (Ground Floor)" etc.
+
+    Deliberately excludes substring matches like 'kitchen' appearing inside
+    "adjacent to the kitchen area", which caused systematic off-by-one errors.
+
+    Only the first 20 lines of the page are checked — room headings are always
+    near the top of a section, not buried in item descriptions.
+    """
+    for line in page_text.splitlines()[:20]:
+        stripped = line.strip()
+        if not stripped or len(stripped) > 80:
+            continue
+        line_norm = _norm_room(stripped)
+        if not line_norm:
+            continue
+        if line_norm == rname_norm:
+            return True
+        if (line_norm.startswith(rname_norm)
+                and len(line_norm) <= len(rname_norm) + 20):
+            return True
+    return False
+
+
 def _map_images_to_rooms(page_texts, page_images, claude_rooms=None):
     """
     Associate extracted images with rooms using page-order heuristic.
 
-    When claude_rooms is supplied we find the FIRST page in the PDF where each
-    room name appears, build a sorted list of (start_page, room_name) pairs, then
-    walk pages in order assigning images to whichever room last started.
-
-    Key invariant: each room is looked up INDEPENDENTLY.  We never share state
-    between rooms while searching — the previous loop bug broke this by checking
-    `page_num in page_to_room` (a shared dict) as the stop condition, which
-    caused every room after the first to stop immediately at page 0.
+    Algorithm (when claude_rooms is supplied):
+      1. For each Claude room, search pages INDEPENDENTLY to find the first page
+         where that room's name appears as a headline (tight matching — exact or
+         starts-with only; no substring-in-sentence matches).
+      2. Sort rooms by their first-page and walk all pages, updating current_room
+         at each room transition.
+      3. Pages whose first heading matches a fixed-section keyword (keys, meters,
+         cleaning, etc.) have their images sent to `unmatched` regardless of
+         current_room — prevents meter/key photos landing in the last room.
 
     Falls back to the regex-based _ROOM_HEADER_RE heuristic if no Claude room
     names can be located in the page texts.
 
     Returns:
       room_photos : {room_name: [{'url': str, 'ref': str|None}, ...]}
-      unmatched   : [{'url': str, 'ref': str|None}]  — photos before any room
+      unmatched   : [{'url': str, 'ref': str|None}]  — photos with no room
     """
     if not page_images:
         return {}, []
 
-    all_pages = sorted(set(list(page_texts.keys()) + list(page_images.keys())))
+    all_pages        = sorted(set(list(page_texts.keys()) + list(page_images.keys())))
+    sorted_page_nums = sorted(page_texts.keys())
 
     # ── Claude-based mapping ──────────────────────────────────────────────
     if claude_rooms:
-        # Step 1: for every Claude room, independently find the FIRST page in
-        # the PDF where that room name appears as a line of text.
-        room_first_page: dict = {}   # {room_name: first_page_num}
-        sorted_page_nums = sorted(page_texts.keys())
+        # Step 1: find the FIRST page for each room INDEPENDENTLY.
+        # Each room is searched from scratch — no shared state between rooms
+        # (the previous version shared a page_to_room dict as the stop condition,
+        # which caused every room after the first to abort at page 0).
+        room_first_page: dict = {}
 
         for room in claude_rooms:
             rname = room.get('name', '')
@@ -571,26 +632,12 @@ def _map_images_to_rooms(page_texts, page_images, claude_rooms=None):
                 continue
 
             for page_num in sorted_page_nums:
-                found_on_this_page = False
-                for line in page_texts[page_num].splitlines():
-                    stripped = line.strip()
-                    if not stripped or len(stripped) > 80:
-                        continue
-                    line_norm = _norm_room(stripped)
-                    if not line_norm:
-                        continue
-                    if (line_norm == rname_norm
-                            or rname_norm in line_norm
-                            or line_norm in rname_norm):
-                        found_on_this_page = True
-                        break
-                if found_on_this_page:
+                if _room_name_on_page(rname_norm, page_texts[page_num]):
                     room_first_page[rname] = page_num
-                    break   # only need the FIRST page for this room
+                    break   # first occurrence only
 
         if room_first_page:
-            # Step 2: sort rooms by start page then walk all pages, updating
-            # current_room whenever a new room starts.
+            # Step 2: sort by start page, then assign images page by page.
             sorted_starts = sorted(room_first_page.items(), key=lambda x: x[1])
             current_room  = None
             room_photos: dict = {}
@@ -598,7 +645,7 @@ def _map_images_to_rooms(page_texts, page_images, claude_rooms=None):
             starts_idx    = 0
 
             for page_num in all_pages:
-                # Advance to the latest room whose start page ≤ current page
+                # Advance current_room to the latest room whose start ≤ this page
                 while (starts_idx < len(sorted_starts)
                        and sorted_starts[starts_idx][1] <= page_num):
                     current_room = sorted_starts[starts_idx][0]
@@ -607,14 +654,20 @@ def _map_images_to_rooms(page_texts, page_images, claude_rooms=None):
                 entries = page_images.get(page_num, [])
                 if not entries:
                     continue
-                if current_room:
+
+                # If this page is a fixed/admin section (keys, meters, etc.),
+                # don't assign its images to any room — send to overview fallback.
+                page_text = page_texts.get(page_num, '')
+                if page_text and _is_fixed_section_page(page_text):
+                    unmatched.extend(entries)
+                elif current_room:
                     room_photos.setdefault(current_room, []).extend(entries)
                 else:
                     unmatched.extend(entries)
 
             return room_photos, unmatched
 
-    # ── Regex fallback ────────────────────────────────────────────────────
+    # ── Regex fallback (no Claude rooms or none found in text) ────────────
     current_room = None
     room_photos  = {}
     unmatched    = []

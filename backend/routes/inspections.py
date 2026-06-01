@@ -1047,6 +1047,27 @@ def share_pdf(inspection_id):
 # Helpers for apply_pdf_import
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _attach_room_photos_to_report_data(report_data, room_photo_map, room_to_sec_id):
+    """
+    For each room that had photos extracted during PDF import, attach those
+    photo URLs to the first item row in the corresponding report_data section.
+
+    room_photo_map  : {room_name: [url, ...]}
+    room_to_sec_id  : {room_name: section_id (int or str)}
+    """
+    for room_name, sec_id in room_to_sec_id.items():
+        photos = room_photo_map.get(room_name)
+        if not photos:
+            continue
+        sec_key  = str(sec_id)
+        sec_data = report_data.get(sec_key)
+        if not sec_data or not isinstance(sec_data, dict):
+            continue
+        first_key = next((k for k in sec_data if not k.startswith('_')), None)
+        if first_key and isinstance(sec_data[first_key], dict):
+            sec_data[first_key]['_photos'] = list(photos)
+
+
 def _pdf_norm(s):
     """Normalise a string for fuzzy section/item name matching."""
     return re.sub(r'[\s/,&\-()\[\]]', '', (s or '').lower())
@@ -1662,6 +1683,7 @@ def apply_pdf_import(inspection_id):
             sec_key = str(new_sec.id)
             report_data[sec_key] = {}
 
+            first_item_id = None
             for item_idx, pdf_item in enumerate(pdf_room.get('items') or []):
                 item_label = pdf_item.get('label', '')
                 new_item = Item(
@@ -1674,6 +1696,8 @@ def apply_pdf_import(inspection_id):
                 )
                 db.session.add(new_item)
                 db.session.flush()
+                if item_idx == 0:
+                    first_item_id = new_item.id
 
                 item_entry = {
                     'description': pdf_item.get('description') or '',
@@ -1688,6 +1712,11 @@ def apply_pdf_import(inspection_id):
                         'condition':   sub.get('condition')   or '',
                     } for sub in pdf_subs]
                 report_data[sec_key][str(new_item.id)] = item_entry
+
+            # Attach any photos extracted from the PDF for this room
+            room_photos = pdf_room.get('_photos')
+            if room_photos and first_item_id:
+                report_data[sec_key][str(first_item_id)]['_photos'] = list(room_photos)
 
         inspection.template_id = composite.id
         _apply_pdf_fixed_sections(report_data, {}, pdf_file_name)
@@ -1818,6 +1847,16 @@ def apply_pdf_import(inspection_id):
             src_id_to_new_sec_id,
             new_room_name_to_sec_id,
         )
+        # Attach any photos extracted during PDF import
+        _room_photo_map  = {r.get('name', ''): r['_photos'] for r in pdf_rooms if r.get('_photos')}
+        _room_to_sec_id  = {
+            r.get('name', ''): (
+                src_id_to_new_sec_id.get(pdf_room_to_src_sec_id.get(r.get('name', '')))
+                or new_room_name_to_sec_id.get(r.get('name', ''))
+            )
+            for r in pdf_rooms
+        }
+        _attach_room_photos_to_report_data(report_data, _room_photo_map, _room_to_sec_id)
         _apply_pdf_fixed_sections(report_data, pdf_fixed, pdf_file_name)
         inspection.report_data = json.dumps(report_data)
         db.session.commit()
@@ -1882,6 +1921,17 @@ def apply_pdf_import(inspection_id):
                         src_id_to_new_sec_id,
                         new_room_name_to_sec_id,
                     )
+
+                # Attach any photos extracted during PDF import
+                _room_photo_map = {r.get('name', ''): r['_photos'] for r in pdf_rooms if r.get('_photos')}
+                _room_to_sec_id = {
+                    r.get('name', ''): (
+                        src_id_to_new_sec_id.get(pdf_room_to_src_sec_id.get(r.get('name', '')))
+                        or new_room_name_to_sec_id.get(r.get('name', ''))
+                    )
+                    for r in pdf_rooms
+                }
+                _attach_room_photos_to_report_data(report_data, _room_photo_map, _room_to_sec_id)
 
                 _apply_pdf_fixed_sections(report_data, pdf_fixed, pdf_file_name)
                 _insp.report_data = json.dumps(report_data)

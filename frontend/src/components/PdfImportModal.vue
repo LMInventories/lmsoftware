@@ -79,6 +79,11 @@ const allTemplateSections = computed(() => {
   return out
 })
 
+/** Total photos extracted from the PDF across all rooms */
+const totalImportedPhotos = computed(() =>
+  (parsed.value?.rooms || []).reduce((n, r) => n + (r._photos?.length || 0), 0)
+)
+
 /** Sections that have more than one PDF room pointing at them (merge indicator) */
 const mergedSections = computed(() => {
   const counts = {}
@@ -532,6 +537,7 @@ function _pollRedistributionJob(inspectionId, jobId) {
           <div class="pi-map-stats">
             <span class="pi-map-stat-badge">{{ parsed.rooms?.length || 0 }} rooms found</span>
             <span class="pi-map-stat-badge">{{ parsed.rooms?.reduce((n, r) => n + (r.items?.length || 0), 0) || 0 }} items extracted</span>
+            <span v-if="totalImportedPhotos > 0" class="pi-map-stat-badge pi-map-stat-badge-photo">{{ totalImportedPhotos }} photo{{ totalImportedPhotos === 1 ? '' : 's' }} extracted</span>
           </div>
 
           <!-- ── Mode cards (toggle at the top) ──────────────────────── -->
@@ -578,7 +584,9 @@ function _pollRedistributionJob(inspectionId, jobId) {
               >
                 <div class="pi-room-left">
                   <div class="pi-room-name">{{ room.name }}</div>
-                  <div class="pi-room-count">{{ room.items?.length || 0 }} item{{ room.items?.length === 1 ? '' : 's' }}</div>
+                  <div class="pi-room-count">
+                    {{ room.items?.length || 0 }} item{{ room.items?.length === 1 ? '' : 's' }}<template v-if="room._photos?.length"> · {{ room._photos.length }} photo{{ room._photos.length === 1 ? '' : 's' }}</template>
+                  </div>
                 </div>
                 <div class="pi-room-arrow">→</div>
                 <div class="pi-room-right">
@@ -806,6 +814,9 @@ function _pollRedistributionJob(inspectionId, jobId) {
   background: #ede9fe; color: #4f46e5;
   font-size: 11px; font-weight: 700;
   padding: 3px 9px; border-radius: 20px; letter-spacing: 0.3px;
+}
+.pi-map-stat-badge-photo {
+  background: #fef3c7; color: #92400e;
 }
 .pi-map-intro  { font-size: 12px; color: #64748b; margin: 0; line-height: 1.5; }
 .pi-map-warn   { color: #b45309; font-style: normal; font-weight: 600; }

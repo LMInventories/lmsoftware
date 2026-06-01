@@ -24,7 +24,9 @@
       "Bash(powershell -Command \"Select-String -Path 'api.js' -Pattern 'createRecording' | Select-Object -First 10\")",
       "Bash(powershell -Command \"Get-Content api.js | Select-String -Pattern '/recording|createRecording' -A 2\")",
       "Bash(powershell -Command \"Select-String -Path 'api.js' -Pattern 'recording' -i\")",
-      "Bash(powershell -Command \"Select-String -Path 'api.js' -Pattern 'recording'\")"
+      "Bash(powershell -Command \"Select-String -Path 'api.js' -Pattern 'recording'\")",
+      "Bash(Get-ChildItem -Path \"C:\\\\Projects\\\\lmsoftware\" -Force)",
+      "Bash(Select-Object Name)"
     ]
   }
 }

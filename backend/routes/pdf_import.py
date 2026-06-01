@@ -35,6 +35,8 @@ CHUNK_THRESHOLD   = 14_000  # chars — above this we chunk
 MAX_CHUNK_CHARS   = 10_000  # target chars per chunk
 MAX_TOKENS_SINGLE = 16384   # generous ceiling for single calls
 MAX_TOKENS_CHUNK  = 6144    # per-chunk ceiling
+MIN_IMAGE_PX      = 100     # skip images smaller than 100 px in either dimension
+MAX_IMAGES_TOTAL  = 150     # hard cap to avoid runaway S3 uploads
 
 # Room-like headings used to detect section boundaries in UK inventory reports
 _ROOM_HEADER_RE = re.compile(
@@ -324,19 +326,118 @@ def _delete_job(job_id):
 
 # ── PDF text extraction ───────────────────────────────────────────────────────
 
-def _extract_pdf_text(raw_bytes):
+def _extract_pdf_text_by_page(raw_bytes):
+    """Returns {page_num (0-based): text} using pdfplumber."""
     try:
         import pdfplumber
-        parts = []
+        page_texts = {}
         with pdfplumber.open(io.BytesIO(raw_bytes)) as pdf:
-            for page in pdf.pages:
+            for i, page in enumerate(pdf.pages):
                 t = page.extract_text(x_tolerance=3, y_tolerance=3)
                 if t:
-                    parts.append(t)
-        return '\n'.join(parts)
+                    page_texts[i] = t
+        return page_texts
     except Exception as e:
         print('[pdf-import] pdfplumber failed: ' + str(e))
-        return ''
+        return {}
+
+
+def _extract_pdf_text(raw_bytes):
+    page_texts = _extract_pdf_text_by_page(raw_bytes)
+    return '\n'.join(page_texts[i] for i in sorted(page_texts))
+
+
+# ── PDF image extraction ──────────────────────────────────────────────────────
+
+def _extract_pdf_images(raw_bytes, job_id):
+    """
+    Extract embedded images from a PDF and upload to S3.
+    Returns {page_num (0-based): [s3_url, ...]} or {} on failure / S3 not configured.
+    Skips images smaller than MIN_IMAGE_PX in either dimension.
+    Caps total images at MAX_IMAGES_TOTAL to prevent runaway uploads.
+    """
+    try:
+        from utils.s3 import is_configured, upload_bytes, new_key
+        if not is_configured():
+            return {}
+    except Exception:
+        return {}
+
+    try:
+        import fitz  # PyMuPDF
+    except ImportError:
+        print('[pdf-import] PyMuPDF not installed — skipping image extraction')
+        return {}
+
+    page_images = {}
+    seen_xrefs  = set()
+    total       = 0
+    prefix      = f'pdf-import/{job_id}'
+
+    try:
+        doc = fitz.open(stream=raw_bytes, filetype='pdf')
+        for page_num in range(len(doc)):
+            if total >= MAX_IMAGES_TOTAL:
+                break
+            page     = doc[page_num]
+            img_list = page.get_images(full=True)
+            urls     = []
+            for img in img_list:
+                if total >= MAX_IMAGES_TOTAL:
+                    break
+                xref = img[0]
+                if xref in seen_xrefs:
+                    continue
+                seen_xrefs.add(xref)
+                try:
+                    base_image = doc.extract_image(xref)
+                    w = base_image.get('width',  0)
+                    h = base_image.get('height', 0)
+                    if w < MIN_IMAGE_PX or h < MIN_IMAGE_PX:
+                        continue
+                    img_bytes = base_image['image']
+                    ext       = base_image.get('ext', 'jpeg')
+                    ctype     = 'image/jpeg' if ext in ('jpeg', 'jpg') else f'image/{ext}'
+                    key       = new_key(prefix, ext)
+                    url       = upload_bytes(img_bytes, key, ctype)
+                    urls.append(url)
+                    total += 1
+                except Exception as e:
+                    print(f'[pdf-import] image xref {xref} extract error: {e}')
+            if urls:
+                page_images[page_num] = urls
+        doc.close()
+    except Exception as e:
+        print(f'[pdf-import] image extraction error: {e}')
+
+    return page_images
+
+
+def _map_images_to_rooms(page_texts, page_images):
+    """
+    Associate extracted images with rooms using page-order heuristic:
+    images on a page belong to the most-recently-seen room header.
+    Returns {room_name (title-cased): [url, ...]}
+    """
+    if not page_images:
+        return {}
+
+    current_room = None
+    room_photos  = {}
+    all_pages    = sorted(set(list(page_texts.keys()) + list(page_images.keys())))
+
+    for page_num in all_pages:
+        text = page_texts.get(page_num, '')
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped and _ROOM_HEADER_RE.match(stripped):
+                current_room = stripped.title()
+                break
+
+        if current_room and page_num in page_images:
+            room_photos.setdefault(current_room, []).extend(page_images[page_num])
+
+    return room_photos
 
 
 # ── Text chunking ─────────────────────────────────────────────────────────────
@@ -436,11 +537,32 @@ def _merge_results(results):
 # ── Background worker ─────────────────────────────────────────────────────────
 
 def _run_import_job(job_id, api_key, extracted_text, pdf_b64, template_structure,
-                    use_text_mode, inspection_id, filename):
+                    use_text_mode, inspection_id, filename,
+                    page_texts=None, raw_bytes=None):
     """Runs in a daemon thread. Writes result to a temp file when complete."""
     try:
         from anthropic import Anthropic
         client = Anthropic(api_key=api_key)
+
+        # ── Image extraction (best-effort, before Claude call) ─────────────
+        room_photos = {}
+        if raw_bytes:
+            try:
+                _write_job(job_id, {
+                    'status':        'processing',
+                    'progress':      'Extracting photos…',
+                    'inspection_id': inspection_id,
+                    'filename':      filename,
+                })
+                page_images = _extract_pdf_images(raw_bytes, job_id)
+                if page_images:
+                    pt = page_texts or {}
+                    room_photos = _map_images_to_rooms(pt, page_images)
+                    total = sum(len(v) for v in room_photos.values())
+                    print(f'[pdf-import] job {job_id}: extracted {total} photos '
+                          f'across {len(room_photos)} rooms')
+            except Exception as img_e:
+                print(f'[pdf-import] job {job_id} image extraction error: {img_e}')
 
         if not use_text_mode:
             # Document mode: send raw PDF — no chunking possible
@@ -512,10 +634,27 @@ def _run_import_job(job_id, api_key, extracted_text, pdf_b64, template_structure
 
             parsed = _merge_results(results)
 
+        # ── Attach extracted photos to matching rooms ──────────────────────
+        if room_photos:
+            for room in parsed.get('rooms', []):
+                rname = room.get('name', '')
+                photos = room_photos.get(rname)
+                if not photos:
+                    # Fallback: partial / case-insensitive match
+                    rname_lower = rname.lower()
+                    for rk, urls in room_photos.items():
+                        if rk.lower() in rname_lower or rname_lower in rk.lower():
+                            photos = urls
+                            break
+                if photos:
+                    room['_photos'] = photos
+
         room_count = len(parsed.get('rooms', []))
         item_count = sum(len(r.get('items', [])) for r in parsed.get('rooms', []))
+        photo_count = sum(len(r.get('_photos', [])) for r in parsed.get('rooms', []))
         mode = 'text' if use_text_mode else 'document'
-        print('[pdf-import] job ' + job_id + ' done: ' + str(room_count) + ' rooms, ' + str(item_count) + ' items (mode=' + mode + ')')
+        print('[pdf-import] job ' + job_id + ' done: ' + str(room_count) + ' rooms, '
+              + str(item_count) + ' items, ' + str(photo_count) + ' photos (mode=' + mode + ')')
 
         _write_job(job_id, {
             'status': 'done',
@@ -581,9 +720,10 @@ def pdf_import():
             return jsonify({'error': 'No PDF data provided'}), 400
         raw_bytes = base64.b64decode(pdf_b64)
 
-    # Text extraction
-    extracted_text = _extract_pdf_text(raw_bytes)
-    use_text_mode = len(extracted_text) >= MIN_TEXT_CHARS
+    # Text extraction (page-by-page so the thread can use it for photo mapping)
+    page_texts     = _extract_pdf_text_by_page(raw_bytes)
+    extracted_text = '\n'.join(page_texts[i] for i in sorted(page_texts))
+    use_text_mode  = len(extracted_text) >= MIN_TEXT_CHARS
 
     if not use_text_mode and pdf_b64 is None:
         pdf_b64 = base64.b64encode(raw_bytes).decode('utf-8')
@@ -600,7 +740,7 @@ def pdf_import():
     thread = threading.Thread(
         target=_run_import_job,
         args=(job_id, api_key, extracted_text, pdf_b64, template_structure,
-              use_text_mode, inspection_id, filename),
+              use_text_mode, inspection_id, filename, page_texts, raw_bytes),
         daemon=True,
     )
     thread.start()

@@ -419,32 +419,50 @@ def _extract_pdf_text(raw_bytes):
 def _extract_pdf_images(raw_bytes, job_id):
     """
     Extract embedded images from a PDF and upload to S3.
-    Returns {page_num (0-based): [{'url': str, 'ref': str|None}, ...]} or {} on failure.
-    Skips images smaller than MIN_IMAGE_PX in either dimension.
-    Caps total images at MAX_IMAGES_TOTAL to prevent runaway uploads.
-    Each entry also includes 'ref': a short reference number extracted from nearby
-    caption text (e.g. 'Photo 1' → '1'), or None if no reference was found.
+
+    Returns:
+      page_images : {page_num (0-based): [{'url': str, 'ref': str|None}, ...]}
+      cover_photo : str | None  — URL of the property overview / cover photo
+
+    Logo / decorative image filtering:
+      • Images that appear on 3+ pages (e.g. repeated header logos) are skipped.
+      • Images with a transparent soft mask (smask > 0) are skipped — most agent
+        logos are PNG-with-transparency; real property photos are opaque JPEGs.
+      • Images with extreme aspect ratios (>5:1 or <1:5) are skipped.
+
+    Cover photo identification:
+      The first sufficiently large opaque image on page 0 is treated as the
+      property / cover photo and returned separately (not added to page_images).
     """
     try:
         from utils.s3 import is_configured, upload_bytes, new_key
         if not is_configured():
-            return {}
+            return {}, None
     except Exception:
-        return {}
+        return {}, None
 
     try:
         import fitz  # PyMuPDF
     except ImportError:
         print('[pdf-import] PyMuPDF not installed — skipping image extraction')
-        return {}
+        return {}, None
 
     page_images = {}
+    cover_photo = None
     seen_xrefs  = set()
     total       = 0
     prefix      = f'pdf-import/{job_id}'
 
     try:
         doc = fitz.open(stream=raw_bytes, filetype='pdf')
+
+        # Pre-scan: count how many pages each image xref appears on.
+        # xrefs seen on 3+ pages are repeated elements (headers, logos) — skip them.
+        xref_page_count: dict = {}
+        for pn in range(len(doc)):
+            for im in doc[pn].get_images():
+                xref_page_count[im[0]] = xref_page_count.get(im[0], 0) + 1
+
         for page_num in range(len(doc)):
             if total >= MAX_IMAGES_TOTAL:
                 break
@@ -455,24 +473,47 @@ def _extract_pdf_images(raw_bytes, job_id):
             for img in img_list:
                 if total >= MAX_IMAGES_TOTAL:
                     break
-                xref = img[0]
+                xref  = img[0]
+                smask = img[1]   # soft-mask xref; > 0 means the image has transparency
                 if xref in seen_xrefs:
                     continue
                 seen_xrefs.add(xref)
+
+                # Skip repeated elements (logos on every page header/footer)
+                if xref_page_count.get(xref, 1) >= 3:
+                    continue
+
+                # Skip transparent images — agent logos are almost always PNG-with-alpha;
+                # real room / property photos are typically opaque JPEGs.
+                if smask > 0:
+                    continue
+
                 try:
                     base_image = doc.extract_image(xref)
                     w = base_image.get('width',  0)
                     h = base_image.get('height', 0)
                     if w < MIN_IMAGE_PX or h < MIN_IMAGE_PX:
                         continue
+
+                    # Skip extreme aspect ratios (banner logos, thin decorative elements)
+                    aspect = w / h if h > 0 else 1.0
+                    if aspect > 5.0 or aspect < 0.2:
+                        continue
+
                     img_bytes = base_image['image']
                     ext       = base_image.get('ext', 'jpeg')
                     ctype     = 'image/jpeg' if ext in ('jpeg', 'jpg') else f'image/{ext}'
                     key       = new_key(prefix, ext)
                     url       = upload_bytes(img_bytes, key, ctype)
-                    ref       = _extract_image_ref(page, xref, text_spans)
+                    total    += 1
+
+                    # First large image on page 0 = property cover photo
+                    if page_num == 0 and cover_photo is None and w >= 300 and h >= 200:
+                        cover_photo = url
+                        continue   # don't add to room images
+
+                    ref = _extract_image_ref(page, xref, text_spans)
                     entries.append({'url': url, 'ref': ref})
-                    total += 1
                 except Exception as e:
                     print(f'[pdf-import] image xref {xref} extract error: {e}')
             if entries:
@@ -481,7 +522,7 @@ def _extract_pdf_images(raw_bytes, job_id):
     except Exception as e:
         print(f'[pdf-import] image extraction error: {e}')
 
-    return page_images
+    return page_images, cover_photo
 
 
 def _norm_room(s):
@@ -493,27 +534,34 @@ def _map_images_to_rooms(page_texts, page_images, claude_rooms=None):
     """
     Associate extracted images with rooms using page-order heuristic.
 
-    When claude_rooms is supplied (list of {name, ...} dicts from Claude's output),
-    the function finds the first page where each room name appears in the PDF text
-    and uses that as the room-start marker.  This is much more reliable than the
-    regex approach because it uses the exact names Claude already extracted.
+    When claude_rooms is supplied we find the FIRST page in the PDF where each
+    room name appears, build a sorted list of (start_page, room_name) pairs, then
+    walk pages in order assigning images to whichever room last started.
+
+    Key invariant: each room is looked up INDEPENDENTLY.  We never share state
+    between rooms while searching — the previous loop bug broke this by checking
+    `page_num in page_to_room` (a shared dict) as the stop condition, which
+    caused every room after the first to stop immediately at page 0.
 
     Falls back to the regex-based _ROOM_HEADER_RE heuristic if no Claude room
     names can be located in the page texts.
 
     Returns:
       room_photos : {room_name: [{'url': str, 'ref': str|None}, ...]}
-      unmatched   : [{'url': str, 'ref': str|None}]  — photos with no preceding room
+      unmatched   : [{'url': str, 'ref': str|None}]  — photos before any room
     """
     if not page_images:
         return {}, []
 
     all_pages = sorted(set(list(page_texts.keys()) + list(page_images.keys())))
 
-    # ── Try Claude-based mapping first ───────────────────────────────────
+    # ── Claude-based mapping ──────────────────────────────────────────────
     if claude_rooms:
-        # Build page → room_name map: the first page on which each room name appears
-        page_to_room: dict = {}
+        # Step 1: for every Claude room, independently find the FIRST page in
+        # the PDF where that room name appears as a line of text.
+        room_first_page: dict = {}   # {room_name: first_page_num}
+        sorted_page_nums = sorted(page_texts.keys())
+
         for room in claude_rooms:
             rname = room.get('name', '')
             if not rname:
@@ -521,33 +569,41 @@ def _map_images_to_rooms(page_texts, page_images, claude_rooms=None):
             rname_norm = _norm_room(rname)
             if not rname_norm:
                 continue
-            for page_num in sorted(page_texts.keys()):
-                text = page_texts[page_num]
-                for line in text.splitlines():
+
+            for page_num in sorted_page_nums:
+                found_on_this_page = False
+                for line in page_texts[page_num].splitlines():
                     stripped = line.strip()
                     if not stripped or len(stripped) > 80:
                         continue
-                    # Match if normalised line equals or contains the normalised room name
-                    # (or vice versa for abbreviated lines)
                     line_norm = _norm_room(stripped)
-                    if line_norm and (
-                        line_norm == rname_norm
-                        or rname_norm in line_norm
-                        or line_norm in rname_norm
-                    ):
-                        if page_num not in page_to_room:
-                            page_to_room[page_num] = rname
+                    if not line_norm:
+                        continue
+                    if (line_norm == rname_norm
+                            or rname_norm in line_norm
+                            or line_norm in rname_norm):
+                        found_on_this_page = True
                         break
-                if page_num in page_to_room:
-                    break  # stop at first occurrence of this room
+                if found_on_this_page:
+                    room_first_page[rname] = page_num
+                    break   # only need the FIRST page for this room
 
-        if page_to_room:
-            current_room = None
+        if room_first_page:
+            # Step 2: sort rooms by start page then walk all pages, updating
+            # current_room whenever a new room starts.
+            sorted_starts = sorted(room_first_page.items(), key=lambda x: x[1])
+            current_room  = None
             room_photos: dict = {}
-            unmatched = []
+            unmatched     = []
+            starts_idx    = 0
+
             for page_num in all_pages:
-                if page_num in page_to_room:
-                    current_room = page_to_room[page_num]
+                # Advance to the latest room whose start page ≤ current page
+                while (starts_idx < len(sorted_starts)
+                       and sorted_starts[starts_idx][1] <= page_num):
+                    current_room = sorted_starts[starts_idx][0]
+                    starts_idx  += 1
+
                 entries = page_images.get(page_num, [])
                 if not entries:
                     continue
@@ -555,6 +611,7 @@ def _map_images_to_rooms(page_texts, page_images, claude_rooms=None):
                     room_photos.setdefault(current_room, []).extend(entries)
                 else:
                     unmatched.extend(entries)
+
             return room_photos, unmatched
 
     # ── Regex fallback ────────────────────────────────────────────────────
@@ -684,10 +741,10 @@ def _run_import_job(job_id, api_key, extracted_text, pdf_b64, template_structure
         client = Anthropic(api_key=api_key)
 
         # ── Image extraction (before Claude, mapping deferred until after) ────
-        # We extract raw images here so S3 uploads happen before the Claude
-        # call (which can take 30-60 s).  Room mapping is done AFTER Claude
-        # because Claude's room names are far more reliable than the regex.
-        page_images = {}
+        # S3 uploads happen here before the long Claude call.
+        # Room mapping is done AFTER Claude so we can use Claude's room names.
+        page_images     = {}
+        cover_photo_url = None
         if raw_bytes:
             try:
                 _write_job(job_id, {
@@ -696,11 +753,10 @@ def _run_import_job(job_id, api_key, extracted_text, pdf_b64, template_structure
                     'inspection_id': inspection_id,
                     'filename':      filename,
                 })
-                page_images = _extract_pdf_images(raw_bytes, job_id)
-                if page_images:
-                    total = sum(len(v) for v in page_images.values())
-                    print(f'[pdf-import] job {job_id}: extracted {total} raw images '
-                          f'across {len(page_images)} pages')
+                page_images, cover_photo_url = _extract_pdf_images(raw_bytes, job_id)
+                img_count = sum(len(v) for v in page_images.values())
+                print(f'[pdf-import] job {job_id}: extracted {img_count} images, '
+                      f'cover={cover_photo_url is not None}')
             except Exception as img_e:
                 print(f'[pdf-import] job {job_id} image extraction error: {img_e}')
 
@@ -811,12 +867,17 @@ def _run_import_job(job_id, api_key, extracted_text, pdf_b64, template_structure
             if overview_photos:
                 parsed['_overviewPhotos'] = [p['url'] for p in overview_photos]
 
+        # Cover photo (first large opaque image on page 0)
+        if cover_photo_url:
+            parsed['_coverPhoto'] = cover_photo_url
+
         room_count  = len(parsed.get('rooms', []))
         item_count  = sum(len(r.get('items', [])) for r in parsed.get('rooms', []))
         photo_count = sum(len(r.get('_photos', [])) for r in parsed.get('rooms', []))
         mode = 'text' if use_text_mode else 'document'
         print('[pdf-import] job ' + job_id + ' done: ' + str(room_count) + ' rooms, '
-              + str(item_count) + ' items, ' + str(photo_count) + ' photos (mode=' + mode + ')')
+              + str(item_count) + ' items, ' + str(photo_count) + ' photos, '
+              + ('cover=yes' if cover_photo_url else 'cover=no') + ' (mode=' + mode + ')')
 
         _write_job(job_id, {
             'status': 'done',

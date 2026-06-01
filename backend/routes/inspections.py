@@ -1735,6 +1735,7 @@ def apply_pdf_import(inspection_id):
     room_mappings      = parsed.get('roomMappings') or []
     redistribute_items = bool(parsed.get('redistributeItems', False))
     pdf_file_name      = parsed.get('_fileName', '')
+    pdf_cover_photo    = parsed.get('_coverPhoto') or None
 
     # ── Keep-layout path: preserve exact PDF structure, ignore template mapping
     if not redistribute_items:
@@ -1841,6 +1842,8 @@ def apply_pdf_import(inspection_id):
 
         _apply_pdf_fixed_sections(report_data, pdf_fixed, pdf_file_name)
         inspection.report_data = json.dumps(report_data)
+        if pdf_cover_photo and inspection.property:
+            inspection.property.overview_photo = pdf_cover_photo
         db.session.commit()
 
         room_count = len(pdf_rooms)
@@ -1990,6 +1993,8 @@ def apply_pdf_import(inspection_id):
                     report_data[_first_sec][_first_item].setdefault('_photos', []).extend(_overview_photos)
         _apply_pdf_fixed_sections(report_data, pdf_fixed, pdf_file_name)
         inspection.report_data = json.dumps(report_data)
+        if pdf_cover_photo and inspection.property:
+            inspection.property.overview_photo = pdf_cover_photo
         db.session.commit()
         print(f'[apply-pdf-import] inspection {inspection_id}: {room_count} rooms, '
               f'{item_count} items (keep-layout), template {composite_id}')
@@ -2084,6 +2089,8 @@ def apply_pdf_import(inspection_id):
 
                 _apply_pdf_fixed_sections(report_data, pdf_fixed, pdf_file_name)
                 _insp.report_data = json.dumps(report_data)
+                if pdf_cover_photo and _insp.property:
+                    _insp.property.overview_photo = pdf_cover_photo
                 _db.session.commit()
 
                 print(f'[apply-pdf-import] job {job_id} done: '

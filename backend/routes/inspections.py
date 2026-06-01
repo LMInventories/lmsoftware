@@ -1047,30 +1047,84 @@ def share_pdf(inspection_id):
 # Helpers for apply_pdf_import
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _attach_room_photos_to_report_data(report_data, room_photo_map, room_to_sec_id):
+def _attach_room_photos_to_report_data(report_data, room_photo_map, room_to_sec_id,
+                                        room_photo_refs=None):
     """
     For each room that had photos extracted during PDF import, attach those
-    photo URLs to the first item row in the corresponding report_data section.
+    photo URLs to the appropriate item row in the corresponding report_data section.
+
+    If a photo has a reference number (from its PDF caption) and an item's
+    description/condition contains that reference, the photo goes to that item.
+    Otherwise it falls back to the first item in the section.
 
     room_photo_map  : {room_name: [url, ...]}
     room_to_sec_id  : {room_name: section_id (int or str)}
+    room_photo_refs : {room_name: [ref_str|None, ...]}  — parallel to room_photo_map
     """
+    if room_photo_refs is None:
+        room_photo_refs = {}
+
     for room_name, sec_id in room_to_sec_id.items():
         photos = room_photo_map.get(room_name)
         if not photos:
             continue
+        refs     = room_photo_refs.get(room_name) or [None] * len(photos)
         sec_key  = str(sec_id)
         sec_data = report_data.get(sec_key)
         if not sec_data or not isinstance(sec_data, dict):
             continue
-        first_key = next((k for k in sec_data if not k.startswith('_')), None)
-        if first_key and isinstance(sec_data[first_key], dict):
-            sec_data[first_key]['_photos'] = list(photos)
+
+        item_keys = [k for k in sec_data if not k.startswith('_')
+                     and isinstance(sec_data.get(k), dict)]
+        first_key = item_keys[0] if item_keys else None
+
+        # Build ref → item_key mapping by scanning all items in this section
+        ref_to_key: dict = {}
+        for ik in item_keys:
+            item_data = sec_data[ik]
+            combined = (
+                (item_data.get('description') or '') + ' ' +
+                (item_data.get('condition')   or '')
+            ).lower()
+            for ref in refs:
+                if ref and ref not in ref_to_key and _ref_in_text(ref, combined):
+                    ref_to_key[ref] = ik
+
+        for url, ref in zip(photos, refs):
+            target = ref_to_key.get(ref) if ref else None
+            if target is None:
+                target = first_key
+            if target and isinstance(sec_data.get(target), dict):
+                sec_data[target].setdefault('_photos', []).append(url)
 
 
 def _pdf_norm(s):
     """Normalise a string for fuzzy section/item name matching."""
     return re.sub(r'[\s/,&\-()\[\]]', '', (s or '').lower())
+
+
+_ITEM_REF_CACHE: dict = {}
+
+def _ref_in_text(ref_num, text):
+    """
+    Return True if text contains a photo reference matching ref_num.
+    Matches patterns like: 'Photo 1', 'Ref 1', 'Fig 1', '(1)', '[1]',
+    'see 1', 'photo no. 1', 'P1', etc.
+    """
+    n = str(ref_num)
+    if n not in _ITEM_REF_CACHE:
+        _ITEM_REF_CACHE[n] = re.compile(
+            rf'(?i)\bphoto[\s._#:\-]*{re.escape(n)}\b'
+            rf'|\bphot[\s._#:\-]*{re.escape(n)}\b'
+            rf'|\bref(?:erence)?[\s._#:\-]*{re.escape(n)}\b'
+            rf'|\bfig(?:ure)?[\s._#:\-]*{re.escape(n)}\b'
+            rf'|\bpic(?:ture)?[\s._#:\-]*{re.escape(n)}\b'
+            rf'|\bimg[\s._#:\-]*{re.escape(n)}\b'
+            rf'|\bsee\s+{re.escape(n)}\b'
+            rf'|\({re.escape(n)}\)'
+            rf'|\[{re.escape(n)}\]'
+        )
+    return bool(_ITEM_REF_CACHE[n].search(text))
 
 def _fuzzy_match_section(name, sections):
     n = _pdf_norm(name)
@@ -1713,13 +1767,48 @@ def apply_pdf_import(inspection_id):
                     } for sub in pdf_subs]
                 report_data[sec_key][str(new_item.id)] = item_entry
 
-            # Attach any photos extracted from the PDF for this room
-            room_photos = pdf_room.get('_photos')
-            if room_photos and first_item_id:
-                report_data[sec_key][str(first_item_id)]['_photos'] = list(room_photos)
+            # Attach photos to items using reference-number matching; fall back to first item
+            room_photo_urls = pdf_room.get('_photos') or []
+            room_photo_refs = pdf_room.get('_photoRefs') or [None] * len(room_photo_urls)
+            if room_photo_urls:
+                # Build ref → item_key map by scanning item descriptions/conditions
+                ref_to_key: dict = {}
+                for ik, ie in report_data.get(sec_key, {}).items():
+                    if ik.startswith('_') or not isinstance(ie, dict):
+                        continue
+                    combined = (
+                        (ie.get('description') or '') + ' ' +
+                        (ie.get('condition')   or '')
+                    ).lower()
+                    for ref in room_photo_refs:
+                        if ref and ref not in ref_to_key and _ref_in_text(ref, combined):
+                            ref_to_key[ref] = ik
+
+                first_key = str(first_item_id) if first_item_id else None
+                for url, ref in zip(room_photo_urls, room_photo_refs):
+                    target = ref_to_key.get(ref) if ref else None
+                    if target is None:
+                        target = first_key
+                    if target and sec_key in report_data and target in report_data[sec_key]:
+                        if isinstance(report_data[sec_key][target], dict):
+                            report_data[sec_key][target].setdefault('_photos', []).append(url)
 
         inspection.template_id = composite.id
-        _apply_pdf_fixed_sections(report_data, {}, pdf_file_name)
+
+        # Attach overview photos (images that appeared before any room heading in the PDF)
+        overview_photos = parsed.get('_overviewPhotos') or []
+        if overview_photos:
+            first_sec = next((k for k in report_data if not k.startswith('_')), None)
+            if first_sec:
+                first_item = next(
+                    (k for k in report_data[first_sec] if not k.startswith('_')
+                     and isinstance(report_data[first_sec].get(k), dict)),
+                    None,
+                )
+                if first_item:
+                    report_data[first_sec][first_item].setdefault('_photos', []).extend(overview_photos)
+
+        _apply_pdf_fixed_sections(report_data, pdf_fixed, pdf_file_name)
         inspection.report_data = json.dumps(report_data)
         db.session.commit()
 
@@ -1847,8 +1936,8 @@ def apply_pdf_import(inspection_id):
             src_id_to_new_sec_id,
             new_room_name_to_sec_id,
         )
-        # Attach any photos extracted during PDF import
-        _room_photo_map  = {r.get('name', ''): r['_photos'] for r in pdf_rooms if r.get('_photos')}
+        _room_photo_map  = {r.get('name', ''): r['_photos']              for r in pdf_rooms if r.get('_photos')}
+        _room_photo_refs = {r.get('name', ''): r.get('_photoRefs', [])   for r in pdf_rooms if r.get('_photos')}
         _room_to_sec_id  = {
             r.get('name', ''): (
                 src_id_to_new_sec_id.get(pdf_room_to_src_sec_id.get(r.get('name', '')))
@@ -1856,7 +1945,18 @@ def apply_pdf_import(inspection_id):
             )
             for r in pdf_rooms
         }
-        _attach_room_photos_to_report_data(report_data, _room_photo_map, _room_to_sec_id)
+        _attach_room_photos_to_report_data(report_data, _room_photo_map, _room_to_sec_id, _room_photo_refs)
+        _overview_photos = parsed.get('_overviewPhotos') or []
+        if _overview_photos:
+            _first_sec = next((k for k in report_data if not k.startswith('_')), None)
+            if _first_sec:
+                _first_item = next(
+                    (k for k in report_data[_first_sec] if not k.startswith('_')
+                     and isinstance(report_data[_first_sec].get(k), dict)),
+                    None,
+                )
+                if _first_item:
+                    report_data[_first_sec][_first_item].setdefault('_photos', []).extend(_overview_photos)
         _apply_pdf_fixed_sections(report_data, pdf_fixed, pdf_file_name)
         inspection.report_data = json.dumps(report_data)
         db.session.commit()
@@ -1873,7 +1973,8 @@ def apply_pdf_import(inspection_id):
     # We return immediately with a job_id; the frontend polls the status
     # endpoint until done/error.  This avoids Gunicorn worker timeouts on
     # large or complex PDFs where the Claude call can exceed 60 seconds.
-    job_id = str(_uuid_mod.uuid4())
+    job_id              = str(_uuid_mod.uuid4())
+    pdf_overview_photos = parsed.get('_overviewPhotos') or []   # capture before thread starts
     _rj_write(job_id, {'status': 'processing'})
 
     from flask import current_app
@@ -1922,16 +2023,33 @@ def apply_pdf_import(inspection_id):
                         new_room_name_to_sec_id,
                     )
 
-                # Attach any photos extracted during PDF import
-                _room_photo_map = {r.get('name', ''): r['_photos'] for r in pdf_rooms if r.get('_photos')}
-                _room_to_sec_id = {
+                # Attach photos to items using reference-number matching
+                _room_photo_map  = {r.get('name', ''): r['_photos']            for r in pdf_rooms if r.get('_photos')}
+                _room_photo_refs = {r.get('name', ''): r.get('_photoRefs', []) for r in pdf_rooms if r.get('_photos')}
+                _room_to_sec_id  = {
                     r.get('name', ''): (
                         src_id_to_new_sec_id.get(pdf_room_to_src_sec_id.get(r.get('name', '')))
                         or new_room_name_to_sec_id.get(r.get('name', ''))
                     )
                     for r in pdf_rooms
                 }
-                _attach_room_photos_to_report_data(report_data, _room_photo_map, _room_to_sec_id)
+                _attach_room_photos_to_report_data(
+                    report_data, _room_photo_map, _room_to_sec_id, _room_photo_refs,
+                )
+
+                # Overview photos — images that appeared before any room heading in the PDF
+                if pdf_overview_photos:
+                    _first_sec = next((k for k in report_data if not k.startswith('_')), None)
+                    if _first_sec:
+                        _first_item = next(
+                            (k for k in report_data[_first_sec] if not k.startswith('_')
+                             and isinstance(report_data[_first_sec].get(k), dict)),
+                            None,
+                        )
+                        if _first_item:
+                            report_data[_first_sec][_first_item].setdefault('_photos', []).extend(
+                                pdf_overview_photos,
+                            )
 
                 _apply_pdf_fixed_sections(report_data, pdf_fixed, pdf_file_name)
                 _insp.report_data = json.dumps(report_data)

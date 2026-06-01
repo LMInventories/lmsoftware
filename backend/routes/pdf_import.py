@@ -38,6 +38,18 @@ MAX_TOKENS_CHUNK  = 6144    # per-chunk ceiling
 MIN_IMAGE_PX      = 100     # skip images smaller than 100 px in either dimension
 MAX_IMAGES_TOTAL  = 150     # hard cap to avoid runaway S3 uploads
 
+# Patterns used to extract photo reference numbers from PDF text near images,
+# and to match those references in item description/condition text.
+_REF_RE = re.compile(
+    r'(?i)\bphoto[\s._#:\-]*(\d+)\b'
+    r'|\bphot[\s._#:\-]*(\d+)\b'
+    r'|\bref(?:erence)?[\s._#:\-]*(\d+)\b'
+    r'|\bfig(?:ure)?[\s._#:\-]*(\d+)\b'
+    r'|\bpic(?:ture)?[\s._#:\-]*(\d+)\b'
+    r'|\bimg[\s._#:\-]*(\d+)\b'
+    r'|^\s*(\d{1,3})\s*$',
+)
+
 # Room-like headings used to detect section boundaries in UK inventory reports
 _ROOM_HEADER_RE = re.compile(
     r'^(?:HALLWAY|HALL|ENTRANCE|RECEPTION|LOUNGE|LIVING\s*ROOM|SITTING\s*ROOM|'
@@ -47,6 +59,51 @@ _ROOM_HEADER_RE = re.compile(
     r'CELLAR|BASEMENT|STORAGE|CUPBOARD|PORCH|LOBBY)[\s\d]*$',
     re.IGNORECASE,
 )
+
+
+def _page_text_spans(page):
+    """Return list of (fitz.Rect, text_string) for all text spans on a page."""
+    try:
+        import fitz
+        spans = []
+        for block in page.get_text('dict').get('blocks', []):
+            if block.get('type') != 0:
+                continue
+            for line in block.get('lines', []):
+                for span in line.get('spans', []):
+                    txt = span.get('text', '').strip()
+                    if txt:
+                        spans.append((fitz.Rect(span['bbox']), txt))
+        return spans
+    except Exception:
+        return []
+
+
+def _extract_image_ref(page, xref, text_spans, margin=70):
+    """
+    Try to find a photo reference number in text near the image at xref on this page.
+    margin is in PDF points (~25 mm at 72 dpi).
+    Returns a normalised string like '1', '2', … or None.
+    """
+    try:
+        img_rects = page.get_image_rects(xref)
+        if not img_rects:
+            return None
+        ir = img_rects[0]
+        candidates = []
+        for span_rect, txt in text_spans:
+            h_overlap = span_rect.x0 < ir.x1 + margin and span_rect.x1 > ir.x0 - margin
+            v_near    = (ir.y0 - margin) < span_rect.y1 and span_rect.y0 < (ir.y1 + margin)
+            if h_overlap and v_near:
+                candidates.append(txt)
+        for txt in candidates:
+            m = _REF_RE.search(txt)
+            if m:
+                num = next(g for g in m.groups() if g is not None)
+                return num.lstrip('0') or '0'
+    except Exception:
+        pass
+    return None
 
 
 PROMPT_TEMPLATE = """You are extracting structured data from a UK property inspection report (inventory or check-in) for a Check Out system.
@@ -352,9 +409,11 @@ def _extract_pdf_text(raw_bytes):
 def _extract_pdf_images(raw_bytes, job_id):
     """
     Extract embedded images from a PDF and upload to S3.
-    Returns {page_num (0-based): [s3_url, ...]} or {} on failure / S3 not configured.
+    Returns {page_num (0-based): [{'url': str, 'ref': str|None}, ...]} or {} on failure.
     Skips images smaller than MIN_IMAGE_PX in either dimension.
     Caps total images at MAX_IMAGES_TOTAL to prevent runaway uploads.
+    Each entry also includes 'ref': a short reference number extracted from nearby
+    caption text (e.g. 'Photo 1' → '1'), or None if no reference was found.
     """
     try:
         from utils.s3 import is_configured, upload_bytes, new_key
@@ -379,9 +438,10 @@ def _extract_pdf_images(raw_bytes, job_id):
         for page_num in range(len(doc)):
             if total >= MAX_IMAGES_TOTAL:
                 break
-            page     = doc[page_num]
-            img_list = page.get_images(full=True)
-            urls     = []
+            page       = doc[page_num]
+            img_list   = page.get_images(full=True)
+            text_spans = _page_text_spans(page)
+            entries    = []
             for img in img_list:
                 if total >= MAX_IMAGES_TOTAL:
                     break
@@ -400,12 +460,13 @@ def _extract_pdf_images(raw_bytes, job_id):
                     ctype     = 'image/jpeg' if ext in ('jpeg', 'jpg') else f'image/{ext}'
                     key       = new_key(prefix, ext)
                     url       = upload_bytes(img_bytes, key, ctype)
-                    urls.append(url)
+                    ref       = _extract_image_ref(page, xref, text_spans)
+                    entries.append({'url': url, 'ref': ref})
                     total += 1
                 except Exception as e:
                     print(f'[pdf-import] image xref {xref} extract error: {e}')
-            if urls:
-                page_images[page_num] = urls
+            if entries:
+                page_images[page_num] = entries
         doc.close()
     except Exception as e:
         print(f'[pdf-import] image extraction error: {e}')
@@ -417,13 +478,17 @@ def _map_images_to_rooms(page_texts, page_images):
     """
     Associate extracted images with rooms using page-order heuristic:
     images on a page belong to the most-recently-seen room header.
-    Returns {room_name (title-cased): [url, ...]}
+
+    Returns:
+      room_photos : {room_name (title-cased): [{'url': str, 'ref': str|None}, ...]}
+      unmatched   : [{'url': str, 'ref': str|None}]  — photos before any room header is seen
     """
     if not page_images:
-        return {}
+        return {}, []
 
     current_room = None
     room_photos  = {}
+    unmatched    = []
     all_pages    = sorted(set(list(page_texts.keys()) + list(page_images.keys())))
 
     for page_num in all_pages:
@@ -434,10 +499,15 @@ def _map_images_to_rooms(page_texts, page_images):
                 current_room = stripped.title()
                 break
 
-        if current_room and page_num in page_images:
-            room_photos.setdefault(current_room, []).extend(page_images[page_num])
+        entries = page_images.get(page_num, [])
+        if not entries:
+            continue
+        if current_room:
+            room_photos.setdefault(current_room, []).extend(entries)
+        else:
+            unmatched.extend(entries)
 
-    return room_photos
+    return room_photos, unmatched
 
 
 # ── Text chunking ─────────────────────────────────────────────────────────────
@@ -545,7 +615,8 @@ def _run_import_job(job_id, api_key, extracted_text, pdf_b64, template_structure
         client = Anthropic(api_key=api_key)
 
         # ── Image extraction (best-effort, before Claude call) ─────────────
-        room_photos = {}
+        room_photos     = {}
+        overview_photos = []   # images that appear before any room header
         if raw_bytes:
             try:
                 _write_job(job_id, {
@@ -557,10 +628,11 @@ def _run_import_job(job_id, api_key, extracted_text, pdf_b64, template_structure
                 page_images = _extract_pdf_images(raw_bytes, job_id)
                 if page_images:
                     pt = page_texts or {}
-                    room_photos = _map_images_to_rooms(pt, page_images)
-                    total = sum(len(v) for v in room_photos.values())
+                    room_photos, overview_photos = _map_images_to_rooms(pt, page_images)
+                    total = sum(len(v) for v in room_photos.values()) + len(overview_photos)
                     print(f'[pdf-import] job {job_id}: extracted {total} photos '
-                          f'across {len(room_photos)} rooms')
+                          f'across {len(room_photos)} rooms '
+                          f'({len(overview_photos)} unmatched → overview)')
             except Exception as img_e:
                 print(f'[pdf-import] job {job_id} image extraction error: {img_e}')
 
@@ -635,22 +707,27 @@ def _run_import_job(job_id, api_key, extracted_text, pdf_b64, template_structure
             parsed = _merge_results(results)
 
         # ── Attach extracted photos to matching rooms ──────────────────────
-        if room_photos:
+        if room_photos or overview_photos:
             for room in parsed.get('rooms', []):
                 rname = room.get('name', '')
                 photos = room_photos.get(rname)
                 if not photos:
                     # Fallback: partial / case-insensitive match
                     rname_lower = rname.lower()
-                    for rk, urls in room_photos.items():
+                    for rk, rp in room_photos.items():
                         if rk.lower() in rname_lower or rname_lower in rk.lower():
-                            photos = urls
+                            photos = rp
                             break
                 if photos:
-                    room['_photos'] = photos
+                    room['_photos']    = [p['url'] for p in photos]
+                    room['_photoRefs'] = [p.get('ref') for p in photos]
 
-        room_count = len(parsed.get('rooms', []))
-        item_count = sum(len(r.get('items', [])) for r in parsed.get('rooms', []))
+            # Photos that appeared before any room heading go to the overview fallback
+            if overview_photos:
+                parsed['_overviewPhotos'] = [p['url'] for p in overview_photos]
+
+        room_count  = len(parsed.get('rooms', []))
+        item_count  = sum(len(r.get('items', [])) for r in parsed.get('rooms', []))
         photo_count = sum(len(r.get('_photos', [])) for r in parsed.get('rooms', []))
         mode = 'text' if use_text_mode else 'document'
         print('[pdf-import] job ' + job_id + ' done: ' + str(room_count) + ' rooms, '

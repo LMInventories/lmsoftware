@@ -1231,6 +1231,11 @@ const pgMoveTree = computed(() => {
       if (srcSid === room.id && srcRid === iid) continue
       children.push({ key: room.id+':'+iid, label: item.label || item._label || iid, sectionId: room.id, rowId: iid })
     }
+    // Items added during the inspection (stored in _customItems — any report type)
+    for (const ci of (reportData.value[room.id]?._customItems || [])) {
+      if (srcSid === room.id && srcRid === ci._cid) continue
+      children.push({ key: room.id+':ci:'+ci._cid, label: ci.name || 'New item', sectionId: room.id, rowId: ci._cid })
+    }
     if (children.length) tree.push({ key: 'pgroom_'+room.id, label: room.name, type: 'room', children })
   }
   return tree
@@ -1283,6 +1288,11 @@ const lbMoveTree = computed(() => {
       if (srcSid === room.id && srcRid === iid) continue
       const lbl = item.label || item._label || iid
       children.push({ key: room.id+':'+iid, label: lbl, sectionId: room.id, rowId: iid })
+    }
+    // Custom items added during tenancy (Check Out only — stored in _customItems)
+    for (const ci of (reportData.value[room.id]?._customItems || [])) {
+      if (srcSid === room.id && srcRid === ci._cid) continue
+      children.push({ key: room.id+':ci:'+ci._cid, label: (ci.name || 'New item') + ' (added)', sectionId: room.id, rowId: ci._cid })
     }
     if (children.length) tree.push({ key: 'room_' + room.id, label: room.name, type: 'room', children })
   }
@@ -1376,35 +1386,6 @@ function lbMovePhotos(destSectionId, destRowId) {
     // lbMoving stays true — tree stays open
   }
 }
-
-// Build flat list of all move destinations (section + row combos)
-const lbMoveDestinations = computed(() => {
-  const dests = []
-  for (const sec of fixedSections.value) {
-    for (const row of (sec.rows || [])) {
-      if (isHidden(sec.id, row.id)) continue
-      const skip = photoViewer.value.sectionId === sec.id && photoViewer.value.rowId === String(row.id)
-      if (skip) continue
-      dests.push({ label: fixedItemLabel(sec, row.id, row.name), sectionId: sec.id, rowId: String(row.id) })
-    }
-    for (const ex of getExtra(sec.id)) {
-      const skip = photoViewer.value.sectionId === sec.id && photoViewer.value.rowId === ex._eid
-      if (skip) continue
-      dests.push({ label: sec.name + ' — (extra)', sectionId: sec.id, rowId: ex._eid })
-    }
-  }
-  for (const room of rooms.value) {
-    dests.push({ label: room.name + ' — Overview', sectionId: room.id, rowId: '_overview' })
-    for (const item of getOrderedRoomItems(room)) {
-      const iid = item._type === 'extra' ? item._eid : String(item.id)
-      const skip = photoViewer.value.sectionId === room.id && photoViewer.value.rowId === iid
-      if (skip) continue
-      const lbl  = item.label || item._label || ('Item ' + iid)
-      dests.push({ label: room.name + ' — ' + lbl, sectionId: room.id, rowId: iid })
-    }
-  }
-  return dests
-})
 
 // Check In condition read-only getter — reads from the source Check In's saved report_data
 function getCI(sectionId, rowId, field) {
@@ -3642,7 +3623,7 @@ async function moveToReview() {
               class="pg-cell"
               :class="{ 'pg-cell-selected': gridSelected.has(pi) }"
               @click="gridToggleSelect(pi)"
-              @dblclick="openLightbox(entry.sectionId, entry.rowId, entry.index)"
+              @dblclick="closePhotoGrid(); openLightbox(entry.sectionId, entry.rowId, entry.index); photoViewer.label = entry.label"
             >
               <img :src="entry.photo" class="pg-img" />
               <div class="pg-cell-label">{{ entry.label }}</div>
@@ -3650,7 +3631,7 @@ async function moveToReview() {
               <div class="pg-cell-check" :class="{ visible: gridSelected.has(pi) }">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="white" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
               </div>
-              <button class="pg-cell-open" @click.stop="openLightbox(entry.sectionId, entry.rowId, entry.index)" title="Open in lightbox">
+              <button class="pg-cell-open" @click.stop="closePhotoGrid(); openLightbox(entry.sectionId, entry.rowId, entry.index); photoViewer.label = entry.label" title="Open in lightbox">
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
               </button>
             </div>
@@ -4244,7 +4225,7 @@ async function moveToReview() {
 .ci-photo-count{background:#0284c7;color:#fff;border-radius:10px;padding:1px 6px;font-size:11px;font-weight:700}
 
 /* CI Lightbox */
-.ci-lightbox-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.88);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px}
+.ci-lightbox-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.88);z-index:1200;display:flex;align-items:center;justify-content:center;padding:20px}
 .ci-lightbox{background:#1e293b;border-radius:12px;width:min(680px,95vw);max-height:92vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 25px 60px rgba(0,0,0,0.6)}
 .ci-lightbox-wide{width:min(780px,96vw)}
 .ci-lightbox-hd{display:flex;align-items:center;gap:12px;padding:14px 18px;border-bottom:1px solid #334155;flex-shrink:0}

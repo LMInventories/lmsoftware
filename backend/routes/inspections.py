@@ -1092,10 +1092,14 @@ def _attach_room_photos_to_report_data(report_data, room_photo_map, room_to_sec_
 
         for url, ref in zip(photos, refs):
             target = ref_to_key.get(ref) if ref else None
-            if target is None:
-                target = first_key
             if target and isinstance(sec_data.get(target), dict):
+                # Photo reference matched a specific item → attach there
                 sec_data[target].setdefault('_photos', []).append(url)
+            else:
+                # No ref match → Room Overview Photos (_overview strip)
+                if not isinstance(sec_data.get('_overview'), dict):
+                    sec_data['_overview'] = {}
+                sec_data['_overview'].setdefault('_photos', []).append(url)
 
 
 def _pdf_norm(s):
@@ -1816,29 +1820,30 @@ def apply_pdf_import(inspection_id):
                         if ref and ref not in ref_to_key and _ref_in_text(ref, combined):
                             ref_to_key[ref] = ik
 
-                first_key = str(first_item_id) if first_item_id else None
                 for url, ref in zip(room_photo_urls, room_photo_refs):
                     target = ref_to_key.get(ref) if ref else None
-                    if target is None:
-                        target = first_key
-                    if target and sec_key in report_data and target in report_data[sec_key]:
-                        if isinstance(report_data[sec_key][target], dict):
-                            report_data[sec_key][target].setdefault('_photos', []).append(url)
+                    if (target and sec_key in report_data
+                            and target in report_data[sec_key]
+                            and isinstance(report_data[sec_key].get(target), dict)):
+                        # Ref match → specific item
+                        report_data[sec_key][target].setdefault('_photos', []).append(url)
+                    else:
+                        # No ref match → Room Overview Photos
+                        if sec_key in report_data:
+                            if not isinstance(report_data[sec_key].get('_overview'), dict):
+                                report_data[sec_key]['_overview'] = {}
+                            report_data[sec_key]['_overview'].setdefault('_photos', []).append(url)
 
         inspection.template_id = composite.id
 
-        # Attach overview photos (images that appeared before any room heading in the PDF)
+        # Overview photos → first room's _overview strip
         overview_photos = parsed.get('_overviewPhotos') or []
         if overview_photos:
             first_sec = next((k for k in report_data if not k.startswith('_')), None)
             if first_sec:
-                first_item = next(
-                    (k for k in report_data[first_sec] if not k.startswith('_')
-                     and isinstance(report_data[first_sec].get(k), dict)),
-                    None,
-                )
-                if first_item:
-                    report_data[first_sec][first_item].setdefault('_photos', []).extend(overview_photos)
+                if not isinstance(report_data[first_sec].get('_overview'), dict):
+                    report_data[first_sec]['_overview'] = {}
+                report_data[first_sec]['_overview'].setdefault('_photos', []).extend(overview_photos)
 
         _apply_pdf_fixed_sections(report_data, pdf_fixed, pdf_file_name)
         inspection.report_data = json.dumps(report_data)
@@ -1984,13 +1989,9 @@ def apply_pdf_import(inspection_id):
         if _overview_photos:
             _first_sec = next((k for k in report_data if not k.startswith('_')), None)
             if _first_sec:
-                _first_item = next(
-                    (k for k in report_data[_first_sec] if not k.startswith('_')
-                     and isinstance(report_data[_first_sec].get(k), dict)),
-                    None,
-                )
-                if _first_item:
-                    report_data[_first_sec][_first_item].setdefault('_photos', []).extend(_overview_photos)
+                if not isinstance(report_data[_first_sec].get('_overview'), dict):
+                    report_data[_first_sec]['_overview'] = {}
+                report_data[_first_sec]['_overview'].setdefault('_photos', []).extend(_overview_photos)
         _apply_pdf_fixed_sections(report_data, pdf_fixed, pdf_file_name)
         inspection.report_data = json.dumps(report_data)
         if pdf_cover_photo and inspection.property:
@@ -2077,15 +2078,11 @@ def apply_pdf_import(inspection_id):
                 if pdf_overview_photos:
                     _first_sec = next((k for k in report_data if not k.startswith('_')), None)
                     if _first_sec:
-                        _first_item = next(
-                            (k for k in report_data[_first_sec] if not k.startswith('_')
-                             and isinstance(report_data[_first_sec].get(k), dict)),
-                            None,
+                        if not isinstance(report_data[_first_sec].get('_overview'), dict):
+                            report_data[_first_sec]['_overview'] = {}
+                        report_data[_first_sec]['_overview'].setdefault('_photos', []).extend(
+                            pdf_overview_photos,
                         )
-                        if _first_item:
-                            report_data[_first_sec][_first_item].setdefault('_photos', []).extend(
-                                pdf_overview_photos,
-                            )
 
                 _apply_pdf_fixed_sections(report_data, pdf_fixed, pdf_file_name)
                 _insp.report_data = json.dumps(report_data)

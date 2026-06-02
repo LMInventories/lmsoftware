@@ -962,6 +962,7 @@ def share_pdf(inspection_id):
     if isinstance(emails, str):
         emails = [e.strip() for e in emails.split(',') if e.strip()]
     emails = [e.strip() for e in emails if e.strip()]
+    notes  = (data.get('notes') or '').strip()
     if not emails:
         return jsonify({'error': 'No email addresses provided'}), 400
     if not inspection.report_data:
@@ -975,6 +976,7 @@ def share_pdf(inspection_id):
     _app     = current_app._get_current_object()
     _insp_id = inspection_id
     _emails  = list(emails)
+    _notes   = notes
 
     def _send_shared():
         with _app.app_context():
@@ -1027,6 +1029,7 @@ def share_pdf(inspection_id):
                     pdf_bytes        = None if _pdf_dl_url else _pdf_bytes,
                     recipients       = _emails,
                     pdf_download_url = _pdf_dl_url,
+                    notes            = _notes,
                 )
                 if ok:
                     print(f'[share-pdf] sent OK → {_emails}')

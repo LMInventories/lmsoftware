@@ -42,6 +42,7 @@ const sendingLinks = ref(false)
 // Share PDF modal
 const showSharePdf      = ref(false)
 const sharePdfEmails    = ref('')
+const sharePdfNotes     = ref('')
 const sharePdfSending   = ref(false)
 
 // Save as Template modal
@@ -442,10 +443,11 @@ async function sendSharedPdf() {
 
   sharePdfSending.value = true
   try {
-    await api.sharePdf(inspection.value.id, emails)
+    await api.sharePdf(inspection.value.id, emails, sharePdfNotes.value.trim())
     toast.success(`Report is being sent to ${emails.join(', ')} — allow a minute for delivery`)
     showSharePdf.value   = false
     sharePdfEmails.value = ''
+    sharePdfNotes.value  = ''
   } catch (err) {
     toast.error(err.response?.data?.error || 'Failed to queue report — check your connection and try again')
   } finally {
@@ -1401,11 +1403,11 @@ onMounted(() => {
       />
 
       <!-- Share PDF Modal -->
-      <div v-if="showSharePdf" class="modal-overlay" @click.self="showSharePdf = false">
+      <div v-if="showSharePdf" class="modal-overlay" @click.self="showSharePdf = false; sharePdfNotes = ''">
         <div class="share-pdf-modal">
           <div class="share-pdf-header">
             <h3>📤 Share Report PDF</h3>
-            <button class="share-pdf-close" @click="showSharePdf = false">✕</button>
+            <button class="share-pdf-close" @click="showSharePdf = false; sharePdfNotes = ''">✕</button>
           </div>
           <div class="share-pdf-body">
             <p class="share-pdf-desc">
@@ -1418,11 +1420,17 @@ onMounted(() => {
               class="share-pdf-input"
               placeholder="e.g. landlord@example.com, tenant@example.com"
               rows="3"
-              @keydown.enter.prevent="sendSharedPdf"
+            />
+            <label class="share-pdf-label" style="margin-top:14px;">Notes <span class="share-pdf-optional">(optional)</span></label>
+            <textarea
+              v-model="sharePdfNotes"
+              class="share-pdf-input"
+              placeholder="Any notes to include in the email to the recipient…"
+              rows="3"
             />
           </div>
           <div class="share-pdf-footer">
-            <button class="btn-cancel" @click="showSharePdf = false">Cancel</button>
+            <button class="btn-cancel" @click="showSharePdf = false; sharePdfNotes = ''">Cancel</button>
             <button
               class="btn-send-pdf"
               :disabled="sharePdfSending || !sharePdfEmails.trim()"
@@ -1788,6 +1796,7 @@ onMounted(() => {
   transition: border-color 0.15s;
 }
 .share-pdf-input:focus { border-color: #0e7490; }
+.share-pdf-optional { font-weight: 400; color: #94a3b8; text-transform: none; letter-spacing: 0; font-size: 11px; }
 .share-pdf-footer {
   display: flex;
   justify-content: flex-end;

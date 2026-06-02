@@ -561,7 +561,7 @@ def send_typist_assignment(typist, inspection, property_obj, client):
 # ── 3. Report complete (with PDF) ────────────────────────────────────────────
 
 def send_report_complete(inspection, client, property_obj, pdf_bytes=None, recipients=None,
-                         pdf_download_url=None):
+                         pdf_download_url=None, notes=None):
     """
     Send report-complete email from reports@ address, optionally with PDF attached.
 
@@ -572,7 +572,12 @@ def send_report_complete(inspection, client, property_obj, pdf_bytes=None, recip
     pdf_download_url: when set the PDF is NOT attached; instead a prominent
                       "Download Report" button is shown pointing to this URL.
                       Used when the PDF exceeds the email attachment size limit.
+    notes:            optional free-text note added by the sender via the
+                      Share PDF modal — rendered as a Notes section in the email.
+                      Omitted entirely if blank/None.
     """
+    import html as _html
+
     prop_addr  = getattr(property_obj, 'address', '') or '—'
     insp_type  = _type_label(getattr(inspection, 'inspection_type', ''))
     insp_date  = _fmt_date(getattr(inspection, 'conduct_date', None) or getattr(inspection, 'scheduled_date', None))
@@ -597,6 +602,21 @@ def send_report_complete(inspection, client, property_obj, pdf_bytes=None, recip
         intro_text   = ('attached ' if pdf_bytes else '') + 'the completed inspection report for the property below.'
         download_btn = ''
 
+    # Notes section — only rendered when the sender included notes
+    notes_html = ''
+    if notes and notes.strip():
+        escaped = _html.escape(notes.strip()).replace('\n', '<br/>')
+        notes_html = (
+            '<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%"'
+            ' style="background-color:#fffbeb;border:1px solid #fcd34d;border-radius:6px;margin:16px 0;">'
+            '<tr><td style="padding:6px 16px 4px;font-family:Arial,Helvetica,sans-serif;'
+            'font-size:11px;font-weight:bold;color:#92400e;text-transform:uppercase;'
+            'letter-spacing:0.05em;">Notes</td></tr>'
+            '<tr><td style="padding:4px 16px 12px;font-family:Arial,Helvetica,sans-serif;'
+            f'font-size:14px;color:#1e293b;line-height:1.6;">{escaped}</td></tr>'
+            '</table>'
+        )
+
     body = (
         f'''<p style="margin:0 0 16px;font-family:Arial,Helvetica,sans-serif;font-size:17px;font-weight:bold;color:#1e293b;">Inspection Report: {insp_type}</p>'''
         f'''<p style="margin:0 0 12px;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#475569;">Dear {client.name},</p>'''
@@ -608,6 +628,7 @@ def send_report_complete(inspection, client, property_obj, pdf_bytes=None, recip
         + _info_row('Inspector',   clerk_name, last=True)
         + _info_table_close()
         + download_btn
+        + notes_html
         + '''<p style="margin:12px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#475569;">Please review the report and contact us if you have any questions or concerns.</p>'''
     )
 

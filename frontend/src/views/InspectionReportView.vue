@@ -4608,15 +4608,14 @@ async function moveToReview() {
 .pg-tree-item{display:flex;align-items:center;gap:5px;padding:5px 10px;font-size:11px;color:#64748b;background:transparent;border:1px solid transparent;border-radius:6px;cursor:pointer;text-align:left;width:100%;font-family:inherit;transition:all 0.12s}
 .pg-tree-item:hover{background:#1e3a5f;color:#93c5fd;border-color:rgba(59,130,246,0.3)}
 
-/* Grid — uniform square thumbnails */
-.pg-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;padding:14px;overflow-y:auto;flex:1;min-height:0;background:#0f172a;align-content:start}
-/* Square cells via padding-bottom trick (works reliably across all browsers).
-   padding-bottom:100% is always relative to the element's own WIDTH, giving height = width. */
-.pg-cell{position:relative;border-radius:8px;overflow:hidden;cursor:pointer;border:2px solid transparent;transition:border-color 0.12s,transform 0.1s;background:#1e293b}
-.pg-cell::before{content:'';display:block;padding-bottom:100%}
+/* Grid — fixed 5-column layout, scrollable */
+.pg-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;padding:14px;overflow-y:auto;flex:1;min-height:0;background:#0f172a;align-content:start}
+/* Square cells via aspect-ratio — reliable in all scrollable/flex contexts */
+.pg-cell{position:relative;border-radius:8px;overflow:hidden;cursor:pointer;border:2px solid transparent;transition:border-color 0.12s,transform 0.1s;background:#1e293b;aspect-ratio:1}
+.pg-cell::before{display:none}
 .pg-cell:hover{transform:scale(1.02);border-color:#475569}
 .pg-cell-selected{border-color:#f59e0b !important;box-shadow:0 0 0 1px #f59e0b}
-/* Image fills the square absolutely — does not use its natural dimensions */
+/* Image fills the square cell absolutely */
 .pg-img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
 .pg-cell-num{position:absolute;bottom:5px;left:6px;font-size:10px;font-weight:700;color:rgba(255,255,255,0.7);background:rgba(0,0,0,0.5);padding:1px 5px;border-radius:4px;pointer-events:none}
 .pg-cell-check{position:absolute;top:6px;left:6px;width:22px;height:22px;background:#f59e0b;border-radius:50%;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity 0.12s;pointer-events:none}

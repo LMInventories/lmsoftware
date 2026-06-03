@@ -537,7 +537,7 @@ def _extract_pdf_images(raw_bytes, job_id):
                     except Exception:
                         pass
                     ref = _extract_image_ref(page, xref, text_spans)
-                    entries.append({'url': url, 'ref': ref, 'y': img_y})
+                    entries.append({'url': url, 'ref': ref, 'y': img_y, 'page': page_num})
                 except Exception as e:
                     print(f'[pdf-import] image xref {xref} extract error: {e}')
             if entries:
@@ -612,10 +612,9 @@ def _room_name_on_page(rname_norm, page_text):
 
 def _find_fixed_section_pages(raw_bytes, page_texts):
     """
-    Find the first page on which each fixed section heading appears (bold text).
-    Returns {'keys': page_num, 'meter_readings': page_num} for each found.
-    Used to bucket preamble photos into their correct fixed-section drawer
-    rather than dumping them in the overview fallback.
+    Find the first bold occurrence of each fixed section heading (Keys, Meters).
+    Returns {'keys': (page_num, y0), 'meter_readings': (page_num, y0)} for each found.
+    The y0 coordinate enables within-page splitting when two sections share a page.
     """
     _PATTERNS = {
         'keys':           re.compile(r'^keys?$', re.IGNORECASE),
@@ -647,7 +646,7 @@ def _find_fixed_section_pages(raw_bytes, page_texts):
                             continue
                         for sec_type, pat in _PATTERNS.items():
                             if sec_type not in result and pat.match(txt):
-                                result[sec_type] = pn
+                                result[sec_type] = (pn, fitz.Rect(span['bbox']).y0)
             if len(result) == len(_PATTERNS):
                 break
     except Exception as e:
@@ -1110,65 +1109,17 @@ def _run_import_job(job_id, api_key, extracted_text, pdf_b64, template_structure
             try:
                 pt = page_texts or {}
 
-                # Build room_index_map: {1: "Entrance & Hallway", 2: "Kitchen", ...}
-                # Used for direct Ref #X.Y → room assignment.
+                # {1: "Entrance & Hallway", 2: "Kitchen/Reception", ...}
+                # Derived from Claude's ORDERED room list so that Ref #X.Y
+                # captions resolve directly to the correct room name.
                 room_index_map = {
                     i + 1: r.get('name', '')
                     for i, r in enumerate(parsed.get('rooms', []))
                     if r.get('name')
                 }
 
-                # Locate fixed section pages (Keys, Meters) via bold headings.
-                fixed_sec_pages = {}  # {section_type: page_num}
-                if raw_bytes:
-                    try:
-                        fixed_sec_pages = _find_fixed_section_pages(raw_bytes, pt)
-                        print(f'[pdf-import] job {job_id}: fixed section pages: {fixed_sec_pages}')
-                    except Exception as fsp_e:
-                        print(f'[pdf-import] job {job_id} fixed section page detection: {fsp_e}')
-
-                # Separate preamble fixed-section photos from room photos.
-                # Keys/meter pages are removed from page_images before room mapping
-                # so they never accidentally land in the last room via page-order.
-                fixed_page_to_type = {pn: t for t, pn in fixed_sec_pages.items()}
-                # Continuation pages: preamble pages that follow a fixed section.
-                # Find first room page so we know where "preamble" ends.
-                first_room_page = 999
-                if raw_bytes and parsed.get('rooms'):
-                    try:
-                        rp = _find_room_positions(raw_bytes, pt, parsed['rooms'])
-                        if rp:
-                            first_room_page = min(pn for pn, _ in rp.values())
-                        else:
-                            first_room_page = 999
-                    except Exception:
-                        first_room_page = 999
-
-                keys_photos   = []
-                meter_photos  = []
-                page_imgs_for_rooms = {}
-                current_fixed_type = None
-                for pn in sorted(page_images.keys()):
-                    entries = page_images[pn]
-                    if pn < first_room_page:
-                        # Update current fixed type if this page has a heading
-                        if pn in fixed_page_to_type:
-                            current_fixed_type = fixed_page_to_type[pn]
-                        # Bucket into the right fixed section
-                        if current_fixed_type == 'keys':
-                            keys_photos.extend(entries)
-                        elif current_fixed_type == 'meter_readings':
-                            meter_photos.extend(entries)
-                        # else: preamble pages before any fixed heading (e.g. cover)
-                        # → leave out entirely (they'll be cover/overview photos)
-                    else:
-                        page_imgs_for_rooms[pn] = entries
-
-                print(f'[pdf-import] job {job_id}: '
-                      f'{len(keys_photos)} keys photos, '
-                      f'{len(meter_photos)} meter photos separated')
-
-                # Locate room heading positions for within-page splitting.
+                # Find room heading positions (bold spans) — used for both
+                # first_room_page detection and within-page y-splitting.
                 room_positions = {}
                 if raw_bytes and parsed.get('rooms'):
                     try:
@@ -1178,23 +1129,83 @@ def _run_import_job(job_id, api_key, extracted_text, pdf_b64, template_structure
                     except Exception as pos_e:
                         print(f'[pdf-import] job {job_id} room position detection: {pos_e}')
 
-                room_photos, overview_photos = _map_images_to_rooms(
-                    pt, page_imgs_for_rooms, parsed.get('rooms', []),
+                # The first page that contains a room section heading.
+                # Fall back to 0 if detection fails so no photos are lost.
+                if room_positions:
+                    first_room_page = min(pn for pn, _ in room_positions.values())
+                else:
+                    first_room_page = 0
+
+                # Fixed section heading positions: {type: (page_num, y0)}
+                fixed_sec_info = {}
+                if raw_bytes:
+                    try:
+                        fixed_sec_info = _find_fixed_section_pages(raw_bytes, pt)
+                        print(f'[pdf-import] job {job_id}: fixed section positions: '
+                              + str({k: v[0] for k, v in fixed_sec_info.items()}))
+                    except Exception as fsp_e:
+                        print(f'[pdf-import] job {job_id} fixed section detection: {fsp_e}')
+
+                # Section timeline for preamble pages — ordered by (page, y) so we
+                # can assign each photo to the section whose heading it appears after.
+                # e.g. [(5, 300, 'keys'), (5, 650, 'meter_readings'), ...]
+                sec_timeline = sorted(
+                    [(pn, y0, sec_type)
+                     for sec_type, (pn, y0) in fixed_sec_info.items()
+                     if pn < first_room_page],
+                    key=lambda x: (x[0], x[1]),
+                )
+
+                # Pass ALL page_images to room mapping (no pre-separation).
+                # This avoids the fragile first_room_page fallback from causing
+                # room photos to be silently lost.
+                room_photos, unmatched_photos = _map_images_to_rooms(
+                    pt, page_images, parsed.get('rooms', []),
                     room_positions=room_positions,
                     room_index_map=room_index_map,
                 )
-                total = sum(len(v) for v in room_photos.values()) + len(overview_photos)
-                print(f'[pdf-import] job {job_id}: mapped {total} room photos → '
-                      f'{len(room_photos)} rooms, {len(overview_photos)} unmatched')
+                total = sum(len(v) for v in room_photos.values()) + len(unmatched_photos)
+                print(f'[pdf-import] job {job_id}: mapped {total} photos → '
+                      f'{len(room_photos)} rooms, {len(unmatched_photos)} unmatched')
 
-                # Attach fixed-section photos to parsed result
+                # Classify unmatched photos into keys / meter_readings / overview
+                # using the section timeline and each photo's stored page+y coords.
+                keys_photos  = []
+                meter_photos = []
+                overview_photos = []
+                for entry in unmatched_photos:
+                    pn = entry.get('page')
+                    ey = entry.get('y', float('inf'))
+                    if pn is None or pn >= first_room_page or not sec_timeline:
+                        overview_photos.append(entry)
+                        continue
+                    # Walk timeline to find the last section heading before this photo
+                    sec_type = None
+                    for (h_pn, h_y, h_type) in sec_timeline:
+                        if h_pn < pn or (h_pn == pn and h_y <= ey):
+                            sec_type = h_type
+                        else:
+                            break
+                    if sec_type == 'keys':
+                        keys_photos.append(entry)
+                    elif sec_type == 'meter_readings':
+                        meter_photos.append(entry)
+                    else:
+                        overview_photos.append(entry)
+
+                print(f'[pdf-import] job {job_id}: classified unmatched → '
+                      f'{len(keys_photos)} keys, {len(meter_photos)} meters, '
+                      f'{len(overview_photos)} overview')
+
                 if keys_photos:
                     parsed['_keysPhotos'] = [p['url'] for p in keys_photos]
                 if meter_photos:
                     parsed['_meterPhotos'] = [p['url'] for p in meter_photos]
 
             except Exception as map_e:
+                import traceback as _tb
                 print(f'[pdf-import] job {job_id} photo mapping error: {map_e}')
+                print(_tb.format_exc())
 
         # ── Attach photos to parsed rooms ─────────────────────────────────
         if room_photos or overview_photos:

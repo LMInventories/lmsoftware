@@ -1848,32 +1848,42 @@ def apply_pdf_import(inspection_id):
                     } for sub in pdf_subs]
                 report_data[sec_key][str(new_item.id)] = item_entry
 
-            # Attach photos to items using reference-number matching; fall back to first item
+            # Attach photos to items.
+            # For "X.Y" refs (L&M PDFs): Y is the 1-based item index — direct lookup.
+            # For plain-number refs: scan item text for a matching reference.
+            # No match → Room Overview Photos strip.
             room_photo_urls = pdf_room.get('_photos') or []
             room_photo_refs = pdf_room.get('_photoRefs') or [None] * len(room_photo_urls)
             if room_photo_urls:
-                # Build ref → item_key map by scanning item descriptions/conditions
+                item_keys = [k for k in report_data.get(sec_key, {})
+                             if not k.startswith('_')
+                             and isinstance(report_data[sec_key].get(k), dict)]
                 ref_to_key: dict = {}
-                for ik, ie in report_data.get(sec_key, {}).items():
-                    if ik.startswith('_') or not isinstance(ie, dict):
-                        continue
-                    combined = (
-                        (ie.get('description') or '') + ' ' +
-                        (ie.get('condition')   or '')
-                    ).lower()
-                    for ref in room_photo_refs:
-                        if ref and ref not in ref_to_key and _ref_in_text(ref, combined):
-                            ref_to_key[ref] = ik
+                for ref in set(r for r in room_photo_refs if r):
+                    if '.' in str(ref):
+                        try:
+                            item_idx = int(str(ref).split('.')[1]) - 1  # 0-based
+                            if 0 <= item_idx < len(item_keys):
+                                ref_to_key[ref] = item_keys[item_idx]
+                        except (ValueError, IndexError):
+                            pass
+                    else:
+                        for ik in item_keys:
+                            ie = report_data[sec_key][ik]
+                            combined = (
+                                (ie.get('description') or '') + ' ' +
+                                (ie.get('condition')   or '')
+                            ).lower()
+                            if _ref_in_text(ref, combined):
+                                ref_to_key[ref] = ik
+                                break
 
                 for url, ref in zip(room_photo_urls, room_photo_refs):
                     target = ref_to_key.get(ref) if ref else None
                     if (target and sec_key in report_data
-                            and target in report_data[sec_key]
                             and isinstance(report_data[sec_key].get(target), dict)):
-                        # Ref match → specific item
                         report_data[sec_key][target].setdefault('_photos', []).append(url)
                     else:
-                        # No ref match → Room Overview Photos
                         if sec_key in report_data:
                             if not isinstance(report_data[sec_key].get('_overview'), dict):
                                 report_data[sec_key]['_overview'] = {}

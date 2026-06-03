@@ -1081,25 +1081,39 @@ def _attach_room_photos_to_report_data(report_data, room_photo_map, room_to_sec_
                      and isinstance(sec_data.get(k), dict)]
         first_key = item_keys[0] if item_keys else None
 
-        # Build ref → item_key mapping by scanning all items in this section
+        # Build ref → item_key mapping.
+        # For "X.Y" refs (L&M PDFs): Y is the 1-based item index — look up directly.
+        # For plain number refs: scan item text for a matching reference.
         ref_to_key: dict = {}
-        for ik in item_keys:
-            item_data = sec_data[ik]
-            combined = (
-                (item_data.get('description') or '') + ' ' +
-                (item_data.get('condition')   or '')
-            ).lower()
-            for ref in refs:
-                if ref and ref not in ref_to_key and _ref_in_text(ref, combined):
-                    ref_to_key[ref] = ik
+        for ref in refs:
+            if not ref or ref in ref_to_key:
+                continue
+            if '.' in str(ref):
+                # "X.Y" format — Y is 1-based item position in this section
+                try:
+                    item_idx = int(str(ref).split('.')[1]) - 1  # 0-based
+                    if 0 <= item_idx < len(item_keys):
+                        ref_to_key[ref] = item_keys[item_idx]
+                except (ValueError, IndexError):
+                    pass
+            else:
+                # Plain number ref — scan item descriptions/conditions
+                for ik in item_keys:
+                    item_data = sec_data[ik]
+                    combined = (
+                        (item_data.get('description') or '') + ' ' +
+                        (item_data.get('condition')   or '')
+                    ).lower()
+                    if _ref_in_text(ref, combined):
+                        ref_to_key[ref] = ik
+                        break
 
         for url, ref in zip(photos, refs):
             target = ref_to_key.get(ref) if ref else None
             if target and isinstance(sec_data.get(target), dict):
-                # Photo reference matched a specific item → attach there
                 sec_data[target].setdefault('_photos', []).append(url)
             else:
-                # No ref match → Room Overview Photos (_overview strip)
+                # No match → Room Overview Photos (_overview strip)
                 if not isinstance(sec_data.get('_overview'), dict):
                     sec_data['_overview'] = {}
                 sec_data['_overview'].setdefault('_photos', []).append(url)
@@ -1647,10 +1661,14 @@ def _build_report_data_fuzzy(
     return report_data
 
 
-def _apply_pdf_fixed_sections(report_data, pdf_fixed, pdf_file_name):
+def _apply_pdf_fixed_sections(report_data, pdf_fixed, pdf_file_name,
+                               keys_photos=None, meter_photos=None):
     """
     Apply fixed sections (meter readings, keys, etc.) and import metadata to
     report_data in-place.  Also stamps _importedSource and _importedFileName.
+
+    keys_photos   : [url, ...]  — photos extracted from the Keys page(s) of the PDF
+    meter_photos  : [url, ...]  — photos extracted from the Meter Readings page(s)
     """
     global_fixed  = _get_global_fixed_sections()
     enabled_fixed = [s for s in global_fixed if s.get('enabled', True) is not False]
@@ -1710,6 +1728,28 @@ def _apply_pdf_fixed_sections(report_data, pdf_fixed, pdf_file_name):
 
         print(f'[apply-pdf-import] fixed {pdf_type} → {sec_id}: {len(pdf_rows)} rows')
 
+        # Attach photos extracted from the relevant PDF page to this section.
+        # Keys photos all go to the section's _overview strip.
+        # Meter photos are matched by order to each individual meter _extra row,
+        # then any remainder goes to _overview.
+        if pdf_type == 'keys' and keys_photos:
+            if not isinstance(report_data[sec_id].get('_overview'), dict):
+                report_data[sec_id]['_overview'] = {}
+            report_data[sec_id]['_overview'].setdefault('_photos', []).extend(keys_photos)
+            print(f'[apply-pdf-import] attached {len(keys_photos)} keys photo(s) → {sec_id}')
+
+        elif pdf_type == 'meter_readings' and meter_photos:
+            extra_rows = report_data[sec_id].get('_extra') or []
+            # Attach one photo per meter row (by order), overflow to _overview
+            for i, url in enumerate(meter_photos):
+                if i < len(extra_rows):
+                    extra_rows[i].setdefault('_photos', []).append(url)
+                else:
+                    if not isinstance(report_data[sec_id].get('_overview'), dict):
+                        report_data[sec_id]['_overview'] = {}
+                    report_data[sec_id]['_overview'].setdefault('_photos', []).append(url)
+            print(f'[apply-pdf-import] attached {len(meter_photos)} meter photo(s) → {sec_id}')
+
     report_data['_importedSource']   = {k: v for k, v in report_data.items() if not k.startswith('_')}
     report_data['_importedFileName'] = pdf_file_name
 
@@ -1743,6 +1783,8 @@ def apply_pdf_import(inspection_id):
     redistribute_items = bool(parsed.get('redistributeItems', False))
     pdf_file_name      = parsed.get('_fileName', '')
     pdf_cover_photo    = parsed.get('_coverPhoto') or None
+    pdf_keys_photos    = parsed.get('_keysPhotos') or []
+    pdf_meter_photos   = parsed.get('_meterPhotos') or []
 
     # ── Keep-layout path: preserve exact PDF structure, ignore template mapping
     if not redistribute_items:
@@ -1848,7 +1890,9 @@ def apply_pdf_import(inspection_id):
                     report_data[first_sec]['_overview'] = {}
                 report_data[first_sec]['_overview'].setdefault('_photos', []).extend(overview_photos)
 
-        _apply_pdf_fixed_sections(report_data, pdf_fixed, pdf_file_name)
+        _apply_pdf_fixed_sections(report_data, pdf_fixed, pdf_file_name,
+                                   keys_photos=pdf_keys_photos,
+                                   meter_photos=pdf_meter_photos)
         inspection.report_data = json.dumps(report_data)
         if pdf_cover_photo and inspection.property:
             inspection.property.overview_photo = pdf_cover_photo
@@ -1995,7 +2039,9 @@ def apply_pdf_import(inspection_id):
                 if not isinstance(report_data[_first_sec].get('_overview'), dict):
                     report_data[_first_sec]['_overview'] = {}
                 report_data[_first_sec]['_overview'].setdefault('_photos', []).extend(_overview_photos)
-        _apply_pdf_fixed_sections(report_data, pdf_fixed, pdf_file_name)
+        _apply_pdf_fixed_sections(report_data, pdf_fixed, pdf_file_name,
+                                   keys_photos=pdf_keys_photos,
+                                   meter_photos=pdf_meter_photos)
         inspection.report_data = json.dumps(report_data)
         if pdf_cover_photo and inspection.property:
             inspection.property.overview_photo = pdf_cover_photo
@@ -2087,7 +2133,9 @@ def apply_pdf_import(inspection_id):
                             pdf_overview_photos,
                         )
 
-                _apply_pdf_fixed_sections(report_data, pdf_fixed, pdf_file_name)
+                _apply_pdf_fixed_sections(report_data, pdf_fixed, pdf_file_name,
+                                           keys_photos=pdf_keys_photos,
+                                           meter_photos=pdf_meter_photos)
                 _insp.report_data = json.dumps(report_data)
                 if pdf_cover_photo and _insp.property:
                     _insp.property.overview_photo = pdf_cover_photo

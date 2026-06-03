@@ -53,10 +53,12 @@ _FIXED_SECTION_HEADING_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Patterns used to extract photo reference numbers from PDF text near images,
-# and to match those references in item description/condition text.
+# Patterns used to extract photo reference numbers from PDF text near images.
+# The X.Y format (e.g. "Ref #1.4") is tried first — it encodes room index (X)
+# and item index (Y) directly and is used by L&M Inventories reports.
 _REF_RE = re.compile(
-    r'(?i)\bphoto[\s._#:\-]*(\d+)\b'
+    r'(?i)\bref(?:erence)?[\s._#:\-]*(\d+\.\d+)\b'  # "Ref #1.4" → "1.4"  (highest priority)
+    r'|\bphoto[\s._#:\-]*(\d+)\b'
     r'|\bphot[\s._#:\-]*(\d+)\b'
     r'|\bref(?:erence)?[\s._#:\-]*(\d+)\b'
     r'|\bfig(?:ure)?[\s._#:\-]*(\d+)\b'
@@ -608,6 +610,57 @@ def _room_name_on_page(rname_norm, page_text):
     return False
 
 
+def _find_fixed_section_pages(raw_bytes, page_texts):
+    """
+    Find the first page on which each fixed section heading appears (bold text).
+    Returns {'keys': page_num, 'meter_readings': page_num} for each found.
+    Used to bucket preamble photos into their correct fixed-section drawer
+    rather than dumping them in the overview fallback.
+    """
+    _PATTERNS = {
+        'keys':           re.compile(r'^keys?$', re.IGNORECASE),
+        'meter_readings': re.compile(r'^(utility\s+meter|meter\s+read)', re.IGNORECASE),
+    }
+    try:
+        import fitz
+    except ImportError:
+        return {}
+
+    result = {}
+    doc = None
+    try:
+        doc = fitz.open(stream=raw_bytes, filetype='pdf')
+        for pn in range(len(doc)):
+            if _is_toc_page(page_texts.get(pn, '')):
+                continue
+            for block in doc[pn].get_text('dict').get('blocks', []):
+                if block.get('type') != 0:
+                    continue
+                for line in block.get('lines', []):
+                    for span in line.get('spans', []):
+                        txt = span.get('text', '').strip()
+                        if not txt or len(txt) > 60:
+                            continue
+                        is_bold = (bool(span.get('flags', 0) & 16)
+                                   or 'bold' in span.get('font', '').lower())
+                        if not is_bold:
+                            continue
+                        for sec_type, pat in _PATTERNS.items():
+                            if sec_type not in result and pat.match(txt):
+                                result[sec_type] = pn
+            if len(result) == len(_PATTERNS):
+                break
+    except Exception as e:
+        print(f'[pdf-import] _find_fixed_section_pages: {e}')
+    finally:
+        if doc:
+            try:
+                doc.close()
+            except Exception:
+                pass
+    return result
+
+
 def _find_room_positions(raw_bytes, page_texts, room_names):
     """
     Use PyMuPDF text spans to find (page_num, y0) for each room heading.
@@ -712,43 +765,65 @@ def _find_room_positions(raw_bytes, page_texts, room_names):
     return result
 
 
-def _map_images_to_rooms(page_texts, page_images, claude_rooms=None, room_positions=None):
+def _map_images_to_rooms(page_texts, page_images, claude_rooms=None,
+                          room_positions=None, room_index_map=None):
     """
-    Associate extracted images with rooms using page-order heuristic.
+    Associate extracted images with rooms.
 
-    Algorithm (when claude_rooms is supplied):
-      1. For each Claude room, search pages INDEPENDENTLY to find the first page
-         where that room's name appears as a headline (tight matching — exact or
-         starts-with only; no substring-in-sentence matches).
-      2. Sort rooms by their first-page and walk all pages, updating current_room
-         at each room transition.
-      3. Pages whose first heading matches a fixed-section keyword (keys, meters,
-         cleaning, etc.) have their images sent to `unmatched` regardless of
-         current_room — prevents meter/key photos landing in the last room.
+    Pass 1 — direct assignment via Ref #X.Y captions (L&M Inventories PDFs):
+      Images whose extracted ref string is in "X.Y" format are assigned straight
+      to the room at 1-based index X in room_index_map, bypassing page heuristics.
+      This is the primary assignment path for item-detail photos.
 
-    Falls back to the regex-based _ROOM_HEADER_RE heuristic if no Claude room
-    names can be located in the page texts.
+    Pass 2 — page-order heuristic for the remainder:
+      Overview photos (no caption) and photos from non-L&M PDFs are assigned by
+      tracking which room section each page belongs to.
 
     Returns:
-      room_photos : {room_name: [{'url': str, 'ref': str|None}, ...]}
-      unmatched   : [{'url': str, 'ref': str|None}]  — photos with no room
+      room_photos : {room_name: [entry, ...]}   entry = {'url','ref','y'}
+      unmatched   : [entry]  — photos not assigned to any room
     """
     if not page_images:
         return {}, []
 
-    all_pages        = sorted(set(list(page_texts.keys()) + list(page_images.keys())))
+    room_photos: dict = {}
+    unmatched: list   = []
+
+    # ── Pass 1: direct Ref #X.Y assignment ───────────────────────────────
+    page_images_remaining: dict = {}
+    if room_index_map:
+        for page_num, entries in page_images.items():
+            leftover = []
+            for entry in entries:
+                ref = entry.get('ref') or ''
+                assigned = False
+                if '.' in str(ref):
+                    try:
+                        room_idx  = int(str(ref).split('.')[0])
+                        room_name = room_index_map.get(room_idx)
+                        if room_name:
+                            room_photos.setdefault(room_name, []).append(entry)
+                            assigned = True
+                    except (ValueError, IndexError):
+                        pass
+                if not assigned:
+                    leftover.append(entry)
+            if leftover:
+                page_images_remaining[page_num] = leftover
+    else:
+        page_images_remaining = page_images
+
+    if not page_images_remaining:
+        return room_photos, unmatched
+
+    # ── Pass 2: page-order heuristic ─────────────────────────────────────
+    all_pages        = sorted(set(list(page_texts.keys()) + list(page_images_remaining.keys())))
     sorted_page_nums = sorted(page_texts.keys())
 
-    # ── Claude-based mapping ──────────────────────────────────────────────
     if claude_rooms:
-        # Step 1: find the FIRST page for each room.
-        # Prefer room_positions (PyMuPDF span coords — most accurate).
-        # Fall back to text-scan via _room_name_on_page for any rooms not found.
         room_first_page: dict = {}
-
         if room_positions:
             room_first_page = {rname: pn for rname, (pn, _) in room_positions.items()}
-
         for room in claude_rooms:
             rname = room.get('name', '')
             if not rname or rname in room_first_page:
@@ -762,38 +837,26 @@ def _map_images_to_rooms(page_texts, page_images, claude_rooms=None, room_positi
                     break
 
         if room_first_page:
-            # Step 2: sort by start page, then assign images page by page.
             sorted_starts = sorted(room_first_page.items(), key=lambda x: x[1])
             current_room  = None
-            room_photos: dict = {}
-            unmatched     = []
             starts_idx    = 0
 
             for page_num in all_pages:
-                # Save room active before this page so images above the first
-                # heading on this page are correctly assigned to the prior room.
                 prev_room = current_room
-
-                # Advance current_room to the latest room whose start ≤ this page
                 while (starts_idx < len(sorted_starts)
                        and sorted_starts[starts_idx][1] <= page_num):
                     current_room = sorted_starts[starts_idx][0]
                     starts_idx  += 1
 
-                entries = page_images.get(page_num, [])
+                entries = page_images_remaining.get(page_num, [])
                 if not entries:
                     continue
 
-                # If this page is a fixed/admin section (keys, meters, etc.),
-                # don't assign its images to any room — send to overview fallback.
                 page_text = page_texts.get(page_num, '')
                 if page_text and _is_fixed_section_page(page_text):
                     unmatched.extend(entries)
                     continue
 
-                # Within-page splitting: when we know y-coords of room headings
-                # on this page, assign each image to the room whose heading it
-                # appears after vertically (y increases downward in PyMuPDF).
                 if room_positions:
                     page_room_ys = sorted(
                         [(rn, y) for rn, (pn, y) in room_positions.items()
@@ -806,8 +869,6 @@ def _map_images_to_rooms(page_texts, page_images, claude_rooms=None, room_positi
                             if ey is None:
                                 assigned = current_room
                             else:
-                                # Images above the first heading on this page
-                                # belong to the room that was active on the prior page.
                                 assigned = prev_room
                                 for rn, ry in page_room_ys:
                                     if ey >= ry:
@@ -827,10 +888,8 @@ def _map_images_to_rooms(page_texts, page_images, claude_rooms=None, room_positi
 
             return room_photos, unmatched
 
-    # ── Regex fallback (no Claude rooms or none found in text) ────────────
+    # ── Regex fallback (no Claude rooms or none found) ────────────────────
     current_room = None
-    room_photos  = {}
-    unmatched    = []
     for page_num in all_pages:
         text = page_texts.get(page_num, '')
         for line in text.splitlines():
@@ -838,7 +897,7 @@ def _map_images_to_rooms(page_texts, page_images, claude_rooms=None, room_positi
             if stripped and _ROOM_HEADER_RE.match(stripped):
                 current_room = stripped.title()
                 break
-        entries = page_images.get(page_num, [])
+        entries = page_images_remaining.get(page_num, [])
         if not entries:
             continue
         if current_room:
@@ -1043,16 +1102,73 @@ def _run_import_job(job_id, api_key, extracted_text, pdf_b64, template_structure
 
             parsed = _merge_results(results)
 
-        # ── Map images to rooms using Claude's room names (most reliable) ───
-        # Done AFTER Claude so we can use the actual room names Claude extracted,
-        # rather than guessing from regex on raw PDF text.
+        # ── Map images to rooms / fixed sections ─────────────────────────
+        # Done AFTER Claude so we can use the actual room names Claude extracted.
         room_photos     = {}
         overview_photos = []
         if page_images:
             try:
                 pt = page_texts or {}
-                # Use PyMuPDF span coordinates to find exact room heading positions.
-                # This lets us split photos on multi-room pages by y-coordinate.
+
+                # Build room_index_map: {1: "Entrance & Hallway", 2: "Kitchen", ...}
+                # Used for direct Ref #X.Y → room assignment.
+                room_index_map = {
+                    i + 1: r.get('name', '')
+                    for i, r in enumerate(parsed.get('rooms', []))
+                    if r.get('name')
+                }
+
+                # Locate fixed section pages (Keys, Meters) via bold headings.
+                fixed_sec_pages = {}  # {section_type: page_num}
+                if raw_bytes:
+                    try:
+                        fixed_sec_pages = _find_fixed_section_pages(raw_bytes, pt)
+                        print(f'[pdf-import] job {job_id}: fixed section pages: {fixed_sec_pages}')
+                    except Exception as fsp_e:
+                        print(f'[pdf-import] job {job_id} fixed section page detection: {fsp_e}')
+
+                # Separate preamble fixed-section photos from room photos.
+                # Keys/meter pages are removed from page_images before room mapping
+                # so they never accidentally land in the last room via page-order.
+                fixed_page_to_type = {pn: t for t, pn in fixed_sec_pages.items()}
+                # Continuation pages: preamble pages that follow a fixed section.
+                # Find first room page so we know where "preamble" ends.
+                first_room_page = 999
+                if raw_bytes and parsed.get('rooms'):
+                    try:
+                        rp = _find_room_positions(raw_bytes, pt, parsed['rooms'])
+                        if rp:
+                            first_room_page = min(pn for pn, _ in rp.values())
+                        else:
+                            first_room_page = 999
+                    except Exception:
+                        first_room_page = 999
+
+                keys_photos   = []
+                meter_photos  = []
+                page_imgs_for_rooms = {}
+                current_fixed_type = None
+                for pn in sorted(page_images.keys()):
+                    entries = page_images[pn]
+                    if pn < first_room_page:
+                        # Update current fixed type if this page has a heading
+                        if pn in fixed_page_to_type:
+                            current_fixed_type = fixed_page_to_type[pn]
+                        # Bucket into the right fixed section
+                        if current_fixed_type == 'keys':
+                            keys_photos.extend(entries)
+                        elif current_fixed_type == 'meter_readings':
+                            meter_photos.extend(entries)
+                        # else: preamble pages before any fixed heading (e.g. cover)
+                        # → leave out entirely (they'll be cover/overview photos)
+                    else:
+                        page_imgs_for_rooms[pn] = entries
+
+                print(f'[pdf-import] job {job_id}: '
+                      f'{len(keys_photos)} keys photos, '
+                      f'{len(meter_photos)} meter photos separated')
+
+                # Locate room heading positions for within-page splitting.
                 room_positions = {}
                 if raw_bytes and parsed.get('rooms'):
                     try:
@@ -1063,12 +1179,20 @@ def _run_import_job(job_id, api_key, extracted_text, pdf_b64, template_structure
                         print(f'[pdf-import] job {job_id} room position detection: {pos_e}')
 
                 room_photos, overview_photos = _map_images_to_rooms(
-                    pt, page_images, parsed.get('rooms', []),
+                    pt, page_imgs_for_rooms, parsed.get('rooms', []),
                     room_positions=room_positions,
+                    room_index_map=room_index_map,
                 )
                 total = sum(len(v) for v in room_photos.values()) + len(overview_photos)
-                print(f'[pdf-import] job {job_id}: mapped {total} photos → '
+                print(f'[pdf-import] job {job_id}: mapped {total} room photos → '
                       f'{len(room_photos)} rooms, {len(overview_photos)} unmatched')
+
+                # Attach fixed-section photos to parsed result
+                if keys_photos:
+                    parsed['_keysPhotos'] = [p['url'] for p in keys_photos]
+                if meter_photos:
+                    parsed['_meterPhotos'] = [p['url'] for p in meter_photos]
+
             except Exception as map_e:
                 print(f'[pdf-import] job {job_id} photo mapping error: {map_e}')
 
@@ -1078,7 +1202,6 @@ def _run_import_job(job_id, api_key, extracted_text, pdf_b64, template_structure
                 rname = room.get('name', '')
                 photos = room_photos.get(rname)
                 if not photos:
-                    # Normalised fallback — handles case/punctuation differences
                     rname_norm = _norm_room(rname)
                     for rk, rp in room_photos.items():
                         if _norm_room(rk) == rname_norm:
@@ -1088,7 +1211,6 @@ def _run_import_job(job_id, api_key, extracted_text, pdf_b64, template_structure
                     room['_photos']    = [p['url'] for p in photos]
                     room['_photoRefs'] = [p.get('ref') for p in photos]
 
-            # Photos before any room heading go to the overview fallback
             if overview_photos:
                 parsed['_overviewPhotos'] = [p['url'] for p in overview_photos]
 

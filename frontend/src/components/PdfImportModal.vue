@@ -52,7 +52,8 @@ const saving      = ref(false)
 const parsing     = ref(false)
 const jobKey      = ref('')          // local key for composable tracking
 const roomMapping = ref({})          // pdfRoomName → sectionId (from any template) | 'new'
-const keepLayout  = ref(false)       // true = skip AI redistribution
+const keepLayout     = ref(false)    // true = skip AI redistribution
+const includePhotos  = ref(true)     // false = strip photos from payload before saving
 const allCheckInTemplates = ref([])  // [{id, name, sections:[{id,name,items}]}]
 
 // Cloud-picker OAuth token (scoped to this component instance)
@@ -313,6 +314,21 @@ function _buildInitialRoomMapping() {
 // Step 3 — Save
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** Strip photo fields from parsed rooms when the user has opted out. */
+function _buildParsedPayload() {
+  if (includePhotos.value) return parsed.value
+  const rooms = (parsed.value.rooms || []).map(r => {
+    const out = { ...r }
+    delete out._photos
+    delete out._photoRefs
+    return out
+  })
+  const out = { ...parsed.value, rooms }
+  delete out._overviewPhotos
+  delete out._coverPhoto
+  return out
+}
+
 async function save() {
   if (!form.value.property_id) { toast.warning('Please select a property'); return }
   saving.value = true
@@ -340,11 +356,12 @@ async function save() {
         templateSectionId: templateSectionId === 'new' ? null : parseInt(templateSectionId, 10),
       }))
       const redistributeItems = !keepLayout.value
+      const parsedPayload = _buildParsedPayload()
 
       // ── 2. POST apply-pdf-import (returns 200 or 202) ─────────────────
       const applyRes = await api.applyPdfImport(
         newId,
-        { ...parsed.value, roomMappings, redistributeItems },
+        { ...parsedPayload, roomMappings, redistributeItems },
         { timeout: redistributeItems ? 60_000 : 30_000 },  // 60 s for phase-1 DB work
       )
 
@@ -462,6 +479,13 @@ function _pollRedistributionJob(inspectionId, jobId) {
                 </label>
                 <p class="pi-suppress-hint">Prevents the system sending a completed report email for this backdated inspection.</p>
               </div>
+              <div class="pi-include-photos-row">
+                <label class="pi-include-photos-label">
+                  <input type="checkbox" v-model="includePhotos" />
+                  <span>Import photos from PDF</span>
+                </label>
+                <p class="pi-include-photos-hint">When ticked, photos embedded in the PDF will be extracted and attached to their rooms in the inspection.</p>
+              </div>
               <div class="pi-info-box">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
                 <span>The inspection will be created as a completed Check In backdated to the date you enter. In the next step you'll match each PDF room to one of your template rooms.</span>
@@ -537,7 +561,9 @@ function _pollRedistributionJob(inspectionId, jobId) {
           <div class="pi-map-stats">
             <span class="pi-map-stat-badge">{{ parsed.rooms?.length || 0 }} rooms found</span>
             <span class="pi-map-stat-badge">{{ parsed.rooms?.reduce((n, r) => n + (r.items?.length || 0), 0) || 0 }} items extracted</span>
-            <span v-if="totalImportedPhotos > 0" class="pi-map-stat-badge pi-map-stat-badge-photo">{{ totalImportedPhotos }} photo{{ totalImportedPhotos === 1 ? '' : 's' }} extracted</span>
+            <span v-if="totalImportedPhotos > 0" class="pi-map-stat-badge" :class="includePhotos ? 'pi-map-stat-badge-photo' : 'pi-map-stat-badge-photo-skip'">
+              {{ totalImportedPhotos }} photo{{ totalImportedPhotos === 1 ? '' : 's' }} {{ includePhotos ? 'extracted' : 'found (not importing)' }}
+            </span>
           </div>
 
           <!-- ── Mode cards (toggle at the top) ──────────────────────── -->
@@ -763,6 +789,20 @@ function _pollRedistributionJob(inspectionId, jobId) {
 }
 .pi-suppress-hint { font-size: 11px; color: #b45309; margin: 5px 0 0 23px; line-height: 1.4; }
 
+/* ── Include photos box ──────────────────────────────────────────────────── */
+.pi-include-photos-row {
+  background: #f0fdf4; border: 1px solid #bbf7d0;
+  border-radius: 8px; padding: 10px 12px; margin-bottom: 14px;
+}
+.pi-include-photos-label {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13px; font-weight: 600; color: #14532d; cursor: pointer;
+}
+.pi-include-photos-label input[type="checkbox"] {
+  accent-color: #16a34a; width: 15px; height: 15px; cursor: pointer; flex-shrink: 0;
+}
+.pi-include-photos-hint { font-size: 11px; color: #15803d; margin: 5px 0 0 23px; line-height: 1.4; }
+
 /* ── Info box (step 1) ───────────────────────────────────────────────────── */
 .pi-info-box {
   display: flex; gap: 8px; align-items: flex-start;
@@ -817,6 +857,9 @@ function _pollRedistributionJob(inspectionId, jobId) {
 }
 .pi-map-stat-badge-photo {
   background: #fef3c7; color: #92400e;
+}
+.pi-map-stat-badge-photo-skip {
+  background: #f1f5f9; color: #64748b;
 }
 .pi-map-intro  { font-size: 12px; color: #64748b; margin: 0; line-height: 1.5; }
 .pi-map-warn   { color: #b45309; font-style: normal; font-weight: 600; }

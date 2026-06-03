@@ -527,8 +527,15 @@ def _extract_pdf_images(raw_bytes, job_id):
                         cover_photo = url
                         continue   # don't add to room images
 
+                    img_y = None
+                    try:
+                        ir_list = page.get_image_rects(xref)
+                        if ir_list:
+                            img_y = ir_list[0].y0
+                    except Exception:
+                        pass
                     ref = _extract_image_ref(page, xref, text_spans)
-                    entries.append({'url': url, 'ref': ref})
+                    entries.append({'url': url, 'ref': ref, 'y': img_y})
                 except Exception as e:
                     print(f'[pdf-import] image xref {xref} extract error: {e}')
             if entries:
@@ -573,7 +580,7 @@ def _room_name_on_page(rname_norm, page_text):
     Only the first 20 lines of the page are checked — room headings are always
     near the top of a section, not buried in item descriptions.
     """
-    for line in page_text.splitlines()[:20]:
+    for line in page_text.splitlines():
         stripped = line.strip()
         if not stripped or len(stripped) > 80:
             continue
@@ -588,7 +595,64 @@ def _room_name_on_page(rname_norm, page_text):
     return False
 
 
-def _map_images_to_rooms(page_texts, page_images, claude_rooms=None):
+def _find_room_positions(raw_bytes, page_texts, room_names):
+    """
+    Use PyMuPDF text spans to find (page_num, y0) for each room heading.
+    Returns {rname: (page_num, y0)} — rooms not found are absent from the dict.
+    Falls back gracefully if PyMuPDF is unavailable.
+    """
+    try:
+        import fitz
+    except ImportError:
+        return {}
+
+    result = {}
+    doc = None
+    try:
+        doc = fitz.open(stream=raw_bytes, filetype='pdf')
+
+        # Pre-scan all pages once — avoids rescanning per room
+        page_span_data = {}
+        for pn in range(len(doc)):
+            spans = _page_text_spans(doc[pn])
+            filtered = []
+            for rect, txt in spans:
+                stripped = txt.strip()
+                if stripped and len(stripped) <= 80:
+                    filtered.append((rect, stripped, _norm_room(stripped)))
+            page_span_data[pn] = filtered
+
+        for room in room_names:
+            rname = room.get('name', '')
+            if not rname:
+                continue
+            rname_norm = _norm_room(rname)
+            if not rname_norm:
+                continue
+            for pn in range(len(doc)):
+                for rect, txt, txt_norm in page_span_data.get(pn, []):
+                    if not txt_norm:
+                        continue
+                    if (txt_norm == rname_norm or
+                            (txt_norm.startswith(rname_norm)
+                             and len(txt_norm) <= len(rname_norm) + 20)):
+                        result[rname] = (pn, rect.y0)
+                        break
+                if rname in result:
+                    break
+    except Exception as e:
+        print(f'[pdf-import] _find_room_positions: {e}')
+    finally:
+        if doc:
+            try:
+                doc.close()
+            except Exception:
+                pass
+
+    return result
+
+
+def _map_images_to_rooms(page_texts, page_images, claude_rooms=None, room_positions=None):
     """
     Associate extracted images with rooms using page-order heuristic.
 
@@ -617,24 +681,25 @@ def _map_images_to_rooms(page_texts, page_images, claude_rooms=None):
 
     # ── Claude-based mapping ──────────────────────────────────────────────
     if claude_rooms:
-        # Step 1: find the FIRST page for each room INDEPENDENTLY.
-        # Each room is searched from scratch — no shared state between rooms
-        # (the previous version shared a page_to_room dict as the stop condition,
-        # which caused every room after the first to abort at page 0).
+        # Step 1: find the FIRST page for each room.
+        # Prefer room_positions (PyMuPDF span coords — most accurate).
+        # Fall back to text-scan via _room_name_on_page for any rooms not found.
         room_first_page: dict = {}
+
+        if room_positions:
+            room_first_page = {rname: pn for rname, (pn, _) in room_positions.items()}
 
         for room in claude_rooms:
             rname = room.get('name', '')
-            if not rname:
+            if not rname or rname in room_first_page:
                 continue
             rname_norm = _norm_room(rname)
             if not rname_norm:
                 continue
-
             for page_num in sorted_page_nums:
                 if _room_name_on_page(rname_norm, page_texts[page_num]):
                     room_first_page[rname] = page_num
-                    break   # first occurrence only
+                    break
 
         if room_first_page:
             # Step 2: sort by start page, then assign images page by page.
@@ -645,6 +710,10 @@ def _map_images_to_rooms(page_texts, page_images, claude_rooms=None):
             starts_idx    = 0
 
             for page_num in all_pages:
+                # Save room active before this page so images above the first
+                # heading on this page are correctly assigned to the prior room.
+                prev_room = current_room
+
                 # Advance current_room to the latest room whose start ≤ this page
                 while (starts_idx < len(sorted_starts)
                        and sorted_starts[starts_idx][1] <= page_num):
@@ -660,7 +729,38 @@ def _map_images_to_rooms(page_texts, page_images, claude_rooms=None):
                 page_text = page_texts.get(page_num, '')
                 if page_text and _is_fixed_section_page(page_text):
                     unmatched.extend(entries)
-                elif current_room:
+                    continue
+
+                # Within-page splitting: when we know y-coords of room headings
+                # on this page, assign each image to the room whose heading it
+                # appears after vertically (y increases downward in PyMuPDF).
+                if room_positions:
+                    page_room_ys = sorted(
+                        [(rn, y) for rn, (pn, y) in room_positions.items()
+                         if pn == page_num and y is not None],
+                        key=lambda x: x[1],
+                    )
+                    if page_room_ys:
+                        for entry in entries:
+                            ey = entry.get('y')
+                            if ey is None:
+                                assigned = current_room
+                            else:
+                                # Images above the first heading on this page
+                                # belong to the room that was active on the prior page.
+                                assigned = prev_room
+                                for rn, ry in page_room_ys:
+                                    if ey >= ry:
+                                        assigned = rn
+                                    else:
+                                        break
+                            if assigned:
+                                room_photos.setdefault(assigned, []).append(entry)
+                            else:
+                                unmatched.append(entry)
+                        continue
+
+                if current_room:
                     room_photos.setdefault(current_room, []).extend(entries)
                 else:
                     unmatched.extend(entries)
@@ -891,8 +991,20 @@ def _run_import_job(job_id, api_key, extracted_text, pdf_b64, template_structure
         if page_images:
             try:
                 pt = page_texts or {}
+                # Use PyMuPDF span coordinates to find exact room heading positions.
+                # This lets us split photos on multi-room pages by y-coordinate.
+                room_positions = {}
+                if raw_bytes and parsed.get('rooms'):
+                    try:
+                        room_positions = _find_room_positions(raw_bytes, pt, parsed['rooms'])
+                        print(f'[pdf-import] job {job_id}: located {len(room_positions)} '
+                              f'room positions via spans')
+                    except Exception as pos_e:
+                        print(f'[pdf-import] job {job_id} room position detection: {pos_e}')
+
                 room_photos, overview_photos = _map_images_to_rooms(
                     pt, page_images, parsed.get('rooms', []),
+                    room_positions=room_positions,
                 )
                 total = sum(len(v) for v in room_photos.values()) + len(overview_photos)
                 print(f'[pdf-import] job {job_id}: mapped {total} photos → '

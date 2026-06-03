@@ -565,21 +565,32 @@ def _is_fixed_section_page(text):
     return False
 
 
+def _is_toc_page(page_text):
+    """
+    Return True if the page looks like a table of contents.
+    Detected by the first meaningful line being exactly "Contents" (the heading
+    of the TOC page in L&M Inventories reports and most standard UK inventory PDFs).
+    """
+    for line in page_text.splitlines()[:6]:
+        stripped = line.strip()
+        if stripped:
+            return stripped.lower() == 'contents'
+    return False
+
+
 def _room_name_on_page(rname_norm, page_text):
     """
     Return True if the page text contains a line that IS the room name.
 
-    Matching rules (tight, to avoid false positives from item descriptions):
-      1. Normalised line == normalised room name  (exact)
-      2. Normalised line STARTS WITH the room name and the extra suffix is short
-         (≤ 20 chars after stripping) — handles "Bedroom 1 (Ground Floor)" etc.
-
-    Deliberately excludes substring matches like 'kitchen' appearing inside
-    "adjacent to the kitchen area", which caused systematic off-by-one errors.
-
-    Only the first 20 lines of the page are checked — room headings are always
-    near the top of a section, not buried in item descriptions.
+    Matching rules (tight, to avoid false positives):
+      1. Skip TOC pages entirely — all room names appear there with page numbers.
+      2. Normalised line == normalised room name  (exact match).
+      3. Normalised line STARTS WITH the room name AND the extra suffix contains
+         at least one non-digit character — handles "Bedroom 1 (Ground Floor)" etc.
+         Pure-digit suffixes (e.g. "Bedroom  17" from a TOC entry) are excluded.
     """
+    if _is_toc_page(page_text):
+        return False
     for line in page_text.splitlines():
         stripped = line.strip()
         if not stripped or len(stripped) > 80:
@@ -589,8 +600,10 @@ def _room_name_on_page(rname_norm, page_text):
             continue
         if line_norm == rname_norm:
             return True
+        extra = line_norm[len(rname_norm):]
         if (line_norm.startswith(rname_norm)
-                and len(line_norm) <= len(rname_norm) + 20):
+                and 0 < len(extra) <= 20
+                and not extra.isdigit()):
             return True
     return False
 
@@ -600,6 +613,16 @@ def _find_room_positions(raw_bytes, page_texts, room_names):
     Use PyMuPDF text spans to find (page_num, y0) for each room heading.
     Returns {rname: (page_num, y0)} — rooms not found are absent from the dict.
     Falls back gracefully if PyMuPDF is unavailable.
+
+    Bold-first strategy: section headings in L&M Inventories reports (and most
+    standard UK inventory PDFs) are rendered in bold.  By preferring bold spans we
+    avoid false positives from the Table of Contents, Condition Summary, and other
+    preamble pages where room names appear in normal-weight text.
+
+    Pass 1: bold spans only.
+    Pass 2: if a room was NOT found in pass 1, retry with all spans but skip
+            TOC pages and reject pure-digit suffixes (same guards as
+            _room_name_on_page).
     """
     try:
         import fitz
@@ -611,35 +634,72 @@ def _find_room_positions(raw_bytes, page_texts, room_names):
     try:
         doc = fitz.open(stream=raw_bytes, filetype='pdf')
 
-        # Pre-scan all pages once — avoids rescanning per room
+        # Pre-scan all pages — collect (rect, txt, norm, is_bold) per page
         page_span_data = {}
         for pn in range(len(doc)):
-            spans = _page_text_spans(doc[pn])
-            filtered = []
-            for rect, txt in spans:
-                stripped = txt.strip()
-                if stripped and len(stripped) <= 80:
-                    filtered.append((rect, stripped, _norm_room(stripped)))
-            page_span_data[pn] = filtered
+            page_dict = doc[pn].get_text('dict')
+            entries = []
+            for block in page_dict.get('blocks', []):
+                if block.get('type') != 0:
+                    continue
+                for line in block.get('lines', []):
+                    for span in line.get('spans', []):
+                        txt = span.get('text', '').strip()
+                        if not txt or len(txt) > 80:
+                            continue
+                        # Bold detection: PDF flag bit 4 OR font name contains "bold"
+                        # (ReportLab embeds Helvetica-Bold whose name reliably
+                        # contains "bold", so the font-name check is the primary
+                        # signal for L&M PDFs; the flag is a fallback for others)
+                        is_bold = (bool(span.get('flags', 0) & 16)
+                                   or 'bold' in span.get('font', '').lower())
+                        entries.append((fitz.Rect(span['bbox']), txt,
+                                        _norm_room(txt), is_bold))
+            page_span_data[pn] = entries
 
+        def _matches(txt_norm, rname_norm):
+            if txt_norm == rname_norm:
+                return True
+            extra = txt_norm[len(rname_norm):]
+            return (txt_norm.startswith(rname_norm)
+                    and 0 < len(extra) <= 20
+                    and not extra.isdigit())
+
+        # Pass 1: bold spans only (skips TOC, summaries, etc.)
         for room in room_names:
             rname = room.get('name', '')
-            if not rname:
-                continue
             rname_norm = _norm_room(rname)
-            if not rname_norm:
+            if not rname or not rname_norm:
                 continue
             for pn in range(len(doc)):
-                for rect, txt, txt_norm in page_span_data.get(pn, []):
-                    if not txt_norm:
+                for rect, txt, txt_norm, is_bold in page_span_data.get(pn, []):
+                    if not is_bold or not txt_norm:
                         continue
-                    if (txt_norm == rname_norm or
-                            (txt_norm.startswith(rname_norm)
-                             and len(txt_norm) <= len(rname_norm) + 20)):
+                    if _matches(txt_norm, rname_norm):
                         result[rname] = (pn, rect.y0)
                         break
                 if rname in result:
                     break
+
+        # Pass 2: non-bold fallback for rooms not found in pass 1
+        for room in room_names:
+            rname = room.get('name', '')
+            rname_norm = _norm_room(rname)
+            if not rname or not rname_norm or rname in result:
+                continue
+            for pn in range(len(doc)):
+                pt = page_texts.get(pn, '')
+                if _is_toc_page(pt):
+                    continue
+                for rect, txt, txt_norm, _ in page_span_data.get(pn, []):
+                    if not txt_norm:
+                        continue
+                    if _matches(txt_norm, rname_norm):
+                        result[rname] = (pn, rect.y0)
+                        break
+                if rname in result:
+                    break
+
     except Exception as e:
         print(f'[pdf-import] _find_room_positions: {e}')
     finally:

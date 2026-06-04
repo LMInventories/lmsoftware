@@ -2253,14 +2253,32 @@ def apply_source_inspection(inspection_id, source_id):
     if not source.report_data:
         return jsonify({'error': 'Source inspection has no report data'}), 400
 
-    inspection.template_id          = source.template_id
-    inspection.report_data           = source.report_data
-    inspection.source_inspection_id  = source_id
+    inspection.template_id         = source.template_id
+    inspection.source_inspection_id = source_id
+
+    # When the source is a check-in/inventory and the target is a damage report,
+    # upgrade the target to a proper check-out rather than leaving it as a damage report.
+    if (inspection.inspection_type == 'damage_report'
+            and source.inspection_type in ('check_in', 'inventory')):
+        inspection.inspection_type = 'check_out'
+
+    # Transform report_data when going check-in/inventory → check-out so that
+    # condition fields are split into inventoryCondition / checkOutCondition (blank),
+    # exactly as if the check-out had been created the normal way.
+    if (source.inspection_type in ('check_in', 'inventory')
+            and inspection.inspection_type == 'check_out'):
+        transformed = _transform_report_data(
+            source.inspection_type, 'check_out', source.report_data
+        )
+        inspection.report_data = json.dumps(transformed) if transformed else source.report_data
+    else:
+        inspection.report_data = source.report_data
+
     db.session.commit()
     _bust_dashboard()
 
     print(f'[apply-source] inspection {inspection_id} ← source {source_id} '
-          f'(template {source.template_id})')
+          f'(template {source.template_id}, type now {inspection.inspection_type})')
     return jsonify(inspection_detail(inspection)), 200
 
 

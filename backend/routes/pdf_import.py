@@ -341,6 +341,13 @@ Room headings are typically short, standalone lines like:
   ENTRANCE HALL, LOUNGE, KITCHEN, BEDROOM 1, BATHROOM, EN-SUITE, LANDING, etc.
 After a room heading, each distinct line or pair of lines is an ITEM within that room.
 
+CONTINUATION HEADINGS: If a room heading ends with "(cont.)", "(cont'd)", "(continued)",
+"— cont.", or similar, it is a continuation of the same room from a previous page.
+Strip the continuation suffix and use the bare room name.
+  "Kitchen (cont.)" → name: "Kitchen"
+  "Bedroom 1 — continued" → name: "Bedroom 1"
+Items under a continuation heading belong to the same room as items before it.
+
 For each item:
 - label: the item heading, sentence-cased (e.g. "Door & Frame", "Walls & Ceiling", "Floor", "Contents")
 - description: text describing the item (material, colour, type) — verbatim, sentence-cased, multi-element → \\n
@@ -993,11 +1000,19 @@ def _merge_results(results):
         'fire_door_safety': [],
     }
 
-    seen_room_names = {}  # name.lower() → index in merged_rooms
+    seen_room_names = {}  # normalised name → index in merged_rooms
+
+    def _norm_room_name(n):
+        """Strip continuation markers so 'Kitchen (cont.)' keys as 'kitchen'."""
+        n = n.lower().strip()
+        n = re.sub(r'\s*\(?\s*cont(?:inued|\.?d?\.?)?\s*\)?\s*$', '', n, flags=re.IGNORECASE)
+        n = re.sub(r'\s*[-–—]\s*cont(?:inued|\.?d?\.?)?\s*$', '', n, flags=re.IGNORECASE)
+        return n.strip()
 
     for result in results:
         for room in result.get('rooms', []):
-            name_key = room.get('name', '').lower().strip()
+            raw_name = room.get('name', '')
+            name_key = _norm_room_name(raw_name)
             if name_key in seen_room_names:
                 # Merge items into the existing room entry
                 idx = seen_room_names[name_key]

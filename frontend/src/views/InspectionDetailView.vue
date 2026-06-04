@@ -5,6 +5,7 @@ import { useAuthStore } from '../stores/auth'
 import { useToast } from '../composables/useToast'
 import api from '../services/api'
 import TemplatePreviewModal from '../components/settings/TemplatePreviewModal.vue'
+import PdfCheckInUploadModal from '../components/PdfCheckInUploadModal.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -28,6 +29,7 @@ const showEditTenantEmail   = ref(false)
 const showEditLandlordEmail = ref(false)
 const showEditDeposit       = ref(false)
 const showEditClientEmail   = ref(false)
+const showPdfCheckInUpload = ref(false)
 const showPreview = ref(false)
 const showPhotoModal = ref(false)
 const photoUploading = ref(false)
@@ -813,7 +815,10 @@ onMounted(() => {
           <div class="info-card" v-if="!authStore.isClient">
             <div class="card-header">
               <h3>Template</h3>
-              <button v-if="canEdit" @click="showEditTemplate = true" class="btn-edit">Edit</button>
+              <div style="display:flex;gap:6px;align-items:center;">
+                <button v-if="canEdit && inspection.client_booked" @click="showPdfCheckInUpload = true" class="btn-edit btn-edit-pdf">Upload PDF Check In</button>
+                <button v-if="canEdit" @click="showEditTemplate = true" class="btn-edit">Edit</button>
+              </div>
             </div>
             <div class="card-content">
               <p>{{ inspection.template_name || 'No template assigned' }}</p>
@@ -1428,6 +1433,14 @@ onMounted(() => {
         @close="showPreview = false"
       />
 
+      <PdfCheckInUploadModal
+        v-if="showPdfCheckInUpload"
+        :inspection="inspection"
+        :templates="templates"
+        @close="showPdfCheckInUpload = false"
+        @saved="showPdfCheckInUpload = false; fetchInspection()"
+      />
+
       <!-- Share PDF Modal -->
       <div v-if="showSharePdf" class="modal-overlay" @click.self="showSharePdf = false; sharePdfNotes = ''">
         <div class="share-pdf-modal">
@@ -2008,6 +2021,14 @@ onMounted(() => {
 .btn-edit:hover {
   background: #eef2ff;
   border-color: #a5b4fc;
+}
+.btn-edit-pdf {
+  color: #0369a1;
+  border-color: #bae6fd;
+}
+.btn-edit-pdf:hover {
+  background: #e0f2fe;
+  border-color: #7dd3fc;
 }
 
 .confirmation-toggle-row {

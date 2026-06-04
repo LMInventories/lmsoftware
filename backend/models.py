@@ -206,6 +206,7 @@ class Inspection(db.Model):
     completion_email_sent = db.Column(db.Boolean, default=False, nullable=False)
     confirmed    = db.Column(db.Boolean, default=False, nullable=False)
     confirmed_at = db.Column(db.DateTime, nullable=True)
+    client_booked = db.Column(db.Boolean, default=False, nullable=False)
     created_at  = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at  = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
@@ -250,6 +251,7 @@ class Inspection(db.Model):
             'report_data':             self.report_data,
             'confirmed':               self.confirmed,
             'confirmed_at':            self.confirmed_at.isoformat() if self.confirmed_at else None,
+            'client_booked':           self.client_booked,
             'created_at':              self.created_at.isoformat() if self.created_at else None,
             'updated_at':              self.updated_at.isoformat() if self.updated_at else None,
         }

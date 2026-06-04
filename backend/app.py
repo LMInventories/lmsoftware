@@ -373,6 +373,10 @@ def _setup_database():
     if not column_exists('inspections', 'confirmed_at'):
         _alter_column("inspections.confirmed_at",
                       "ALTER TABLE inspections ADD COLUMN confirmed_at TIMESTAMP")
+    if not column_exists('inspections', 'client_booked'):
+        default = "0" if _is_sqlite() else "FALSE"
+        _alter_column("inspections.client_booked",
+                      f"ALTER TABLE inspections ADD COLUMN client_booked BOOLEAN NOT NULL DEFAULT {default}")
 
     # ── Reset midterm_sections to v2 defaults if still on old v1 schema ───────────
     # The original defaults used "Property Condition Overview" / "Safety & Alarms";

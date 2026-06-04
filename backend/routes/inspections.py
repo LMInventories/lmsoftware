@@ -413,6 +413,7 @@ def create_inspection():
         conduct_date=conduct_date,
         conduct_time_preference=data.get('conduct_time_preference'),
         report_data=seeded_report_data,
+        client_booked=is_client(user),
     )
 
     db.session.add(inspection)
@@ -626,7 +627,7 @@ def update_inspection(inspection_id):
             inspection.confirmed_at = datetime.now(_tz.utc)
         else:
             inspection.confirmed_at = None
-        if newly_confirmed:
+        if newly_confirmed and inspection.client_booked:
             try:
                 from routes.email_service import send_booking_confirmation_to_client
                 prop = inspection.property

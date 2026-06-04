@@ -810,7 +810,7 @@ onMounted(() => {
           </div>
 
           <!-- TEMPLATE -->
-          <div class="info-card">
+          <div class="info-card" v-if="!authStore.isClient">
             <div class="card-header">
               <h3>Template</h3>
               <button v-if="canEdit" @click="showEditTemplate = true" class="btn-edit">Edit</button>
@@ -822,7 +822,7 @@ onMounted(() => {
           </div>
 
           <!-- INTERNAL NOTES -->
-          <div class="info-card">
+          <div class="info-card" v-if="!authStore.isClient">
             <div class="card-header">
               <h3>Internal Notes</h3>
               <button v-if="canEdit" @click="showEditNotes = true" class="btn-edit">Edit</button>
@@ -838,7 +838,7 @@ onMounted(() => {
         <div class="right-col">
 
           <!-- BOOKING CONFIRMATION -->
-          <div class="info-card" v-if="canEdit">
+          <div class="info-card" v-if="authStore.isAdmin">
             <div class="card-header">
               <h3>Booking Confirmation</h3>
             </div>
@@ -936,7 +936,7 @@ onMounted(() => {
           </div>
 
           <!-- ASSIGNMENTS -->
-          <div class="info-card">
+          <div class="info-card" v-if="!authStore.isClient">
             <div class="card-header">
               <h3>Assignments</h3>
             </div>

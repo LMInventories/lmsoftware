@@ -570,7 +570,7 @@ async function handleSubmit() {
     toast.warning('Please select a property')
     return
   }
-  if (!form.value.inspector_id) {
+  if (!authStore.isClient && !form.value.inspector_id) {
     toast.warning('Please assign a clerk')
     return
   }
@@ -986,56 +986,58 @@ onMounted(() => {
             <div class="modal-col">
               <div class="col-section-title">Assignment &amp; Contact</div>
 
-              <!-- Template -->
-              <div class="form-group" v-if="form.inspection_type === 'midterm'">
-                <label>Template</label>
-                <p class="helper-text">Midterm reports use sections configured in <strong>Settings → Midterm Sections</strong>. No room template required.</p>
-              </div>
-              <div class="form-group" v-else-if="form.inspection_type === 'heads_up'">
-                <label>Template</label>
-                <p class="helper-text">Heads Up Reports use sections configured in <strong>Settings → Heads-Up Sections</strong>. No room template required.</p>
-              </div>
-              <div class="form-group" v-else>
-                <label>Template</label>
-                <select v-model="form.template_id">
-                  <option :value="null">Use default for this type</option>
-                  <option v-for="t in filteredTemplates" :key="t.id" :value="t.id">
-                    {{ t.name }}{{ t.is_default ? ' ★ Default' : '' }}
-                  </option>
-                </select>
-                <p v-if="filteredTemplates.length === 0" class="helper-text warning">
-                  No templates for this type. Create one in Settings → Templates.
-                </p>
-                <p v-else class="helper-text">
-                  {{ filteredTemplates.length }} template{{ filteredTemplates.length !== 1 ? 's' : '' }} available.
-                </p>
-              </div>
+              <!-- Template (admin/manager only) -->
+              <template v-if="!authStore.isClient">
+                <div class="form-group" v-if="form.inspection_type === 'midterm'">
+                  <label>Template</label>
+                  <p class="helper-text">Midterm reports use sections configured in <strong>Settings → Midterm Sections</strong>. No room template required.</p>
+                </div>
+                <div class="form-group" v-else-if="form.inspection_type === 'heads_up'">
+                  <label>Template</label>
+                  <p class="helper-text">Heads Up Reports use sections configured in <strong>Settings → Heads-Up Sections</strong>. No room template required.</p>
+                </div>
+                <div class="form-group" v-else>
+                  <label>Template</label>
+                  <select v-model="form.template_id">
+                    <option :value="null">Use default for this type</option>
+                    <option v-for="t in filteredTemplates" :key="t.id" :value="t.id">
+                      {{ t.name }}{{ t.is_default ? ' ★ Default' : '' }}
+                    </option>
+                  </select>
+                  <p v-if="filteredTemplates.length === 0" class="helper-text warning">
+                    No templates for this type. Create one in Settings → Templates.
+                  </p>
+                  <p v-else class="helper-text">
+                    {{ filteredTemplates.length }} template{{ filteredTemplates.length !== 1 ? 's' : '' }} available.
+                  </p>
+                </div>
 
-              <!-- Clerk -->
-              <div class="form-group">
-                <label>Clerk (Inspector) *</label>
-                <select v-model="form.inspector_id" required>
-                  <option :value="null" disabled>Select a clerk...</option>
-                  <option v-for="clerk in clerks" :key="clerk.id" :value="clerk.id">
-                    {{ clerk.name }} ({{ clerk.email }})
-                  </option>
-                </select>
-                <p v-if="clerks.length === 0" class="helper-text warning">
-                  No clerks available. Create clerk users first.
-                </p>
-              </div>
+                <!-- Clerk -->
+                <div class="form-group">
+                  <label>Clerk (Inspector) *</label>
+                  <select v-model="form.inspector_id" required>
+                    <option :value="null" disabled>Select a clerk...</option>
+                    <option v-for="clerk in clerks" :key="clerk.id" :value="clerk.id">
+                      {{ clerk.name }} ({{ clerk.email }})
+                    </option>
+                  </select>
+                  <p v-if="clerks.length === 0" class="helper-text warning">
+                    No clerks available. Create clerk users first.
+                  </p>
+                </div>
 
-              <!-- Typist -->
-              <div class="form-group">
-                <label>Typist (Optional)</label>
-                <select v-model="form.typist_id">
-                  <option :value="null">None — assign later</option>
-                  <option v-for="typist in typists" :key="typist.id" :value="typist.id">
-                    {{ typist.name }} ({{ typist.email }})
-                  </option>
-                </select>
-                <p class="helper-text">Can be assigned at the Processing stage.</p>
-              </div>
+                <!-- Typist -->
+                <div class="form-group">
+                  <label>Typist (Optional)</label>
+                  <select v-model="form.typist_id">
+                    <option :value="null">None — assign later</option>
+                    <option v-for="typist in typists" :key="typist.id" :value="typist.id">
+                      {{ typist.name }} ({{ typist.email }})
+                    </option>
+                  </select>
+                  <p class="helper-text">Can be assigned at the Processing stage.</p>
+                </div>
+              </template>
 
               <!-- Tenant contact -->
               <div class="form-group">

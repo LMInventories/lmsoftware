@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from models import db, Inspection, Property, Client, User, Template, Section, Item
-from permissions import get_current_user, require_admin_or_manager, filter_inspections_for_user, is_admin_or_manager
+from permissions import get_current_user, require_admin_or_manager, filter_inspections_for_user, is_admin_or_manager, is_client
 from sqlalchemy.orm import joinedload, selectinload, defer
 from datetime import datetime
 import json
@@ -328,9 +328,18 @@ def get_property_history(property_id):
 @jwt_required()
 def create_inspection():
     user = get_current_user()
-    if not is_admin_or_manager(user):
+    if not is_admin_or_manager(user) and not is_client(user):
         return jsonify({'error': 'Forbidden'}), 403
     data = request.json
+
+    # Clients can only create inspections for their own portfolio and cannot
+    # set clerk, typist, or template — those are admin-only assignments.
+    if is_client(user):
+        prop = db.session.get(Property, data.get('property_id'))
+        if not prop or prop.client_id != user.client_id:
+            return jsonify({'error': 'Forbidden'}), 403
+        data = {k: v for k, v in data.items()
+                if k not in ('inspector_id', 'typist_id', 'template_id', 'typist_mode', 'status')}
 
     # ── Template resolution ──────────────────────────────────────────────
     inspection_type = data.get('inspection_type', 'check_in')

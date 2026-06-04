@@ -31,7 +31,8 @@
       "Bash(python -c \"import ast, sys; [ast.parse\\(open\\(f\\).read\\(\\)\\) and print\\(f, 'OK'\\) for f in ['backend/routes/pdf_import.py', 'backend/routes/inspections.py']]\")",
       "Bash(python \"C:\\\\Projects\\\\lmsoftware\\\\backend\\\\routes\\\\pdf_import.py\")",
       "Bash(python -c \"import ast; ast.parse\\(open\\('C:/Projects/lmsoftware/backend/routes/pdf_import.py'\\).read\\(\\)\\); print\\('pdf_import.py OK'\\)\")",
-      "Bash(python *)"
+      "Bash(python *)",
+      "Bash(Get-ChildItem -Force)"
     ]
   }
 }

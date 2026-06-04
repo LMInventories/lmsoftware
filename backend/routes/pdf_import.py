@@ -32,9 +32,9 @@ os.makedirs(JOBS_DIR, exist_ok=True)
 
 MIN_TEXT_CHARS    = 500
 CHUNK_THRESHOLD   = 14_000  # chars — above this we chunk
-MAX_CHUNK_CHARS   = 10_000  # target chars per chunk
+MAX_CHUNK_CHARS   = 5_000   # target chars per chunk (smaller → less JSON output needed per call)
 MAX_TOKENS_SINGLE = 16384   # generous ceiling for single calls
-MAX_TOKENS_CHUNK  = 6144    # per-chunk ceiling
+MAX_TOKENS_CHUNK  = 8192    # per-chunk ceiling — full model output capacity
 MIN_IMAGE_PX      = 100     # skip images smaller than 100 px in either dimension
 MAX_IMAGES_TOTAL  = 150     # hard cap to avoid runaway S3 uploads
 
@@ -67,13 +67,17 @@ _REF_RE = re.compile(
     r'|^\s*(\d{1,3})\s*$',
 )
 
-# Room-like headings used to detect section boundaries in UK inventory reports
+# Room-like headings used to detect section boundaries in UK inventory reports.
+# Intentionally loose at the end ([\s\d/&,.-]*\w*$) to catch compound names like
+# "ENTRANCE/HALLWAY", "LOUNGE/DINER", "BEDROOM 2 (REAR)", "BATHROOM & EN SUITE".
 _ROOM_HEADER_RE = re.compile(
     r'^(?:HALLWAY|HALL|ENTRANCE|RECEPTION|LOUNGE|LIVING\s*ROOM|SITTING\s*ROOM|'
     r'KITCHEN|KITCHEN[/ ]*DINER|DINING\s*ROOM|BEDROOM|MASTER\s*BEDROOM|SPARE\s*BEDROOM|'
+    r'SECOND\s*BEDROOM|THIRD\s*BEDROOM|DOUBLE\s*BEDROOM|SINGLE\s*BEDROOM|'
     r'BATHROOM|BATHROOM\s*\d|EN[- ]?SUITE|WC|TOILET|CLOAKROOM|LANDING|STAIRS?|'
     r'STAIRCASE|GARAGE|UTILITY\s*ROOM|STUDY|OFFICE|CONSERVATORY|GARDEN|LOFT|'
-    r'CELLAR|BASEMENT|STORAGE|CUPBOARD|PORCH|LOBBY)[\s\d]*$',
+    r'CELLAR|BASEMENT|STORAGE|CUPBOARD|PORCH|LOBBY|OPEN\s*PLAN|HALLWAY\s*/|'
+    r'ENTRANCE\s*/|CORRIDOR|TERRACE|BALCONY|ANNEX|ANNEX|ROOM)[\s\d/&(,.-]*\w*\s*\)?$',
     re.IGNORECASE,
 )
 
@@ -224,15 +228,18 @@ FIELD RULES
 ═══════════════════════════════════════
 FIXED SECTIONS
 ═══════════════════════════════════════
-Extract these if present in the PDF. Copy all text verbatim (sentence-cased).
-- condition_summary: overall condition notes
-- keys: key types and quantities handed over (name = key type, description = quantity and cut type)
+Extract ALL of these if present in the PDF. Copy all text verbatim (sentence-cased).
+- condition_summary: overall condition notes → [{ "name": "...", "condition": "..." }]
+- cleaning_summary: cleanliness notes → [{ "name": "...", "cleanliness": "...", "cleanlinessNotes": "" }]
+- keys: key types and quantities handed over → [{ "name": "key type", "description": "quantity and cut type, e.g. 2 x Yale" }]
 - meter_readings: gas/electric/water meter readings — SPLIT into three fields:
     • name: type of meter only (e.g. "Gas Meter", "Electricity Meter", "Water Meter")
-    • locationSerial: WHERE the meter is located AND its serial number
-      (e.g. "Under stairs cupboard\nSerial No: 1234567") — DO NOT put the reading here
+    • locationSerial: WHERE the meter is located AND its serial number (e.g. "Under stairs cupboard\nSerial No: 1234567") — DO NOT put the reading here
     • reading: ONLY the numeric reading with unit (e.g. "12345.67 m³") — nothing else
-- cleaning_summary: cleanliness notes
+  → [{ "name": "Gas Meter", "locationSerial": "...", "reading": "..." }]
+- smoke_alarms: smoke alarm / carbon monoxide detector entries → [{ "name": "alarm location or type", "answer": "Present/Working/Tested/Yes/No", "notes": "any additional info" }]
+- health_safety: health & safety checks → [{ "name": "check name", "answer": "Yes/No/N/A/Pass/Fail", "notes": "" }]
+- fire_door_safety: fire door safety checks → [{ "name": "door or check type", "answer": "Yes/No/Pass/Fail", "notes": "" }]
 
 Return ONLY valid JSON — no markdown, no explanation:
 {
@@ -264,9 +271,12 @@ Return ONLY valid JSON — no markdown, no explanation:
   ],
   "fixedSections": {
     "condition_summary": [{ "name": "General Condition", "condition": "Good overall condition throughout" }],
+    "cleaning_summary": [{ "name": "General Cleanliness", "cleanliness": "Professionally Cleaned", "cleanlinessNotes": "" }],
     "keys": [{ "name": "Front Door Key", "description": "2 x Yale, 1 x Deadlock" }],
     "meter_readings": [{ "name": "Gas Meter", "locationSerial": "Under stairs cupboard\nSerial No: 1234567", "reading": "12345.67 m³" }],
-    "cleaning_summary": [{ "name": "General Cleanliness", "cleanliness": "Professionally Cleaned", "cleanlinessNotes": "" }]
+    "smoke_alarms": [{ "name": "Living Room Smoke Alarm", "answer": "Present and tested", "notes": "" }],
+    "health_safety": [{ "name": "EICR Certificate", "answer": "Yes", "notes": "" }],
+    "fire_door_safety": [{ "name": "Front Door", "answer": "Pass", "notes": "" }]
   }
 }"""
 
@@ -344,17 +354,18 @@ If a line starts with the parent item name followed by a dash, colon, or slash, 
 ═══════════════════════════════════════
 FIXED SECTIONS
 ═══════════════════════════════════════
-If you see any of these sections in the text, extract them too:
-- Keys handed over → fixedSections.keys
-  Each entry: { "name": "key type", "description": "quantity and cut, e.g. 2 x Yale" }
-- Meter readings (gas/electric/water) → fixedSections.meter_readings
-  SPLIT each reading into three fields — do NOT put location or serial info into "reading":
-  { "name": "Gas Meter", "locationSerial": "Under stairs cupboard\nSerial No: 1234567", "reading": "12345.67 m³" }
-  • name: type of meter only
-  • locationSerial: location description + serial number (on separate lines if both present)
-  • reading: the numeric reading + unit ONLY
-- Overall condition notes → fixedSections.condition_summary
-- Cleanliness notes → fixedSections.cleaning_summary
+If you see any of these sections in the text, extract them too. Use empty arrays [] for any not present.
+- condition_summary: overall condition notes → [{ "name": "...", "condition": "..." }]
+- cleaning_summary: cleanliness notes → [{ "name": "...", "cleanliness": "...", "cleanlinessNotes": "" }]
+- keys: keys handed over → [{ "name": "key type", "description": "quantity and cut, e.g. 2 x Yale" }]
+- meter_readings: gas/electric/water readings — SPLIT each into three fields:
+    • name: type of meter only (e.g. "Gas Meter")
+    • locationSerial: location + serial number — NOT the reading
+    • reading: the numeric reading + unit ONLY
+  → [{ "name": "Gas Meter", "locationSerial": "Under stairs\nSerial No: 1234567", "reading": "12345.67 m³" }]
+- smoke_alarms: smoke/CO alarms → [{ "name": "location or type", "answer": "Present/Working/Yes/No", "notes": "" }]
+- health_safety: health & safety checks → [{ "name": "check name", "answer": "Yes/No/N/A", "notes": "" }]
+- fire_door_safety: fire door checks → [{ "name": "door type", "answer": "Pass/Fail/Yes/No", "notes": "" }]
 
 Return ONLY valid JSON — no markdown, no explanation, no trailing text:
 {
@@ -375,9 +386,12 @@ Return ONLY valid JSON — no markdown, no explanation, no trailing text:
   ],
   "fixedSections": {
     "condition_summary": [],
+    "cleaning_summary": [],
     "keys": [],
     "meter_readings": [],
-    "cleaning_summary": []
+    "smoke_alarms": [],
+    "health_safety": [],
+    "fire_door_safety": []
   }
 }
 
@@ -971,9 +985,12 @@ def _merge_results(results):
     merged_rooms = []
     merged_fixed = {
         'condition_summary': [],
+        'cleaning_summary': [],
         'keys': [],
         'meter_readings': [],
-        'cleaning_summary': [],
+        'smoke_alarms': [],
+        'health_safety': [],
+        'fire_door_safety': [],
     }
 
     seen_room_names = {}  # name.lower() → index in merged_rooms

@@ -30,6 +30,11 @@ const showEditLandlordEmail = ref(false)
 const showEditDeposit       = ref(false)
 const showEditClientEmail   = ref(false)
 const showPdfCheckInUpload = ref(false)
+const showSourcePicker = ref(false)
+const propertyHistory  = ref([])
+const historyLoading   = ref(false)
+const selectedSourceId = ref(null)
+const applyingSource   = ref(false)
 const showPreview = ref(false)
 const showPhotoModal = ref(false)
 const photoUploading = ref(false)
@@ -144,6 +149,15 @@ const currentStepIndex = computed(() => {
 })
 
 const canEdit = computed(() => authStore.isAdmin || authStore.isManager)
+
+const sourceCheckInCandidates = computed(() => {
+  if (!inspection.value) return []
+  return propertyHistory.value.filter(h =>
+    h.inspection_type === 'check_in' &&
+    h.has_report_data &&
+    h.id !== inspection.value.id
+  )
+})
 
 const canAdvance = computed(() => {
   if (!inspection.value) return false
@@ -314,6 +328,36 @@ async function updateField(field, value) {
   } catch (error) {
     console.error('Failed to update:', error)
     toast.error('Failed to update')
+  }
+}
+
+async function openSourcePicker() {
+  showSourcePicker.value = true
+  if (propertyHistory.value.length) return
+  historyLoading.value = true
+  try {
+    const res = await api.getPropertyHistory(inspection.value.property_id)
+    propertyHistory.value = res.data
+  } catch {
+    toast.error('Failed to load property history')
+  } finally {
+    historyLoading.value = false
+  }
+}
+
+async function applySourceInspection() {
+  if (!selectedSourceId.value) return
+  applyingSource.value = true
+  try {
+    const res = await api.applySourceInspection(inspection.value.id, selectedSourceId.value)
+    inspection.value = res.data
+    showSourcePicker.value = false
+    selectedSourceId.value = null
+    toast.success('Template and report data copied from previous report')
+  } catch (e) {
+    toast.error(e?.response?.data?.error || 'Failed to apply source inspection')
+  } finally {
+    applyingSource.value = false
   }
 }
 
@@ -823,6 +867,48 @@ onMounted(() => {
             <div class="card-content">
               <p>{{ inspection.template_name || 'No template assigned' }}</p>
               <span class="badge">{{ inspection.inspection_type.replace('_', ' ').toUpperCase() }}</span>
+
+              <!-- Previous report picker -->
+              <div v-if="canEdit" class="source-report-row">
+                <button
+                  v-if="!showSourcePicker"
+                  class="btn-source-report"
+                  @click="openSourcePicker"
+                >
+                  Use previous report
+                </button>
+
+                <div v-else class="source-picker">
+                  <div class="source-picker-header">
+                    <span class="source-picker-label">Select a previous Check In</span>
+                    <button class="source-picker-close" @click="showSourcePicker = false; selectedSourceId = null">✕</button>
+                  </div>
+
+                  <div v-if="historyLoading" class="source-picker-loading">Loading…</div>
+                  <template v-else-if="sourceCheckInCandidates.length">
+                    <select v-model="selectedSourceId" class="source-picker-select">
+                      <option :value="null" disabled>Select a report…</option>
+                      <option
+                        v-for="h in sourceCheckInCandidates"
+                        :key="h.id"
+                        :value="h.id"
+                      >
+                        {{ h.reference_number || `#${h.id}` }}
+                        <template v-if="h.conduct_date"> · {{ new Date(h.conduct_date).toLocaleDateString('en-GB') }}</template>
+                        <template v-if="h.template_name"> · {{ h.template_name }}</template>
+                      </option>
+                    </select>
+                    <button
+                      class="btn-source-apply"
+                      :disabled="!selectedSourceId || applyingSource"
+                      @click="applySourceInspection"
+                    >
+                      {{ applyingSource ? 'Applying…' : 'Apply' }}
+                    </button>
+                  </template>
+                  <p v-else class="source-picker-empty">No completed Check In reports found for this property.</p>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -2029,6 +2115,88 @@ onMounted(() => {
 .btn-edit-pdf:hover {
   background: #e0f2fe;
   border-color: #7dd3fc;
+}
+
+.source-report-row {
+  margin-top: 12px;
+  border-top: 1px solid #f1f5f9;
+  padding-top: 10px;
+}
+.btn-source-report {
+  font-size: 12px;
+  font-weight: 600;
+  color: #6366f1;
+  background: none;
+  border: 1px dashed #c7d2fe;
+  border-radius: 6px;
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+  width: 100%;
+}
+.btn-source-report:hover {
+  background: #eef2ff;
+  border-color: #a5b4fc;
+}
+.source-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.source-picker-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.source-picker-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #475569;
+}
+.source-picker-close {
+  width: 22px; height: 22px;
+  border: none; background: #f1f5f9;
+  border-radius: 4px; cursor: pointer;
+  font-size: 11px; color: #64748b;
+  display: flex; align-items: center; justify-content: center;
+}
+.source-picker-close:hover { background: #e2e8f0; }
+.source-picker-loading {
+  font-size: 12px;
+  color: #94a3b8;
+  padding: 4px 0;
+}
+.source-picker-select {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #1e293b;
+  background: #fff;
+}
+.source-picker-select:focus {
+  outline: none;
+  border-color: #6366f1;
+}
+.btn-source-apply {
+  padding: 6px 14px;
+  background: #6366f1;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+  align-self: flex-end;
+}
+.btn-source-apply:hover:not(:disabled) { background: #4f46e5; }
+.btn-source-apply:disabled { opacity: 0.5; cursor: not-allowed; }
+.source-picker-empty {
+  font-size: 12px;
+  color: #94a3b8;
+  margin: 0;
 }
 
 .confirmation-toggle-row {

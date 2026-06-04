@@ -311,6 +311,7 @@ def get_property_history(property_id):
         'id': i.id,
         'inspection_type': i.inspection_type,
         'status': i.status,
+        'reference_number': i.reference_number,
         'source_inspection_id': i.source_inspection_id,
         'conduct_date': i.conduct_date.isoformat() if i.conduct_date else None,
         'created_at': i.created_at.isoformat() if i.created_at else None,
@@ -2153,8 +2154,26 @@ def apply_pdf_import(inspection_id):
                                     'description': (entry.get('description') or '').strip(),
                                     'condition':   (entry.get('condition')   or '').strip(),
                                 }
-                    print(f'[apply-pdf-import] job {job_id}: AI redistribution — '
-                          f'{len(report_data)} sections populated')
+                    total_items = sum(
+                        len([v for v in sec.values() if isinstance(v, dict)])
+                        for sec in report_data.values()
+                        if isinstance(sec, dict)
+                    )
+                    if total_items == 0:
+                        # AI returned something but validation stripped all items
+                        # (e.g. composite template sections had no DB items because
+                        # all rooms were mapped to "new"). Fall back to fuzzy match
+                        # so PDF content isn't silently lost.
+                        print(f'[apply-pdf-import] job {job_id}: AI result had no valid items — falling back to fuzzy match')
+                        report_data = _build_report_data_fuzzy(
+                            pdf_rooms,
+                            pdf_room_to_src_sec_id,
+                            src_id_to_new_sec_id,
+                            new_room_name_to_sec_id,
+                        )
+                    else:
+                        print(f'[apply-pdf-import] job {job_id}: AI redistribution — '
+                              f'{len(report_data)} sections, {total_items} items populated')
                 else:
                     print(f'[apply-pdf-import] job {job_id}: AI failed — falling back to fuzzy match')
                     report_data = _build_report_data_fuzzy(
@@ -2214,6 +2233,35 @@ def apply_pdf_import(inspection_id):
     threading.Thread(target=_redistrib_thread, daemon=True).start()
     print(f'[apply-pdf-import] inspection {inspection_id}: background job {job_id} started')
     return jsonify({'job_id': job_id}), 202
+
+
+@inspections_bp.route('/<int:inspection_id>/apply-source/<int:source_id>', methods=['POST'])
+@jwt_required()
+def apply_source_inspection(inspection_id, source_id):
+    """Copy template and report_data from a completed check-in into this inspection."""
+    user = get_current_user()
+    if not is_admin_or_manager(user):
+        return jsonify({'error': 'Forbidden'}), 403
+
+    inspection = Inspection.query.get_or_404(inspection_id)
+    source     = Inspection.query.get_or_404(source_id)
+
+    if source.property_id != inspection.property_id:
+        return jsonify({'error': 'Source inspection belongs to a different property'}), 400
+    if not source.template_id:
+        return jsonify({'error': 'Source inspection has no template'}), 400
+    if not source.report_data:
+        return jsonify({'error': 'Source inspection has no report data'}), 400
+
+    inspection.template_id          = source.template_id
+    inspection.report_data           = source.report_data
+    inspection.source_inspection_id  = source_id
+    db.session.commit()
+    _bust_dashboard()
+
+    print(f'[apply-source] inspection {inspection_id} ← source {source_id} '
+          f'(template {source.template_id})')
+    return jsonify(inspection_detail(inspection)), 200
 
 
 @inspections_bp.route('/<int:inspection_id>/apply-pdf-import-status/<job_id>', methods=['GET'])

@@ -32,7 +32,8 @@
       "Bash(python \"C:\\\\Projects\\\\lmsoftware\\\\backend\\\\routes\\\\pdf_import.py\")",
       "Bash(python -c \"import ast; ast.parse\\(open\\('C:/Projects/lmsoftware/backend/routes/pdf_import.py'\\).read\\(\\)\\); print\\('pdf_import.py OK'\\)\")",
       "Bash(python *)",
-      "Bash(Get-ChildItem -Force)"
+      "Bash(Get-ChildItem -Force)",
+      "PowerShell(head *)"
     ]
   }
 }

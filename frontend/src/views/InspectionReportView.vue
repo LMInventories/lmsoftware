@@ -2967,7 +2967,7 @@ async function moveToReview() {
                           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
                           <span v-if="getPhotos(room.id, item._itemKey).length" class="cam-count">{{ getPhotos(room.id, item._itemKey).length }}</span>
                         </button>
-                        
+
                         <button
                           class="cam-btn cam-btn-item action-trigger-btn"
                           :class="{ 'action-has': getItemActions(room.id, item._itemKey).length }"
@@ -2975,6 +2975,14 @@ async function moveToReview() {
                           title="Actions">
                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
                           <span v-if="getItemActions(room.id, item._itemKey).length" class="cam-count action-count">{{ getItemActions(room.id, item._itemKey).length }}</span>
+                        </button>
+
+                        <button
+                          v-if="canDelete"
+                          class="del-item-icon-btn"
+                          @click="item._type === 'extra' ? removeRoomExtraItem(room.id, item._eid) : hideItem(room.id, item.id)"
+                          title="Remove item">
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
                         </button>
                       </div>
                     </div>

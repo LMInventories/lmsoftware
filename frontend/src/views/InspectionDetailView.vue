@@ -837,6 +837,32 @@ onMounted(() => {
         <!-- ── Right column ── -->
         <div class="right-col">
 
+          <!-- BOOKING CONFIRMATION -->
+          <div class="info-card" v-if="canEdit">
+            <div class="card-header">
+              <h3>Booking Confirmation</h3>
+            </div>
+            <div class="card-content">
+              <div class="confirmation-toggle-row">
+                <button
+                  class="confirmation-toggle"
+                  :class="inspection.confirmed ? 'confirmed' : 'unconfirmed'"
+                  :disabled="!inspection.inspector_id"
+                  :title="!inspection.inspector_id ? 'Assign a clerk before confirming' : ''"
+                  @click="updateField('confirmed', !inspection.confirmed)"
+                >
+                  <span class="toggle-dot"></span>
+                  <span>{{ inspection.confirmed ? 'Confirmed' : 'Unconfirmed' }}</span>
+                </button>
+                <span v-if="!inspection.inspector_id" class="helper-text" style="margin-left:10px;">Requires a clerk</span>
+                <span v-else-if="inspection.confirmed_at" class="helper-text" style="margin-left:10px;">{{ formatDate(inspection.confirmed_at) }}</span>
+              </div>
+              <p class="helper-text" style="margin-top:8px;">
+                Confirming will send a booking confirmation email to the client.
+              </p>
+            </div>
+          </div>
+
           <!-- CONDUCT DATE & TIME -->
           <div class="info-card">
             <div class="card-header">
@@ -1982,6 +2008,49 @@ onMounted(() => {
 .btn-edit:hover {
   background: #eef2ff;
   border-color: #a5b4fc;
+}
+
+.confirmation-toggle-row {
+  display: flex;
+  align-items: center;
+}
+.confirmation-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px 6px 10px;
+  border-radius: 20px;
+  border: none;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+}
+.confirmation-toggle.unconfirmed {
+  background: #fef3c7;
+  color: #92400e;
+}
+.confirmation-toggle.unconfirmed:hover:not(:disabled) {
+  background: #fde68a;
+}
+.confirmation-toggle.confirmed {
+  background: #dcfce7;
+  color: #166534;
+}
+.confirmation-toggle.confirmed:hover:not(:disabled) {
+  background: #bbf7d0;
+}
+.confirmation-toggle:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.toggle-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: currentColor;
+  opacity: 0.7;
 }
 
 .btn-edit-inline {

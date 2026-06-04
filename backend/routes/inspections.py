@@ -453,6 +453,19 @@ def create_inspection():
         except Exception as _cal_exc:
             print(f'[calendar] non-fatal exception: {_cal_exc}')
 
+    # ── Notify admin when a client submits a booking ────────────────────
+    if is_client(user) and not data.get('pdf_import'):
+        try:
+            from routes.email_service import send_client_booking_to_admin
+            prop = inspection.property
+            client_obj = prop.client if prop else None
+            if client_obj:
+                ok, err = send_client_booking_to_admin(inspection, client_obj, prop)
+                if not ok:
+                    print(f'[email] client booking admin notify failed (non-fatal): {err}')
+        except Exception as _email_exc:
+            print(f'[email] client booking admin notify exception (non-fatal): {_email_exc}')
+
     # ── Auto-create linked Heads-Up Report ───────────────────────────────
     if data.get('create_heads_up') and inspection_type != 'heads_up':
         try:
@@ -605,6 +618,25 @@ def update_inspection(inspection_id):
         inspection.client_email_override = data['client_email_override']
     if 'typist_mode' in data:
         inspection.typist_mode = data['typist_mode'] or None  # empty string → null
+    if 'confirmed' in data:
+        newly_confirmed = bool(data['confirmed']) and not inspection.confirmed
+        inspection.confirmed = bool(data['confirmed'])
+        if inspection.confirmed:
+            from datetime import timezone as _tz
+            inspection.confirmed_at = datetime.now(_tz.utc)
+        else:
+            inspection.confirmed_at = None
+        if newly_confirmed:
+            try:
+                from routes.email_service import send_booking_confirmation_to_client
+                prop = inspection.property
+                client_obj = prop.client if prop else None
+                if client_obj:
+                    ok, err = send_booking_confirmation_to_client(inspection, client_obj, prop)
+                    if not ok:
+                        print(f'[email] booking confirmation failed (non-fatal): {err}')
+            except Exception as _conf_exc:
+                print(f'[email] booking confirmation exception (non-fatal): {_conf_exc}')
     if 'report_data' in data:
         inspection.report_data = data['report_data']
         # ── Extract overview photo from report_data and save to property ──────

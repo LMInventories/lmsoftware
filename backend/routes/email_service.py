@@ -322,6 +322,71 @@ def send_inspection_notification(event, inspection, client, property_obj):
     return _send(SMTP_FROM, recipients, subject, _wrap(body, subject))
 
 
+# ── 1b. Client booking notification to admin ────────────────────────────────
+
+ADMIN_NOTIFY_EMAIL = 'info@lminventories.co.uk'
+
+def send_client_booking_to_admin(inspection, client, property_obj):
+    """Notify info@lminventories.co.uk when a client books a new inspection."""
+    prop_addr   = getattr(property_obj, 'address', '') or '—'
+    insp_type   = _type_label(getattr(inspection, 'inspection_type', ''))
+    insp_date   = _fmt_date(getattr(inspection, 'conduct_date', None))
+    ref         = getattr(inspection, 'reference_number', '') or '—'
+    client_name = getattr(client, 'name', '—')
+    client_email = getattr(client, 'email', '—')
+    pill_c, pill_bg = PILL_COLORS['blue']
+
+    subject = f'New Booking Request — {ref}'
+    body = (
+        f'''<p style="margin:0 0 16px;font-family:Arial,Helvetica,sans-serif;font-size:17px;font-weight:bold;color:#1e293b;">New Booking Request</p>'''
+        f'''<p style="margin:0 0 16px;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#475569;">A client has submitted a new inspection booking request.</p>'''
+        + _info_table_open()
+        + _info_row('Reference', ref)
+        + _info_row('Client', f'{client_name} &lt;{client_email}&gt;')
+        + _info_row('Property', prop_addr)
+        + _info_row('Type', _pill(insp_type, pill_c, pill_bg))
+        + _info_row('Date', insp_date or 'Not specified', last=True)
+        + _info_table_close()
+        + f'''<p style="margin:12px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#475569;">Log in to the portal to assign a clerk and confirm the booking.</p>'''
+    )
+    return _send(SMTP_FROM, ADMIN_NOTIFY_EMAIL, subject, _wrap(body, subject))
+
+
+# ── 1c. Booking confirmation to client ──────────────────────────────────────
+
+def send_booking_confirmation_to_client(inspection, client, property_obj):
+    """Send a booking confirmation email to the client once an admin confirms."""
+    prop_addr   = getattr(property_obj, 'address', '') or '—'
+    beds        = getattr(property_obj, 'bedrooms', None)
+    baths       = getattr(property_obj, 'bathrooms', None)
+    prop_detail = ', '.join(filter(None, [f'{beds} bed' if beds else '', f'{baths} bath' if baths else '']))
+    insp_type   = _type_label(getattr(inspection, 'inspection_type', ''))
+    insp_date   = _fmt_date(getattr(inspection, 'conduct_date', None))
+    insp_time   = _fmt_time(getattr(inspection, 'conduct_time_preference', None))
+    clerk_name  = inspection.inspector.name if getattr(inspection, 'inspector', None) else '—'
+    ref         = getattr(inspection, 'reference_number', '') or '—'
+    pill_c, pill_bg = PILL_COLORS['green']
+
+    subject = f'Inspection Booking Confirmed — {ref}'
+    body = (
+        f'''<p style="margin:0 0 16px;font-family:Arial,Helvetica,sans-serif;font-size:17px;font-weight:bold;color:#1e293b;">Booking Confirmed</p>'''
+        f'''<p style="margin:0 0 12px;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#475569;">Dear {client.name},</p>'''
+        f'''<p style="margin:0 0 16px;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#475569;">Your inspection booking has been confirmed. Here are the details:</p>'''
+        + _info_table_open()
+        + _info_row('Reference', ref)
+        + _info_row('Property', prop_addr + (' · ' + prop_detail if prop_detail else ''))
+        + _info_row('Type', _pill(insp_type, pill_c, pill_bg))
+        + _info_row('Date', (insp_date or 'TBC') + (' at ' + insp_time if insp_time else ''))
+        + _info_row('Inspector', clerk_name, last=True)
+        + _info_table_close()
+        + '''<p style="margin:12px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#475569;">If you have any questions, please don\'t hesitate to contact us.</p>'''
+    )
+
+    override = getattr(inspection, 'client_email_override', None)
+    recipients = override if override else getattr(client, 'email', '')
+    return _send(SMTP_FROM, recipients, subject, _wrap(body, subject))
+
+
 # ── 2. Clerk daily summary ───────────────────────────────────────────────────
 
 def send_clerk_daily_summary(clerk, inspections_tomorrow):

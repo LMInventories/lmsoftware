@@ -1292,19 +1292,58 @@ def _claude_fill_room(transcript: str, section_name: str, items: list, processed
         id_list = ', '.join(f'"{pid}"' for pid in processed_ids)
         processed_note = f"""
 ══════════════════════════════════════════════════════
-ALREADY-TRANSCRIBED ITEMS — do not re-fill
+ALREADY-TRANSCRIBED ITEMS — skip unless explicitly amended
 ══════════════════════════════════════════════════════
-The following item IDs were filled in a previous transcription pass:
+The following item IDs were filled in a previous transcription pass and already have content:
   {id_list}
 
-Do NOT output these items unless the clerk explicitly says one of:
-  • "Amend [item name] ..."
-  • "Add to [item name] ..."
-  • "Return to [item name], amend ..."
-  • "Return to [item name], add ..."
-  • "Return to [item name], add sub-item ..."
-  • "[item name] Delete Item" or "[item name] Not Applicable"
-If the clerk does not explicitly address an already-transcribed item, omit it from your output entirely.
+RULE: Omit these items from your output entirely UNLESS the clerk explicitly amends, adds to,
+creates a sub-item on, or deletes them. If a chapter heading matches an already-transcribed
+item but the content that follows is a plain description or condition (no command word) — skip it.
+
+Include an already-transcribed item ONLY when the clerk uses one of these patterns:
+
+  OVERWRITE — set _descAction and/or _condAction = "overwrite":
+    "Amend [item name] [content]"
+    "Amend [item name] description [content]"
+    "Amend [item name] condition [content]"
+    "[item name]. Amend. [content]"
+    "[item name]. Amend description. [content]"
+    "[item name]. Amend condition. [content]"
+    "Return to [item name], amend, [content]"
+    "Return to [item name], amend description, [content]"
+    "Return to [item name], amend condition, [content]"
+
+  APPEND — set _descAction and/or _condAction = "append":
+    "Add to [item name] [content]"
+    "Add to [item name] description [content]"
+    "Add to [item name] condition [content]"
+    "[item name]. Add. [content]"
+    "[item name]. Add to description. [content]"
+    "[item name]. Add to condition. [content]"
+    "Return to [item name], add, [content]"
+    "Return to [item name], add to description, [content]"
+    "Return to [item name], add to condition, [content]"
+
+  SUB-ITEM — output only _subs, no _descAction/_condAction:
+    "[item name]. Sub-item. [description and condition]"
+    "[item name]. Add sub item. [description and condition]"
+    "Return to [item name], add sub item, [description and condition]"
+
+  DELETE — output only _delete: true:
+    "[item name]. Delete item."
+    "[item name]. Not Applicable."
+
+CHAPTER-HEADING AMENDMENT PATTERN — critical rule:
+When the clerk names an already-transcribed item as a CHAPTER HEADING and then IMMEDIATELY
+uses an amendment or sub-item command word ("Amend", "Add", "Sub-item"), treat this as an
+explicit amendment even if the item name is not repeated after the command word.
+  Example: "Ceiling. Amend condition. Light scratching to left wall."
+    → {{"<ceilingId>": {{"condition": "Light scratching to left wall", "_condAction": "overwrite"}}}}
+  Example: "Door and frame. Add sub item. White painted frame, light scuffing."
+    → {{"<doorId>": {{"_subs": [{{"description": "White painted frame", "condition": "Light scuffing"}}]}}}}
+  Example: "Walls. Add to condition. Some discolouration to right wall."
+    → {{"<wallsId>": {{"condition": "Some discolouration to right wall", "_condAction": "append"}}}}
 """
 
     prompt = f"""You are processing a UK property inventory inspection dictation for a single room.
@@ -1745,13 +1784,32 @@ def _claude_fill_room_damage(transcript: str, section_name: str, items: list, pr
         id_list = ', '.join(f'"{pid}"' for pid in processed_ids)
         processed_note = f"""
 ══════════════════════════════════════════════════════
-ALREADY-TRANSCRIBED ITEMS — do not re-fill
+ALREADY-TRANSCRIBED ITEMS — skip unless explicitly amended
 ══════════════════════════════════════════════════════
-The following item IDs were filled in a previous pass:
+The following item IDs were filled in a previous pass and already have condition content:
   {id_list}
 
-Omit them from output unless the clerk explicitly says "Return to [name], add sub-item ..."
-or uses an amendment command ("Amend [name] condition ...", "Add to [name] condition ...").
+Omit these items entirely UNLESS the clerk explicitly amends, adds to, creates a sub-item on,
+or deletes them. Accepted patterns:
+
+  OVERWRITE (_condAction = "overwrite"):
+    "Amend [item name] condition [content]" | "[item name]. Amend condition. [content]"
+    "Return to [item name], amend condition, [content]"
+
+  APPEND (_condAction = "append"):
+    "Add to [item name] condition [content]" | "[item name]. Add to condition. [content]"
+    "Return to [item name], add to condition, [content]"
+
+  SUB-ITEM (output only _subs):
+    "[item name]. Sub-item. [damage]" | "Return to [item name], add sub-item, [damage]"
+
+  DELETE (_delete: true):
+    "[item name]. Delete item." | "[item name]. Not Applicable."
+
+CHAPTER-HEADING PATTERN: If the clerk names an already-transcribed item as a chapter heading
+and IMMEDIATELY follows with a command word ("Amend", "Add", "Sub-item"), treat it as explicit.
+  Example: "Door and frame. Amend condition. Chip to base."
+    → {{"<doorId>": {{"condition": "Chip to base", "_condAction": "overwrite"}}}}
 """
 
     prompt = f"""You are processing a UK property DAMAGE REPORT inspection dictation for a single room.

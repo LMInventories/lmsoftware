@@ -455,6 +455,94 @@ function formatDate(dateString) {
   return convertDateToUKFormat(dateString)
 }
 
+// ── Transcription export ────────────────────────────────────────────
+const transcriptCount = computed(() => {
+  if (!inspection.value?.report_data) return 0
+  try {
+    const rd = JSON.parse(inspection.value.report_data)
+    return (rd._recordings || []).filter(r => r.transcript).length
+  } catch { return 0 }
+})
+
+function exportTranscription() {
+  let rd = {}
+  try { rd = JSON.parse(inspection.value.report_data || '{}') } catch { rd = {} }
+
+  const recs = (rd._recordings || []).filter(r => r.transcript)
+  const insp = inspection.value
+  const addr = insp.property?.address || 'Unknown property'
+  const ref  = insp.reference_number || `#${insp.id}`
+  const type = (insp.inspection_type || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+  const date = formatDate(insp.conduct_date)
+  const now  = new Date().toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'short' })
+  const div  = '─'.repeat(52)
+
+  const lines = [
+    'TRANSCRIPTION LOG',
+    div,
+    `Property:  ${addr}`,
+    `Reference: ${ref}`,
+    `Type:      ${type}`,
+    `Date:      ${date}`,
+    `Exported:  ${now}`,
+    div,
+  ]
+
+  if (!recs.length) {
+    lines.push('', 'No transcripts available for this inspection.')
+    lines.push('Transcripts are stored when recordings are processed through the AI Typist.')
+  } else {
+    for (let i = 0; i < recs.length; i++) {
+      const rec = recs[i]
+      const ts  = rec.createdAt
+        ? new Date(rec.createdAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+        : ''
+      const dur = rec.duration ? `${rec.duration}s` : ''
+      const meta = [ts, dur].filter(Boolean).join('  ·  ')
+
+      lines.push(
+        '',
+        `Recording ${i + 1} of ${recs.length}`,
+        `Item:  ${rec.label || 'Unknown'}`,
+        ...(meta ? [`Time:  ${meta}`] : []),
+        div,
+        'TRANSCRIPT (Whisper):',
+        rec.transcript || '(empty)',
+      )
+
+      if (rec.gptResult && typeof rec.gptResult === 'object') {
+        lines.push('', 'AI RESULT (Claude):')
+        const SKIP = new Set(['_subs', '_sid'])
+        for (const [key, val] of Object.entries(rec.gptResult)) {
+          if (SKIP.has(key) || val == null || val === '') continue
+          const label = key.replace(/([A-Z])/g, ' $1').replace(/^./, s => s.toUpperCase()).trim()
+          const text  = String(val).replace(/\\n/g, '\n' + ' '.repeat(13))
+          lines.push(`${label.padEnd(12)}: ${text}`)
+        }
+        const subs = rec.gptResult._subs || []
+        for (let j = 0; j < subs.length; j++) {
+          const s = subs[j]
+          lines.push(`  Sub-item ${j + 1}:`)
+          if (s.description) lines.push(`    Description: ${s.description.replace(/\\n/g, '\n               ')}`)
+          if (s.condition)   lines.push(`    Condition:   ${s.condition.replace(/\\n/g, '\n               ')}`)
+        }
+      }
+
+      lines.push(div)
+    }
+  }
+
+  const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' })
+  const url  = URL.createObjectURL(blob)
+  const a    = document.createElement('a')
+  a.href     = url
+  a.download = `transcription-${ref.replace(/[^a-z0-9]/gi, '-').toLowerCase()}-${insp.id}.txt`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
 // ── Property photo ──────────────────────────────────────────────────
 function onPhotoFileChange(e) {
   const file = e.target.files[0]
@@ -920,6 +1008,21 @@ onMounted(() => {
             </div>
             <div class="card-content">
               <p class="notes-text">{{ inspection.internal_notes || 'No notes added yet' }}</p>
+            </div>
+          </div>
+
+          <!-- TRANSCRIPTION LOG — admin only -->
+          <div class="info-card" v-if="authStore.isAdmin">
+            <div class="card-header">
+              <h3>Transcription Log</h3>
+            </div>
+            <div class="card-content">
+              <p class="notes-text" style="margin-bottom:10px;">
+                {{ transcriptCount ? `${transcriptCount} transcript${transcriptCount !== 1 ? 's' : ''} stored` : 'No transcripts stored for this inspection.' }}
+              </p>
+              <button class="btn-secondary" :disabled="!transcriptCount" @click="exportTranscription">
+                Export Transcription
+              </button>
             </div>
           </div>
 

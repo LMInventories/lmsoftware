@@ -79,6 +79,8 @@ _TRANSCRIPT_CORRECTIONS = [
     (_re.compile(r'\bUPVC\b', _re.I),             'UPVC'),
     (_re.compile(r'\byou PVC\b', _re.I),          'UPVC'),
     (_re.compile(r'\bu PVC\b', _re.I),            'UPVC'),
+    # Normalise compound words to standard UK one-word forms
+    (_re.compile(r'\blime\s+scale\b', _re.I),     'limescale'),
     # Normalise "add sub-item" variants → canonical trigger phrase "add sub item"
     (_re.compile(r'\badd sub-item\b', _re.I),     'add sub item'),
     (_re.compile(r'\badd subitem\b', _re.I),      'add sub item'),
@@ -135,9 +137,9 @@ Surface deterioration:
 
 Soiling:
   Dirty / Soiled / Grimy / Greasy / Dusty
-  Mould / Mouldy / Mold / Mildew / Mildewed / Black mould
+  Mould / Mouldy / Mildew / Mildewed / Black mould
   Damp / Dampness / Water damage / Water ingress
-  Limescale / Lime scale / Scale / Scaling / Scale build-up / Ingrained dirt
+  Limescale / Scale / Scaling / Scale build-up / Ingrained dirt
 
 Metal defects:
   Rust / Rusted / Rusty / Rusting / Corrosion / Corroded / Corroding / Tarnished / Tarnishing / Pitting / Pitted
@@ -687,23 +689,20 @@ Return ONLY valid JSON, no markdown:
 Extract description and condition from the transcript exactly as you would for a normal item,
 then return the result inside a "_subs" array with a single entry.
 
-Condition signal phrases — everything from the first match onwards is CONDITION, not description:
-  State:   "in good order", "in fair order", "in poor order", "good order", "as new", "as inventory"
-  Defect:  "loose", "slightly loose", "tight", "stiff", "sticky", "missing", "broken",
-           "light scuffing", "light marking", "light scratching", "light staining",
-           "chipped", "cracked", "scratched", "damaged", "worn", "faded",
-           "rattling", "squeaking", "bent", "rusted"
-  Functional: "tested", "appears working", "appear complete", "appears"
-
-Defect words are ALWAYS condition even when they appear without a preceding "in … order" phrase.
+Defect and state words are ALWAYS condition even when they appear without a preceding "in … order" phrase.
   Example: "chrome doorstop, slightly loose"
     → description: "Chrome doorstop"   condition: "Slightly loose"
   Example: "white door handle, missing screw"
     → description: "White door handle"   condition: "Missing screw"
 
 If no condition is mentioned, default condition to "In good order".
-Use \n to separate multiple components within description or condition.
 
+MULTI-COMPONENT FORMATTING — CRITICAL: use \\n not commas to separate components or observations:
+  CORRECT:   "White painted door\\nChrome handle"   condition: "In good order\\nLight scuffing to base"
+  INCORRECT: "White painted door, chrome handle"   condition: "In good order, light scuffing to base"
+  Commas are only acceptable within a single observation (e.g. "Scuff to base of door, left side").
+
+""" + _CONDITION_WORDS + """
 Return ONLY valid JSON, no markdown:
 {"_subs": [{"description": "...", "condition": "..."}]}"""
         else:
@@ -828,7 +827,12 @@ Instructions:
 - The clerk's terminology is professional and intentional — this is a legal document
 - ONLY remove filler sounds (um, uh, er, errr, umm, erm) — do NOT remove, shorten, or alter any actual content words
 - Do NOT summarise or abbreviate what the clerk said — reproduce their words in full
-- Use British English spelling for any connecting words you add
+- USE UK ENGLISH SPELLING THROUGHOUT — every word in your output: "discolouration" not "discoloration",
+  "colour" not "color", "mould" not "mold", "grey" not "gray", "centre" not "center"
+- MULTI-COMPONENT FORMATTING: when description or condition has multiple distinct components or observations,
+  separate each with \\n — NEVER use commas to join them.
+  CORRECT:   "White painted door\\nChrome handle"   condition: "In good order\\nLight scuffing to base"
+  INCORRECT: "White painted door, chrome handle"   condition: "In good order, light scuffing to base"
 - Only fill items that are mentioned in the transcript
 - If an item is not mentioned, omit it from the output entirely
 
@@ -890,7 +894,7 @@ def transcribe_item():
     {
       "transcript":  "White painted panel door...",
       "description": "White painted panel door with chrome handle",
-      "condition":   "Good condition",
+      "condition":   "In good order",
       "sectionId":   "abc123",
       "rowId":       "456"
     }
@@ -1971,7 +1975,8 @@ RULES:
    - "fair wear and tear" → "Fair wear and tear"
 4. ONLY remove filler sounds (um, uh, er, errr, umm, erm) and clear false starts where the clerk immediately restarts the same phrase. Do NOT remove, shorten, or paraphrase any actual content — reproduce the clerk's words in full.
 5. Only fill items that are mentioned. Omit unmentioned items entirely from the output.
-6. Use British English spelling for any connecting words.
+6. USE UK ENGLISH SPELLING THROUGHOUT — "discolouration" not "discoloration", "colour" not "color",
+   "mould" not "mold", "grey" not "gray", "centre" not "center", "limescale" not "lime scale".
 7. Capitalise the first word of each line.
 
 LINE BREAKS — THIS IS CRITICAL:
@@ -2024,7 +2029,7 @@ def transcribe_room():
     {
       "transcript": "Ceiling. Good condition, white painted...",
       "filled": {
-        "456": {"description": "White painted", "condition": "Good condition"}
+        "456": {"description": "White painted", "condition": "In good order"}
       }
     }
     """

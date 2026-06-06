@@ -5,7 +5,7 @@ POST /api/auth/forgot-password   { email }           → always 200 (no enumerat
 POST /api/auth/reset-password    { token, password } → 200 or 400
 """
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from flask import Blueprint, request, jsonify
 from models import db, User
 import os
@@ -30,7 +30,7 @@ def forgot_password():
 
     if user:
         token  = secrets.token_urlsafe(32)
-        expiry = datetime.now(timezone.utc) + timedelta(hours=1)
+        expiry = datetime.utcnow() + timedelta(hours=1)
 
         user.reset_token        = token
         user.reset_token_expiry = expiry
@@ -63,7 +63,7 @@ def reset_password():
     if not user:
         return jsonify({'error': 'This reset link is invalid or has already been used.'}), 400
 
-    if user.reset_token_expiry < datetime.now(timezone.utc):
+    if user.reset_token_expiry < datetime.utcnow():
         return jsonify({'error': 'This reset link has expired. Please request a new one.'}), 400
 
     user.set_password(password)

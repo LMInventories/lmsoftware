@@ -79,6 +79,11 @@ _TRANSCRIPT_CORRECTIONS = [
     (_re.compile(r'\bUPVC\b', _re.I),             'UPVC'),
     (_re.compile(r'\byou PVC\b', _re.I),          'UPVC'),
     (_re.compile(r'\bu PVC\b', _re.I),            'UPVC'),
+    # Normalise "add sub-item" variants → canonical trigger phrase "add sub item"
+    (_re.compile(r'\badd sub-item\b', _re.I),     'add sub item'),
+    (_re.compile(r'\badd subitem\b', _re.I),      'add sub item'),
+    # Normalise "delete item" variants (hyphen / spacing)
+    (_re.compile(r'\bdelete-item\b', _re.I),      'delete item'),
 ]
 
 def _correct_transcript(text: str) -> str:
@@ -428,7 +433,8 @@ BATHROOM ACCESSORIES:
 # NOTE: longer/more specific phrases must come before short ones so they match first.
 
 _EDIT_TRIGGERS = [
-    # Delete command — item is not applicable, remove it
+    # Delete commands — item is not in the property or not applicable
+    ('delete item',            'delete',    None),
     ('not applicable',         'delete',    None),
     # Sub-item command — treat transcript content as a new sub-item
     ('add sub item',           'add_sub',   None),
@@ -511,7 +517,7 @@ def _whisper_transcribe(audio_bytes: bytes, mime_type: str) -> tuple[str, float]
                     'induction hob, extractor fan, UPVC, double glazed, thermostatic, TRV, '
                     'fair wear and tear, in good order, in fair order, in poor order. '
                     'Commands to preserve exactly: '
-                    '"Not Applicable", "Add sub item", '
+                    '"Delete item", "Not Applicable", "Add sub item", '
                     '"Amend description", "Amend condition", '
                     '"Add to description", "Add to condition", "Amend", "Add". '
                     'Transcribe all words accurately, including technical property terms.'
@@ -561,6 +567,9 @@ VERBATIM RULES — absolute, no exceptions:
 - Convert spoken numbers to numerals: "two" → "2", "three" → "3"
 - Format quantities as "N x item": "two bulbs" → "2 x bulbs"
 - Capitalise the first word of each observation
+- USE UK ENGLISH SPELLING — this is a legal document for UK property: "discolouration" not "discoloration",
+  "colour" not "color", "centre" not "center", "neighbour" not "neighbor",
+  "recognise" not "recognize", "labelled" not "labeled", "mould" not "mold"
 - SEPARATE OBSERVATIONS ON DIFFERENT LINES: if the clerk mentions two or more distinct observations
   about different parts or fittings of the same item, put each observation on its own line using \\n
   NEVER join separate observations with a comma — use \\n instead
@@ -598,6 +607,8 @@ RULES — absolute, no exceptions:
 - Convert spoken numbers to numerals: "two" → "2", "three" → "3"
 - Format quantities as "N x item": "two marks" → "2 x marks"
 - Capitalise the first word of each line
+- USE UK ENGLISH SPELLING — this is a legal document for UK property: "discolouration" not "discoloration",
+  "colour" not "color", "centre" not "center", "mould" not "mold"
 - SEPARATE OBSERVATIONS ON DIFFERENT LINES: if the clerk mentions two or more distinct damage
   observations, put each on its own line using \\n. NEVER join with commas.
   Example: "scuff to bottom panel, chip to frame edge"
@@ -725,21 +736,22 @@ DEFAULT CONDITION RULE — this is critical:
 - WRONG: clerk says "light surface scratching" → condition: "In good order"
 - RIGHT: clerk says "light surface scratching" → condition: "Light surface scratching"
 
-MULTI-COMPONENT FORMATTING:
+MULTI-COMPONENT FORMATTING — CRITICAL: use \\n not commas to separate items:
 - If description has multiple distinct physical components, put EACH on its own line using \\n
 - A "component" is a distinct element — different surface, fitting, or object
-- ALWAYS use \\n, NEVER commas to separate components
+- ALWAYS use \\n, NEVER commas to separate components or observations
   Example: "part white ceramic tile, part grey fitted carpet with silver metal threshold"
     CORRECT:   "Part white ceramic tile\\nPart grey fitted carpet\\nSilver metal threshold"
     INCORRECT: "Part white ceramic tile, part grey fitted carpet with silver metal threshold"
   Example: "dark wood curtain rail, two green fabric floor length curtains"
     CORRECT:   "Dark wood curtain rail\\n2 x green fabric floor length curtains"
     INCORRECT: "Dark wood curtain rail, two green fabric floor length curtains"
-- Same rule applies to condition — multiple observations each get their own line:
+- Same rule applies to condition — multiple observations MUST each get their own line:
   Example: "in good order, light indentations to tiles, light wear to carpet"
     CORRECT:   "In good order\\nLight indentations to tiles\\nLight wear to carpet"
     INCORRECT: "In good order, light indentations to tiles, light wear to carpet"
-- When in doubt: if you'd use a comma between two ideas, use \\n instead
+- THE RULE: if you would use a comma between two separate ideas or observations, use \\n instead.
+  Commas are only acceptable WITHIN a single observation (e.g. "Light scuff to base of door, left side")
 
 APPLIANCE FORMATTING — for any appliance (washing machine, dishwasher, fridge, oven, hob, dryer, microwave, etc.):
 - Each attribute MUST be on its own line — NEVER merge them into a single line
@@ -767,7 +779,10 @@ CRITICAL LANGUAGE RULES:
 - This is a legal document — preserve all professional terminology exactly
 - ONLY remove filler sounds (um, uh, er, errr, umm, erm) — do NOT remove, shorten, or alter any actual content words
 - Do NOT summarise or abbreviate what the clerk said — reproduce their words in full
-- Use British English spelling
+- USE UK ENGLISH SPELLING THROUGHOUT — mandatory for every word in the output:
+  "discolouration" not "discoloration", "colour" not "color", "centre" not "center",
+  "neighbour" not "neighbor", "recognise" not "recognize", "labelled" not "labeled",
+  "mould" not "mold", "grey" not "gray", "practise" not "practice" (verb)
 {formatting_rules}
 
 {field_instructions}"""
@@ -1284,6 +1299,7 @@ Do NOT output these items unless the clerk explicitly says one of:
   • "Return to [item name], amend ..."
   • "Return to [item name], add ..."
   • "Return to [item name], add sub-item ..."
+  • "[item name] Delete Item" or "[item name] Not Applicable"
 If the clerk does not explicitly address an already-transcribed item, omit it from your output entirely.
 """
 
@@ -1309,7 +1325,9 @@ RULES:
    - "as new" or "as inventory" → preserve exactly
 4. ONLY remove filler sounds (um, uh, er, errr, umm, erm) and clear false starts where the clerk immediately restarts the same phrase (e.g. "white — white painted door" → "white painted door"). Do NOT remove, shorten, or paraphrase any actual content — reproduce the clerk's words in full.
 5. Only fill items that are mentioned. Omit unmentioned items entirely from the output.
-6. Use British English spelling for any connecting words.
+6. USE UK ENGLISH SPELLING THROUGHOUT — every word in the output must use UK spelling:
+   "discolouration" not "discoloration", "colour" not "color", "centre" not "center",
+   "mould" not "mold", "grey" not "gray", "neighbour" not "neighbor", "recognise" not "recognize".
 7. If only one piece of information is given for an item, put it in description.
 
 FORMATTING NUMBERS AND QUANTITIES:
@@ -1317,11 +1335,14 @@ FORMATTING NUMBERS AND QUANTITIES:
 - Format quantities as "N x item": "two green curtains" → "2 x green curtains"
 - Capitalise the first word of each line
 - Do NOT use bullet points or dashes
-- MULTI-COMPONENT LINES: when a description or condition contains more than one distinct component,
-  separate each component with a newline character \n — NEVER use commas to join them.
+- MULTI-COMPONENT LINES — CRITICAL: when a description or condition contains more than one distinct
+  component or observation, separate each with a newline character \n — NEVER use commas to join them.
   ✓ CORRECT:   "White painted door\nChrome lever handle\nChrome letter box"
   ✗ INCORRECT: "White painted door, chrome lever handle, chrome letter box"
-  This applies to both description and condition fields.
+  ✓ CORRECT:   "In good order\nLight scuffing to base\nLight wear to corners"
+  ✗ INCORRECT: "In good order, light scuffing to base, light wear to corners"
+  This applies to BOTH description AND condition fields without exception.
+  Commas are only acceptable within a single observation (e.g. "Light scuff to base of door, left side").
 
 APPLIANCE FORMATTING — for any appliance (washing machine, dishwasher, fridge, oven, hob, dryer, microwave, etc.):
 - Each attribute MUST be on its own line — NEVER merge them into a single line
@@ -1418,14 +1439,17 @@ condition fully closes (or the very start of the transcript). Any item-name word
 encountered before that point stay inside the current item's content.
 
 ══════════════════════════════════════════════════════
-NOT APPLICABLE — delete command
+DELETE ITEM — remove command
 ══════════════════════════════════════════════════════
-The clerk may say "[item name] Not Applicable" to mark an item as not present or irrelevant.
-When you detect this command:
+The clerk may say "[item name] Delete Item" or "[item name] Not Applicable" to mark an item
+as not present in the property.
+When you detect either command:
   - Set "_delete": true on that item's output
   - Do NOT fill description or condition — omit them
 
-Example:
+Examples:
+  "Built-in Storage. Delete Item."
+  → {{"<builtInStorageId>": {{"_delete": true}}}}
   "Fireplace. Not Applicable."
   → {{"<fireplaceId>": {{"_delete": true}}}}
 
@@ -1569,7 +1593,7 @@ If no amendment phrase — omit the action flags entirely (default behaviour = f
 Return ONLY valid JSON — no markdown, no extra text.
 Items without sub-items use the flat shape. Items WITH sub-items include the "_subs" array.
 Amendment flags are optional — only include when the clerk explicitly amends/adds.
-The "_delete" flag is only included when the clerk says "Not Applicable" for that item.
+The "_delete" flag is only included when the clerk says "Delete Item" or "Not Applicable" for that item.
 {{
   "<itemId>": {{
     "description": "...",
@@ -1657,7 +1681,9 @@ VERBATIM RULES — absolute, no exceptions:
    and include it under the parent item's "_subs" array, using the exact _sid shown above.
 6. Capitalise the first word of each observation.
 7. Only fill items/sub-items that are mentioned. Omit everything else.
-8. SEPARATE OBSERVATIONS ON DIFFERENT LINES: if the clerk mentions two or more distinct observations
+8. USE UK ENGLISH SPELLING — "discolouration" not "discoloration", "colour" not "color",
+   "mould" not "mold", "grey" not "gray", "centre" not "center".
+9. SEPARATE OBSERVATIONS ON DIFFERENT LINES: if the clerk mentions two or more distinct observations
    about different parts or fittings of the same item, put each on its own line using \\n.
    NEVER join separate observations with a comma — use \\n instead.
    Example: "handles slightly loose, one screw missing to interior handle"
@@ -1753,11 +1779,13 @@ RULES:
 6. Capitalise the first word of each line.
 7. Only fill items that are mentioned. Omit unmentioned items entirely.
 8. If a single component has multiple distinct damage observations, each goes on its own line.
+9. USE UK ENGLISH SPELLING — "discolouration" not "discoloration", "colour" not "color",
+   "mould" not "mold", "grey" not "gray", "centre" not "center".
 
 ══════════════════════════════════════════════════════
-NOT APPLICABLE
+DELETE ITEM
 ══════════════════════════════════════════════════════
-The clerk may say "[item name] Not Applicable" to mark an item as not present.
+The clerk may say "[item name] Delete Item" or "[item name] Not Applicable" to mark an item as not present.
   → Set "_delete": true on that item. Do NOT fill condition.
 
 ══════════════════════════════════════════════════════

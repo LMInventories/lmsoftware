@@ -82,8 +82,11 @@ _TRANSCRIPT_CORRECTIONS = [
     # Normalise compound words to standard UK one-word forms
     (_re.compile(r'\blime\s+scale\b', _re.I),     'limescale'),
     # Normalise "add sub-item" variants → canonical trigger phrase "add sub item"
-    (_re.compile(r'\badd sub-item\b', _re.I),     'add sub item'),
-    (_re.compile(r'\badd subitem\b', _re.I),      'add sub item'),
+    (_re.compile(r'\badd sub-items?\b', _re.I),   'add sub item'),
+    (_re.compile(r'\badd subitems?\b', _re.I),    'add sub item'),
+    (_re.compile(r'\badd a sub-?item\b', _re.I),  'add sub item'),
+    # Normalise "not seen" variants (Whisper mishearing)
+    (_re.compile(r'\bnot scene\b', _re.I),        'not seen'),
     # Normalise "delete item" variants (hyphen / spacing)
     (_re.compile(r'\bdelete-item\b', _re.I),      'delete item'),
 ]
@@ -438,6 +441,7 @@ _EDIT_TRIGGERS = [
     # Delete commands — item is not in the property or not applicable
     ('delete item',            'delete',    None),
     ('not applicable',         'delete',    None),
+    ('not seen',               'delete',    None),
     # Sub-item command — treat transcript content as a new sub-item
     ('add sub item',           'add_sub',   None),
     # Specific field amend/add
@@ -519,7 +523,7 @@ def _whisper_transcribe(audio_bytes: bytes, mime_type: str) -> tuple[str, float]
                     'induction hob, extractor fan, UPVC, double glazed, thermostatic, TRV, '
                     'fair wear and tear, in good order, in fair order, in poor order. '
                     'Commands to preserve exactly: '
-                    '"Delete item", "Not Applicable", "Add sub item", '
+                    '"Delete item", "Not Applicable", "Not seen", "Add sub item", '
                     '"Amend description", "Amend condition", '
                     '"Add to description", "Add to condition", "Amend", "Add". '
                     'Transcribe all words accurately, including technical property terms.'
@@ -1333,6 +1337,7 @@ Include an already-transcribed item ONLY when the clerk uses one of these patter
   DELETE — output only _delete: true:
     "[item name]. Delete item."
     "[item name]. Not Applicable."
+    "[item name]. Not seen."  (only when immediately after item name, not within a description)
 
 CHAPTER-HEADING AMENDMENT PATTERN — critical rule:
 When the clerk names an already-transcribed item as a CHAPTER HEADING and then IMMEDIATELY
@@ -1484,24 +1489,38 @@ encountered before that point stay inside the current item's content.
 ══════════════════════════════════════════════════════
 DELETE ITEM — remove command
 ══════════════════════════════════════════════════════
-The clerk may say "[item name] Delete Item" or "[item name] Not Applicable" to mark an item
-as not present in the property.
-When you detect either command:
+The clerk may say "[item name] Delete Item", "[item name] Not Applicable", or
+"[item name] Not seen" to mark an item as not present in the property.
+When you detect any of these commands:
   - Set "_delete": true on that item's output
   - Do NOT fill description or condition — omit them
+
+CRITICAL CONTEXT RULE FOR "not seen":
+"Not seen" is a delete command ONLY when it appears IMMEDIATELY after an item title with
+no intervening description. If it appears inside a longer passage about the item, it is
+descriptive content (e.g. referring to a serial number that could not be read) and must
+NOT trigger deletion.
+
+  ✓ DELETE: "Windows & Frames. Not seen."
+      → {{"<windowsId>": {{"_delete": true}}}}
+  ✗ NOT DELETE: "BOSCH black glass hob, model and serial number not seen."
+      → dictate normally; "not seen" refers to the serial number, not the item
 
 Examples:
   "Built-in Storage. Delete Item."
   → {{"<builtInStorageId>": {{"_delete": true}}}}
   "Fireplace. Not Applicable."
   → {{"<fireplaceId>": {{"_delete": true}}}}
+  "Windows & Frames. Not seen."
+  → {{"<windowsId>": {{"_delete": true}}}}
 
 ══════════════════════════════════════════════════════
 EXPLICIT SUB-ITEM TRIGGER — highest priority rule
 ══════════════════════════════════════════════════════
-The clerk may say "sub-item", "sub item", "next sub-item", or "add sub item" to EXPLICITLY
-signal the start of a new element within the current item.
-When you encounter any of these trigger phrases:
+The clerk may use ANY of the following phrases to EXPLICITLY signal a new sub-item:
+  "sub-item", "sub item", "next sub-item", "next sub item",
+  "add sub item", "add sub-item", "add a sub item", "add a sub-item"
+When you encounter any variation of these phrases:
   - Immediately close the current element (its description + condition are complete)
   - Begin collecting a fresh description and condition for the next _subs entry
   - Do NOT treat the trigger phrase itself as part of any description or item name
@@ -1804,7 +1823,8 @@ or deletes them. Accepted patterns:
     "[item name]. Sub-item. [damage]" | "Return to [item name], add sub-item, [damage]"
 
   DELETE (_delete: true):
-    "[item name]. Delete item." | "[item name]. Not Applicable."
+    "[item name]. Delete item." | "[item name]. Not Applicable." | "[item name]. Not seen."
+    ("Not seen" only deletes when IMMEDIATELY after the item name — not when inside a description)
 
 CHAPTER-HEADING PATTERN: If the clerk names an already-transcribed item as a chapter heading
 and IMMEDIATELY follows with a command word ("Amend", "Add", "Sub-item"), treat it as explicit.
@@ -1847,14 +1867,23 @@ RULES:
 ══════════════════════════════════════════════════════
 DELETE ITEM
 ══════════════════════════════════════════════════════
-The clerk may say "[item name] Delete Item" or "[item name] Not Applicable" to mark an item as not present.
+The clerk may say "[item name] Delete Item", "[item name] Not Applicable", or
+"[item name] Not seen" to mark an item as not present.
   → Set "_delete": true on that item. Do NOT fill condition.
+
+CRITICAL CONTEXT RULE FOR "not seen":
+"Not seen" is a delete command ONLY when it appears IMMEDIATELY after an item title with
+no intervening description. If it appears inside a longer passage about the item, it is
+descriptive content and must NOT trigger deletion.
+  ✓ DELETE: "Windows & Frames. Not seen."  → _delete: true
+  ✗ NOT DELETE: "model and serial number not seen" (within a description) → dictate normally
 
 ══════════════════════════════════════════════════════
 SUB-ITEMS
 ══════════════════════════════════════════════════════
-The clerk may say "sub-item" or "next sub-item" to start a new damage element within the
-same item (e.g. a second wall surface or a second component).
+The clerk may use ANY of these phrases to start a new damage element within the same item:
+  "sub-item", "sub item", "next sub-item", "next sub item",
+  "add sub item", "add sub-item", "add a sub item"
 Each sub-item has its own "condition" only. No description.
 
 "Return to [item name], add sub-item [damage content]"

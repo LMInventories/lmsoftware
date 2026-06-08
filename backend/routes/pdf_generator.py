@@ -44,16 +44,20 @@ from reportlab.pdfbase import pdfmetrics
 # Public entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
-def generate_inspection_pdf(inspection_id: int) -> bytes:
+def generate_inspection_pdf(inspection_id: int, deadline: float = None) -> bytes:
     """
     Generate a PDF for the given inspection and return raw bytes.
     Raises ValueError if the inspection doesn't exist.
+
+    deadline: monotonic timestamp (time.monotonic()) after which image fetches
+    are skipped rather than attempted. Pass this when calling from a
+    time-limited context (e.g. force-sync) to avoid worker timeouts.
     """
     inspection = db.session.get(Inspection, inspection_id)
     if not inspection:
         raise ValueError(f'Inspection {inspection_id} not found')
 
-    builder = _PDFBuilder(inspection)
+    builder = _PDFBuilder(inspection, deadline=deadline)
     return builder.build()
 
 
@@ -261,8 +265,9 @@ def _gallery_url(base_url, inspection_id, sid, rid):
 
 class _PDFBuilder:
 
-    def __init__(self, inspection):
-        self.inspection = inspection
+    def __init__(self, inspection, deadline: float = None):
+        self.inspection  = inspection
+        self._img_deadline = deadline  # monotonic deadline; None = unlimited
 
         self.cl   = _client_dict(inspection.property.client if inspection.property else None)
         self.prop = _prop_dict(inspection.property)
@@ -435,8 +440,11 @@ class _PDFBuilder:
                     _, b64data = url.split(',', 1)
                     raw = _b64.b64decode(b64data)
                 else:
+                    import time as _time
+                    if self._img_deadline and _time.monotonic() > self._img_deadline:
+                        return None  # time budget exhausted — skip image rather than hang
                     req = urllib.request.Request(url, headers={'User-Agent': 'InspectPro/1.0'})
-                    raw = urllib.request.urlopen(req, timeout=8).read()
+                    raw = urllib.request.urlopen(req, timeout=4).read()
                 self._img_cache[url] = _compress_image(raw)
             data = self._img_cache[url]
             buf  = io.BytesIO(data)

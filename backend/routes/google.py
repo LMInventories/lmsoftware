@@ -446,7 +446,7 @@ def drive_force_sync():
         .all()
     )
 
-    results = {'total': len(inspections), 'synced': 0, 'failed': [], 'truncated': False}
+    results  = {'total': len(inspections), 'synced': 0, 'failed': [], 'truncated': False}
     deadline = _time.monotonic() + 100  # stay inside Gunicorn's 120s timeout
 
     for insp in inspections:
@@ -455,7 +455,7 @@ def drive_force_sync():
             print(f'[drive_force_sync] time budget exhausted — stopping early')
             break
         try:
-            pdf_bytes = generate_inspection_pdf(insp.id)
+            pdf_bytes = generate_inspection_pdf(insp.id, deadline=deadline)
             ok, outcome = upload_report(insp, pdf_bytes)
             if ok:
                 results['synced'] += 1

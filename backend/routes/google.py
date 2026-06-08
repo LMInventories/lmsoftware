@@ -222,6 +222,7 @@ def is_connected() -> bool:
 @google_bp.route('/health', methods=['OPTIONS'])
 @google_bp.route('/status', methods=['OPTIONS'])
 @google_bp.route('/disconnect', methods=['OPTIONS'])
+@google_bp.route('/drive/force-sync', methods=['OPTIONS'])
 def handle_options():
     return '', 204
 
@@ -397,3 +398,67 @@ def google_disconnect():
 
     _clear_tokens()
     return jsonify({'disconnected': True})
+
+
+@google_bp.route('/drive/force-sync', methods=['POST'])
+@jwt_required()
+def drive_force_sync():
+    """
+    Re-upload completed inspection PDFs to Google Drive.
+    Used when sporadic failures leave reports unsynced.
+
+    Body (optional):
+      { "since": "2025-01-01" }  — only process inspections updated on or after this date
+                                   defaults to the last 30 days
+
+    Returns:
+      { total, synced, failed: [{id, error}, ...] }
+    """
+    import datetime as dt
+    from routes.pdf_generator import generate_inspection_pdf
+    from services.google_drive import upload_report, is_drive_connected
+    from models import Inspection
+
+    if not is_drive_connected():
+        return jsonify({'error': 'Google Drive is not connected'}), 400
+
+    body = request.get_json(silent=True) or {}
+    since_str = body.get('since')
+
+    if since_str:
+        try:
+            since = dt.datetime.fromisoformat(since_str)
+            if since.tzinfo is None:
+                since = since.replace(tzinfo=dt.timezone.utc)
+        except (ValueError, TypeError):
+            return jsonify({'error': 'Invalid date — use YYYY-MM-DD'}), 400
+    else:
+        since = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=30)
+
+    inspections = (
+        Inspection.query
+        .filter(Inspection.status == 'complete')
+        .filter(Inspection.updated_at >= since)
+        .filter(Inspection.report_data.isnot(None))
+        .order_by(Inspection.updated_at.desc())
+        .limit(100)
+        .all()
+    )
+
+    results = {'total': len(inspections), 'synced': 0, 'failed': []}
+
+    for insp in inspections:
+        try:
+            pdf_bytes = generate_inspection_pdf(insp.id)
+            ok, outcome = upload_report(insp, pdf_bytes)
+            if ok:
+                results['synced'] += 1
+                print(f'[drive_force_sync] synced inspection {insp.id}')
+            else:
+                results['failed'].append({'id': insp.id, 'error': outcome})
+                print(f'[drive_force_sync] failed inspection {insp.id}: {outcome}')
+        except Exception as e:
+            results['failed'].append({'id': insp.id, 'error': str(e)[:120]})
+            print(f'[drive_force_sync] exception on inspection {insp.id}: {e}')
+
+    return jsonify(results)

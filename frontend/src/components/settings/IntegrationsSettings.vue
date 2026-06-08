@@ -53,6 +53,26 @@ const googleStatus = ref({
 })
 const googleDisconnecting = ref(false)
 
+// ── Google Drive — Force Sync panel ──────────────────────────────────────────
+const showDrivePanel  = ref(false)
+const driveSyncDate   = ref('')
+const driveSyncing    = ref(false)
+const driveSyncResult = ref(null)   // { total, synced, failed } | { error }
+
+async function forceSyncDrive() {
+  driveSyncing.value    = true
+  driveSyncResult.value = null
+  try {
+    const body = driveSyncDate.value ? { since: driveSyncDate.value } : {}
+    const res  = await api.http.post('/api/google/drive/force-sync', body)
+    driveSyncResult.value = res.data
+  } catch (e) {
+    driveSyncResult.value = { error: 'Sync failed — check your Google connection and try again.' }
+  } finally {
+    driveSyncing.value = false
+  }
+}
+
 // ── Google Sheets — Master Sheet config ───────────────────────────────────────
 const showSheetsPanel  = ref(false)
 const masterSheetId    = ref('')
@@ -114,6 +134,11 @@ async function disconnectGoogle() {
 }
 
 onMounted(async () => {
+  // Default force-sync date to 30 days ago
+  const d = new Date()
+  d.setDate(d.getDate() - 30)
+  driveSyncDate.value = d.toISOString().slice(0, 10)
+
   await loadDepositarySettings()
   await loadGoogleStatus()
   await loadSheetsSettings()
@@ -461,6 +486,14 @@ function handleConnect(integration) {
             <button class="int-reauth-btn" @click.stop="connectGoogle" title="Re-run the Google sign-in if the connection is broken">
               Reconnect →
             </button>
+            <button
+              v-if="integration.id === 'google_drive'"
+              class="int-reauth-btn int-reauth-btn--sync"
+              @click.stop="showDrivePanel = true; driveSyncResult = null"
+              title="Re-upload completed reports that may have been missed"
+            >
+              Force Sync →
+            </button>
           </div>
 
           <!-- CTA -->
@@ -545,6 +578,55 @@ function handleConnect(integration) {
           </transition>
           <button class="btn-primary" :disabled="sheetsSaving || !googleStatus.has_sheets" @click="saveSheetsSettings">
             {{ sheetsSaving ? 'Saving…' : 'Save' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Google Drive — Force Sync panel -->
+    <div v-if="showDrivePanel" class="modal-overlay" @click.self="showDrivePanel = false">
+      <div class="modal modal--wide">
+        <div class="modal-icon" style="font-size:28px;">📂</div>
+        <h3>Force Sync to Google Drive</h3>
+        <p class="modal-sub">
+          Re-uploads completed report PDFs that may have been missed due to connection issues.
+          Only reports marked complete on or after the date below will be processed (max 100).
+        </p>
+
+        <div class="config-fields" style="margin-top:16px;">
+          <div class="config-field">
+            <label>Sync reports completed from</label>
+            <input
+              v-model="driveSyncDate"
+              type="date"
+              class="config-input"
+            />
+            <p class="field-hint">Defaults to the last 30 days. Widen the range if you suspect older reports are missing.</p>
+          </div>
+        </div>
+
+        <div v-if="driveSyncResult && !driveSyncResult.error" style="margin-top:12px; width:100%;">
+          <div class="config-status" v-if="driveSyncResult.synced > 0 || driveSyncResult.total === 0">
+            <template v-if="driveSyncResult.total === 0">
+              No completed reports found in the selected date range.
+            </template>
+            <template v-else>
+              ✅ Synced {{ driveSyncResult.synced }} of {{ driveSyncResult.total }} report{{ driveSyncResult.total !== 1 ? 's' : '' }} to Drive.
+            </template>
+          </div>
+          <div v-if="driveSyncResult.failed && driveSyncResult.failed.length" class="config-status config-status--warn" style="margin-top:8px;">
+            ⚠ {{ driveSyncResult.failed.length }} report{{ driveSyncResult.failed.length !== 1 ? 's' : '' }} could not be synced.
+            Check the server logs for details (inspection IDs: {{ driveSyncResult.failed.map(f => f.id).join(', ') }}).
+          </div>
+        </div>
+        <div v-if="driveSyncResult && driveSyncResult.error" class="config-status config-status--warn" style="margin-top:12px; width:100%;">
+          ⚠ {{ driveSyncResult.error }}
+        </div>
+
+        <div class="modal-actions">
+          <button class="btn-secondary" @click="showDrivePanel = false">Close</button>
+          <button class="btn-primary" :disabled="driveSyncing" @click="forceSyncDrive">
+            {{ driveSyncing ? 'Syncing…' : 'Sync Now' }}
           </button>
         </div>
       </div>
@@ -712,6 +794,7 @@ h2 { font-size: 18px; font-weight: 700; color: #0f172a; margin: 0 0 6px; }
   transition: all 0.15s;
 }
 .int-reauth-btn:hover { border-color: #6366f1; color: #6366f1; }
+.int-reauth-btn--sync:hover { border-color: #0369a1; color: #0369a1; }
 
 .int-btn {
   margin-top: 4px; padding: 7px 14px;

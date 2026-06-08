@@ -33,7 +33,8 @@
       "Bash(python -c \"import ast; ast.parse\\(open\\('C:/Projects/lmsoftware/backend/routes/pdf_import.py'\\).read\\(\\)\\); print\\('pdf_import.py OK'\\)\")",
       "Bash(python *)",
       "Bash(Get-ChildItem -Force)",
-      "PowerShell(head *)"
+      "PowerShell(head *)",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Projects\\\\lmsoftware\" -Directory | Select-Object -First 20 | ForEach-Object { $_.Name })"
     ]
   }
 }

@@ -618,6 +618,9 @@ function handleConnect(integration) {
             ⚠ {{ driveSyncResult.failed.length }} report{{ driveSyncResult.failed.length !== 1 ? 's' : '' }} could not be synced.
             Check the server logs for details (inspection IDs: {{ driveSyncResult.failed.map(f => f.id).join(', ') }}).
           </div>
+          <div v-if="driveSyncResult.truncated" class="config-status config-status--warn" style="margin-top:8px;">
+            ⚠ Not all reports were processed — the sync hit the time limit. Click Sync Now again to continue.
+          </div>
         </div>
         <div v-if="driveSyncResult && driveSyncResult.error" class="config-status config-status--warn" style="margin-top:12px; width:100%;">
           ⚠ {{ driveSyncResult.error }}

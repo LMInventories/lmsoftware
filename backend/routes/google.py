@@ -415,6 +415,7 @@ def drive_force_sync():
       { total, synced, failed: [{id, error}, ...] }
     """
     import datetime as dt
+    import time as _time
     from routes.pdf_generator import generate_inspection_pdf
     from services.google_drive import upload_report, is_drive_connected
     from models import Inspection
@@ -445,9 +446,14 @@ def drive_force_sync():
         .all()
     )
 
-    results = {'total': len(inspections), 'synced': 0, 'failed': []}
+    results = {'total': len(inspections), 'synced': 0, 'failed': [], 'truncated': False}
+    deadline = _time.monotonic() + 100  # stay inside Gunicorn's 120s timeout
 
     for insp in inspections:
+        if _time.monotonic() > deadline:
+            results['truncated'] = True
+            print(f'[drive_force_sync] time budget exhausted — stopping early')
+            break
         try:
             pdf_bytes = generate_inspection_pdf(insp.id)
             ok, outcome = upload_report(insp, pdf_bytes)

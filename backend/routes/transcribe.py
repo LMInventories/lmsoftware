@@ -2211,6 +2211,205 @@ def transcribe_room():
     })
 
 
+@transcribe_bp.route('/condition-summary', methods=['POST'])
+@jwt_required()
+def generate_condition_summary():
+    """
+    Generate a Condition Summary from the filled room inspection data.
+    No audio involved — reads existing report content and synthesises notable issues.
+
+    Request JSON:
+    {
+      "inspectionId": 123,
+      "sections": [
+        {
+          "name": "Kitchen",
+          "items": [
+            { "name": "Ceiling", "description": "White emulsion", "condition": "In good order" },
+            { "name": "Floor",   "description": "Grey vinyl",     "condition": "Worn to entrance",
+              "subs": [{ "description": "Silver threshold", "condition": "Light scratching" }] }
+          ]
+        }
+      ],
+      "summaryItems": [
+        { "id": "fs_2_0", "name": "General Property Condition" }
+      ]
+    }
+
+    Response JSON:
+    {
+      "filled": {
+        "fs_2_0": { "condition": "Worn vinyl flooring to Kitchen entrance\\nLight scuffing to walls in Hallway" }
+      }
+    }
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': 'No data provided'}), 400
+
+    sections     = data.get('sections', [])
+    summary_items = data.get('summaryItems', [])
+    inspection_id = int(data['inspectionId']) if data.get('inspectionId') else None
+
+    if not sections:
+        return jsonify({'error': 'No inspection data provided'}), 400
+    if not summary_items:
+        return jsonify({'error': 'No condition summary items provided'}), 400
+
+    if not os.environ.get('ANTHROPIC_API_KEY'):
+        return jsonify({'error': 'ANTHROPIC_API_KEY not configured on server'}), 503
+
+    # ── Format inspection findings as readable text ────────────────────────
+    lines = []
+    for section in sections:
+        sec_name  = section.get('name', 'Room')
+        sec_items = section.get('items', [])
+        if not sec_items:
+            continue
+        sec_lines = []
+        for item in sec_items:
+            item_name = item.get('name', 'Item')
+            desc      = (item.get('description') or '').strip()
+            cond      = (item.get('condition') or '').strip()
+            if not desc and not cond:
+                continue
+            entry = f'  - {item_name}'
+            if desc:
+                entry += f': {desc}'
+            if cond:
+                entry += f' | {cond}'
+            sec_lines.append(entry)
+            for sub in item.get('subs', []):
+                sub_desc = (sub.get('description') or '').strip()
+                sub_cond = (sub.get('condition') or '').strip()
+                if sub_desc or sub_cond:
+                    sub_entry = '    ↳'
+                    if sub_desc:
+                        sub_entry += f' {sub_desc}'
+                    if sub_cond:
+                        sub_entry += f' | {sub_cond}'
+                    sec_lines.append(sub_entry)
+        if sec_lines:
+            lines.append(f'\n=== {sec_name} ===')
+            lines.extend(sec_lines)
+
+    inspection_text = '\n'.join(lines) if lines else 'No room data available.'
+
+    items_list = '\n'.join(
+        f'  - ID: "{item["id"]}", Name: "{item["name"]}"'
+        for item in summary_items
+    )
+
+    client = anthropic.Anthropic(api_key=os.environ.get('ANTHROPIC_API_KEY'))
+
+    prompt = f"""You are writing a Condition Summary for a UK property inspection report.
+
+Read the room-by-room findings below and produce a tight, line-by-line list of significant issues only.
+Each line is a separate observation. No paragraphs. No filler.
+
+INSPECTION FINDINGS:
+{inspection_text}
+
+CONDITION SUMMARY ITEMS — map your output to these (use each ID as the JSON key):
+{items_list}
+
+══════════════════════════════════════════════════
+SEVERITY FILTER — the most important rule
+══════════════════════════════════════════════════
+Only include observations that require attention or are genuinely notable.
+
+INCLUDE — major issues:
+  Damage at moderate level or worse: chips, cracks, breaks, gouges, splits, holes, burns
+  Structural concerns: damp, mould, water damage, water ingress, cracking plaster
+  Missing items or fittings
+  Non-functional items: no power, seized, jammed, does not operate, stuck
+  Failed finishes: failed silicone, cracked or missing grout, heavy peeling paint
+  Hardware faults: dropped hinges, dropped door, broken lock or handle
+
+EXCLUDE — minor, routine, cosmetic:
+  Anything preceded by "light", "slight", "minor", or "superficial":
+    light scuffing, light scratching, light marking, light surface marks, light limescale — ALL excluded
+  Fair wear and tear — always excluded
+  In good order / in fair order / as new / as inventory — always excluded
+  Tested and working (used only in LIGHTING and APPLIANCE lines below, nowhere else)
+
+RULE: if the word "light" or "slight" or "minor" or "superficial" precedes a defect — skip it entirely.
+
+══════════════════════════════════════════════════
+LIGHTING — fixed rules, always apply
+══════════════════════════════════════════════════
+If ANY lighting items appear anywhere in the findings:
+  1. Write exactly: "Lighting — tested for power"
+  2. Scan every lighting item across all rooms for expired, blown, or missing bulbs.
+     If any are found: write "[N] x bulb(s) expired" and name the room(s).
+     Example: "2 x bulbs expired in Bedroom 2 and Landing"
+  3. Do NOT write any other lighting line unless a fitting is broken or completely non-functional.
+
+══════════════════════════════════════════════════
+APPLIANCES — fixed rules, always apply
+══════════════════════════════════════════════════
+If ANY appliances appear anywhere in the findings (oven, hob, extractor, dishwasher,
+washing machine, fridge, freezer, dryer, microwave, etc.):
+  1. Write exactly: "Appliances — tested for power"
+  2. For each appliance that has no power, is non-functional, or has major physical damage:
+     write a specific line naming the appliance and room.
+     Examples: "No power to extractor fan in Kitchen"
+               "Heavy cracking to freezer drawers in Kitchen"
+  3. Do NOT write other appliance lines for minor wear or routine observations.
+
+══════════════════════════════════════════════════
+FORMATTING
+══════════════════════════════════════════════════
+- One observation per line, separated by \\n. No bullet points.
+- Be specific: name the room and item — "Chipping to wood flooring in Bedroom 1" not "floor damage"
+- Consolidate the same defect across rooms into one line:
+    CORRECT: "Chipping to wood flooring in Bedroom 1 and Kitchen"
+    WRONG:   two separate lines for each room
+- If a summary item name suggests a specific area (e.g. "Kitchen", "Bathrooms"), map only relevant
+  findings there. If it is general (e.g. "General Condition", "Overall"), include everything.
+- If there are no notable issues for an item, return an empty string for it.
+- Capitalise the first word of each line.
+- UK English spelling: "discolouration", "colour", "grey", "mould", "centre" etc.
+
+Return ONLY valid JSON — no markdown, no extra text:
+{{
+  "<itemId>": {{"condition": "Lighting — tested for power\\n2 x bulbs expired in Bedroom 2\\nChipping to wood flooring in Bedroom 1"}}
+}}"""
+
+    message = client.messages.create(
+        model='claude-haiku-4-5',
+        max_tokens=1200,
+        messages=[{'role': 'user', 'content': prompt}]
+    )
+
+    raw = message.content[0].text.strip()
+    raw = raw.replace('```json', '').replace('```', '').strip()
+
+    try:
+        filled = json.loads(_sanitise_json(raw))
+    except json.JSONDecodeError:
+        print(f'[condition-summary] JSON parse error: {raw[:200]}')
+        return jsonify({'error': 'AI returned an invalid response — please try again'}), 500
+
+    # Log usage
+    try:
+        usage_log = TranscriptionUsage(
+            call_type     = 'item',
+            inspection_id = inspection_id,
+            user_id       = int(get_jwt_identity()),
+            audio_seconds = 0,
+            input_tokens  = message.usage.input_tokens  if message.usage else 0,
+            output_tokens = message.usage.output_tokens if message.usage else 0,
+            section_type  = 'condition_summary',
+        )
+        db.session.add(usage_log)
+        db.session.commit()
+    except Exception:
+        pass
+
+    return jsonify({'filled': filled})
+
+
 @transcribe_bp.route('/full', methods=['POST'])
 @jwt_required()
 def transcribe_full():

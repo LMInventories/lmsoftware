@@ -1,5 +1,5 @@
 ﻿<script setup>
-import { ref, onMounted, computed, watch } from 'vue'
+import { ref, onMounted, computed, watch, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import api from '../services/api'
 import { useToast } from '../composables/useToast'
@@ -334,9 +334,17 @@ const filteredInspections = computed(() => {
   return result
 })
 
+const propertySearchQuery = ref('')
+
 const filteredProperties = computed(() => {
-  if (!form.value.client_id) return properties.value
-  return properties.value.filter(p => p.client_id === form.value.client_id)
+  let props = form.value.client_id
+    ? properties.value.filter(p => p.client_id === form.value.client_id)
+    : properties.value
+  if (propertySearchQuery.value.trim()) {
+    const q = propertySearchQuery.value.trim().toLowerCase()
+    props = props.filter(p => p.address && p.address.toLowerCase().includes(q))
+  }
+  return props
 })
 
 const clerks = computed(() => users.value.filter(u => u.role === 'clerk'))
@@ -536,6 +544,7 @@ async function fetchUsers() {
 }
 
 function openModal() {
+  propertySearchQuery.value = ''
   conductDateDisplay.value = ''
   form.value = {
     client_id: authStore.isClient ? authStore.user.client_id : null,
@@ -561,6 +570,7 @@ function openModal() {
 
 function onClientChange() {
   form.value.property_id = null
+  propertySearchQuery.value = ''
   lifecycleSuggestion.value = null
   form.value.source_inspection_id = null
 }
@@ -626,7 +636,7 @@ function viewInspection(id) {
   router.push(`/inspections/${id}`)
 }
 
-onMounted(() => {
+onMounted(async () => {
   // Pre-apply status filter if navigated from a dashboard workflow card
   const statusParam = route.query.status
   if (statusParam) {
@@ -637,12 +647,33 @@ onMounted(() => {
   }
 
   fetchInspections()
-  fetchProperties()
-  if (!authStore.isClient) {
-    fetchClients()
-    fetchUsers()
+
+  const doAutoOpen  = route.query.autoOpen === '1'
+  const qClientId   = doAutoOpen && route.query.clientId   ? Number(route.query.clientId)   : null
+  const qPropertyId = doAutoOpen && route.query.propertyId ? Number(route.query.propertyId) : null
+
+  if (doAutoOpen) {
+    // Wait for the data the modal needs before opening it
+    await Promise.all([
+      fetchProperties(),
+      !authStore.isClient ? fetchClients()   : Promise.resolve(),
+      !authStore.isClient ? fetchUsers()     : Promise.resolve(),
+      fetchTemplates()
+    ])
+    openModal()
+    if (qClientId) {
+      form.value.client_id = qClientId
+      await nextTick()   // let filteredProperties recompute before setting property
+    }
+    if (qPropertyId) form.value.property_id = qPropertyId
+  } else {
+    fetchProperties()
+    if (!authStore.isClient) {
+      fetchClients()
+      fetchUsers()
+    }
+    fetchTemplates()
   }
-  fetchTemplates()
 })
 </script>
 
@@ -911,6 +942,14 @@ onMounted(() => {
               <!-- Property -->
               <div class="form-group">
                 <label>Property *</label>
+                <input
+                  v-if="form.client_id"
+                  v-model="propertySearchQuery"
+                  type="text"
+                  placeholder="Filter by address..."
+                  class="prop-filter-input"
+                  autocomplete="off"
+                />
                 <select v-model="form.property_id" required :disabled="!form.client_id">
                   <option :value="null" disabled>
                     {{ form.client_id ? 'Select a property...' : 'Select a portfolio first' }}
@@ -920,7 +959,7 @@ onMounted(() => {
                   </option>
                 </select>
                 <p v-if="form.client_id && filteredProperties.length === 0" class="helper-text">
-                  No properties found for this portfolio.
+                  No properties found{{ propertySearchQuery ? ' matching your search' : ' for this portfolio' }}.
                 </p>
               </div>
 
@@ -1659,6 +1698,27 @@ onMounted(() => {
 
 .helper-text { font-size: 12px; color: #64748b; }
 .helper-text.warning { color: #f59e0b; font-weight: 600; }
+
+.prop-filter-input {
+  padding: 7px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 7px 7px 0 0;
+  border-bottom: none;
+  font-size: 13px;
+  font-family: inherit;
+  color: #1e293b;
+  background: #f8fafc;
+  width: 100%;
+  box-sizing: border-box;
+}
+.prop-filter-input:focus {
+  outline: none;
+  border-color: #6366f1;
+  background: #fff;
+}
+.prop-filter-input + select {
+  border-radius: 0 0 7px 7px;
+}
 
 .time-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .time-select { width: 80px; padding: 7px 10px; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 14px; font-family: inherit; }

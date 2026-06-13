@@ -1242,8 +1242,17 @@ _DEFAULT_GLOBAL_FIXED = [
     {'name': 'Smoke & Carbon Alarms',  'enabled': True, 'columns': ['name', 'answer', 'condition'],             'items': []},
     {'name': 'Fire Door Safety',       'enabled': True, 'columns': ['name', 'answer', 'condition'],             'items': []},
     {'name': 'Health & Safety',        'enabled': True, 'columns': ['name', 'answer', 'description'],           'items': []},
-    {'name': 'Keys',                   'enabled': True, 'columns': ['name', 'description'],                     'items': []},
-    {'name': 'Utility Meter Readings', 'enabled': True, 'columns': ['name', 'location_serial', 'reading'],      'items': []},
+    {'name': 'Keys',                   'enabled': True, 'columns': ['name', 'description'],                     'items': [
+        {'name': 'Full Sets',           'description': ''},
+        {'name': 'Access at Check In',  'description': ''},
+        {'name': 'Access at Check Out', 'description': ''},
+    ]},
+    {'name': 'Utility Meter Readings', 'enabled': True, 'columns': ['name', 'location_serial', 'reading'],      'items': [
+        {'name': 'Gas Meter',      'location_serial': '', 'reading': ''},
+        {'name': 'Electric Meter', 'location_serial': '', 'reading': ''},
+        {'name': 'Water Meter',    'location_serial': '', 'reading': ''},
+        {'name': 'Heat Meter',     'location_serial': '', 'reading': ''},
+    ]},
 ]
 
 def _get_global_fixed_sections():
@@ -1288,6 +1297,33 @@ _FS_FIELD_MAP = {
     'health_safety':     ['answer', 'notes'],
     'fire_door_safety':  ['answer', 'notes'],
 }
+
+
+def _meter_classifier(name):
+    """Normalize a meter name to a canonical utility type for fuzzy matching.
+    Handles variations like 'Electricity Meter' → same bucket as 'Electric Meter'."""
+    n = (name or '').lower()
+    if 'electric' in n or 'electricity' in n:
+        return 'electric'
+    if 'gas' in n:
+        return 'gas'
+    if 'water' in n:
+        return 'water'
+    if 'heat' in n:
+        return 'heat'
+    return n.strip()
+
+
+def _key_classifier(name):
+    """Normalize a key/access row name to a canonical type for fuzzy matching."""
+    n = re.sub(r'[\s\-]', '', (name or '').lower())
+    if 'checkin' in n:
+        return 'checkin'
+    if 'checkout' in n:
+        return 'checkout'
+    if 'fullset' in n:
+        return 'fullsets'
+    return n.strip()
 
 
 def _build_template_from_pdf(pdf_rooms, inspection):
@@ -1728,6 +1764,10 @@ def _apply_pdf_fixed_sections(report_data, pdf_fixed, pdf_file_name,
     for pdf_type, pdf_rows in pdf_fixed.items():
         if not isinstance(pdf_rows, list) or not pdf_rows:
             continue
+        # Never overwrite Condition Summary or Cleaning Summary from PDF —
+        # these are filled in by the clerk during the inspection itself.
+        if pdf_type in ('condition_summary', 'cleaning_summary'):
+            continue
         match = type_to_global.get(pdf_type)
         if not match:
             continue
@@ -1735,35 +1775,84 @@ def _apply_pdf_fixed_sections(report_data, pdf_fixed, pdf_file_name,
         sec_id = f'fs_{sec_idx}_{_fs_slug(gsec["name"])}'
 
         if pdf_type == 'meter_readings':
-            # Meter readings use _extra rows so the name and both data fields
-            # are always visible regardless of predefined template items.
-            report_data[sec_id] = {'_extra': []}
-            for i, pdf_row in enumerate(pdf_rows):
+            # Match each PDF meter row to the closest predefined template item by
+            # utility type (handles "Electricity Meter" → "Electric Meter" etc.).
+            # Matched rows fill the predefined slot; unmatched overflow to _extra.
+            template_items = gsec.get('items') or []
+            report_data[sec_id] = {}
+            used_item_indices = set()
+            extra = []
+            meter_row_refs = []  # ordered refs for photo attachment
+
+            for pdf_row in pdf_rows:
                 if not isinstance(pdf_row, dict):
                     pdf_row = {}
-                eid = f'pdf_fs_{sec_idx}_{i}'
-                report_data[sec_id]['_extra'].append({
-                    '_eid':          eid,
-                    'name':          pdf_row.get('name', ''),
-                    'locationSerial': pdf_row.get('locationSerial', ''),
-                    'reading':       pdf_row.get('reading', ''),
-                })
+                pdf_key = _meter_classifier(pdf_row.get('name', ''))
+                matched_idx = next(
+                    (i for i, item in enumerate(template_items)
+                     if i not in used_item_indices
+                     and _meter_classifier(item.get('name', '')) == pdf_key),
+                    None
+                )
+                if matched_idx is not None:
+                    used_item_indices.add(matched_idx)
+                    row_id = f'fs_{sec_idx}_{matched_idx}'
+                    row_data = {
+                        'reading':        pdf_row.get('reading', ''),
+                        'locationSerial': pdf_row.get('locationSerial', ''),
+                    }
+                    report_data[sec_id][row_id] = row_data
+                    meter_row_refs.append(row_data)
+                else:
+                    entry = {
+                        '_eid':           f'pdf_fs_{sec_idx}_{len(extra)}',
+                        'name':           pdf_row.get('name', ''),
+                        'locationSerial': pdf_row.get('locationSerial', ''),
+                        'reading':        pdf_row.get('reading', ''),
+                    }
+                    extra.append(entry)
+                    meter_row_refs.append(entry)
+
+            if extra:
+                report_data[sec_id]['_extra'] = extra
 
         elif pdf_type == 'keys':
-            # Keys also use _extra so the key name and description are both shown.
-            report_data[sec_id] = {'_extra': []}
-            for i, pdf_row in enumerate(pdf_rows):
+            # Match each PDF key row to the closest predefined template item by
+            # key type (handles "Keys at Check In" → "Access at Check In" etc.).
+            # Matched rows fill the predefined slot; unmatched overflow to _extra.
+            template_items = gsec.get('items') or []
+            report_data[sec_id] = {}
+            used_item_indices = set()
+            extra = []
+
+            for pdf_row in pdf_rows:
                 if not isinstance(pdf_row, dict):
                     pdf_row = {}
-                eid = f'pdf_fs_{sec_idx}_{i}'
-                report_data[sec_id]['_extra'].append({
-                    '_eid':        eid,
-                    'name':        pdf_row.get('name', ''),
-                    'description': pdf_row.get('description', ''),
-                })
+                pdf_key = _key_classifier(pdf_row.get('name', ''))
+                matched_idx = next(
+                    (i for i, item in enumerate(template_items)
+                     if i not in used_item_indices
+                     and _key_classifier(item.get('name', '')) == pdf_key),
+                    None
+                )
+                if matched_idx is not None:
+                    used_item_indices.add(matched_idx)
+                    row_id = f'fs_{sec_idx}_{matched_idx}'
+                    report_data[sec_id][row_id] = {
+                        'description': pdf_row.get('description', ''),
+                    }
+                else:
+                    extra.append({
+                        '_eid':        f'pdf_fs_{sec_idx}_{len(extra)}',
+                        'name':        pdf_row.get('name', ''),
+                        'description': pdf_row.get('description', ''),
+                    })
+
+            if extra:
+                report_data[sec_id]['_extra'] = extra
 
         else:
-            # condition_summary, cleaning_summary, etc. — write to predefined row slots
+            # smoke_alarms, fire_door_safety, health_safety — write to predefined row slots
             fields = _FS_FIELD_MAP.get(pdf_type, ['condition'])
             report_data[sec_id] = {}
             for i, pdf_row in enumerate(pdf_rows):
@@ -1776,7 +1865,7 @@ def _apply_pdf_fixed_sections(report_data, pdf_fixed, pdf_file_name,
 
         # Attach photos extracted from the relevant PDF page to this section.
         # Keys photos all go to the section's _overview strip.
-        # Meter photos are matched by order to each individual meter _extra row,
+        # Meter photos are matched by order to each meter row (predefined or extra),
         # then any remainder goes to _overview.
         if pdf_type == 'keys' and keys_photos:
             if not isinstance(report_data[sec_id].get('_overview'), dict):
@@ -1785,11 +1874,9 @@ def _apply_pdf_fixed_sections(report_data, pdf_fixed, pdf_file_name,
             print(f'[apply-pdf-import] attached {len(keys_photos)} keys photo(s) → {sec_id}')
 
         elif pdf_type == 'meter_readings' and meter_photos:
-            extra_rows = report_data[sec_id].get('_extra') or []
-            # Attach one photo per meter row (by order), overflow to _overview
             for i, url in enumerate(meter_photos):
-                if i < len(extra_rows):
-                    extra_rows[i].setdefault('_photos', []).append(url)
+                if i < len(meter_row_refs):
+                    meter_row_refs[i].setdefault('_photos', []).append(url)
                 else:
                     if not isinstance(report_data[sec_id].get('_overview'), dict):
                         report_data[sec_id]['_overview'] = {}

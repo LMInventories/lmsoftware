@@ -213,12 +213,12 @@ function openEditModal(property) {
   showModal.value = true
 }
 
-async function handleSubmit() {
+async function saveProperty() {
   const address = buildAddress()
-  if (!form.value.address_line1.trim()) { toast.warning('Address Line 1 is required'); return }
-  if (!form.value.postcode.trim()) { toast.warning('Postcode is required'); return }
-  if (!address) { toast.warning('Address is required'); return }
-  if (!form.value.client_id) { toast.warning('Client is required'); return }
+  if (!form.value.address_line1.trim()) { toast.warning('Address Line 1 is required'); return null }
+  if (!form.value.postcode.trim()) { toast.warning('Postcode is required'); return null }
+  if (!address) { toast.warning('Address is required'); return null }
+  if (!form.value.client_id) { toast.warning('Client is required'); return null }
   const payload = {
     address,
     property_type: 'residential',
@@ -237,10 +237,37 @@ async function handleSubmit() {
     client_id: form.value.client_id
   }
   try {
-    if (editingProperty.value) { await api.updateProperty(editingProperty.value.id, payload); toast.success('Property updated') }
-    else { await api.createProperty(payload); toast.success('Property created') }
-    showModal.value = false; fetchProperties()
-  } catch (e) { console.error(e); toast.error('Failed to save property') }
+    if (editingProperty.value) {
+      await api.updateProperty(editingProperty.value.id, payload)
+      toast.success('Property updated')
+      return { id: editingProperty.value.id, client_id: form.value.client_id }
+    } else {
+      const res = await api.createProperty(payload)
+      toast.success('Property created')
+      return res.data
+    }
+  } catch (e) { console.error(e); toast.error('Failed to save property'); return null }
+}
+
+async function handleSubmit() {
+  const saved = await saveProperty()
+  if (!saved) return
+  showModal.value = false
+  fetchProperties()
+}
+
+async function handleSubmitAndAddInspection() {
+  const saved = await saveProperty()
+  if (!saved) return
+  showModal.value = false
+  router.push({
+    path: '/inspections',
+    query: {
+      autoOpen: '1',
+      clientId: String(form.value.client_id),
+      ...(saved.id ? { propertyId: String(saved.id) } : {})
+    }
+  })
 }
 
 async function deleteProperty(id) {
@@ -602,6 +629,7 @@ onMounted(() => { fetchProperties(); fetchClients() })
 
           <div class="modal-footer">
             <button type="button" @click="showModal = false" class="btn-secondary">Cancel</button>
+            <button v-if="!editingProperty" type="button" @click="handleSubmitAndAddInspection" class="btn-inspect">Create Property &amp; Add Inspection</button>
             <button type="submit" class="btn-primary">{{ editingProperty ? 'Update' : 'Create' }} Property</button>
           </div>
         </form>
@@ -744,8 +772,10 @@ h1 { font-size: 21px; font-weight: 700; color: #0f172a; margin: 0 0 2px; }
 .meter-field input { flex: 1; padding: 6px 10px; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 12px; font-family: inherit; color: #1e293b; }
 .meter-field input:focus { outline: none; border-color: #6366f1; }
 
-.modal-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 22px; border-top: 1px solid #e5e7eb; background: #f8fafc; }
+.modal-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 22px; border-top: 1px solid #e5e7eb; background: #f8fafc; flex-wrap: wrap; }
 .btn-secondary { padding: 7px 14px; background: white; color: #64748b; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; }
+.btn-inspect { padding: 7px 14px; background: #ecfdf5; color: #047857; border: 1px solid #6ee7b7; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.btn-inspect:hover { background: #d1fae5; border-color: #34d399; }
 
 @media (max-width: 900px) { .map-view { grid-template-columns: 1fr; } .map-bg { min-height: 300px; } }
 @media (max-width: 640px) { .modal-cols { grid-template-columns: 1fr; } .modal-col-divider { border-left: none; border-top: 1px solid #f1f5f9; } }

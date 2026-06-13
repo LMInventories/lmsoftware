@@ -394,6 +394,36 @@ def _setup_database():
         except Exception:
             pass
 
+    # ── Ensure fixed_sections has Access at Check In and Heat Meter items ────────
+    # Adds missing items to Keys and Utility Meter Readings without resetting
+    # any other user customisations.
+    _fs = SystemSetting.query.filter_by(key='fixed_sections').first()
+    if _fs and _fs.value:
+        try:
+            _fs_data = json.loads(_fs.value)
+            _fs_changed = False
+            for _sec in _fs_data:
+                _items = _sec.get('items') or []
+                _names = [i.get('name', '') for i in _items]
+                if _sec.get('name') == 'Keys':
+                    if 'Access at Check In' not in _names:
+                        # Insert after Full Sets (index 1)
+                        _insert_at = next((i+1 for i, n in enumerate(_names) if n == 'Full Sets'), len(_items))
+                        _items.insert(_insert_at, {'name': 'Access at Check In', 'description': ''})
+                        _sec['items'] = _items
+                        _fs_changed = True
+                elif _sec.get('name') == 'Utility Meter Readings':
+                    if 'Heat Meter' not in _names:
+                        _items.append({'name': 'Heat Meter', 'location_serial': '', 'reading': ''})
+                        _sec['items'] = _items
+                        _fs_changed = True
+            if _fs_changed:
+                _fs.value = json.dumps(_fs_data)
+                db.session.commit()
+                print('✅ Migrated fixed_sections: added Access at Check In / Heat Meter.')
+        except Exception:
+            pass
+
     # ── Performance indexes ────────────────────────────────────────────────────────
     # CREATE INDEX IF NOT EXISTS is safe to run on every boot — a no-op when the
     # index already exists. These cover the most frequent filter/join columns so

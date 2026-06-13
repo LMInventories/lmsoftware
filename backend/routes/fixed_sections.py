@@ -57,8 +57,9 @@ DEFAULT_FIXED_SECTIONS = [
         "enabled": True,
         "columns": ["name", "description"],
         "items": [
-            {"name": "Full Sets",           "description": ""},
-            {"name": "Access at Check Out", "description": ""},
+            {"name": "Full Sets",            "description": ""},
+            {"name": "Access at Check In",   "description": ""},
+            {"name": "Access at Check Out",  "description": ""},
         ]
     },
     {
@@ -69,6 +70,7 @@ DEFAULT_FIXED_SECTIONS = [
             {"name": "Gas Meter",      "location_serial": "", "reading": ""},
             {"name": "Electric Meter", "location_serial": "", "reading": ""},
             {"name": "Water Meter",    "location_serial": "", "reading": ""},
+            {"name": "Heat Meter",     "location_serial": "", "reading": ""},
         ]
     },
 ]

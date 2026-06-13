@@ -439,9 +439,10 @@ BATHROOM ACCESSORIES:
 
 _EDIT_TRIGGERS = [
     # Delete commands — item is not in the property or not applicable
+    ('not seen',               'delete',    None),
+    ('not scene',              'delete',    None),   # common Whisper mishearing of "not seen"
     ('delete item',            'delete',    None),
     ('not applicable',         'delete',    None),
-    ('not seen',               'delete',    None),
     # Sub-item command — treat transcript content as a new sub-item
     ('add sub item',           'add_sub',   None),
     # Specific field amend/add
@@ -943,6 +944,16 @@ def transcribe_item():
 
         # Detect edit-mode trigger phrases before passing to Claude
         edit_mode, edit_field, transcript = _detect_edit_mode(raw_transcript)
+
+        # Check Out inspections do not support delete or add-sub commands.
+        # "Not seen" at check-out means the item was there at check-in but is now missing —
+        # it is meaningful condition content, not a deletion trigger.
+        # Items must never be deleted from a check-out report.
+        if is_check_out and edit_mode in ('delete', 'add_sub'):
+            edit_mode = 'normal'
+            edit_field = None
+            transcript = raw_transcript
+
         print(f'[transcribe/item] edit_mode={edit_mode!r} field={edit_field!r} transcript={transcript[:60]!r}')
 
         # ── Delete: "Not Applicable" — no Claude call needed ──────────────

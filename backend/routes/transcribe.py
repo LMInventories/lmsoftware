@@ -2343,20 +2343,18 @@ ITEM-TYPE RULES — read the item name and apply the matching rule
 ════════════════════════════════════════════════════
 
 OVERVIEW  (item name contains "overview", "description of property", or "property description"):
-  Write a single sentence describing the property.
-  Use the PROPERTY DETAILS above. Format:
-    "Property is a [X]-bedroom, [Y]-bathroom [furnished/unfurnished/part furnished] [type]."
-  Add any notable outdoor spaces mentioned in the inspection findings (e.g. "with garden", "with balcony").
-  If a detail is unknown, omit it. Do not pull from inspection findings for this item.
+  Write a single sentence describing the property using PROPERTY DETAILS above.
+  Format: "Property is a [X]-bedroom, [Y]-bathroom [furnished/unfurnished/part furnished] [type]."
+  Where [type] is the property type from PROPERTY DETAILS (e.g. flat, house, apartment, bungalow).
+  If the inspection findings include outdoor features such as a garden, garage, balcony, or terrace, append them
+  to the sentence (e.g. "with garden", "with garage", "with garden and garage").
+  Omit any detail that is unknown. No other text.
 
 DECORATIVE ORDER  (item name contains "decorative"):
-  First line must be one of these three grades — choose based on the number and severity of major defects:
-    "In good order"  — few or no major defects across the property
-    "In fair order"  — some moderate defects present
-    "In poor order"  — multiple major defects present
-  Then list, room by room in the order they appear in the inspection, any notable observations about:
+  List, room by room in the order they appear in the inspection, any notable observations about:
     doors, door frames, skirting boards, architraves, woodwork, panelling, radiators, heating.
   Include moderate-to-major defects only. Group by room: room name on its own line, then the observation(s) below it.
+  If no notable defects are found, return "In good order".
 
 WALLS  (item name is "walls", "wall condition", or similar — specifically about walls):
   List only wall-related findings across all rooms.
@@ -2365,9 +2363,9 @@ WALLS  (item name is "walls", "wall condition", or similar — specifically abou
   Group by room: room name on its own line, then the observation(s) below it.
 
 APPLIANCES  (item name contains "appliance"):
-  First line must be exactly: "Appliances — tested for power"
-  Then list any appliance with no power, non-functional, or major physical damage.
+  List any appliance with no power, non-functional, or major physical damage.
   Group by room: room name on its own line, then the appliance issue(s) below it. Exclude minor wear.
+  If no defects are found, return "All tested for power".
 
 SANITARY WARE / BATHROOMS  (item name contains "sanitary", "sanitaryware", "sanitary ware",
   "bathroom", "plumbing", or "wc"):
@@ -2377,16 +2375,15 @@ SANITARY WARE / BATHROOMS  (item name contains "sanitary", "sanitaryware", "sani
   Group by room: room name on its own line (e.g. "Bathroom", "En Suite"), then the issue(s) below it.
 
 LIGHTING  (item name contains "light" or "lighting"):
-  First line must be exactly: "Lighting — tested for power"
+  First line must always be exactly: "All tested for power"
   Then list any light fittings that are non-functional and any rooms where bulbs are blown, expired, or missing.
   Group by room: room name on its own line, then the issue(s) below it. Exclude minor cosmetic issues.
 
 OUTDOOR AREAS  (item name contains "garden", "balcon", "outdoor", "external", "terrace",
   "patio", "yard", "grounds", or "exterior"):
-  Describe the overall condition of the outdoor space in one line.
-  Then list any damage to fences, boundary walls, gates, or paths.
-  Then list any weed growth, overgrowth, or lack of maintenance.
-  One observation per line.
+  List any defects: damage to fences, boundary walls, gates, paths, weed growth, overgrowth, or lack of maintenance.
+  Group by area if multiple outdoor spaces. One observation per line.
+  If no defects are found, return an empty string.
 
 ALL OTHER ITEMS:
   Pull only findings relevant to that specific item or category name from the inspection data.

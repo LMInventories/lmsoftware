@@ -2247,9 +2247,10 @@ def generate_condition_summary():
     if not data:
         return jsonify({'error': 'No data provided'}), 400
 
-    sections     = data.get('sections', [])
+    sections      = data.get('sections', [])
     summary_items = data.get('summaryItems', [])
     inspection_id = int(data['inspectionId']) if data.get('inspectionId') else None
+    prop_details  = data.get('propertyDetails') or {}
 
     if not sections:
         return jsonify({'error': 'No inspection data provided'}), 400
@@ -2258,6 +2259,30 @@ def generate_condition_summary():
 
     if not os.environ.get('ANTHROPIC_API_KEY'):
         return jsonify({'error': 'ANTHROPIC_API_KEY not configured on server'}), 503
+
+    # ── Build property description sentence ───────────────────────────────
+    prop_type  = (prop_details.get('property_type') or '').strip()
+    bedrooms   = prop_details.get('bedrooms')
+    bathrooms  = prop_details.get('bathrooms')
+    furnished  = (prop_details.get('furnished') or '').strip()
+    address    = (prop_details.get('address') or '').strip()
+
+    prop_parts = []
+    if bedrooms is not None:
+        prop_parts.append(f'{int(bedrooms)}-bedroom')
+    if bathrooms is not None:
+        prop_parts.append(f'{int(bathrooms)}-bathroom')
+    if furnished:
+        prop_parts.append(furnished.lower())
+    if prop_type:
+        prop_parts.append(prop_type.lower())
+
+    if prop_parts:
+        property_description = 'Property is a ' + ' '.join(prop_parts) + '.'
+    elif address:
+        property_description = f'Property at {address}.'
+    else:
+        property_description = 'Property details not provided.'
 
     # ── Format inspection findings as readable text ────────────────────────
     lines = []
@@ -2304,81 +2329,105 @@ def generate_condition_summary():
 
     prompt = f"""You are writing a Condition Summary for a UK property inspection report.
 
-Read the room-by-room findings below and produce a tight, line-by-line list of significant issues only.
-Each line is a separate observation. No paragraphs. No filler.
+PROPERTY DETAILS:
+{property_description}
 
-INSPECTION FINDINGS:
+INSPECTION FINDINGS (room-by-room):
 {inspection_text}
 
-CONDITION SUMMARY ITEMS — map your output to these (use each ID as the JSON key):
+CONDITION SUMMARY ITEMS — produce output for each ID below:
 {items_list}
 
-══════════════════════════════════════════════════
-SEVERITY FILTER — the most important rule
-══════════════════════════════════════════════════
-Only include observations that require attention or are genuinely notable.
+════════════════════════════════════════════════════
+ITEM-TYPE RULES — read the item name and apply the matching rule
+════════════════════════════════════════════════════
 
-INCLUDE — major issues:
-  Damage at moderate level or worse: chips, cracks, breaks, gouges, splits, holes, burns
+OVERVIEW  (item name contains "overview", "description of property", or "property description"):
+  Write a single sentence describing the property.
+  Use the PROPERTY DETAILS above. Format:
+    "Property is a [X]-bedroom, [Y]-bathroom [furnished/unfurnished/part furnished] [type]."
+  Add any notable outdoor spaces mentioned in the inspection findings (e.g. "with garden", "with balcony").
+  If a detail is unknown, omit it. Do not pull from inspection findings for this item.
+
+DECORATIVE ORDER  (item name contains "decorative"):
+  First line must be one of these three grades — choose based on the number and severity of major defects:
+    "In good order"  — few or no major defects across the property
+    "In fair order"  — some moderate defects present
+    "In poor order"  — multiple major defects present
+  Then list, room by room in the order they appear in the inspection, any notable observations about:
+    doors, door frames, skirting boards, architraves, woodwork, panelling, radiators, heating.
+  Include moderate-to-major defects only. One observation per line, naming the room.
+
+WALLS  (item name is "walls", "wall condition", or similar — specifically about walls):
+  List only wall-related findings across all rooms.
+  Moderate-to-major defects only (cracks, holes, damp, mould, peeling paint, failed plaster, damage to tiles on walls).
+  One observation per line, naming the room. Exclude floors, ceilings, and other surfaces.
+
+APPLIANCES  (item name contains "appliance"):
+  First line must be exactly: "Appliances — tested for power"
+  Then list any appliance with no power, non-functional, or major physical damage.
+  Name the appliance and room on each line. Exclude minor wear.
+
+SANITARY WARE / BATHROOMS  (item name contains "sanitary", "sanitaryware", "sanitary ware",
+  "bathroom", "plumbing", or "wc"):
+  List issues with bathroom staple items only:
+    sinks, wash basins, toilets, WCs, cisterns, bidets, baths, shower trays, shower enclosures, taps, mixers.
+  Moderate-to-major defects only. Name the item and room.
+
+LIGHTING  (item name contains "light" or "lighting"):
+  First line must be exactly: "Lighting — tested for power"
+  Then list any light fittings that are non-functional.
+  Then list any rooms where bulbs are blown, expired, or missing — name the room and count.
+  Room-ordered. Exclude minor cosmetic issues.
+
+OUTDOOR AREAS  (item name contains "garden", "balcon", "outdoor", "external", "terrace",
+  "patio", "yard", "grounds", or "exterior"):
+  Describe the overall condition of the outdoor space in one line.
+  Then list any damage to fences, boundary walls, gates, or paths.
+  Then list any weed growth, overgrowth, or lack of maintenance.
+  One observation per line.
+
+ALL OTHER ITEMS:
+  Pull only findings relevant to that specific item or category name from the inspection data.
+  List moderate-to-major defects per room. One observation per line.
+  If no notable issues exist, return an empty string.
+
+════════════════════════════════════════════════════
+SEVERITY FILTER — applies to ALL items except where overridden above
+════════════════════════════════════════════════════
+INCLUDE:
+  Damage moderate or worse: chips, cracks, breaks, gouges, splits, holes, burns
   Structural concerns: damp, mould, water damage, water ingress, cracking plaster
   Missing items or fittings
   Non-functional items: no power, seized, jammed, does not operate, stuck
-  Failed finishes: failed silicone, cracked or missing grout, heavy peeling paint
-  Hardware faults: dropped hinges, dropped door, broken lock or handle
+  Failed finishes: failed silicone, cracked/missing grout, heavy peeling paint
+  Hardware faults: dropped hinges, broken locks/handles
 
-EXCLUDE — minor, routine, cosmetic:
-  Anything preceded by "light", "slight", "minor", or "superficial":
-    light scuffing, light scratching, light marking, light surface marks, light limescale — ALL excluded
-  Fair wear and tear — always excluded
-  In good order / in fair order / as new / as inventory — always excluded
-  Tested and working (used only in LIGHTING and APPLIANCE lines below, nowhere else)
+EXCLUDE:
+  Anything preceded by "light", "slight", "minor", or "superficial"
+  Fair wear and tear
+  "In good order" / "in fair order" / "as new" / "as inventory"
 
-RULE: if the word "light" or "slight" or "minor" or "superficial" precedes a defect — skip it entirely.
-
-══════════════════════════════════════════════════
-LIGHTING — fixed rules, always apply
-══════════════════════════════════════════════════
-If ANY lighting items appear anywhere in the findings:
-  1. Write exactly: "Lighting — tested for power"
-  2. Scan every lighting item across all rooms for expired, blown, or missing bulbs.
-     If any are found: write "[N] x bulb(s) expired" and name the room(s).
-     Example: "2 x bulbs expired in Bedroom 2 and Landing"
-  3. Do NOT write any other lighting line unless a fitting is broken or completely non-functional.
-
-══════════════════════════════════════════════════
-APPLIANCES — fixed rules, always apply
-══════════════════════════════════════════════════
-If ANY appliances appear anywhere in the findings (oven, hob, extractor, dishwasher,
-washing machine, fridge, freezer, dryer, microwave, etc.):
-  1. Write exactly: "Appliances — tested for power"
-  2. For each appliance that has no power, is non-functional, or has major physical damage:
-     write a specific line naming the appliance and room.
-     Examples: "No power to extractor fan in Kitchen"
-               "Heavy cracking to freezer drawers in Kitchen"
-  3. Do NOT write other appliance lines for minor wear or routine observations.
-
-══════════════════════════════════════════════════
+════════════════════════════════════════════════════
 FORMATTING
-══════════════════════════════════════════════════
-- One observation per line, separated by \\n. No bullet points.
-- Be specific: name the room and item — "Chipping to wood flooring in Bedroom 1" not "floor damage"
-- Consolidate the same defect across rooms into one line:
+════════════════════════════════════════════════════
+- One observation per line, separated by \\n. No bullet points, no dashes.
+- Be specific: name the room and item.
+- Consolidate the same defect across multiple rooms into one line:
     CORRECT: "Chipping to wood flooring in Bedroom 1 and Kitchen"
     WRONG:   two separate lines for each room
-- If a summary item name suggests a specific area (e.g. "Kitchen", "Bathrooms"), map only relevant
-  findings there. If it is general (e.g. "General Condition", "Overall"), include everything.
-- If there are no notable issues for an item, return an empty string for it.
 - Capitalise the first word of each line.
-- UK English spelling: "discolouration", "colour", "grey", "mould", "centre" etc.
+- UK English: "discolouration", "colour", "grey", "mould", "centre".
+- If there are no notable issues for an item, return an empty string for it.
 
 Return ONLY valid JSON — no markdown, no extra text:
 {{
-  "<itemId>": {{"condition": "Lighting — tested for power\\n2 x bulbs expired in Bedroom 2\\nChipping to wood flooring in Bedroom 1"}}
+  "<itemId>": {{"condition": "..."}}
 }}"""
 
     message = client.messages.create(
         model='claude-haiku-4-5',
-        max_tokens=1200,
+        max_tokens=1500,
         messages=[{'role': 'user', 'content': prompt}]
     )
 

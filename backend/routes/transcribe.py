@@ -2356,29 +2356,30 @@ DECORATIVE ORDER  (item name contains "decorative"):
     "In poor order"  — multiple major defects present
   Then list, room by room in the order they appear in the inspection, any notable observations about:
     doors, door frames, skirting boards, architraves, woodwork, panelling, radiators, heating.
-  Include moderate-to-major defects only. One observation per line, naming the room.
+  Include moderate-to-major defects only. Group by room: room name on its own line, then the observation(s) below it.
 
 WALLS  (item name is "walls", "wall condition", or similar — specifically about walls):
   List only wall-related findings across all rooms.
   Moderate-to-major defects only (cracks, holes, damp, mould, peeling paint, failed plaster, damage to tiles on walls).
-  One observation per line, naming the room. Exclude floors, ceilings, and other surfaces.
+  Exclude floors, ceilings, and other surfaces.
+  Group by room: room name on its own line, then the observation(s) below it.
 
 APPLIANCES  (item name contains "appliance"):
   First line must be exactly: "Appliances — tested for power"
   Then list any appliance with no power, non-functional, or major physical damage.
-  Name the appliance and room on each line. Exclude minor wear.
+  Group by room: room name on its own line, then the appliance issue(s) below it. Exclude minor wear.
 
 SANITARY WARE / BATHROOMS  (item name contains "sanitary", "sanitaryware", "sanitary ware",
   "bathroom", "plumbing", or "wc"):
   List issues with bathroom staple items only:
     sinks, wash basins, toilets, WCs, cisterns, bidets, baths, shower trays, shower enclosures, taps, mixers.
-  Moderate-to-major defects only. Name the item and room.
+  Moderate-to-major defects only.
+  Group by room: room name on its own line (e.g. "Bathroom", "En Suite"), then the issue(s) below it.
 
 LIGHTING  (item name contains "light" or "lighting"):
   First line must be exactly: "Lighting — tested for power"
-  Then list any light fittings that are non-functional.
-  Then list any rooms where bulbs are blown, expired, or missing — name the room and count.
-  Room-ordered. Exclude minor cosmetic issues.
+  Then list any light fittings that are non-functional and any rooms where bulbs are blown, expired, or missing.
+  Group by room: room name on its own line, then the issue(s) below it. Exclude minor cosmetic issues.
 
 OUTDOOR AREAS  (item name contains "garden", "balcon", "outdoor", "external", "terrace",
   "patio", "yard", "grounds", or "exterior"):
@@ -2389,7 +2390,7 @@ OUTDOOR AREAS  (item name contains "garden", "balcon", "outdoor", "external", "t
 
 ALL OTHER ITEMS:
   Pull only findings relevant to that specific item or category name from the inspection data.
-  List moderate-to-major defects per room. One observation per line.
+  Group by room: room name on its own line, then the observation(s) below it.
   If no notable issues exist, return an empty string.
 
 ════════════════════════════════════════════════════
@@ -2411,14 +2412,20 @@ EXCLUDE:
 ════════════════════════════════════════════════════
 FORMATTING
 ════════════════════════════════════════════════════
-- One observation per line, separated by \\n. No bullet points, no dashes.
-- Be specific: name the room and item.
-- Consolidate the same defect across multiple rooms into one line:
-    CORRECT: "Chipping to wood flooring in Bedroom 1 and Kitchen"
-    WRONG:   two separate lines for each room
+- Group all observations by room. Write the room name alone on its own line, then list each issue for that room on the following line(s).
+- Do NOT consolidate the same defect from multiple rooms onto one line — each affected room gets its own group.
+- No bullet points, no dashes, no room name prefix on the issue lines themselves (the room heading above provides the context).
 - Capitalise the first word of each line.
 - UK English: "discolouration", "colour", "grey", "mould", "centre".
 - If there are no notable issues for an item, return an empty string for it.
+
+Example — flooring issues in three rooms:
+Kitchen
+Issue with flooring
+Bedroom 1
+Issue with flooring
+Bedroom 2
+Issue with flooring
 
 Return ONLY valid JSON — no markdown, no extra text:
 {{

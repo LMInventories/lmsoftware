@@ -168,31 +168,40 @@ onMounted(() => { checkApiKeys(); loadUsage() })
                 <span v-if="insp.inspection_type" class="insp-type-badge">{{ insp.inspection_type }}</span>
                 <span v-if="insp.reference_number" class="insp-ref">{{ insp.reference_number }}</span>
               </span>
+              <span class="insp-mins" v-if="insp.audio_minutes > 0">{{ insp.audio_minutes }} min{{ insp.audio_minutes !== 1 ? 's' : '' }}</span>
               <span class="insp-total">{{ formatGBP(insp.total_cost_gbp) }}</span>
             </button>
 
             <!-- Expanded breakdown -->
             <div v-if="expandedInsp.has(insp.inspection_id ?? 'unlinked')" class="insp-breakdown">
-              <div class="breakdown-row" v-if="insp.audio_minutes > 0">
-                <span class="breakdown-icon">🎙️</span>
-                <span class="breakdown-label">Whisper transcription</span>
-                <span class="breakdown-meta">{{ insp.audio_minutes }} mins · {{ (insp.item_calls || 0) + (insp.room_calls || 0) }} clip{{ ((insp.item_calls || 0) + (insp.room_calls || 0)) !== 1 ? 's' : '' }}</span>
-                <span class="breakdown-cost">{{ formatGBP(insp.whisper_cost_gbp) }}</span>
+              <div v-if="insp.audio_minutes === 0 && insp.photo_calls === 0" class="breakdown-empty">
+                No AI calls recorded for this inspection.
               </div>
-              <div class="breakdown-row" v-if="(insp.item_calls || 0) + (insp.room_calls || 0) > 0">
-                <span class="breakdown-icon">🤖</span>
-                <span class="breakdown-label">Claude Haiku (fill)</span>
-                <span class="breakdown-meta">{{ (insp.item_calls || 0) + (insp.room_calls || 0) }} call{{ ((insp.item_calls || 0) + (insp.room_calls || 0)) !== 1 ? 's' : '' }}</span>
-                <span class="breakdown-cost">{{ formatGBP(insp.claude_cost_gbp) }}</span>
-              </div>
-              <div class="breakdown-row" v-if="insp.photo_calls > 0">
-                <span class="breakdown-icon">📷</span>
-                <span class="breakdown-label">Claude Opus (photo sort)</span>
-                <span class="breakdown-meta">{{ insp.photo_calls }} photo{{ insp.photo_calls !== 1 ? 's' : '' }}</span>
-                <span class="breakdown-cost">{{ formatGBP(insp.photo_cost_gbp) }}</span>
-              </div>
-              <div class="breakdown-row breakdown-empty" v-if="insp.audio_minutes === 0 && insp.photo_calls === 0">
-                <span class="breakdown-label" style="color:#94a3b8">No calls recorded</span>
+              <div v-else class="breakdown-cards">
+                <div class="bc" v-if="insp.audio_minutes > 0">
+                  <span class="bc-icon">🎙️</span>
+                  <span class="bc-label">Whisper</span>
+                  <span class="bc-value">{{ formatGBP(insp.whisper_cost_gbp) }}</span>
+                  <span class="bc-meta">{{ insp.audio_minutes }} mins · {{ (insp.item_calls || 0) + (insp.room_calls || 0) }} clip{{ ((insp.item_calls || 0) + (insp.room_calls || 0)) !== 1 ? 's' : '' }}</span>
+                </div>
+                <div class="bc" v-if="(insp.item_calls || 0) + (insp.room_calls || 0) > 0">
+                  <span class="bc-icon">🤖</span>
+                  <span class="bc-label">Claude Haiku</span>
+                  <span class="bc-value">{{ formatGBP(insp.claude_cost_gbp) }}</span>
+                  <span class="bc-meta">{{ (insp.item_calls || 0) + (insp.room_calls || 0) }} fill call{{ ((insp.item_calls || 0) + (insp.room_calls || 0)) !== 1 ? 's' : '' }}</span>
+                </div>
+                <div class="bc" v-if="insp.photo_calls > 0">
+                  <span class="bc-icon">📷</span>
+                  <span class="bc-label">Photo AI</span>
+                  <span class="bc-value">{{ formatGBP(insp.photo_cost_gbp) }}</span>
+                  <span class="bc-meta">{{ insp.photo_calls }} photo{{ insp.photo_calls !== 1 ? 's' : '' }}</span>
+                </div>
+                <div class="bc bc-total">
+                  <span class="bc-icon">£</span>
+                  <span class="bc-label">Total</span>
+                  <span class="bc-value">{{ formatGBP(insp.total_cost_gbp) }}</span>
+                  <span class="bc-meta">this inspection</span>
+                </div>
               </div>
             </div>
           </div>
@@ -314,16 +323,21 @@ onMounted(() => { checkApiKeys(); loadUsage() })
 .insp-ref { font-size: 11px; color: #94a3b8; white-space: nowrap; }
 .insp-total { font-size: 15px; font-weight: 700; color: #1e293b; flex-shrink: 0; }
 
-.insp-breakdown { border-top: 1px solid #f1f5f9; background: #f8fafc; padding: 4px 0 6px; }
-.breakdown-row {
-  display: flex; align-items: center; gap: 10px;
-  padding: 8px 14px 8px 40px;
+.insp-mins { font-size: 12px; color: #64748b; white-space: nowrap; flex-shrink: 0; }
+
+.insp-breakdown { border-top: 1px solid #f1f5f9; background: #f8fafc; padding: 12px 14px; }
+.breakdown-empty { font-size: 12px; color: #94a3b8; text-align: center; padding: 4px 0; }
+.breakdown-cards { display: flex; gap: 8px; flex-wrap: wrap; }
+.bc {
+  flex: 1; min-width: 110px; background: white; border: 1px solid #e2e8f0;
+  border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px;
 }
-.breakdown-row + .breakdown-row { border-top: 1px solid #f1f5f9; }
-.breakdown-icon { font-size: 13px; flex-shrink: 0; }
-.breakdown-label { flex: 1; font-size: 13px; color: #475569; }
-.breakdown-meta { font-size: 12px; color: #94a3b8; white-space: nowrap; }
-.breakdown-cost { font-size: 13px; font-weight: 600; color: #475569; flex-shrink: 0; min-width: 56px; text-align: right; }
+.bc-total { background: #f0fdf4; border-color: #bbf7d0; }
+.bc-icon { font-size: 14px; line-height: 1; margin-bottom: 2px; }
+.bc-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; }
+.bc-value { font-size: 18px; font-weight: 800; color: #1e293b; line-height: 1.1; }
+.bc-total .bc-value { color: #16a34a; }
+.bc-meta { font-size: 11px; color: #94a3b8; margin-top: 1px; }
 
 .info-panel { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px; padding: 20px 24px; margin-bottom: 28px; }
 .info-panel h3 { font-size: 15px; font-weight: 700; color: #1e3a8a; margin-bottom: 16px; }

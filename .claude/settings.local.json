@@ -35,7 +35,11 @@
       "Bash(Get-ChildItem -Force)",
       "PowerShell(head *)",
       "PowerShell(Get-ChildItem -Path \"C:\\\\Projects\\\\lmsoftware\" -Directory | Select-Object -First 20 | ForEach-Object { $_.Name })",
-      "Bash(xargs grep -l \"transcribe\")"
+      "Bash(xargs grep -l \"transcribe\")",
+      "Bash(grep -v \"//\")",
+      "Bash(grep -v \"//\\\\|getInspection\\\\|getTemplate\\\\|getProperty\\\\|getAction\\\\|getFixed\\\\|getMidterm\\\\|getSection\\\\|getClient\\\\|getHeads\\\\|updateInspection\\\\|updateProperty\\\\|pdfImport\\\\|getPropertyHistory\\\\|getTem\")",
+      "Read(//c/Projects/**)",
+      "Read(//c/Projects\" 2>/dev/**)"
     ]
   }
 }

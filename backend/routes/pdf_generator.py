@@ -374,6 +374,9 @@ class _PDFBuilder:
                     return len(room_order)
             self.rooms.sort(key=_room_pos)
 
+        # ── Room name → anchor id, used to hyperlink Condition Summary entries ──
+        self._room_anchor_map = {str(r['name']).strip().lower(): r['id'] for r in self.rooms}
+
         # ── Action catalogue — loaded from SystemSetting 'actions_config' ──
         self.action_catalogue = []
         try:
@@ -630,6 +633,25 @@ class _PDFBuilder:
         text  = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
         text  = text.replace('\n', '<br/>')
         return Paragraph(text or '—', style)
+
+    def _p_room_links(self, text, style=None):
+        """Like _p, but any line that matches a room name becomes a clickable
+        link jumping to that room's section (Condition Summary room headings)."""
+        style = style or self.s_cell
+        text  = str(text or '')
+        text  = text.replace('\r\n', '\n').replace('\r', '\n')
+        lines = [l.strip() for l in text.split('\n') if l.strip()]
+        if not lines:
+            return Paragraph('—', style)
+        out = []
+        for line in lines:
+            esc = line.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            rid = self._room_anchor_map.get(line.lower())
+            if rid is not None:
+                out.append(f'<a href="#anchor_room_{rid}" color="#3b82f6"><u>{esc}</u></a>')
+            else:
+                out.append(esc)
+        return Paragraph('<br/>'.join(out), style)
 
     def _uw(self):
         return self.pw - 2 * self.margin
@@ -1231,7 +1253,7 @@ class _PDFBuilder:
                 ref_p = Paragraph(row_ref(rid, is_extra), self.s_ref)
 
                 if t == 'condition_summary':
-                    return [ref_p, self._p(rn(r,is_extra)), self._p(gv(r,is_extra,'condition') or '—')]
+                    return [ref_p, self._p(rn(r,is_extra)), self._p_room_links(gv(r,is_extra,'condition'))]
                 if t == 'cleaning_summary':
                     return [ref_p, self._p(rn(r,is_extra)), self._p(gv(r,is_extra,'cleanliness') or '—'), self._p(gv(r,is_extra,'cleanlinessNotes') or '—', self.s_cell_sm)]
                 if t in ('smoke_alarms','health_safety'):

@@ -9,13 +9,21 @@ const router    = useRouter()
 const route     = useRoute()
 const authStore = useAuthStore()
 
-// Routes that need to fill the viewport and manage their own internal scroll.
 const fullscreenRoutes = new Set(['InspectionReport'])
 const isFullscreen = computed(() => fullscreenRoutes.has(route.name))
 
-// ── Sidebar hide/show (persisted) ─────────────────────────────────────────
-const sidebarHidden = ref(localStorage.getItem('sidebar-hidden') === 'true')
-watch(sidebarHidden, val => localStorage.setItem('sidebar-hidden', String(val)))
+// ── Sidebar collapse (persisted) ──────────────────────────────────────────
+const sidebarCollapsed = ref(localStorage.getItem('sidebar-collapsed') === 'true')
+watch(sidebarCollapsed, val => {
+  localStorage.setItem('sidebar-collapsed', String(val))
+  if (!val) navFlyoutOpen.value = false   // close flyout when expanding
+})
+
+// ── Nav flyout (hamburger popup in collapsed mode) ────────────────────────
+const navFlyoutOpen = ref(false)
+function toggleFlyout() { navFlyoutOpen.value = !navFlyoutOpen.value }
+function closeFlyout()  { navFlyoutOpen.value = false }
+function flyoutNavigate(path) { router.push(path); navFlyoutOpen.value = false }
 
 // ── Mobile drawer ─────────────────────────────────────────────────────────
 const drawerOpen = ref(false)
@@ -23,7 +31,6 @@ const drawerOpen = ref(false)
 // ── User popup ────────────────────────────────────────────────────────────
 const userPopupOpen = ref(false)
 
-// ── Change password (inline in popup) ─────────────────────────────────────
 const showChangePassword = ref(false)
 const cpCurrent  = ref('')
 const cpNew      = ref('')
@@ -85,8 +92,8 @@ function logout() {
 }
 
 // ── Integration health banner ─────────────────────────────────────────────
-const integrationIssues   = ref([])
-const bannerDismissed     = ref(false)
+const integrationIssues = ref([])
+const bannerDismissed   = ref(false)
 const showBanner = computed(() =>
   !bannerDismissed.value &&
   integrationIssues.value.length > 0 &&
@@ -98,92 +105,123 @@ async function checkIntegrationHealth() {
   try {
     const res = await api.http.get('/api/google/health')
     integrationIssues.value = res.data.issues || []
-  } catch {
-    // Non-fatal — silently skip if the endpoint isn't reachable
-  }
+  } catch { /* non-fatal */ }
 }
 
 let _healthTimer = null
-
 onMounted(() => {
   checkIntegrationHealth()
   _healthTimer = setInterval(checkIntegrationHealth, 30 * 60 * 1000)
 })
+onUnmounted(() => clearInterval(_healthTimer))
 
-onUnmounted(() => {
-  clearInterval(_healthTimer)
-})
+function navigate(path) { router.push(path); drawerOpen.value = false }
 
-function navigate(path) {
-  router.push(path)
-  drawerOpen.value = false
-}
-
-// ── PDF import progress indicator ─────────────────────────────────────
 const pdfImportJobs = usePdfImportJobs()
 </script>
 
 <template>
-  <div class="layout" :class="{ 'sidebar-is-hidden': sidebarHidden }">
+  <div class="layout" :class="{ 'sidebar-is-collapsed': sidebarCollapsed }">
 
     <!-- ══ DESKTOP SIDEBAR ══════════════════════════════════════════ -->
-    <aside class="sidebar" :class="{ hidden: sidebarHidden }">
+    <aside class="sidebar" :class="{ collapsed: sidebarCollapsed }">
 
+      <!-- Logo -->
       <div class="sidebar-header">
-        <img src="/ip-logo.png" alt="InspectPro" class="sidebar-logo" />
+        <img v-if="!sidebarCollapsed" src="/ip-logo.png" alt="InspectPro" class="sidebar-logo" />
+        <img v-else src="/ip-logo.png" alt="InspectPro" class="sidebar-logo-icon" />
       </div>
 
+      <!-- Nav -->
       <nav class="sidebar-nav">
-        <router-link to="/dashboard" class="nav-item">Dashboard</router-link>
-        <router-link to="/inspections" class="nav-item">Inspections</router-link>
-        <router-link to="/properties" class="nav-item">Properties</router-link>
-        <router-link to="/clients" class="nav-item" v-if="authStore.isAdmin || authStore.isManager">Clients</router-link>
-        <router-link to="/users" class="nav-item" v-if="authStore.isAdmin || authStore.isManager">Users</router-link>
 
-        <!-- PDF import progress indicator -->
+        <!-- Hamburger — collapsed mode only -->
+        <button
+          v-if="sidebarCollapsed"
+          class="hamburger-btn"
+          :class="{ active: navFlyoutOpen }"
+          @click="toggleFlyout"
+          title="Navigation"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+            <line x1="3" y1="6"  x2="21" y2="6"/>
+            <line x1="3" y1="12" x2="21" y2="12"/>
+            <line x1="3" y1="18" x2="21" y2="18"/>
+          </svg>
+        </button>
+
+        <!-- Nav links — expanded mode only -->
+        <template v-if="!sidebarCollapsed">
+          <router-link to="/dashboard"   class="nav-item">Dashboard</router-link>
+          <router-link to="/inspections" class="nav-item">Inspections</router-link>
+          <router-link to="/properties"  class="nav-item">Properties</router-link>
+          <router-link to="/clients"     class="nav-item" v-if="authStore.isAdmin || authStore.isManager">Clients</router-link>
+          <router-link to="/users"       class="nav-item" v-if="authStore.isAdmin || authStore.isManager">Users</router-link>
+        </template>
+
+        <!-- PDF import pulse (always visible, text only when expanded) -->
         <div v-if="pdfImportJobs.activeJobs.value.length > 0" class="nav-import-indicator">
           <span class="import-pulse"></span>
-          <span>Importing PDF…</span>
+          <span v-if="!sidebarCollapsed">Importing PDF…</span>
         </div>
       </nav>
 
-      <!-- Settings + User panel -->
+      <!-- Footer: settings + user -->
       <div class="sidebar-footer">
-        <router-link v-if="authStore.isAdmin || authStore.isManager" to="/settings" class="nav-item settings-item">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="settings-gear">
+        <router-link
+          v-if="authStore.isAdmin || authStore.isManager"
+          to="/settings"
+          class="nav-item settings-item"
+          :title="sidebarCollapsed ? 'Settings' : undefined"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="settings-gear">
             <circle cx="12" cy="12" r="3"/>
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
           </svg>
-          Settings
+          <span v-if="!sidebarCollapsed">Settings</span>
         </router-link>
+
         <div class="footer-divider"></div>
-        <button class="user-btn" @click="openUserPopup">
+
+        <button
+          class="user-btn"
+          @click="openUserPopup"
+          :title="sidebarCollapsed ? (authStore.user?.name || 'Account') : undefined"
+        >
           <div class="user-avatar">{{ authStore.user?.name?.charAt(0) || 'U' }}</div>
-          <div class="user-details">
-            <div class="user-name">{{ authStore.user?.name }}</div>
-            <div class="user-role">{{ authStore.user?.role }}</div>
-          </div>
-          <svg class="user-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="18 15 12 9 6 15"/></svg>
+          <template v-if="!sidebarCollapsed">
+            <div class="user-details">
+              <div class="user-name">{{ authStore.user?.name }}</div>
+              <div class="user-role">{{ authStore.user?.role }}</div>
+            </div>
+            <svg class="user-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="18 15 12 9 6 15"/></svg>
+          </template>
         </button>
       </div>
 
-      <!-- Hide sidebar button — right edge, vertically centred -->
-      <button class="sidebar-toggle" @click="sidebarHidden = true" title="Hide sidebar">
+      <!-- Expand/collapse toggle on sidebar edge -->
+      <button
+        class="sidebar-toggle"
+        @click="sidebarCollapsed = !sidebarCollapsed"
+        :title="sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'"
+      >
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
-          <polyline points="15 18 9 12 15 6"/>
+          <polyline v-if="!sidebarCollapsed" points="15 18 9 12 15 6"/>
+          <polyline v-else                   points="9 18 15 12 9 6"/>
         </svg>
       </button>
     </aside>
 
-    <!-- Floating reveal button — appears when sidebar is hidden -->
-    <Transition name="reveal-fade">
-      <button v-if="sidebarHidden" class="sidebar-reveal" @click="sidebarHidden = false" title="Show sidebar">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
-          <line x1="3" y1="6" x2="21" y2="6"/>
-          <line x1="3" y1="12" x2="21" y2="12"/>
-          <line x1="3" y1="18" x2="21" y2="18"/>
-        </svg>
-      </button>
+    <!-- ══ NAV FLYOUT (collapsed hamburger) ══════════════════════════ -->
+    <div v-if="navFlyoutOpen && sidebarCollapsed" class="flyout-backdrop" @click="closeFlyout"></div>
+    <Transition name="flyout-pop">
+      <div v-if="navFlyoutOpen && sidebarCollapsed" class="nav-flyout">
+        <router-link to="/dashboard"   class="flyout-item" @click="closeFlyout">Dashboard</router-link>
+        <router-link to="/inspections" class="flyout-item" @click="closeFlyout">Inspections</router-link>
+        <router-link to="/properties"  class="flyout-item" @click="closeFlyout">Properties</router-link>
+        <router-link to="/clients"     class="flyout-item" v-if="authStore.isAdmin || authStore.isManager" @click="closeFlyout">Clients</router-link>
+        <router-link to="/users"       class="flyout-item" v-if="authStore.isAdmin || authStore.isManager" @click="closeFlyout">Users</router-link>
+      </div>
     </Transition>
 
     <!-- ══ MOBILE TOPBAR ════════════════════════════════════════════ -->
@@ -195,7 +233,7 @@ const pdfImportJobs = usePdfImportJobs()
         <div class="mobile-user-avatar">{{ authStore.user?.name?.charAt(0) || 'U' }}</div>
         <button class="mobile-menu-btn" @click="drawerOpen = true">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-            <line x1="3" y1="6" x2="21" y2="6"/>
+            <line x1="3" y1="6"  x2="21" y2="6"/>
             <line x1="3" y1="12" x2="21" y2="12"/>
             <line x1="3" y1="18" x2="21" y2="18"/>
           </svg>
@@ -206,13 +244,8 @@ const pdfImportJobs = usePdfImportJobs()
     <!-- ══ MAIN CONTENT ══════════════════════════════════════════════ -->
     <main class="main-content" :class="{ 'main-fullscreen': isFullscreen }">
 
-      <!-- Integration health banner -->
       <TransitionGroup name="banner-slide" tag="div" class="integration-banners">
-        <div
-          v-for="issue in (showBanner ? integrationIssues : [])"
-          :key="issue.key"
-          class="integration-banner"
-        >
+        <div v-for="issue in (showBanner ? integrationIssues : [])" :key="issue.key" class="integration-banner">
           <span class="banner-icon">⚠</span>
           <span class="banner-text">{{ issue.message }}</span>
           <router-link to="/settings?tab=integrations" class="banner-link">Reconnect →</router-link>
@@ -281,7 +314,7 @@ const pdfImportJobs = usePdfImportJobs()
     <!-- ══ USER POPUP (desktop) ══════════════════════════════════════ -->
     <Transition name="popup-fade">
       <div v-if="userPopupOpen" class="user-popup-backdrop" @click.self="closeUserPopup">
-        <div class="user-popup">
+        <div class="user-popup" :class="{ 'popup-collapsed': sidebarCollapsed }">
 
           <div class="popup-header">
             <div class="popup-avatar">{{ authStore.user?.name?.charAt(0) || 'U' }}</div>
@@ -346,14 +379,14 @@ const pdfImportJobs = usePdfImportJobs()
 </template>
 
 <style scoped>
-/* ── Base layout ───────────────────────────────────────────────────── */
+/* ── Layout ────────────────────────────────────────────────────────── */
 .layout {
   display: flex;
   min-height: 100vh;
   background: #f1f5f9;
 }
 
-/* ── Desktop sidebar ───────────────────────────────────────────────── */
+/* ── Sidebar ───────────────────────────────────────────────────────── */
 .sidebar {
   width: 260px;
   background: #1e293b;
@@ -363,15 +396,12 @@ const pdfImportJobs = usePdfImportJobs()
   position: fixed;
   left: 0; top: 0; bottom: 0;
   z-index: 100;
-  transition: transform 0.25s ease;
+  transition: width 0.25s ease;
   overflow: visible;
 }
-.sidebar.hidden {
-  transform: translateX(-260px);
-  pointer-events: none;
-}
+.sidebar.collapsed { width: 62px; }
 
-/* ── Sidebar header ── */
+/* ── Header / logo ── */
 .sidebar-header {
   padding: 20px 16px;
   border-bottom: 1px solid rgba(255,255,255,0.1);
@@ -381,80 +411,95 @@ const pdfImportJobs = usePdfImportJobs()
   min-height: 72px;
   overflow: hidden;
 }
-.sidebar-logo {
-  width: 140px; height: auto; display: block;
-  filter: brightness(0) invert(1);
-}
+.sidebar-logo      { width: 140px; height: auto; display: block; filter: brightness(0) invert(1); }
+.sidebar-logo-icon { width: 32px;  height: 32px; object-fit: contain; filter: brightness(0) invert(1); }
 
-/* ── Nav items ── */
+/* ── Nav ── */
 .sidebar-nav {
   flex: 1;
-  padding: 16px 8px;
+  padding: 12px 8px;
   overflow-y: auto;
   overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
+
 .nav-item {
   display: flex; align-items: center; gap: 10px;
   padding: 11px 12px; border-radius: 8px;
   color: #cbd5e1; text-decoration: none;
   transition: background 0.15s, color 0.15s;
-  margin-bottom: 2px;
   font-weight: 500; font-size: 14px;
   white-space: nowrap;
 }
 .nav-item:hover { background: rgba(255,255,255,0.1); color: white; }
 .nav-item.router-link-active { background: #6366f1; color: white; }
 
+/* ── Hamburger button (collapsed only) ── */
+.hamburger-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 100%; padding: 11px 0; border-radius: 8px;
+  background: none; border: none;
+  color: #94a3b8; cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.hamburger-btn:hover  { background: rgba(255,255,255,0.1); color: white; }
+.hamburger-btn.active { background: rgba(255,255,255,0.12); color: white; }
+
 /* ── PDF import indicator ── */
 .nav-import-indicator {
-  display: flex; align-items: center; gap: 10px;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
   padding: 9px 12px; border-radius: 8px;
   color: #93c5fd; font-size: 13px; font-weight: 500;
   background: rgba(59,130,246,0.12);
-  margin-bottom: 2px;
 }
+.sidebar.collapsed .nav-import-indicator { padding: 9px 0; }
+
 .import-pulse {
-  width: 10px; height: 10px; border-radius: 50%;
+  width: 8px; height: 8px; border-radius: 50%;
   background: #60a5fa; flex-shrink: 0;
   box-shadow: 0 0 0 0 rgba(96,165,250,0.7);
   animation: import-pulse-anim 1.5s ease-in-out infinite;
 }
 @keyframes import-pulse-anim {
   0%   { box-shadow: 0 0 0 0 rgba(96,165,250,0.7); }
-  70%  { box-shadow: 0 0 0 7px rgba(96,165,250,0); }
+  70%  { box-shadow: 0 0 0 6px rgba(96,165,250,0); }
   100% { box-shadow: 0 0 0 0 rgba(96,165,250,0); }
 }
 
-/* ── Sidebar footer ── */
+/* ── Footer ── */
 .sidebar-footer {
   padding: 8px 8px 12px;
   border-top: 1px solid rgba(255,255,255,0.1);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
-.settings-item {
-  gap: 10px;
-  margin-bottom: 0;
-}
-.settings-gear {
-  flex-shrink: 0;
-  opacity: 0.6;
-  transition: opacity 0.15s;
-}
-.settings-item:hover .settings-gear      { opacity: 1; }
+
+.settings-item { gap: 10px; }
+.settings-gear  { flex-shrink: 0; opacity: 0.65; transition: opacity 0.15s; }
+.settings-item:hover .settings-gear             { opacity: 1; }
 .settings-item.router-link-active .settings-gear { opacity: 1; }
 
-.footer-divider {
-  height: 1px;
-  background: rgba(255,255,255,0.1);
-  margin: 8px 4px;
+/* Center the settings item icon when collapsed */
+.sidebar.collapsed .settings-item {
+  justify-content: center;
+  padding: 11px 0;
 }
+
+.footer-divider { height: 1px; background: rgba(255,255,255,0.1); margin: 4px 4px; }
+
 .user-btn {
-  width: 100%; display: flex; align-items: center; gap: 10px;
+  display: flex; align-items: center; gap: 10px;
   padding: 10px; background: rgba(255,255,255,0.05);
   border: 1px solid rgba(255,255,255,0.08); border-radius: 8px;
   color: white; cursor: pointer; transition: background 0.2s;
-  text-align: left; overflow: hidden;
+  text-align: left; overflow: hidden; width: 100%;
 }
 .user-btn:hover { background: rgba(255,255,255,0.12); }
+.sidebar.collapsed .user-btn { justify-content: center; padding: 10px 0; border: none; background: none; }
+.sidebar.collapsed .user-btn:hover { background: rgba(255,255,255,0.1); border-radius: 8px; }
 
 .user-avatar {
   width: 34px; height: 34px; background: #6366f1; border-radius: 50%;
@@ -466,18 +511,16 @@ const pdfImportJobs = usePdfImportJobs()
 .user-role { font-size: 11px; color: #94a3b8; text-transform: capitalize; }
 .user-chevron { color: #64748b; flex-shrink: 0; }
 
-/* ── Hide button — centred on sidebar's right edge ── */
+/* ── Toggle button on sidebar edge ── */
 .sidebar-toggle {
   position: absolute;
-  top: 50%;
-  right: -13px;
+  top: 50%; right: -13px;
   transform: translateY(-50%);
   width: 26px; height: 26px;
   background: #1e293b;
   border: 1px solid rgba(255,255,255,0.15);
   border-radius: 50%;
-  color: #94a3b8;
-  cursor: pointer;
+  color: #94a3b8; cursor: pointer;
   display: flex; align-items: center; justify-content: center;
   transition: background 0.2s, color 0.2s, box-shadow 0.2s;
   z-index: 101;
@@ -485,23 +528,36 @@ const pdfImportJobs = usePdfImportJobs()
 }
 .sidebar-toggle:hover { background: #334155; color: white; box-shadow: 0 2px 12px rgba(0,0,0,0.4); }
 
-/* ── Floating reveal button (hamburger) ── */
-.sidebar-reveal {
-  position: fixed;
-  top: 20px;
-  left: 16px;
-  z-index: 200;
-  width: 34px; height: 34px;
-  background: #1e293b;
-  border: none;
-  border-radius: 8px;
-  color: #94a3b8;
-  cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
-  box-shadow: 0 2px 10px rgba(0,0,0,0.25);
-  transition: background 0.2s, color 0.2s;
+/* ── Nav flyout (hamburger popup) ── */
+.flyout-backdrop {
+  position: fixed; inset: 0; z-index: 150;
 }
-.sidebar-reveal:hover { background: #334155; color: white; }
+.nav-flyout {
+  position: fixed;
+  left: 70px;
+  top: 80px;
+  z-index: 151;
+  background: white;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.14), 0 2px 8px rgba(0,0,0,0.06);
+  min-width: 200px;
+  overflow: hidden;
+  padding: 6px;
+}
+.flyout-item {
+  display: block;
+  padding: 10px 14px;
+  color: #374151;
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 500;
+  border-radius: 7px;
+  transition: background 0.1s, color 0.1s;
+  white-space: nowrap;
+}
+.flyout-item:hover { background: #f1f5f9; color: #1e293b; }
+.flyout-item.router-link-active { background: #eef2ff; color: #6366f1; }
 
 /* ── Main content ── */
 .main-content {
@@ -512,95 +568,60 @@ const pdfImportJobs = usePdfImportJobs()
   min-height: 100vh;
   transition: margin-left 0.25s ease;
 }
-.sidebar-is-hidden .main-content { margin-left: 0; }
+.sidebar-is-collapsed .main-content { margin-left: 62px; }
 
 .main-content.main-fullscreen {
-  padding: 0;
-  overflow: hidden;
-  height: 100vh;
-  min-height: unset;
-  display: flex;
-  flex-direction: column;
+  padding: 0; overflow: hidden;
+  height: 100vh; min-height: unset;
+  display: flex; flex-direction: column;
 }
-.sidebar-is-hidden .main-content.main-fullscreen { margin-left: 0; }
+.sidebar-is-collapsed .main-content.main-fullscreen { margin-left: 62px; }
 
-/* ── Mobile elements — hidden on desktop ── */
-.mobile-topbar,
-.mobile-bottom-nav,
-.mobile-drawer,
-.drawer-backdrop { display: none; }
+/* ── Mobile — hidden on desktop ── */
+.mobile-topbar, .mobile-bottom-nav, .mobile-drawer, .drawer-backdrop { display: none; }
 
 /* ══════════════════════════════════════════════════════════════════════
    USER POPUP
 ══════════════════════════════════════════════════════════════════════ */
-.user-popup-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 500;
-}
+.user-popup-backdrop { position: fixed; inset: 0; z-index: 500; }
 .user-popup {
   position: fixed;
-  bottom: 80px;
-  left: 272px;
+  bottom: 80px; left: 272px;
   width: 280px;
-  background: white;
-  border-radius: 12px;
+  background: white; border-radius: 12px;
   box-shadow: 0 8px 40px rgba(0,0,0,0.18), 0 2px 8px rgba(0,0,0,0.08);
-  z-index: 501;
-  overflow: hidden;
-  border: 1px solid #e2e8f0;
+  z-index: 501; overflow: hidden; border: 1px solid #e2e8f0;
+  transition: left 0.25s ease;
 }
+.user-popup.popup-collapsed { left: 74px; }
 
-.popup-header {
-  display: flex; align-items: center; gap: 10px;
-  padding: 16px; background: #f8fafc;
-  border-bottom: 1px solid #f1f5f9;
-}
-.popup-avatar {
-  width: 38px; height: 38px; background: #6366f1; border-radius: 50%;
-  display: flex; align-items: center; justify-content: center;
-  font-weight: 700; font-size: 15px; color: white; flex-shrink: 0;
-}
+.popup-header { display: flex; align-items: center; gap: 10px; padding: 16px; background: #f8fafc; border-bottom: 1px solid #f1f5f9; }
+.popup-avatar { width: 38px; height: 38px; background: #6366f1; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 15px; color: white; flex-shrink: 0; }
 .popup-user-info { flex: 1; min-width: 0; }
 .popup-name { font-weight: 700; font-size: 14px; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .popup-role { font-size: 11px; color: #64748b; text-transform: capitalize; margin-top: 1px; }
-.popup-close {
-  width: 28px; height: 28px; background: #f1f5f9; border: none; border-radius: 50%;
-  cursor: pointer; display: flex; align-items: center; justify-content: center;
-  color: #64748b; flex-shrink: 0; transition: background 0.15s;
-}
+.popup-close { width: 28px; height: 28px; background: #f1f5f9; border: none; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; color: #64748b; flex-shrink: 0; transition: background 0.15s; }
 .popup-close:hover { background: #e2e8f0; }
 
 .popup-actions { padding: 8px; }
-.popup-action {
-  width: 100%; display: flex; align-items: center; gap: 10px;
-  padding: 11px 12px; background: none; border: none; border-radius: 8px;
-  font-size: 14px; font-weight: 500; color: #374151;
-  cursor: pointer; text-align: left; transition: background 0.15s;
-}
+.popup-action { width: 100%; display: flex; align-items: center; gap: 10px; padding: 11px 12px; background: none; border: none; border-radius: 8px; font-size: 14px; font-weight: 500; color: #374151; cursor: pointer; text-align: left; transition: background 0.15s; }
 .popup-action:hover { background: #f8fafc; }
 .popup-action svg { flex-shrink: 0; color: #64748b; }
 .popup-logout { color: #dc2626; }
 .popup-logout:hover { background: #fef2f2; }
 .popup-logout svg { color: #dc2626; }
 
-/* ── Change password form inside popup ── */
+/* ── Change password ── */
 .cp-form { padding: 16px; border-top: 1px solid #f1f5f9; }
 .cp-field { margin-bottom: 14px; }
 .cp-field label { display: block; font-size: 12px; font-weight: 600; color: #475569; margin-bottom: 5px; }
-.cp-input {
-  width: 100%; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 6px;
-  font-size: 13px; font-family: inherit; box-sizing: border-box; transition: border-color 0.15s;
-}
+.cp-input { width: 100%; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 13px; font-family: inherit; box-sizing: border-box; transition: border-color 0.15s; }
 .cp-input:focus { outline: none; border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99,102,241,0.1); }
-
 .strength-row { display: flex; gap: 5px; margin-top: 6px; }
 .req { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 10px; background: #f1f5f9; color: #94a3b8; transition: all 0.2s; }
 .req.met { background: #dcfce7; color: #16a34a; }
-
 .cp-error { background: #fef2f2; border: 1px solid #fca5a5; color: #dc2626; padding: 8px 12px; border-radius: 6px; font-size: 12px; margin-bottom: 12px; }
 .cp-success { background: #f0fdf4; border: 1px solid #bbf7d0; color: #16a34a; padding: 12px; border-radius: 6px; font-size: 13px; font-weight: 600; text-align: center; }
-
 .cp-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
 .btn-cp-cancel { padding: 7px 14px; background: white; border: 1px solid #e2e8f0; color: #64748b; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; }
 .btn-cp-cancel:hover { background: #f8fafc; }
@@ -609,12 +630,12 @@ const pdfImportJobs = usePdfImportJobs()
 .btn-cp-save:disabled { background: #94a3b8; cursor: not-allowed; }
 
 /* ══════════════════════════════════════════════════════════════════════
-   MOBILE STYLES  ≤ 768px
+   MOBILE  ≤ 768px
 ══════════════════════════════════════════════════════════════════════ */
 @media (max-width: 768px) {
   .sidebar { display: none; }
   .sidebar-toggle { display: none; }
-  .sidebar-reveal { display: none; }
+  .nav-flyout { display: none; }
   .user-popup { display: none; }
   .layout { flex-direction: column; }
 
@@ -625,11 +646,8 @@ const pdfImportJobs = usePdfImportJobs()
     min-height: 100vh;
   }
   .main-content.main-fullscreen {
-    padding: 0;
-    padding-top: 52px;
-    overflow: hidden;
-    height: calc(100vh - 52px);
-    min-height: unset;
+    padding: 0; padding-top: 52px;
+    overflow: hidden; height: calc(100vh - 52px); min-height: unset;
   }
 
   .mobile-topbar {
@@ -641,98 +659,49 @@ const pdfImportJobs = usePdfImportJobs()
   .mobile-topbar-brand { display: flex; align-items: center; }
   .mobile-brand-logo { height: 32px; width: auto; filter: brightness(0) invert(1); }
   .mobile-topbar-right { display: flex; align-items: center; gap: 10px; }
-  .mobile-user-avatar {
-    width: 30px; height: 30px; background: #6366f1; border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 12px; font-weight: 700; color: white;
-  }
-  .mobile-menu-btn {
-    background: none; border: none; color: #94a3b8; cursor: pointer;
-    padding: 4px; display: flex; align-items: center; justify-content: center; border-radius: 6px;
-  }
+  .mobile-user-avatar { width: 30px; height: 30px; background: #6366f1; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: white; }
+  .mobile-menu-btn { background: none; border: none; color: #94a3b8; cursor: pointer; padding: 4px; display: flex; align-items: center; justify-content: center; border-radius: 6px; }
   .mobile-menu-btn:hover { background: rgba(255,255,255,0.1); color: white; }
 
-  .mobile-bottom-nav {
-    display: flex; position: fixed; bottom: 0; left: 0; right: 0; height: 60px;
-    background: white; border-top: 1px solid #e2e8f0;
-    z-index: 200; box-shadow: 0 -2px 12px rgba(0,0,0,0.06);
-  }
-  .bnav-item {
-    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 3px; text-decoration: none; color: #94a3b8; font-size: 10px; font-weight: 600;
-    background: none; border: none; cursor: pointer; transition: color 0.15s; padding: 8px 4px;
-  }
+  .mobile-bottom-nav { display: flex; position: fixed; bottom: 0; left: 0; right: 0; height: 60px; background: white; border-top: 1px solid #e2e8f0; z-index: 200; box-shadow: 0 -2px 12px rgba(0,0,0,0.06); }
+  .bnav-item { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; text-decoration: none; color: #94a3b8; font-size: 10px; font-weight: 600; background: none; border: none; cursor: pointer; transition: color 0.15s; padding: 8px 4px; }
   .bnav-item.router-link-active { color: #6366f1; }
   .bnav-item:hover { color: #475569; }
 
-  .drawer-backdrop {
-    display: block; position: fixed; inset: 0;
-    background: rgba(0,0,0,0.45); z-index: 300;
-  }
-  .mobile-drawer {
-    display: flex; flex-direction: column;
-    position: fixed; bottom: 0; left: 0; right: 0;
-    max-height: 85vh; background: white;
-    border-radius: 20px 20px 0 0; z-index: 301;
-    overflow-y: auto;
-    padding-bottom: env(safe-area-inset-bottom, 16px);
-  }
-  .drawer-header {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 20px 20px 14px; border-bottom: 1px solid #f1f5f9;
-  }
+  .drawer-backdrop { display: block; position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 300; }
+  .mobile-drawer { display: flex; flex-direction: column; position: fixed; bottom: 0; left: 0; right: 0; max-height: 85vh; background: white; border-radius: 20px 20px 0 0; z-index: 301; overflow-y: auto; padding-bottom: env(safe-area-inset-bottom, 16px); }
+  .drawer-header { display: flex; align-items: center; justify-content: space-between; padding: 20px 20px 14px; border-bottom: 1px solid #f1f5f9; }
   .drawer-user { display: flex; align-items: center; gap: 12px; }
-  .drawer-avatar {
-    width: 40px; height: 40px; background: #6366f1; border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 15px; font-weight: 700; color: white;
-  }
+  .drawer-avatar { width: 40px; height: 40px; background: #6366f1; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 700; color: white; }
   .drawer-name { font-size: 14px; font-weight: 700; color: #0f172a; }
   .drawer-role { font-size: 11px; color: #94a3b8; text-transform: capitalize; margin-top: 1px; }
-  .drawer-close {
-    width: 32px; height: 32px; background: #f1f5f9; border: none; border-radius: 50%;
-    cursor: pointer; display: flex; align-items: center; justify-content: center; color: #64748b;
-  }
+  .drawer-close { width: 32px; height: 32px; background: #f1f5f9; border: none; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; color: #64748b; }
   .drawer-nav { padding: 8px 12px 20px; }
-  .drawer-item {
-    display: flex; align-items: center;
-    width: 100%; padding: 13px 12px; border: none; background: none;
-    font-size: 15px; font-weight: 500; color: #1e293b;
-    text-align: left; cursor: pointer; border-radius: 10px; transition: background 0.1s;
-  }
+  .drawer-item { display: flex; align-items: center; width: 100%; padding: 13px 12px; border: none; background: none; font-size: 15px; font-weight: 500; color: #1e293b; text-align: left; cursor: pointer; border-radius: 10px; transition: background 0.1s; }
   .drawer-item:hover { background: #f8fafc; }
   .drawer-divider { height: 1px; background: #f1f5f9; margin: 6px 0; }
   .drawer-logout { color: #dc2626; }
   .drawer-logout:hover { background: #fef2f2; }
 }
 
-/* ── Integration health banner ─────────────────────────────────────── */
+/* ── Integration banners ──────────────────────────────────────────── */
 .integration-banners { display: flex; flex-direction: column; gap: 0; }
-.integration-banner {
-  display: flex; align-items: center; gap: 10px;
-  padding: 10px 14px; margin-bottom: 16px;
-  background: #fffbeb; border: 1px solid #fcd34d;
-  border-left: 4px solid #f59e0b; border-radius: 8px;
-  font-size: 13px; color: #78350f;
-}
+.integration-banner { display: flex; align-items: center; gap: 10px; padding: 10px 14px; margin-bottom: 16px; background: #fffbeb; border: 1px solid #fcd34d; border-left: 4px solid #f59e0b; border-radius: 8px; font-size: 13px; color: #78350f; }
 .banner-icon { font-size: 15px; flex-shrink: 0; }
 .banner-text { flex: 1; font-weight: 500; }
 .banner-link { font-weight: 700; color: #b45309; text-decoration: none; white-space: nowrap; flex-shrink: 0; }
 .banner-link:hover { text-decoration: underline; }
-.banner-dismiss {
-  background: none; border: none; cursor: pointer; color: #92400e;
-  opacity: 0.6; padding: 2px; display: flex; align-items: center;
-  flex-shrink: 0; border-radius: 4px; transition: opacity 0.15s;
-}
+.banner-dismiss { background: none; border: none; cursor: pointer; color: #92400e; opacity: 0.6; padding: 2px; display: flex; align-items: center; flex-shrink: 0; border-radius: 4px; transition: opacity 0.15s; }
 .banner-dismiss:hover { opacity: 1; }
 
 .banner-slide-enter-active, .banner-slide-leave-active { transition: all 0.25s ease; overflow: hidden; }
 .banner-slide-enter-from, .banner-slide-leave-to { opacity: 0; max-height: 0; margin-bottom: 0; padding-top: 0; padding-bottom: 0; }
 .banner-slide-enter-to, .banner-slide-leave-from { opacity: 1; max-height: 80px; margin-bottom: 16px; }
 
-/* ── Transitions ───────────────────────────────────────────────────── */
-.reveal-fade-enter-active, .reveal-fade-leave-active { transition: opacity 0.2s; }
-.reveal-fade-enter-from, .reveal-fade-leave-to { opacity: 0; }
+/* ── Transitions ─────────────────────────────────────────────────── */
+.flyout-pop-enter-active { transition: opacity 0.15s ease, transform 0.15s ease; }
+.flyout-pop-leave-active { transition: opacity 0.1s ease, transform 0.1s ease; }
+.flyout-pop-enter-from, .flyout-pop-leave-to { opacity: 0; transform: translateX(-6px); }
 
 .drawer-fade-enter-active, .drawer-fade-leave-active { transition: opacity 0.2s; }
 .drawer-fade-enter-from, .drawer-fade-leave-to { opacity: 0; }

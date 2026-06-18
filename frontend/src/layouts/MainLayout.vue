@@ -136,36 +136,44 @@ const pdfImportJobs = usePdfImportJobs()
       </div>
 
       <nav class="sidebar-nav">
-        <router-link to="/dashboard" class="nav-item" :title="sidebarCollapsed ? 'Dashboard' : undefined">
+        <router-link to="/dashboard" class="nav-item" title="Dashboard">
+          <span class="nav-abbr">DB</span>
           <span class="nav-label">Dashboard</span>
         </router-link>
-        <router-link to="/inspections" class="nav-item" :title="sidebarCollapsed ? 'Inspections' : undefined">
+        <router-link to="/inspections" class="nav-item" title="Inspections">
+          <span class="nav-abbr">INS</span>
           <span class="nav-label">Inspections</span>
         </router-link>
-        <router-link to="/properties" class="nav-item" :title="sidebarCollapsed ? 'Properties' : undefined">
+        <router-link to="/properties" class="nav-item" title="Properties">
+          <span class="nav-abbr">PROP</span>
           <span class="nav-label">Properties</span>
         </router-link>
-        <router-link to="/clients" class="nav-item" v-if="authStore.isAdmin || authStore.isManager" :title="sidebarCollapsed ? 'Clients' : undefined">
+        <router-link to="/clients" class="nav-item" v-if="authStore.isAdmin || authStore.isManager" title="Clients">
+          <span class="nav-abbr">CLI</span>
           <span class="nav-label">Clients</span>
         </router-link>
-        <router-link to="/users" class="nav-item" v-if="authStore.isAdmin || authStore.isManager" :title="sidebarCollapsed ? 'Users' : undefined">
+        <router-link to="/users" class="nav-item" v-if="authStore.isAdmin || authStore.isManager" title="Users">
+          <span class="nav-abbr">USR</span>
           <span class="nav-label">Users</span>
         </router-link>
-        <div class="nav-divider"></div>
 
         <!-- PDF import progress indicator -->
-        <div v-if="pdfImportJobs.activeJobs.value.length > 0" class="nav-import-indicator" :title="sidebarCollapsed ? 'Importing PDF…' : undefined">
+        <div v-if="pdfImportJobs.activeJobs.value.length > 0" class="nav-import-indicator" title="Importing PDF…">
           <span class="import-pulse"></span>
           <span class="nav-label">Importing PDF…</span>
         </div>
-
-        <router-link to="/settings" class="nav-item" v-if="authStore.isAdmin || authStore.isManager" :title="sidebarCollapsed ? 'Settings' : undefined">
-          <span class="nav-label">Settings</span>
-        </router-link>
       </nav>
 
-      <!-- User button -->
+      <!-- Settings + User button -->
       <div class="sidebar-footer">
+        <router-link v-if="authStore.isAdmin || authStore.isManager" to="/settings" class="nav-item settings-item" title="Settings">
+          <svg class="nav-abbr settings-gear" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+          </svg>
+          <span class="nav-label">Settings</span>
+        </router-link>
+        <div class="nav-divider footer-divider"></div>
         <button class="user-btn" @click="openUserPopup" :title="sidebarCollapsed ? (authStore.user?.name || 'Account') : undefined">
           <div class="user-avatar">{{ authStore.user?.name?.charAt(0) || 'U' }}</div>
           <div v-if="!sidebarCollapsed" class="user-details">
@@ -367,7 +375,7 @@ const pdfImportJobs = usePdfImportJobs()
   transition: width 0.25s ease;
   overflow: visible;
 }
-.sidebar.collapsed { width: 64px; }
+.sidebar.collapsed { width: 72px; }
 
 /* ── Sidebar header ── */
 .sidebar-header {
@@ -405,9 +413,23 @@ const pdfImportJobs = usePdfImportJobs()
 }
 .nav-item:hover { background: rgba(255,255,255,0.1); color: white; }
 .nav-item.router-link-active { background: #6366f1; color: white; }
+.nav-abbr {
+  display: none;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #94a3b8;
+  text-align: center;
+  flex-shrink: 0;
+  transition: color 0.2s;
+}
 .nav-label { transition: opacity 0.15s; }
 
+.collapsed .nav-item { justify-content: center; padding: 11px 0; }
 .collapsed .nav-label { opacity: 0; width: 0; overflow: hidden; }
+.collapsed .nav-abbr  { display: block; }
+.collapsed .nav-item:hover .nav-abbr      { color: white; }
+.collapsed .nav-item.router-link-active .nav-abbr { color: white; }
 
 .nav-divider { height: 1px; background: rgba(255,255,255,0.1); margin: 10px 8px; }
 .collapsed .nav-divider { margin: 10px 4px; }
@@ -438,8 +460,36 @@ const pdfImportJobs = usePdfImportJobs()
 
 /* ── Sidebar footer / user button ── */
 .sidebar-footer {
-  padding: 12px 8px;
+  padding: 8px 8px 12px;
   border-top: 1px solid rgba(255,255,255,0.1);
+}
+
+.settings-item {
+  display: flex; align-items: center; gap: 12px;
+  padding: 11px 12px; border-radius: 8px;
+  color: #cbd5e1; text-decoration: none;
+  transition: all 0.2s; margin-bottom: 2px;
+  font-weight: 500; font-size: 14px;
+  white-space: nowrap; overflow: hidden;
+}
+.settings-item:hover { background: rgba(255,255,255,0.1); color: white; }
+.settings-item.router-link-active { background: #6366f1; color: white; }
+
+.settings-gear {
+  display: none;
+  flex-shrink: 0;
+  color: #94a3b8;
+  transition: color 0.2s;
+}
+.settings-item:hover .settings-gear      { color: white; }
+.settings-item.router-link-active .settings-gear { color: white; }
+
+.collapsed .settings-item { justify-content: center; padding: 11px 0; }
+.collapsed .settings-item .nav-label { opacity: 0; width: 0; overflow: hidden; }
+.collapsed .settings-gear { display: block; }
+
+.footer-divider {
+  margin: 6px 8px;
 }
 .user-btn {
   width: 100%; display: flex; align-items: center; gap: 10px;
@@ -489,7 +539,7 @@ const pdfImportJobs = usePdfImportJobs()
   min-height: 100vh;
   transition: margin-left 0.25s ease;
 }
-.sidebar-is-collapsed .main-content { margin-left: 64px; }
+.sidebar-is-collapsed .main-content { margin-left: 72px; }
 
 /* Fullscreen mode: the child view manages its own scroll internally */
 .main-content.main-fullscreen {
@@ -500,7 +550,7 @@ const pdfImportJobs = usePdfImportJobs()
   display: flex;
   flex-direction: column;
 }
-.sidebar-is-collapsed .main-content.main-fullscreen { margin-left: 64px; }
+.sidebar-is-collapsed .main-content.main-fullscreen { margin-left: 72px; }
 
 /* ── Mobile elements — hidden on desktop ── */
 .mobile-topbar,
@@ -530,7 +580,7 @@ const pdfImportJobs = usePdfImportJobs()
   border: 1px solid #e2e8f0;
   transition: left 0.25s ease;
 }
-.user-popup.collapsed { left: 76px; }
+.user-popup.collapsed { left: 84px; }
 
 .popup-header {
   display: flex; align-items: center; gap: 10px;

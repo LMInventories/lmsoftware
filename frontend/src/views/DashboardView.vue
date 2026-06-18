@@ -18,7 +18,7 @@ const stats = ref({
 const loading = ref(true)
 
 const statusConfig = {
-  created:    { color: '#94a3b8', bg: '#f8fafc', label: 'Created'    },
+  created:    { color: '#64748b', bg: '#f8fafc', label: 'Created'    },
   assigned:   { color: '#3b82f6', bg: '#eff6ff', label: 'Assigned'   },
   active:     { color: '#10b981', bg: '#f0fdf4', label: 'Active'     },
   processing: { color: '#f59e0b', bg: '#fffbeb', label: 'Processing' },
@@ -97,9 +97,24 @@ onMounted(fetchDashboardStats)
       <p class="subtitle">Overview &amp; activity</p>
     </div>
 
-    <div v-if="loading" class="loading-state">
-      <div class="spinner"></div>
-      <span>Loading…</span>
+    <div v-if="loading" class="dash-skeleton">
+      <div class="sk-tiles">
+        <div v-for="n in 6" :key="n" class="sk-tile">
+          <div class="sk-bar"></div>
+          <div class="sk-num"></div>
+          <div class="sk-lbl"></div>
+        </div>
+      </div>
+      <div class="sk-panels">
+        <div class="sk-panel">
+          <div class="sk-panel-header"></div>
+          <div v-for="n in 5" :key="n" class="sk-row"></div>
+        </div>
+        <div class="sk-panel">
+          <div class="sk-panel-header"></div>
+          <div v-for="n in 5" :key="n" class="sk-row"></div>
+        </div>
+      </div>
     </div>
 
     <div v-else>
@@ -266,15 +281,72 @@ onMounted(fetchDashboardStats)
 h1 { font-size: 21px; font-weight: 700; color: #0f172a; margin: 0 0 2px; }
 .subtitle { font-size: 12px; color: #94a3b8; margin: 0; }
 
-.loading-state {
-  display: flex; align-items: center; gap: 10px;
-  padding: 60px; justify-content: center;
-  color: #94a3b8; font-size: 14px;
+/* ── Dashboard skeleton ─────────────────────────────────────────────────── */
+@keyframes shimmer {
+  0%   { background-position: -600px 0; }
+  100% { background-position: 600px 0; }
 }
-.spinner {
-  width: 18px; height: 18px;
-  border: 2px solid #e2e8f0; border-top-color: #6366f1;
-  border-radius: 50%; animation: spin 0.7s linear infinite;
+.sk-shimmer {
+  background: linear-gradient(90deg, #e2e8f0 25%, #f1f5f9 50%, #e2e8f0 75%);
+  background-size: 1200px 100%;
+  animation: shimmer 1.5s infinite linear;
+  border-radius: 6px;
+}
+.dash-skeleton { display: flex; flex-direction: column; gap: 20px; }
+.sk-tiles {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 8px;
+}
+.sk-tile {
+  background: white;
+  border: 1px solid #e9ecef;
+  border-radius: 9px;
+  padding: 16px 14px;
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  position: relative; overflow: hidden;
+}
+.sk-bar {
+  position: absolute; top: 0; left: 0; right: 0; height: 3px;
+  background: linear-gradient(90deg, #e2e8f0 25%, #f1f5f9 50%, #e2e8f0 75%);
+  background-size: 1200px 100%;
+  animation: shimmer 1.5s infinite linear;
+}
+.sk-num {
+  width: 40px; height: 26px; border-radius: 6px;
+  background: linear-gradient(90deg, #e2e8f0 25%, #f1f5f9 50%, #e2e8f0 75%);
+  background-size: 1200px 100%;
+  animation: shimmer 1.5s infinite linear;
+  margin-top: 4px;
+}
+.sk-lbl {
+  width: 56px; height: 10px; border-radius: 4px;
+  background: linear-gradient(90deg, #e2e8f0 25%, #f1f5f9 50%, #e2e8f0 75%);
+  background-size: 1200px 100%;
+  animation: shimmer 1.5s infinite linear;
+}
+.sk-panels { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.sk-panel {
+  background: white; border: 1px solid #e8ecf1; border-radius: 11px; overflow: hidden;
+}
+.sk-panel-header {
+  height: 44px; border-bottom: 1px solid #f1f5f9;
+  background: linear-gradient(90deg, #f8fafc 25%, #f1f5f9 50%, #f8fafc 75%);
+  background-size: 1200px 100%;
+  animation: shimmer 1.5s infinite linear;
+}
+.sk-row {
+  height: 48px; border-bottom: 1px solid #f8fafc;
+  background: linear-gradient(90deg, #ffffff 25%, #f8fafc 50%, #ffffff 75%);
+  background-size: 1200px 100%;
+  animation: shimmer 1.5s infinite linear;
+}
+@media (max-width: 1100px) {
+  .sk-tiles { grid-template-columns: repeat(3, 1fr); }
+  .sk-panels { grid-template-columns: 1fr; }
+}
+@media (max-width: 640px) {
+  .sk-tiles { grid-template-columns: repeat(2, 1fr); }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 

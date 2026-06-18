@@ -137,19 +137,19 @@ const pdfImportJobs = usePdfImportJobs()
 
       <nav class="sidebar-nav">
         <router-link to="/dashboard" class="nav-item" :title="sidebarCollapsed ? 'Dashboard' : undefined">
-          <span class="icon">📊</span><span class="nav-label">Dashboard</span>
+          <span class="nav-label">Dashboard</span>
         </router-link>
         <router-link to="/inspections" class="nav-item" :title="sidebarCollapsed ? 'Inspections' : undefined">
-          <span class="icon">📋</span><span class="nav-label">Inspections</span>
+          <span class="nav-label">Inspections</span>
         </router-link>
         <router-link to="/properties" class="nav-item" :title="sidebarCollapsed ? 'Properties' : undefined">
-          <span class="icon">🏢</span><span class="nav-label">Properties</span>
+          <span class="nav-label">Properties</span>
         </router-link>
         <router-link to="/clients" class="nav-item" v-if="authStore.isAdmin || authStore.isManager" :title="sidebarCollapsed ? 'Clients' : undefined">
-          <span class="icon">👥</span><span class="nav-label">Clients</span>
+          <span class="nav-label">Clients</span>
         </router-link>
         <router-link to="/users" class="nav-item" v-if="authStore.isAdmin || authStore.isManager" :title="sidebarCollapsed ? 'Users' : undefined">
-          <span class="icon">👤</span><span class="nav-label">Users</span>
+          <span class="nav-label">Users</span>
         </router-link>
         <div class="nav-divider"></div>
 
@@ -160,7 +160,7 @@ const pdfImportJobs = usePdfImportJobs()
         </div>
 
         <router-link to="/settings" class="nav-item" v-if="authStore.isAdmin || authStore.isManager" :title="sidebarCollapsed ? 'Settings' : undefined">
-          <span class="icon">⚙️</span><span class="nav-label">Settings</span>
+          <span class="nav-label">Settings</span>
         </router-link>
       </nav>
 
@@ -265,16 +265,16 @@ const pdfImportJobs = usePdfImportJobs()
           </button>
         </div>
         <div class="drawer-nav">
-          <button class="drawer-item" @click="navigate('/dashboard')"><span class="drawer-icon">📊</span><span>Dashboard</span></button>
-          <button class="drawer-item" @click="navigate('/inspections')"><span class="drawer-icon">📋</span><span>Inspections</span></button>
-          <button class="drawer-item" @click="navigate('/properties')"><span class="drawer-icon">🏢</span><span>Properties</span></button>
-          <button class="drawer-item" v-if="authStore.isAdmin || authStore.isManager" @click="navigate('/clients')"><span class="drawer-icon">👥</span><span>Clients</span></button>
-          <button class="drawer-item" v-if="authStore.isAdmin || authStore.isManager" @click="navigate('/users')"><span class="drawer-icon">👤</span><span>Users</span></button>
+          <button class="drawer-item" @click="navigate('/dashboard')"><span>Dashboard</span></button>
+          <button class="drawer-item" @click="navigate('/inspections')"><span>Inspections</span></button>
+          <button class="drawer-item" @click="navigate('/properties')"><span>Properties</span></button>
+          <button class="drawer-item" v-if="authStore.isAdmin || authStore.isManager" @click="navigate('/clients')"><span>Clients</span></button>
+          <button class="drawer-item" v-if="authStore.isAdmin || authStore.isManager" @click="navigate('/users')"><span>Users</span></button>
           <div class="drawer-divider"></div>
-          <button class="drawer-item" v-if="authStore.isAdmin || authStore.isManager" @click="navigate('/settings')"><span class="drawer-icon">⚙️</span><span>Settings</span></button>
-          <button class="drawer-item" @click="navigate('/change-password')"><span class="drawer-icon">🔑</span><span>Change Password</span></button>
+          <button class="drawer-item" v-if="authStore.isAdmin || authStore.isManager" @click="navigate('/settings')"><span>Settings</span></button>
+          <button class="drawer-item" @click="navigate('/change-password')"><span>Change Password</span></button>
           <div class="drawer-divider"></div>
-          <button class="drawer-item drawer-logout" @click="logout"><span class="drawer-icon">🚪</span><span>Logout</span></button>
+          <button class="drawer-item drawer-logout" @click="logout"><span>Logout</span></button>
         </div>
       </div>
     </Transition>
@@ -405,10 +405,8 @@ const pdfImportJobs = usePdfImportJobs()
 }
 .nav-item:hover { background: rgba(255,255,255,0.1); color: white; }
 .nav-item.router-link-active { background: #6366f1; color: white; }
-.nav-item .icon { font-size: 18px; width: 22px; text-align: center; flex-shrink: 0; }
 .nav-label { transition: opacity 0.15s; }
 
-.collapsed .nav-item { justify-content: center; padding: 11px 0; }
 .collapsed .nav-label { opacity: 0; width: 0; overflow: hidden; }
 
 .nav-divider { height: 1px; background: rgba(255,255,255,0.1); margin: 10px 8px; }
@@ -683,8 +681,7 @@ const pdfImportJobs = usePdfImportJobs()
     text-align: left; cursor: pointer; border-radius: 10px; transition: background 0.1s;
   }
   .drawer-item:hover { background: #f8fafc; }
-  .drawer-icon { font-size: 18px; width: 26px; text-align: center; }
-  .drawer-divider { height: 1px; background: #f1f5f9; margin: 6px 0; }
+.drawer-divider { height: 1px; background: #f1f5f9; margin: 6px 0; }
   .drawer-logout { color: #dc2626; }
   .drawer-logout:hover { background: #fef2f2; }
 }

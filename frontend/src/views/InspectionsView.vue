@@ -199,12 +199,25 @@ const hourOptions = ['09', '10', '11', '12', '13', '14', '15', '16', '17']
 const minuteOptions = ['00', '15', '30', '45']
 
 const statusColors = {
-  created: '#94a3b8',
+  created: '#64748b',
   assigned: '#3b82f6',
   active: '#10b981',
   processing: '#f59e0b',
   review: '#8b5cf6',
   complete: '#10b981'
+}
+
+const inspectionTypeLabels = {
+  check_in:      'Check In',
+  check_out:     'Check Out',
+  inventory:     'Inventory',
+  interim:       'Interim',
+  midterm:       'Midterm',
+  damage_report: 'Damage Report',
+  heads_up:      'Heads Up',
+}
+function typeLabel(type) {
+  return inspectionTypeLabels[type] || (type || '').replace(/_/g, ' ')
 }
 
 const statusOptions = [
@@ -620,15 +633,27 @@ async function handleSubmit() {
   }
 }
 
-async function deleteInspection(id) {
-  if (!confirm('Delete this inspection?')) return
+// ── Delete confirmation ─────────────────────────────────────────────────────
+const confirmDeleteId = ref(null)
+const confirmDeleting = ref(false)
+
+function promptDelete(id) {
+  confirmDeleteId.value = id
+}
+
+async function confirmDelete() {
+  if (!confirmDeleteId.value) return
+  confirmDeleting.value = true
   try {
-    await api.deleteInspection(id)
+    await api.deleteInspection(confirmDeleteId.value)
     toast.success('Inspection deleted')
+    confirmDeleteId.value = null
     fetchInspections()
   } catch (error) {
     console.error('Failed to delete inspection:', error)
     toast.error('Failed to delete inspection')
+  } finally {
+    confirmDeleting.value = false
   }
 }
 
@@ -776,7 +801,18 @@ onMounted(async () => {
       title="Add Inspection"
     >+</button>
 
-    <div v-if="loading" class="loading">Loading...</div>
+    <!-- Skeleton loader -->
+    <div v-if="loading" class="inspections-list">
+      <div v-for="n in 6" :key="n" class="skeleton-card">
+        <div class="sk-banner"></div>
+        <div class="sk-body">
+          <div class="sk-line sk-line--short"></div>
+          <div class="sk-line sk-line--full"></div>
+          <div class="sk-line sk-line--med"></div>
+        </div>
+        <div class="sk-footer"></div>
+      </div>
+    </div>
 
       <div v-else class="inspections-list">
         <div v-for="inspection in filteredInspections" :key="inspection.id" class="inspection-card" @click="viewInspection(inspection.id)">
@@ -794,7 +830,7 @@ onMounted(async () => {
 
           <div class="card-body">
             <div class="card-top">
-              <div class="card-type-badge">{{ inspection.inspection_type.replace(/_/g,' ').toUpperCase() }}</div>
+              <div class="card-type-badge">{{ typeLabel(inspection.inspection_type) }}</div>
               <span class="status-badge" :style="{ backgroundColor: statusColors[inspection.status] }">{{ inspection.status }}</span>
             </div>
             <h3 class="card-address">{{ inspection.property_address }}</h3>
@@ -820,13 +856,32 @@ onMounted(async () => {
 
           <div class="card-footer">
             <span class="card-created">Created {{ new Date(inspection.created_at).toLocaleDateString('en-GB') }}</span>
-            <button v-if="authStore.isAdmin || authStore.isManager" @click.stop="deleteInspection(inspection.id)" class="btn-delete-sm">✕</button>
+            <button v-if="authStore.isAdmin || authStore.isManager" @click.stop="promptDelete(inspection.id)" class="btn-delete-sm">✕</button>
           </div>
         </div>
         <div v-if="filteredInspections.length === 0" class="empty-state">
-          {{ filters.client_ids.length || filters.postcode || filters.reference || filters.statuses.length || filters.clerk_ids.length
-            ? 'No inspections match your filters.'
-            : 'No inspections yet. Create your first inspection!' }}
+          <svg class="empty-icon" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="8" y="10" width="48" height="44" rx="4" stroke="#cbd5e1" stroke-width="2.5"/>
+            <path d="M20 10V6a2 2 0 0 1 2-2h20a2 2 0 0 1 2 2v4" stroke="#cbd5e1" stroke-width="2.5"/>
+            <line x1="20" y1="28" x2="44" y2="28" stroke="#e2e8f0" stroke-width="2" stroke-linecap="round"/>
+            <line x1="20" y1="36" x2="38" y2="36" stroke="#e2e8f0" stroke-width="2" stroke-linecap="round"/>
+            <line x1="20" y1="44" x2="30" y2="44" stroke="#e2e8f0" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          <p class="empty-title">
+            {{ filters.client_ids.length || filters.postcode || filters.reference || filters.statuses.length || filters.clerk_ids.length
+              ? 'No inspections match your filters'
+              : 'No inspections yet' }}
+          </p>
+          <p class="empty-sub">
+            {{ filters.client_ids.length || filters.postcode || filters.reference || filters.statuses.length || filters.clerk_ids.length
+              ? 'Try adjusting or clearing the filters above.'
+              : 'Get started by creating your first inspection.' }}
+          </p>
+          <button
+            v-if="!filters.client_ids.length && !filters.postcode && !filters.reference && !filters.statuses.length && !filters.clerk_ids.length && (authStore.isAdmin || authStore.isManager || authStore.isClient)"
+            class="btn-primary empty-cta"
+            @click="openModal"
+          >+ Add Inspection</button>
         </div>
       </div>
     </div>
@@ -878,7 +933,9 @@ onMounted(async () => {
         <button @click="clearCalendarFilters" class="btn-clear-filters">Clear Filters</button>
       </div>
 
-      <div v-if="loading" class="loading">Loading calendar...</div>
+      <div v-if="loading" class="calendar-skeleton">
+        <div v-for="n in 3" :key="n" class="sk-cal-row"></div>
+      </div>
 
       <div v-else class="calendar-container">
         <div class="calendar-toolbar">
@@ -1179,6 +1236,23 @@ onMounted(async () => {
       @close="showPdfImportModal = false"
       @saved="showPdfImportModal = false; fetchInspections()"
     />
+
+    <!-- ══ Delete Confirmation Modal ═══════════════════════════════════ -->
+    <div v-if="confirmDeleteId" class="modal-overlay" @click.self="confirmDeleteId = null">
+      <div class="modal modal-small confirm-modal">
+        <div class="confirm-icon">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+        </div>
+        <h3 class="confirm-title">Delete inspection?</h3>
+        <p class="confirm-body">This cannot be undone. All data for this inspection will be permanently removed.</p>
+        <div class="confirm-actions">
+          <button class="btn-secondary" @click="confirmDeleteId = null">Cancel</button>
+          <button class="btn-danger" :disabled="confirmDeleting" @click="confirmDelete">
+            {{ confirmDeleting ? 'Deleting…' : 'Delete' }}
+          </button>
+        </div>
+      </div>
+    </div>
 
     <!-- Date Picker Modal -->
     <div v-if="showDatePicker" class="modal-overlay" @click.self="showDatePicker = false">
@@ -1534,20 +1608,96 @@ onMounted(async () => {
 }
 .btn-delete-sm:hover { background: #fef2f2; color: #ef4444; }
 
+/* ── Empty state ─────────────────────────────────────────────────────────── */
 .empty-state {
   grid-column: 1 / -1;
-  text-align: center;
-  padding: 60px 20px;
-  color: #94a3b8;
-  font-size: 15px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 72px 20px 56px;
+  gap: 8px;
+}
+.empty-icon { width: 64px; height: 64px; margin-bottom: 8px; }
+.empty-title { font-size: 16px; font-weight: 700; color: #475569; margin: 0; }
+.empty-sub   { font-size: 13px; color: #94a3b8; margin: 0; text-align: center; }
+.empty-cta   { margin-top: 12px; }
+
+/* ── Skeleton loader ─────────────────────────────────────────────────────── */
+@keyframes shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+.skeleton-card {
+  background: white;
+  border: 1px solid #e8ecf1;
+  border-radius: 12px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.sk-banner {
+  height: 54px;
+  background: linear-gradient(90deg, #e2e8f0 25%, #f1f5f9 50%, #e2e8f0 75%);
+  background-size: 800px 100%;
+  animation: shimmer 1.4s infinite linear;
+}
+.sk-body {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+}
+.sk-line {
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, #e2e8f0 25%, #f1f5f9 50%, #e2e8f0 75%);
+  background-size: 800px 100%;
+  animation: shimmer 1.4s infinite linear;
+}
+.sk-line--short { width: 40%; }
+.sk-line--med   { width: 60%; }
+.sk-line--full  { width: 90%; }
+.sk-footer {
+  height: 36px;
+  border-top: 1px solid #f1f5f9;
+  background: linear-gradient(90deg, #f8fafc 25%, #f1f5f9 50%, #f8fafc 75%);
+  background-size: 800px 100%;
+  animation: shimmer 1.4s infinite linear;
 }
 
-.loading {
+/* ── Delete confirmation modal ──────────────────────────────────────────── */
+.confirm-modal {
+  padding: 32px 28px 24px;
   text-align: center;
-  padding: 60px;
-  color: #94a3b8;
-  font-size: 15px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
 }
+.confirm-icon {
+  width: 56px; height: 56px;
+  background: #fef2f2;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  margin-bottom: 4px;
+}
+.confirm-title { font-size: 17px; font-weight: 700; color: #0f172a; margin: 0; }
+.confirm-body  { font-size: 13px; color: #64748b; margin: 0; line-height: 1.5; max-width: 280px; }
+.confirm-actions { display: flex; gap: 10px; justify-content: center; margin-top: 8px; }
+.btn-danger {
+  padding: 9px 20px;
+  background: #ef4444;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.btn-danger:hover:not(:disabled) { background: #dc2626; }
+.btn-danger:disabled { opacity: 0.6; cursor: not-allowed; }
 
 /* Calendar */
 .calendar-view { margin-top: 8px; }
@@ -1936,6 +2086,15 @@ onMounted(async () => {
   font-size: 20px;
 }
 
+
+/* ── Calendar skeleton ──────────────────────────────────────────────────── */
+.calendar-skeleton { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
+.sk-cal-row {
+  height: 80px; border-radius: 8px;
+  background: linear-gradient(90deg, #e2e8f0 25%, #f1f5f9 50%, #e2e8f0 75%);
+  background-size: 800px 100%;
+  animation: shimmer 1.4s infinite linear;
+}
 
 /* ── Multi-select dropdown filters ─────────────────────────────────────── */
 .filter-group { position: relative; }

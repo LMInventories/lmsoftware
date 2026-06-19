@@ -39,7 +39,9 @@
       "Bash(grep -v \"//\")",
       "Bash(grep -v \"//\\\\|getInspection\\\\|getTemplate\\\\|getProperty\\\\|getAction\\\\|getFixed\\\\|getMidterm\\\\|getSection\\\\|getClient\\\\|getHeads\\\\|updateInspection\\\\|updateProperty\\\\|pdfImport\\\\|getPropertyHistory\\\\|getTem\")",
       "Read(//c/Projects/**)",
-      "Read(//c/Projects\" 2>/dev/**)"
+      "Read(//c/Projects\" 2>/dev/**)",
+      "PowerShell(Get-ChildItem \"C:\\\\Projects\\\\inspectpro-mobile\" | Where-Object { $_.Name -ne \"node_modules\" } | Select-Object Name, PSIsContainer)",
+      "PowerShell(Get-ChildItem \"C:\\\\Projects\\\\inspectpro-mobile\\\\src\" -Recurse | Where-Object { !$_.PSIsContainer } | Select-Object FullName | Sort-Object FullName)"
     ]
   }
 }

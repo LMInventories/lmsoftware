@@ -2410,6 +2410,8 @@ EXCLUDE:
 FORMATTING
 ════════════════════════════════════════════════════
 - Group all observations by room. Write the room name alone on its own line, then list each issue for that room on the following line(s).
+- Leave a blank line between each room group (i.e. after the last issue line for a room, add an empty line before the next room name).
+- Each sentence or distinct observation MUST be on its own line — never run two sentences together on the same line.
 - Do NOT consolidate the same defect from multiple rooms onto one line — each affected room gets its own group.
 - No bullet points, no dashes, no room name prefix on the issue lines themselves (the room heading above provides the context).
 - Capitalise the first word of each line.
@@ -2419,8 +2421,10 @@ FORMATTING
 Example — flooring issues in three rooms:
 Kitchen
 Issue with flooring
+
 Bedroom 1
 Issue with flooring
+
 Bedroom 2
 Issue with flooring
 

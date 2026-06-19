@@ -219,7 +219,7 @@ async function saveProperty() {
   if (!form.value.postcode.trim()) { toast.warning('Postcode is required'); return null }
   if (!address) { toast.warning('Address is required'); return null }
   if (!form.value.client_id) { toast.warning('Client is required'); return null }
-  const DETACHMENT_TYPE_MAP: Record<string, string> = {
+  const DETACHMENT_TYPE_MAP = {
     'Terraced':           'house',
     'Semi-Detached':      'house',
     'Detached':           'house',

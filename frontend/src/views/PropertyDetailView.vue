@@ -128,9 +128,18 @@ function openEditDetails() {
 async function saveDetails() {
   const address = buildAddress()
   if (!address) { toast.warning('Address is required'); return }
+  const DETACHMENT_TYPE_MAP: Record<string, string> = {
+    'Terraced':           'house',
+    'Semi-Detached':      'house',
+    'Detached':           'house',
+    'Purpose Built Flat': 'flat',
+    'Converted Flat':     'flat',
+    'Bungalow':           'bungalow',
+    'Penthouse':          'flat',
+  }
   const payload = {
     address,
-    property_type: 'residential',
+    property_type: DETACHMENT_TYPE_MAP[editForm.value.detachment_type] || 'residential',
     bedrooms: editForm.value.bedrooms === '' ? null : Number(editForm.value.bedrooms),
     bathrooms: editForm.value.bathrooms === '' ? null : Number(editForm.value.bathrooms),
     furnished: editForm.value.furnished,

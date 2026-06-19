@@ -219,9 +219,18 @@ async function saveProperty() {
   if (!form.value.postcode.trim()) { toast.warning('Postcode is required'); return null }
   if (!address) { toast.warning('Address is required'); return null }
   if (!form.value.client_id) { toast.warning('Client is required'); return null }
+  const DETACHMENT_TYPE_MAP: Record<string, string> = {
+    'Terraced':           'house',
+    'Semi-Detached':      'house',
+    'Detached':           'house',
+    'Purpose Built Flat': 'flat',
+    'Converted Flat':     'flat',
+    'Bungalow':           'bungalow',
+    'Penthouse':          'flat',
+  }
   const payload = {
     address,
-    property_type: 'residential',
+    property_type: DETACHMENT_TYPE_MAP[form.value.detachment_type] || 'residential',
     bedrooms: form.value.bedrooms === '' ? null : Number(form.value.bedrooms),
     bathrooms: form.value.bathrooms === '' ? null : Number(form.value.bathrooms),
     furnished: form.value.furnished,

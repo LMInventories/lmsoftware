@@ -128,7 +128,7 @@ function openEditDetails() {
 async function saveDetails() {
   const address = buildAddress()
   if (!address) { toast.warning('Address is required'); return }
-  const DETACHMENT_TYPE_MAP: Record<string, string> = {
+  const DETACHMENT_TYPE_MAP = {
     'Terraced':           'house',
     'Semi-Detached':      'house',
     'Detached':           'house',

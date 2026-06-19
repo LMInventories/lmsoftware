@@ -46,7 +46,8 @@
       "Bash(grep -rn \"claudeProxy\\\\|transcribe/condition\\\\|transcribe.*ai\\\\|ai.*proxy\\\\|\\\\/transcribe\\\\/\" C:/Projects/lmsoftware/frontend/src --include=\"*.vue\" --include=\"*.js\")",
       "Bash(grep -rn \"claudeProxy\\\\|\\\\/api\\\\/transcribe\\\\|\\\\/transcribe\\\\/condition\" C:/Projects/lmsoftware/frontend/src --include=\"*.vue\" --include=\"*.js\")",
       "Bash(xargs grep -l \"condition.summary\\\\|property_type\\\\|Residential\\\\|detachment\")",
-      "Bash(grep -rn \"generateCondition\\\\|generate_condition\\\\|transcribe\\\\/condition\\\\|\\\\/condition-summary\\\\|aiCondition\\\\|conditionAI\\\\|aiSumm\" C:/Projects/lmsoftware/frontend/src --include=\"*.vue\" --include=\"*.js\")"
+      "Bash(grep -rn \"generateCondition\\\\|generate_condition\\\\|transcribe\\\\/condition\\\\|\\\\/condition-summary\\\\|aiCondition\\\\|conditionAI\\\\|aiSumm\" C:/Projects/lmsoftware/frontend/src --include=\"*.vue\" --include=\"*.js\")",
+      "Bash(grep *)"
     ]
   }
 }

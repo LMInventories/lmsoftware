@@ -2383,117 +2383,118 @@ def generate_condition_summary():
     inspection_text = '\n'.join(lines) if lines else 'No room data available.'
 
     items_list = '\n'.join(
-        f'  - ID: "{item["id"]}", Name: "{item["name"]}"'
-        for item in summary_items
+        f'  {i+1}. ID: "{item["id"]}", Name: "{item["name"]}"'
+        for i, item in enumerate(summary_items)
     )
 
     client = anthropic.Anthropic(api_key=os.environ.get('ANTHROPIC_API_KEY'))
 
     prompt = f"""You are writing a Condition Summary for a UK property inspection report.
 
-PROPERTY DETAILS:
-{property_description}
+════════════════════════════════════════════════════
+PHASE 1 — INTERNALIZE THE SUMMARY SECTIONS
+Before reading the inspection data, memorize the following sections.
+Every finding must be assigned to EXACTLY ONE section. No duplication.
+════════════════════════════════════════════════════
 
-INSPECTION FINDINGS (room-by-room):
-{inspection_text}
+PROPERTY: {property_description}
 
-CONDITION SUMMARY ITEMS — produce output for each ID below:
+SUMMARY SECTIONS (numbered for reference):
 {items_list}
 
-════════════════════════════════════════════════════
-ITEM-TYPE RULES — read the item name and apply the matching rule
-════════════════════════════════════════════════════
+CATEGORY GUIDE — use each section's name to determine what belongs there:
+  • Overview / Property Description → one-sentence property summary only (see OVERVIEW RULE below)
+  • Decorative Order               → general decorative finish: paintwork, wallcoverings, overall presentation
+  • Doors / Frames / Fittings      → door leaves, frames, architraves, hinges, handles, locks, door closers
+  • Ceilings                       → ceiling surfaces, coving, plasterwork overhead, ceiling roses
+  • Lighting / Light Fittings      → light fittings, lampshades, bulbs, track lighting
+  • Walls                          → wall surfaces, plasterwork, wallpaper, tiling on walls
+  • Windows / Fittings             → window frames, glazing, handles, locks, restrictors, blinds, curtains
+  • Electrics / Heating            → sockets, switches, consumer unit, radiators, boiler, thermostat, towel rails
+  • Woodwork / Flooring            → skirting boards, architraves, window boards, carpet, hard floors, thresholds
+  • Contents / Furniture           → furniture, soft furnishings, mirrors, art, inventory items
+  • Appliances                     → kitchen appliances, white goods, extractor fans, washer/dryer
+  • Sanitaryware / Bathrooms       → bath, shower tray/enclosure, sink, toilet, cistern, taps, mixers, tiles in wet areas
+  • Outdoor / Garden / External    → garden, patio, decking, fencing, gates, garage, external paths, gutters
 
-OVERVIEW  (item name contains "overview", "description of property", or "property description"):
-  Write a single sentence describing the property using PROPERTY DETAILS above.
-  Format: "Property is a [X]-bedroom, [Y]-bathroom [furnished/unfurnished/part furnished] [type]."
-  Where [type] is the property type from PROPERTY DETAILS (e.g. flat, house, apartment, bungalow).
-  If the inspection findings include outdoor features such as a garden, garage, balcony, or terrace, append them
-  to the sentence (e.g. "with garden", "with garage", "with garden and garage").
-  Omit any detail that is unknown. No other text.
-
-DECORATIVE ORDER  (item name contains "decorative"):
-  List, room by room in the order they appear in the inspection, any notable observations about:
-    doors, door frames, skirting boards, architraves, woodwork, panelling, radiators, heating.
-  Include moderate-to-major defects only. Group by room: room name on its own line, then the observation(s) below it.
-  If no notable defects are found, return "In good order".
-
-WALLS  (item name is "walls", "wall condition", or similar — specifically about walls):
-  List only wall-related findings across all rooms.
-  Moderate-to-major defects only (cracks, holes, damp, mould, peeling paint, failed plaster, damage to tiles on walls).
-  Exclude floors, ceilings, and other surfaces.
-  Group by room: room name on its own line, then the observation(s) below it.
-
-APPLIANCES  (item name contains "appliance"):
-  List any appliance with no power, non-functional, or major physical damage.
-  Group by room: room name on its own line, then the appliance issue(s) below it. Exclude minor wear.
-  If no defects are found, return "All tested for power".
-
-SANITARY WARE / BATHROOMS  (item name contains "sanitary", "sanitaryware", "sanitary ware",
-  "bathroom", "plumbing", or "wc"):
-  List issues with bathroom staple items only:
-    sinks, wash basins, toilets, WCs, cisterns, bidets, baths, shower trays, shower enclosures, taps, mixers.
-  Moderate-to-major defects only.
-  Group by room: room name on its own line (e.g. "Bathroom", "En Suite"), then the issue(s) below it.
-
-LIGHTING  (item name contains "light" or "lighting"):
-  First line must always be exactly: "All tested for power"
-  Then list any light fittings that are non-functional and any rooms where bulbs are blown, expired, or missing.
-  Group by room: room name on its own line, then the issue(s) below it. Exclude minor cosmetic issues.
-
-OUTDOOR AREAS  (item name contains "garden", "balcon", "outdoor", "external", "terrace",
-  "patio", "yard", "grounds", or "exterior"):
-  List any defects: damage to fences, boundary walls, gates, paths, weed growth, overgrowth, or lack of maintenance.
-  Group by area if multiple outdoor spaces. One observation per line.
-  If no defects are found, return an empty string.
-
-ALL OTHER ITEMS:
-  Pull only findings relevant to that specific item or category name from the inspection data.
-  Group by room: room name on its own line, then the observation(s) below it.
-  If no notable issues exist, return an empty string.
+For any section name not listed above, match findings based on the plain meaning of the name.
 
 ════════════════════════════════════════════════════
-SEVERITY FILTER — applies to ALL items except where overridden above
+PHASE 2 — INSPECTION FINDINGS
+Draw from the following room-by-room inspection data to populate each section above.
 ════════════════════════════════════════════════════
-INCLUDE:
-  Damage moderate or worse: chips, cracks, breaks, gouges, splits, holes, burns
-  Structural concerns: damp, mould, water damage, water ingress, cracking plaster
-  Missing items or fittings
-  Non-functional items: no power, seized, jammed, does not operate, stuck
-  Failed finishes: failed silicone, cracked/missing grout, heavy peeling paint
-  Hardware faults: dropped hinges, broken locks/handles
 
-EXCLUDE:
-  Anything preceded by "light", "slight", "minor", or "superficial"
-  Fair wear and tear
-  "In good order" / "in fair order" / "as new" / "as inventory"
+{inspection_text}
 
 ════════════════════════════════════════════════════
-FORMATTING
+ASSIGNMENT AND FORMATTING RULES
 ════════════════════════════════════════════════════
-- Group all observations by room. Write the room name alone on its own line, then list each issue for that room on the following line(s).
-- Leave a blank line between each room group (i.e. after the last issue line for a room, add an empty line before the next room name).
-- Each sentence or distinct observation MUST be on its own line — never run two sentences together on the same line.
-- Do NOT consolidate the same defect from multiple rooms onto one line — each affected room gets its own group.
-- No bullet points, no dashes, no room name prefix on the issue lines themselves (the room heading above provides the context).
-- Capitalise the first word of each line.
-- UK English: "discolouration", "colour", "grey", "mould", "centre".
-- If there are no notable issues for an item, return an empty string for it.
 
-Example — flooring issues in three rooms:
+1. ONE FINDING PER LINE
+   Each distinct defect or observation is a single line. Never write prose paragraphs or
+   multi-sentence blocks. Never join separate issues with commas or "and".
+
+2. ONE SECTION PER FINDING
+   Assign each finding to the section whose name most closely matches the item type.
+   Do NOT repeat the same finding in multiple sections.
+
+3. GROUP BY ROOM
+   Write the room name alone on its own line. List each finding for that room on the
+   line(s) below. Leave one blank line between room groups.
+
+4. SEVERITY FILTER — applies to ALL sections except Lighting, Appliances, and Overview
+   INCLUDE: chips, cracks, breaks, gouges, holes, burns, damp, mould, water damage,
+            missing items or fittings, non-functional items (no power, seized, jammed,
+            does not operate), failed silicone/grout, heavy peeling paint, dropped hinges,
+            broken locks/handles, moderate-to-major wear or damage
+   EXCLUDE: anything described as "light", "slight", "minor", or "superficial";
+            fair wear and tear; "in good order"; "in fair order"; "as new"; "as inventory"
+
+5. OVERVIEW RULE
+   If a section is named "Overview" or "Property Description" (or similar), write exactly
+   one sentence using PROPERTY DETAILS above. No findings, no defects, no other content.
+   Format: "{property_description}"
+   Append outdoor features if present in the data (e.g. "with garden", "with garage").
+
+6. LIGHTING RULE
+   If a section is named "Lighting" or "Light Fittings", the first line must always be
+   exactly: "All tested for power"
+   Then list non-functional fittings or rooms with blown/missing bulbs only.
+
+7. APPLIANCES RULE
+   If a section is named "Appliances", the first line must always be exactly:
+   "All tested for power"
+   Then list appliances with no power, non-functional, or major physical damage only.
+
+8. EMPTY SECTIONS
+   If no qualifying findings exist for a section, return "In good order".
+   Exception — Lighting and Appliances: return "All tested for power" (no additional text).
+   Exception — Overview: return the one-sentence property summary only (no "In good order").
+   NEVER write "None noted", "No issues found", or "No defects noted".
+
+9. FORMAT
+   - Capitalise the first word of each line.
+   - No bullet points, dashes, or numbering on observation lines.
+   - UK English: "discolouration", "colour", "grey", "mould", "centre".
+
+════════════════════════════════════════════════════
+EXAMPLE OUTPUT (Walls section with findings in two rooms)
+════════════════════════════════════════════════════
 Kitchen
-Issue with flooring
+Crack to plaster above window
+Mould to corner behind boiler
 
 Bedroom 1
-Issue with flooring
-
-Bedroom 2
-Issue with flooring
+Large scuff marks to wall behind door
+Hole to wall, left of window
 
 Return ONLY valid JSON — no markdown, no extra text:
 {{
   "<itemId>": {{"condition": "..."}}
-}}"""
+}}
+
+Use \\n between lines within a condition value. Use \\n\\n between room groups.
+Sections with no defects: {{"condition": "In good order"}} (or "All tested for power" for Lighting/Appliances)."""
 
     message = client.messages.create(
         model='claude-haiku-4-5',

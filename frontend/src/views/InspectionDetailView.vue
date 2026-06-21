@@ -493,7 +493,7 @@ function exportTranscription() {
     lines.push('Transcripts are recorded when AI transcription is used on the mobile app.')
   } else {
     // Human-readable label for instant-mode command codes
-    function fmtCommand(cmd: string, field?: string): string {
+    function fmtCommand(cmd, field) {
       const f = field === 'description' ? ' (description)' : field === 'condition' ? ' (condition)' : ''
       if (cmd === 'delete')    return 'DELETE / NOT SEEN'
       if (cmd === 'add_sub')   return 'ADD SUB-ITEM'
@@ -502,8 +502,8 @@ function exportTranscription() {
       return cmd.toUpperCase()
     }
     // Human-readable label for room-mode per-item action flags
-    function fmtRoomActions(f: Record<string, any>): string {
-      const parts: string[] = []
+    function fmtRoomActions(f) {
+      const parts = []
       if (f._delete)                        parts.push('DELETE / NOT SEEN')
       if (f._descAction === 'overwrite')    parts.push('AMEND DESCRIPTION')
       if (f._descAction === 'append')       parts.push('ADD TO DESCRIPTION')
@@ -537,7 +537,7 @@ function exportTranscription() {
 
       if (entry.mode === 'room' && entry.filled && typeof entry.filled === 'object') {
         for (const [itemId, fields] of Object.entries(entry.filled)) {
-          const f = fields as Record<string, any>
+          const f = fields
           const name    = f.name || itemId
           const actions = fmtRoomActions(f)
           lines.push(`  [${name}]${actions ? `  ← ${actions}` : ''}`)

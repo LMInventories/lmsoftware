@@ -64,10 +64,11 @@ async function forceSyncDrive() {
   driveSyncResult.value = null
   try {
     const body = driveSyncDate.value ? { since: driveSyncDate.value } : {}
-    const res  = await api.http.post('/api/google/drive/force-sync', body)
+    const res  = await api.http.post('/api/google/drive/force-sync', body, { timeout: 120000 })
     driveSyncResult.value = res.data
   } catch (e) {
-    driveSyncResult.value = { error: 'Sync failed — check your Google connection and try again.' }
+    const msg = e.response?.data?.error || e.message || 'Sync failed — check your Google connection and try again.'
+    driveSyncResult.value = { error: msg }
   } finally {
     driveSyncing.value = false
   }

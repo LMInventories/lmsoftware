@@ -1298,8 +1298,8 @@ def _claude_fill_room(transcript: str, section_name: str, items: list, processed
     client = anthropic.Anthropic(api_key=os.environ.get('ANTHROPIC_API_KEY'))
 
     items_list = '\n'.join(
-        f'  - ID: "{item["id"]}", Name: "{item["name"]}"'
-        for item in items
+        f'  {i+1}. ID: "{item["id"]}", Name: "{item["name"]}"'
+        for i, item in enumerate(items)
     )
 
     processed_note = ''
@@ -1364,19 +1364,65 @@ explicit amendment even if the item name is not repeated after the command word.
 
     prompt = f"""You are processing a UK property inventory inspection dictation for a single room.
 
-The clerk walked through the room and spoke each item name aloud followed by its description and condition.
-Item names act as CHAPTER HEADINGS — when the clerk says an item name (or something close to it), everything that follows until the next item name is the description and/or condition for that item.
+PHASE 1 — INTERNALIZE THE TEMPLATE
+Before reading the transcript, memorize the following item sequence for this room.
+These are the ONLY items you will fill. They are numbered in the order the clerk is expected to cover them.
 
 Room: {section_name}
 
-Items to fill (use the ID as the JSON key, match by Name):
+ROOM ITEMS IN ORDER:
 {items_list}
+
+PHASE 2 — PARSE THE TRANSCRIPT
+The clerk walked through the room and spoke each item name aloud followed by its description and condition.
+Item names act as CHAPTER HEADINGS. When the clerk says an item name as a standalone phrase that
+EXACTLY matches a name from the list above, everything that follows belongs to that item until
+the next exact item name is spoken as a standalone heading.
+
+EXACT MATCH REQUIRED FOR CHAPTER HEADINGS:
+The spoken phrase must match the full item name from the numbered list above — case-insensitive,
+and treating "&" and "and" as interchangeable. No abbreviations, no partial words, no fragments.
+
+  ✓ "Flooring" triggers the "Flooring" item.
+  ✗ "Floor" does NOT trigger "Flooring" — it is one word short of the full name.
+  ✓ "Door and frame" triggers "Door & Frame".
+  ✗ "Door" alone does NOT trigger "Door & Frame".
+  ✓ "Built-in storage" triggers "Built-In Storage".
+  ✗ "Storage" alone does NOT trigger "Built-In Storage".
+  ✓ "Walls" triggers "Walls".
+  ✗ "Wall" alone — only acceptable if the item is literally named "Wall" (not "Walls").
+
+If the clerk says a word that is only part of an item name, it is DESCRIPTION content for
+the current item. It is never a chapter heading switch.
+
+CURRENT-ITEM LOCK — this rule overrides everything else:
+Once you are inside an item's dictation, ALL words belong to that item — including any words that happen
+to match another item's name — until the current item's content (description AND condition) is fully
+closed AND you encounter that other item's name as the very first word(s) of a new clause.
+
+  ✓ "Built-in storage. White wardrobe, floor-level shelf, in good order."
+    → Everything is Built-in storage. "floor-level" is NOT a heading for Flooring.
+  ✗ WRONG: switching to Flooring mid-sentence because "floor" appears in a description.
+
+WORD-POSITION TEST — use this to decide if a word is a chapter heading:
+Ask: Is the matching item name the VERY FIRST word(s) spoken after the previous item's condition
+has fully closed, with NOTHING else said before it in the same breath or clause?
+  ✓ Heading: "Flooring. Grey fitted carpet."           (first words after condition closed)
+  ✗ Not a heading: "shelves above floor level"          (mid-sentence inside Built-in Storage)
+  ✗ Not a heading: "door and frame of the wardrobe"     (mid-sentence inside Built-in Storage)
+  ✗ Not a heading: "walls to the interior of the unit"  (mid-sentence, location qualifier)
+
+If a word matching an item name appears after other words in a running sentence, it is NEVER a
+chapter heading — it is content for the current item only.
 {processed_note}
 Transcript:
 "{transcript}"
 
 RULES:
-1. Match each passage to the closest item name. The clerk may abbreviate (e.g. "Door" for "Door & Frame") — use fuzzy matching.
+1. A chapter heading MUST exactly match the full item name from the numbered list above (case-insensitive;
+   "&" and "and" are interchangeable). Partial words and abbreviations are NEVER chapter headings.
+   Examples: "Floor" ≠ "Flooring". "Door" ≠ "Door & Frame". "Storage" ≠ "Built-In Storage".
+   The clerk must say the complete item name for a heading switch to occur.
 2. Extract description and condition separately. If the clerk says a single phrase, put it in description.
 3. CRITICAL: Use the EXACT words the clerk spoke. Do not rephrase, paraphrase, or substitute synonyms.
    - "good order" → "Good order" (NOT "Good condition")
@@ -1473,29 +1519,42 @@ quantity) AFTER the condition has fully closed.
 ══════════════════════════════════════════════════════
 STRICT CHAPTER HEADING RULE — prevents content bleeding between items
 ══════════════════════════════════════════════════════
-A chapter heading switch can ONLY occur at the START of a new passage — when the clerk
-says an item name as a STANDALONE utterance AFTER the previous item's description and
-condition have both been fully assigned.
+A chapter heading switch can ONLY occur when ALL of the following are true:
+  1. The previous item's content (description AND condition) has fully closed.
+  2. The item name is the VERY FIRST word(s) of a new utterance — nothing spoken before it
+     in the same clause, phrase, or breath group.
+  3. The spoken phrase EXACTLY matches the full item name from the list (case-insensitive;
+     "&" ↔ "and"). Partial words and abbreviations do not qualify.
 
 Words matching another item's name that appear WITHIN an item's description or condition
-are NEVER treated as a chapter heading switch. They are content for the CURRENT item only.
+are NEVER a chapter heading switch — they are content for the CURRENT item only.
 
   ✓ CORRECT: "Built-in storage. White painted door and frame, in good order."
-      → Built-in storage: description="White painted door and frame"  condition="In good order"
-      → "door and frame" is part of the Built-in storage description.
-        It does NOT open the "Door & Frame" item, even though those words appear in the item list.
+      → Entirely Built-in storage. "door and frame" is part of the storage description.
+        It does NOT switch to the "Door & Frame" item.
 
-  ✗ WRONG: treating "door and frame" inside a Built-in storage passage as a heading for
-      the separate "Door & Frame" item — this bleeds content into the wrong item.
+  ✓ CORRECT: "Built-in storage. White shelving unit, floor-level drawer, in good order."
+      → Entirely Built-in storage. "floor-level" is NOT a heading for Flooring.
+        "floor" appears mid-sentence as part of a description — it stays with Built-in storage.
+
+  ✓ CORRECT: "Built-in storage. White painted walls to interior, in good order."
+      → Entirely Built-in storage. "walls" here refers to the interior surfaces of the
+        storage unit, not the room's Walls item.
+
+  ✗ WRONG: switching to "Flooring" because "floor" appears in "floor-level shelf" inside
+      a Built-in Storage passage — this is content bleeding and must never happen.
+
+  ✗ WRONG: treating "door and frame" inside a Built-in Storage passage as a heading for
+      the separate "Door & Frame" item — this is content bleeding.
 
   ✓ CORRECT: "Built-in storage. White painted door and frame, in good order.
               Door and frame. White painted timber door. In good order."
       → The second "Door and frame" opens a CLEARLY ISOLATED new passage after Built-in
         storage's condition has closed — this correctly switches to the Door & Frame item.
 
-The test: an item name is only a chapter heading when it is the FIRST content after a
-condition fully closes (or the very start of the transcript). Any item-name words
-encountered before that point stay inside the current item's content.
+The definitive test: does the item name appear as the FIRST WORD(S) after a condition
+has fully closed? If yes → chapter heading. If it appears after other words in a running
+sentence → it is content, never a heading.
 
 ══════════════════════════════════════════════════════
 DELETE ITEM — remove command
@@ -1858,7 +1917,10 @@ Transcript:
 "{transcript}"
 
 RULES:
-1. Match each passage to the closest item name. Abbreviations and partial names are fine.
+1. A chapter heading MUST exactly match the full item name from the list above (case-insensitive;
+   "&" and "and" are interchangeable). Partial words and abbreviations are NEVER chapter headings.
+   Examples: "Floor" ≠ "Flooring". "Door" ≠ "Door & Frame". "Storage" ≠ "Built-In Storage".
+   The clerk must say the complete item name for a heading switch to occur.
 2. Everything the clerk says after an item name is DAMAGE CONDITION — put it all in "condition".
    Never use a "description" field.
 3. VERBATIM: use the clerk's exact words. Only remove filler sounds (um, uh, er, errr, umm, erm)

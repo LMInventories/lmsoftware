@@ -460,7 +460,7 @@ const transcriptCount = computed(() => {
   if (!inspection.value?.report_data) return 0
   try {
     const rd = JSON.parse(inspection.value.report_data)
-    return (rd._recordings || []).filter(r => r.transcript).length
+    return (rd._transcriptionLog || []).length
   } catch { return 0 }
 })
 
@@ -468,7 +468,7 @@ function exportTranscription() {
   let rd = {}
   try { rd = JSON.parse(inspection.value.report_data || '{}') } catch { rd = {} }
 
-  const recs = (rd._recordings || []).filter(r => r.transcript)
+  const log  = rd._transcriptionLog || []
   const insp = inspection.value
   const addr = insp.property?.address || 'Unknown property'
   const ref  = insp.reference_number || `#${insp.id}`
@@ -488,44 +488,103 @@ function exportTranscription() {
     div,
   ]
 
-  if (!recs.length) {
-    lines.push('', 'No transcripts available for this inspection.')
-    lines.push('Transcripts are stored when recordings are processed through the AI Typist.')
+  if (!log.length) {
+    lines.push('', 'No transcripts stored for this inspection.')
+    lines.push('Transcripts are recorded when AI transcription is used on the mobile app.')
   } else {
-    for (let i = 0; i < recs.length; i++) {
-      const rec = recs[i]
-      const ts  = rec.createdAt
-        ? new Date(rec.createdAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+    // Human-readable label for instant-mode command codes
+    function fmtCommand(cmd: string, field?: string): string {
+      const f = field === 'description' ? ' (description)' : field === 'condition' ? ' (condition)' : ''
+      if (cmd === 'delete')    return 'DELETE / NOT SEEN'
+      if (cmd === 'add_sub')   return 'ADD SUB-ITEM'
+      if (cmd === 'overwrite') return `AMEND${f}`
+      if (cmd === 'append')    return `ADD TO${f}`
+      return cmd.toUpperCase()
+    }
+    // Human-readable label for room-mode per-item action flags
+    function fmtRoomActions(f: Record<string, any>): string {
+      const parts: string[] = []
+      if (f._delete)                        parts.push('DELETE / NOT SEEN')
+      if (f._descAction === 'overwrite')    parts.push('AMEND DESCRIPTION')
+      if (f._descAction === 'append')       parts.push('ADD TO DESCRIPTION')
+      if (f._condAction === 'overwrite')    parts.push('AMEND CONDITION')
+      if (f._condAction === 'append')       parts.push('ADD TO CONDITION')
+      if (Array.isArray(f._subs) && f._subs.length) parts.push('ADD SUB-ITEM')
+      return parts.join(' + ')
+    }
+
+    const SKIP_FIELDS = new Set(['_subs', '_sid', 'name', '_descAction', '_condAction', '_delete'])
+    for (let i = 0; i < log.length; i++) {
+      const entry = log[i]
+      const modeLabel = entry.mode === 'room' ? 'Room Mode' : 'Instant Mode'
+      const ts = entry.timestamp
+        ? new Date(entry.timestamp).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
         : ''
-      const dur = rec.duration ? `${rec.duration}s` : ''
-      const meta = [ts, dur].filter(Boolean).join('  ·  ')
 
       lines.push(
         '',
-        `Recording ${i + 1} of ${recs.length}`,
-        `Item:  ${rec.label || 'Unknown'}`,
-        ...(meta ? [`Time:  ${meta}`] : []),
+        `Entry ${i + 1} of ${log.length} — ${modeLabel}`,
+        `Room:  ${entry.room || 'Unknown'}`,
+        ...(entry.item    ? [`Item:  ${entry.item}`]                            : []),
+        ...(ts            ? [`Time:  ${ts}`]                                    : []),
+        ...(entry.command ? [`Command: ${fmtCommand(entry.command, entry.commandField)}`] : []),
         div,
         'TRANSCRIPT (Whisper):',
-        rec.transcript || '(empty)',
+        entry.transcript || '(empty)',
+        '',
+        'AI RESULT (Claude):',
       )
 
-      if (rec.gptResult && typeof rec.gptResult === 'object') {
-        lines.push('', 'AI RESULT (Claude):')
-        const SKIP = new Set(['_subs', '_sid'])
-        for (const [key, val] of Object.entries(rec.gptResult)) {
-          if (SKIP.has(key) || val == null || val === '') continue
-          const label = key.replace(/([A-Z])/g, ' $1').replace(/^./, s => s.toUpperCase()).trim()
-          const text  = String(val).replace(/\\n/g, '\n' + ' '.repeat(13))
-          lines.push(`${label.padEnd(12)}: ${text}`)
+      if (entry.mode === 'room' && entry.filled && typeof entry.filled === 'object') {
+        for (const [itemId, fields] of Object.entries(entry.filled)) {
+          const f = fields as Record<string, any>
+          const name    = f.name || itemId
+          const actions = fmtRoomActions(f)
+          lines.push(`  [${name}]${actions ? `  ← ${actions}` : ''}`)
+          if (f._delete) {
+            lines.push('    (item deleted)')
+            continue
+          }
+          for (const [key, val] of Object.entries(f)) {
+            if (SKIP_FIELDS.has(key) || val == null || val === '') continue
+            const label = key.replace(/([A-Z])/g, ' $1').replace(/^./, s => s.toUpperCase()).trim()
+            const text  = String(val).replace(/\\n/g, '\n' + ' '.repeat(18))
+            lines.push(`    ${label.padEnd(13)}: ${text}`)
+          }
+          const subs = f._subs || []
+          for (let j = 0; j < subs.length; j++) {
+            const s = subs[j]
+            lines.push(`    Sub-item ${j + 1}:`)
+            if (s.description) lines.push(`      Description : ${s.description.replace(/\\n/g, '\n                    ')}`)
+            if (s.condition)   lines.push(`      Condition   : ${s.condition.replace(/\\n/g, '\n                    ')}`)
+          }
         }
-        const subs = rec.gptResult._subs || []
+      } else if (entry.command === 'delete') {
+        lines.push('  (item deleted)')
+      } else if (entry.command === 'add_sub' && entry.filled?._subs) {
+        const subs = entry.filled._subs
         for (let j = 0; j < subs.length; j++) {
           const s = subs[j]
           lines.push(`  Sub-item ${j + 1}:`)
-          if (s.description) lines.push(`    Description: ${s.description.replace(/\\n/g, '\n               ')}`)
-          if (s.condition)   lines.push(`    Condition:   ${s.condition.replace(/\\n/g, '\n               ')}`)
+          if (s.description) lines.push(`    Description : ${s.description.replace(/\\n/g, '\n                  ')}`)
+          if (s.condition)   lines.push(`    Condition   : ${s.condition.replace(/\\n/g, '\n                  ')}`)
         }
+      } else if (entry.filled && typeof entry.filled === 'object') {
+        for (const [key, val] of Object.entries(entry.filled)) {
+          if (SKIP_FIELDS.has(key) || val == null || val === '') continue
+          const label = key.replace(/([A-Z])/g, ' $1').replace(/^./, s => s.toUpperCase()).trim()
+          const text  = String(val).replace(/\\n/g, '\n' + ' '.repeat(15))
+          lines.push(`  ${label.padEnd(13)}: ${text}`)
+        }
+        const subs = (entry.filled as any)._subs || []
+        for (let j = 0; j < subs.length; j++) {
+          const s = subs[j]
+          lines.push(`  Sub-item ${j + 1}:`)
+          if (s.description) lines.push(`    Description : ${s.description.replace(/\\n/g, '\n                  ')}`)
+          if (s.condition)   lines.push(`    Condition   : ${s.condition.replace(/\\n/g, '\n                  ')}`)
+        }
+      } else {
+        lines.push('  (no AI result recorded)')
       }
 
       lines.push(div)

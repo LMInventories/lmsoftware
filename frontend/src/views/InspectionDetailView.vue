@@ -576,7 +576,7 @@ function exportTranscription() {
           const text  = String(val).replace(/\\n/g, '\n' + ' '.repeat(15))
           lines.push(`  ${label.padEnd(13)}: ${text}`)
         }
-        const subs = (entry.filled as any)._subs || []
+        const subs = (entry.filled || {})._subs || []
         for (let j = 0; j < subs.length; j++) {
           const s = subs[j]
           lines.push(`  Sub-item ${j + 1}:`)

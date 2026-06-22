@@ -1380,58 +1380,65 @@ EXACTLY matches a name from the list above, everything that follows belongs to t
 the next exact item name is spoken as a standalone heading.
 
 EXACT MATCH REQUIRED FOR CHAPTER HEADINGS:
-The spoken phrase must match the full item name from the numbered list above — case-insensitive,
-and treating "&" and "and" as interchangeable. No abbreviations, no partial words, no fragments.
+A chapter heading is ONLY when the clerk speaks the item name BY ITSELF — the item name alone,
+with no preceding adjectives, no descriptive words, no prepositions, no qualifiers, nothing else.
+Case-insensitive; "&" and "and" are interchangeable.
 
-  ✓ "Flooring" triggers the "Flooring" item.
-  ✗ "Floor" does NOT trigger "Flooring" — it is one word short of the full name.
-  ✓ "Door and frame" triggers "Door & Frame".
-  ✗ "Door" alone does NOT trigger "Door & Frame".
-  ✓ "Built-in storage" triggers "Built-In Storage".
-  ✗ "Storage" alone does NOT trigger "Built-In Storage".
-  ✓ "Walls" triggers "Walls".
-  ✗ "Wall" alone — only acceptable if the item is literally named "Wall" (not "Walls").
+  ✓ "Flooring" alone → triggers "Flooring"
+  ✓ "Built-in storage" alone → triggers "Built-In Storage"
+  ✓ "Ceiling" alone → triggers "Ceiling"
+  ✗ "white painted ceiling" → does NOT trigger "Ceiling" — there are words before the noun
+  ✗ "light wood flooring" → does NOT trigger "Flooring" — there are words before the noun
+  ✗ "frosted glass light fitting" → does NOT trigger "Lighting" — descriptive phrase
+  ✗ "white painted walls" → does NOT trigger "Walls" — there are words before the noun
+  ✗ "white plastic switches and sockets" → does NOT trigger any item — descriptive phrase
+  ✗ "heavy scratches to flooring" → does NOT trigger "Flooring" — prepositional phrase
+  ✗ "Floor" → does NOT trigger "Flooring" — different word
 
-STANDALONE ANNOUNCEMENT RULE — a chapter heading must be the ENTIRE spoken phrase at that
-moment. An item name that appears INSIDE a longer noun phrase or prepositional phrase is NEVER
-a chapter heading — it is always description content for the current item.
+DO NOT ROUTE BY CONTENT SEMANTICS — this rule overrides your default understanding:
+You are NOT permitted to look at what content describes and use that to decide which item it
+belongs to. Your ONLY routing mechanism is an exact standalone item name announcement.
 
-  ✗ "light wood flooring" — 'flooring' is the head noun of a description phrase ('light wood
-      flooring'). The whole phrase is descriptive. It is NOT the clerk announcing a new item.
-  ✗ "heavy scratches to the flooring" — 'flooring' follows "heavy scratches to", making it a
-      location reference within a defect description. Not a chapter heading.
-  ✗ "interior matching reception" — descriptive phrase. No heading.
-  ✗ "walls to the interior of the unit" — 'walls' follows a location qualifier. Not a heading.
-  ✗ "socket cover" — 'socket' is a modifier inside a noun phrase. Not a heading.
-  ✓ "Flooring." spoken alone after condition has closed — exact standalone. Heading.
-  ✓ "Built-in storage." spoken alone — exact standalone. Heading.
+  Even if "white painted ceiling" obviously describes a ceiling surface, and even if "Ceiling"
+  exists as an item in the template — if the clerk did not say "Ceiling" alone as a standalone
+  announcement, the content STAYS IN THE CURRENT ITEM. Do not move it.
 
-If an item name word appears AFTER any other word(s) in the same phrase, it is NEVER a heading.
+  Even if "frosted glass light fitting" describes a light fitting, and "Lighting" is an item —
+  if no standalone "Lighting" announcement was made, the content STAYS IN THE CURRENT ITEM.
+
+  Your semantic understanding of what words describe MUST NOT influence routing decisions.
+  Only explicit standalone announcements route content.
 
 CURRENT-ITEM LOCK — this rule overrides everything else:
-Once you are inside an item's dictation, ALL words belong to that item — including any words that happen
-to match another item's name — until the current item's content (description AND condition) is fully
-closed AND you encounter that other item's name as the very first word(s) of a new standalone phrase.
+Once inside an item, every word belongs to that item until an exact standalone item name is
+announced. This is absolute. There are no exceptions for content that sounds like it belongs
+to another item.
 
-  ✓ "Built-in storage. White painted wooden door, matching frame, chrome handles, interior
-      matching reception, light wood flooring, heavy scratches to flooring."
-    → EVERYTHING is Built-in Storage. "light wood flooring" is a description of the flooring
-      INSIDE the unit. "heavy scratches to flooring" is a condition of THAT internal flooring.
-      Neither triggers a switch to the "Flooring" room item.
-  ✗ WRONG: switching to Flooring because the word 'flooring' appears within Built-in Storage dictation.
+CRITICAL EXAMPLE — showing correct versus wrong behaviour for a real transcript:
 
-WORD-POSITION TEST — use this to decide if a word is a chapter heading:
-Ask: Is the matching item name the VERY FIRST word(s) spoken, standalone, after the previous item's
-condition has fully closed — with NOTHING else said before it in the same breath or clause?
-  ✓ Heading: "Flooring. Grey fitted carpet."              (first words after condition closed)
-  ✗ Not a heading: "light wood flooring"                  (flooring at end of a description phrase)
-  ✗ Not a heading: "heavy scratches to the flooring"      (flooring after "heavy scratches to")
-  ✗ Not a heading: "shelves above floor level"            (mid-sentence inside Built-in Storage)
-  ✗ Not a heading: "door and frame of the wardrobe"       (mid-sentence, location qualifier)
-  ✗ Not a heading: "walls to the interior of the unit"    (mid-sentence, location qualifier)
+Transcript:
+"built-in storage, white painted wooden door, white painted frame, chrome handles,
+white painted ceiling, frosted glass light fitting, white painted walls, white plastic
+switches and sockets, white painted woodwork, light wood flooring, in good order,
+light scratches to flooring, right hand side on entry"
 
-If a word matching an item name appears after other words in a running phrase, it is NEVER a
-chapter heading — it is content for the current item only.
+CORRECT — everything after "built-in storage" stays in Built-in Storage:
+  Built-in Storage
+    Description: White painted wooden door / White painted frame / Chrome handles /
+                 White painted ceiling / Frosted glass light fitting / White painted walls /
+                 White plastic switches and sockets / White painted woodwork / Light wood flooring
+    Condition:   In good order / Light scratches to flooring, right hand side on entry
+
+WRONG — do NOT do this:
+  Built-in Storage: door, frame, handles only
+  Ceiling: white painted  ← clerk never said "Ceiling" alone
+  Lighting: frosted glass light fitting  ← clerk never said "Lighting" alone
+  Walls: white painted  ← clerk never said "Walls" alone
+  Flooring: light wood flooring  ← clerk never said "Flooring" alone
+
+The clerk described the interior of the Built-in Storage unit (its ceiling, light fitting, walls,
+woodwork, and flooring). None of these are standalone item announcements — they are all content
+of the Built-in Storage item until the clerk explicitly announces a new item name alone.
 {processed_note}
 Transcript:
 "{transcript}"

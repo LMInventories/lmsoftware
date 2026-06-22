@@ -1392,27 +1392,45 @@ and treating "&" and "and" as interchangeable. No abbreviations, no partial word
   ✓ "Walls" triggers "Walls".
   ✗ "Wall" alone — only acceptable if the item is literally named "Wall" (not "Walls").
 
-If the clerk says a word that is only part of an item name, it is DESCRIPTION content for
-the current item. It is never a chapter heading switch.
+STANDALONE ANNOUNCEMENT RULE — a chapter heading must be the ENTIRE spoken phrase at that
+moment. An item name that appears INSIDE a longer noun phrase or prepositional phrase is NEVER
+a chapter heading — it is always description content for the current item.
+
+  ✗ "light wood flooring" — 'flooring' is the head noun of a description phrase ('light wood
+      flooring'). The whole phrase is descriptive. It is NOT the clerk announcing a new item.
+  ✗ "heavy scratches to the flooring" — 'flooring' follows "heavy scratches to", making it a
+      location reference within a defect description. Not a chapter heading.
+  ✗ "interior matching reception" — descriptive phrase. No heading.
+  ✗ "walls to the interior of the unit" — 'walls' follows a location qualifier. Not a heading.
+  ✗ "socket cover" — 'socket' is a modifier inside a noun phrase. Not a heading.
+  ✓ "Flooring." spoken alone after condition has closed — exact standalone. Heading.
+  ✓ "Built-in storage." spoken alone — exact standalone. Heading.
+
+If an item name word appears AFTER any other word(s) in the same phrase, it is NEVER a heading.
 
 CURRENT-ITEM LOCK — this rule overrides everything else:
 Once you are inside an item's dictation, ALL words belong to that item — including any words that happen
 to match another item's name — until the current item's content (description AND condition) is fully
-closed AND you encounter that other item's name as the very first word(s) of a new clause.
+closed AND you encounter that other item's name as the very first word(s) of a new standalone phrase.
 
-  ✓ "Built-in storage. White wardrobe, floor-level shelf, in good order."
-    → Everything is Built-in storage. "floor-level" is NOT a heading for Flooring.
-  ✗ WRONG: switching to Flooring mid-sentence because "floor" appears in a description.
+  ✓ "Built-in storage. White painted wooden door, matching frame, chrome handles, interior
+      matching reception, light wood flooring, heavy scratches to flooring."
+    → EVERYTHING is Built-in Storage. "light wood flooring" is a description of the flooring
+      INSIDE the unit. "heavy scratches to flooring" is a condition of THAT internal flooring.
+      Neither triggers a switch to the "Flooring" room item.
+  ✗ WRONG: switching to Flooring because the word 'flooring' appears within Built-in Storage dictation.
 
 WORD-POSITION TEST — use this to decide if a word is a chapter heading:
-Ask: Is the matching item name the VERY FIRST word(s) spoken after the previous item's condition
-has fully closed, with NOTHING else said before it in the same breath or clause?
-  ✓ Heading: "Flooring. Grey fitted carpet."           (first words after condition closed)
-  ✗ Not a heading: "shelves above floor level"          (mid-sentence inside Built-in Storage)
-  ✗ Not a heading: "door and frame of the wardrobe"     (mid-sentence inside Built-in Storage)
-  ✗ Not a heading: "walls to the interior of the unit"  (mid-sentence, location qualifier)
+Ask: Is the matching item name the VERY FIRST word(s) spoken, standalone, after the previous item's
+condition has fully closed — with NOTHING else said before it in the same breath or clause?
+  ✓ Heading: "Flooring. Grey fitted carpet."              (first words after condition closed)
+  ✗ Not a heading: "light wood flooring"                  (flooring at end of a description phrase)
+  ✗ Not a heading: "heavy scratches to the flooring"      (flooring after "heavy scratches to")
+  ✗ Not a heading: "shelves above floor level"            (mid-sentence inside Built-in Storage)
+  ✗ Not a heading: "door and frame of the wardrobe"       (mid-sentence, location qualifier)
+  ✗ Not a heading: "walls to the interior of the unit"    (mid-sentence, location qualifier)
 
-If a word matching an item name appears after other words in a running sentence, it is NEVER a
+If a word matching an item name appears after other words in a running phrase, it is NEVER a
 chapter heading — it is content for the current item only.
 {processed_note}
 Transcript:
@@ -2402,26 +2420,37 @@ PROPERTY: {property_description}
 SUMMARY SECTIONS (numbered for reference):
 {items_list}
 
-CATEGORY GUIDE — use each section's name to determine what belongs there:
-  • Overview / Property Description → one-sentence property summary only (see OVERVIEW RULE below)
-  • Decorative Order               → general decorative finish: paintwork, wallcoverings, overall presentation
-  • Doors / Frames / Fittings      → door leaves, frames, architraves, hinges, handles, locks, door closers
-  • Ceilings                       → ceiling surfaces, coving, plasterwork overhead, ceiling roses
-  • Lighting / Light Fittings      → light fittings, lampshades, bulbs, track lighting
-  • Walls                          → wall surfaces, plasterwork, wallpaper, tiling on walls
-  • Windows / Fittings             → window frames, glazing, handles, locks, restrictors, blinds, curtains
-  • Electrics / Heating            → sockets, switches, consumer unit, radiators, boiler, thermostat, towel rails
-  • Woodwork / Flooring            → skirting boards, architraves, window boards, carpet, hard floors, thresholds
-  • Contents / Furniture           → furniture, soft furnishings, mirrors, art, inventory items
-  • Appliances                     → kitchen appliances, white goods, extractor fans, washer/dryer
-  • Sanitaryware / Bathrooms       → bath, shower tray/enclosure, sink, toilet, cistern, taps, mixers, tiles in wet areas
-  • Outdoor / Garden / External    → garden, patio, decking, fencing, gates, garage, external paths, gutters
+CATEGORY GUIDE — match by INSPECTION ITEM NAME (the label before the colon in the data below):
+  Assign each inspection item to the summary section whose name most closely matches
+  the ITEM NAME. Use the examples below as a guide for common item names:
 
-For any section name not listed above, match findings based on the plain meaning of the name.
+  • Overview / Property Description  → no inspection items; use property details only
+  • Decorative Order                 → items named: Decorative Order, General Condition, Paintwork
+  • Doors / Frames / Fittings        → items named: Door, Door & Frame, Internal Door, Front Door, Skirting (if listed under doors)
+  • Ceilings                         → items named: Ceiling, Coving
+  • Lighting / Light Fittings        → items named: Lighting, Light Fitting, Light, Pendant, Spotlights
+  • Walls                            → items named: Walls, Wall, Wall Surfaces
+  • Windows / Fittings               → items named: Window, Window & Frame, Blind, Curtain, Curtain Track
+  • Electrics / Heating              → items named: Sockets, Switches, Radiator, Boiler, Consumer Unit, Thermostat, Towel Rail
+  • Woodwork / Flooring              → items named: Flooring, Floor, Carpet, Skirting Board, Architrave, Threshold, Laminate, Hard Floor
+  • Contents / Furniture             → items named: Furniture, Contents, Wardrobe, Chest of Drawers, Sofa, Table, Bed,
+                                        Built-in Storage, Built-in Wardrobe, Cupboard, Cabinet, Shelving, Storage
+  • Appliances                       → items named: Oven, Hob, Fridge, Freezer, Washing Machine, Dishwasher, Extractor, Microwave
+  • Sanitaryware / Bathrooms         → items named: Bath, Shower, Sink, Toilet, WC, Cistern, Taps, Mixer, Basin
+  • Outdoor / Garden / External      → items named: Garden, Patio, Fence, Garage, Path, Driveway, Decking, Balcony
+
+  CRITICAL — ITEM LOCK:
+  An inspection item's ENTIRE condition and description stays together in ONE section.
+  Do NOT read keywords inside an item's text and redistribute them to other sections.
+  Example: a "Built-in Storage" item with condition "shelving worn, flooring to base damaged,
+  socket inside not working" → the whole entry goes to Contents/Furniture.
+  Do NOT extract "flooring" to Woodwork/Flooring or "socket" to Electrics/Heating.
+  The item name, not the content text, determines the section.
 
 ════════════════════════════════════════════════════
 PHASE 2 — INSPECTION FINDINGS
 Draw from the following room-by-room inspection data to populate each section above.
+Match each item to a section using its ITEM NAME (left of the colon), not keywords in its text.
 ════════════════════════════════════════════════════
 
 {inspection_text}
@@ -2434,9 +2463,9 @@ ASSIGNMENT AND FORMATTING RULES
    Each distinct defect or observation is a single line. Never write prose paragraphs or
    multi-sentence blocks. Never join separate issues with commas or "and".
 
-2. ONE SECTION PER FINDING
-   Assign each finding to the section whose name most closely matches the item type.
-   Do NOT repeat the same finding in multiple sections.
+2. ONE SECTION PER ITEM
+   Each inspection item goes to exactly ONE summary section, chosen by item name.
+   Do NOT repeat the same item in multiple sections.
 
 3. GROUP BY ROOM
    Write the room name alone on its own line. List each finding for that room on the

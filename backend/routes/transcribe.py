@@ -87,6 +87,17 @@ _TRANSCRIPT_CORRECTIONS = [
     (_re.compile(r'\badd a sub-?item\b', _re.I),  'add sub item'),
     # Normalise "not seen" variants (Whisper mishearing)
     (_re.compile(r'\bnot scene\b', _re.I),        'not seen'),
+    # Normalise "rawl plug" (Whisper writes "raw plug" or "rawl plug" inconsistently)
+    (_re.compile(r'\braw\s+plug(s?)\b', _re.I),    r'rawl plug\1'),
+    (_re.compile(r'\brawle?\s+plug(s?)\b', _re.I), r'rawl plug\1'),
+    # "warn" → "worn" (Whisper consistently mishears the condition word "worn")
+    (_re.compile(r'\bwarn\b', _re.I),              'worn'),
+    # "casing window" → "casement window" (standard UK window type)
+    (_re.compile(r'\bcasing\s+window(s?)\b', _re.I), r'casement window\1'),
+    # Additional UPVC mishearings
+    (_re.compile(r'\bEPEZ\b', _re.I),              'UPVC'),
+    (_re.compile(r'\bupez\b', _re.I),              'UPVC'),
+    (_re.compile(r'\bU\s*P\s*V\s*C\b', _re.I),    'UPVC'),
     # Normalise "delete item" variants (hyphen / spacing)
     (_re.compile(r'\bdelete-item\b', _re.I),      'delete item'),
 ]
@@ -1454,6 +1465,8 @@ RULES:
    - "fair wear and tear" → "Fair wear and tear"
    - "as new" or "as inventory" → preserve exactly
 4. ONLY remove filler sounds (um, uh, er, errr, umm, erm) and clear false starts where the clerk immediately restarts the same phrase (e.g. "white — white painted door" → "white painted door"). Do NOT remove, shorten, or paraphrase any actual content — reproduce the clerk's words in full.
+   SELF-CORRECTION: if the clerk says "sorry" mid-dictation, treat it as retracting the word or phrase immediately before it. Discard that retracted content and continue from what follows.
+   e.g. "in good order, and sorry, and one chrome rail, tarnished" → discard "in good order"; output "1 x chrome rail" (description) + "Tarnished" (condition).
 5. Only fill items that are mentioned. Omit unmentioned items entirely from the output.
 6. USE UK ENGLISH SPELLING THROUGHOUT — every word in the output must use UK spelling:
    "discolouration" not "discoloration", "colour" not "color", "centre" not "center",
@@ -1463,6 +1476,41 @@ RULES:
 FORMATTING NUMBERS AND QUANTITIES:
 - Convert spoken numbers to numerals: "two" → "2", "three" → "3"
 - Format quantities as "N x item": "two green curtains" → "2 x green curtains"
+
+NUMBER HOMOPHONES — Whisper frequently mishears spoken numbers as similar-sounding words.
+Apply the following substitutions when the context matches:
+
+  "for [noun]"  → "4 x [noun]"   e.g. "for rawl plug holes" → "4 x rawl plug holes"
+  "to [noun]"   → "2 x [noun]"   e.g. "to scratches to low level" → "2 x scratches to low level"
+  "won [noun]"  → "1 x [noun]"   e.g. "won crack" → "1 x crack"
+
+HOW TO DECIDE: "to" is a NUMBER when ALL of these are true:
+  1. It is the FIRST word of the clause — either the very first word spoken for that element,
+     or the first word after a comma separating components.
+  2. It is followed DIRECTLY by a countable noun or plural noun with NO article (no "the", "a", "an").
+  3. It is NOT preceded by a defect/condition word in the same clause.
+
+"to" is a PREPOSITION (leave unchanged) when ANY of these are true:
+  ✗ It follows a defect or condition word:
+      "scratches to low level", "scuffing to base", "chips to door", "crack to frame"
+      → here "to" is a location preposition showing WHERE the defect is
+  ✗ It follows a command word:
+      "return to [item]", "add to condition", "tested for power"
+  ✗ It is followed by "the", "a", "an", or a location word:
+      "to the left", "to base", "to centre", "to right hand side"
+
+DISTINGUISHING PATTERN — "to [noun] to [location]":
+  When you see "to" followed by a noun, then another "to" followed by a location,
+  the FIRST "to" is the number and the SECOND "to" is the location preposition:
+    "to scratches to low level"  → "2 x scratches to low level"
+    "to cracks to top edge"      → "2 x cracks to top edge"
+    "to hooks to door"           → "2 x hooks to door"
+
+  ✓ "to scratches to low level"   → first "to" = two (precedes countable noun "scratches")
+  ✓ "for rawl plug holes"         → "for" = four (precedes countable noun at start of element)
+  ✓ "to hooks"                    → "to" = two (first word, countable plural, no article)
+  ✗ "scuffing to base"            → preposition (follows defect word "scuffing")
+  ✗ "return to walls"             → command preposition
 - Capitalise the first word of each line
 - Do NOT use bullet points or dashes
 - MULTI-COMPONENT LINES — CRITICAL: when a description or condition contains more than one distinct
@@ -1491,6 +1539,13 @@ SPLITTING description vs condition:
   encountered. Once closed, NO further text may be added to description — not even text that
   sounds descriptive. All remaining text for that element goes into condition only.
   The only exception is an explicit amendment command from the clerk.
+- NEVER write a defect word (chipping, scratching, marks, cracked, etc.) in the description
+  field. If such a word appears alongside descriptive terms in a list, the defect word and
+  everything after it belongs in condition. For example:
+    "white painted wooden door, odd chipping to base, light scuff marks"
+    → description: "White painted wooden door"
+    → condition:   "Odd chipping to base\nLight scuff marks"
+  Do NOT put condition content in both fields. Each piece of content appears in ONE field only.
 
 HOW TO PARSE EACH ITEM — follow this algorithm exactly:
 
@@ -1590,6 +1645,16 @@ When you detect any of these commands:
   - Set "_delete": true on that item's output
   - Do NOT fill description or condition — omit them
 
+PARTIAL NAME MATCHING FOR DELETION ONLY:
+For deletion commands (not seen / not applicable / delete item), if the clerk speaks a word
+that is a unique and distinctive part of an item name — and no other item in the list contains
+that word — treat it as a match for that item.
+  e.g. "storage, not seen" → matches "Built-in Storage" (the word "storage" is unique to it)
+  e.g. "heating, not seen" → matches "Heating" (exact match)
+  e.g. "curtains, none seen" → matches "Curtains & Blinds"
+This relaxed matching applies ONLY to deletion. Chapter heading switches for content still
+require an exact match.
+
 CRITICAL CONTEXT RULE FOR "not seen":
 "Not seen" is a delete command ONLY when it appears IMMEDIATELY after an item title with
 no intervening description. If it appears inside a longer passage about the item, it is
@@ -1619,6 +1684,9 @@ When you encounter any variation of these phrases:
   - Immediately close the current element (its description + condition are complete)
   - Begin collecting a fresh description and condition for the next _subs entry
   - Do NOT treat the trigger phrase itself as part of any description or item name
+  - CRITICAL: everything after the trigger belongs EXCLUSIVELY to the sub-item. Do NOT
+    also write it into the main item's description or condition fields. Each piece of
+    content appears in exactly ONE place — either the main item or a sub-item, never both.
 
 The "Add sub item" command may appear at any point in the dictation — including at the start
 of a new recording clip — to add a sub-item to the most recently described room item.
@@ -1720,6 +1788,7 @@ The clerk may amend or extend an already-described item using these commands:
   "Return to [item name], amend condition, [new text]"
   "Return to [item name], add to description, [new text]"
   "Return to [item name], add to condition, [new text]"
+  "Return to [item name], add to condition for [new text]"  — "for" is a filler word; treat as above
   "Return to [item name], amend, [new text]"  — overwrite both fields
   "Return to [item name], add, [new text]"    — append to both fields
   "Return to [item name], add sub item [description and condition]"   (also accepted: "add sub-item")

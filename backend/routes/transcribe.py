@@ -2534,17 +2534,21 @@ Sections with no defects: {{"condition": "In good order"}} (or "All tested for p
 
     message = client.messages.create(
         model='claude-haiku-4-5',
-        max_tokens=1500,
+        max_tokens=4000,
         messages=[{'role': 'user', 'content': prompt}]
     )
 
     raw = message.content[0].text.strip()
     raw = raw.replace('```json', '').replace('```', '').strip()
 
+    stop_reason = getattr(message, 'stop_reason', None)
+    if stop_reason == 'max_tokens':
+        print(f'[condition-summary] output truncated (max_tokens reached) — raw[:200]: {raw[:200]}')
+
     try:
         filled = json.loads(_sanitise_json(raw))
     except json.JSONDecodeError:
-        print(f'[condition-summary] JSON parse error: {raw[:200]}')
+        print(f'[condition-summary] JSON parse error (stop_reason={stop_reason}): {raw[:400]}')
         return jsonify({'error': 'AI returned an invalid response — please try again'}), 500
 
     # Log usage

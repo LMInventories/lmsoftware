@@ -2535,15 +2535,19 @@ Sections with no defects: {{"condition": "In good order"}} (or "All tested for p
     message = client.messages.create(
         model='claude-haiku-4-5',
         max_tokens=4000,
-        messages=[{'role': 'user', 'content': prompt}]
+        messages=[
+            {'role': 'user',      'content': prompt},
+            {'role': 'assistant', 'content': '{'},   # prefill forces JSON-only output
+        ]
     )
 
-    raw = message.content[0].text.strip()
+    # Restore the prefilled '{' that was stripped from the response
+    raw = ('{' + message.content[0].text).strip()
     raw = raw.replace('```json', '').replace('```', '').strip()
 
     stop_reason = getattr(message, 'stop_reason', None)
     if stop_reason == 'max_tokens':
-        print(f'[condition-summary] output truncated (max_tokens reached) — raw[:200]: {raw[:200]}')
+        print(f'[condition-summary] output truncated (max_tokens reached) — raw[:400]: {raw[:400]}')
 
     try:
         filled = json.loads(_sanitise_json(raw))

@@ -1560,21 +1560,33 @@ APPLIANCE FORMATTING — for any appliance (washing machine, dishwasher, fridge,
 - Format spoken model/serial references as "Model number: X" and "Serial number: X"
 
 SPLITTING description vs condition:
-- Condition signal phrases: "in good order", "in fair order", "in poor order", "good order",
-  "fair order", "poor order", "as new", "as inventory", "in good condition"
-- Everything said AFTER a condition phrase is also condition
-- Functional observations ("appear complete", "tested", "appears working") are always condition
+- A CONDITION SIGNAL is ANY of the following:
+    (a) A state-grade phrase: "in good order", "in fair order", "in poor order", "good order",
+        "fair order", "poor order", "as new", "as inventory", "in good condition"
+    (b) ANY word or phrase listed in the CONDITION VOCABULARY block above — this includes
+        defect words (chipping, cracked, marks, rust, mould…), surface observations (seam,
+        gapping, swelling…), fixings/alterations (nail, nails, screw, hook, cabling…),
+        and functional observations (tested, working, not working…)
+    (c) A functional observation ("appear complete", "tested", "appears working")
+- Everything said AFTER a condition signal is also condition
 - If no condition is mentioned, default condition to "In good order"
-- DESCRIPTION CLOSES PERMANENTLY the moment a condition signal phrase (or defect phrase) is
-  encountered. Once closed, NO further text may be added to description — not even text that
-  sounds descriptive. All remaining text for that element goes into condition only.
+- DESCRIPTION CLOSES PERMANENTLY the moment ANY condition signal is encountered.
+  Once closed, NO further text may be added to description — not even text that sounds
+  descriptive. All remaining text for that element goes into condition only.
   The only exception is an explicit amendment command from the clerk.
-- NEVER write a defect word (chipping, scratching, marks, cracked, etc.) in the description
-  field. If such a word appears alongside descriptive terms in a list, the defect word and
-  everything after it belongs in condition. For example:
+- NEVER write a condition signal word in the description field. This applies equally to
+  classic defect words AND to fixings/alterations AND to surface observations. Examples:
     "white painted wooden door, odd chipping to base, light scuff marks"
     → description: "White painted wooden door"
     → condition:   "Odd chipping to base\nLight scuff marks"
+
+    "white painted walls, 2 x nails fitted to high level near wall"
+    → description: "White painted"
+    → condition:   "2 x nails fitted to high level near wall"
+
+    "white painted skirting, cabling attached"
+    → description: "White painted skirting"
+    → condition:   "Cabling attached"
   Do NOT put condition content in both fields. Each piece of content appears in ONE field only.
 
 HOW TO PARSE EACH ITEM — follow this algorithm exactly:

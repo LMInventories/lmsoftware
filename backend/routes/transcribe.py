@@ -132,26 +132,34 @@ Surface defects:
   Scuff / Scuffs / Scuffed / Scuffing / Light scuffing / Scuff mark / Scuff marks
   Scratch / Scratches / Scratched / Scratching / Light scratching / Surface scratching / Light surface scratching
   Mark / Marks / Marked / Marking / Light marking / Light marks / Light surface marks
+  Impact mark / Impact marks (from door handle, furniture, etc.)
   Chip / Chips / Chipped / Chipping / Small chip / Large chip
-  Crack / Cracks / Cracked / Cracking / Hairline crack / Fine crack / Stress crack / Crazing
+  Crack / Cracks / Cracked / Cracking / Hairline / Hairline crack / Fine crack / Stress crack / Settlement crack / Crazing
   Dent / Dents / Dented / Denting
+  Indentation / Indented / Indentation mark / Indentation marks (pressed-in area, e.g. from furniture feet)
   Gouge / Gouges / Gouged / Nick / Nicks / Nicked / Notch / Notches / Score / Scored
   Hole / Holes / Small hole / Large hole
 
 Finish defects:
   Stain / Stains / Stained / Staining / Light staining / Tide mark / Water mark / Water stain
+  Nicotine / Nicotine staining (discolouration from cigarette smoke)
+  Soot / Soot mark / Soot marks / Soot staining (from fire, candles, or smoke)
+  Grease / Grease mark / Grease marks / Grease build-up (surface contamination)
   Burn / Burns / Burned / Burnt / Burn mark / Scorch / Scorched / Scorching / Scorch mark
   Discolouration / Discoloured / Yellowing / Yellowed / Fading / Faded / Bleached
 
 Surface deterioration:
-  Peeling / Peeled / Peel / Paint peeling / Flaking / Flaked / Flake
+  Peeling / Peeled / Peel / Paint peeling / Flaking / Flaked / Flake / Flaky
   Bubbling / Bubbled / Blistering / Blistered
   Warping / Warped / Bowing / Bowed / Buckling / Buckled
   Sagging / Sagged / Splitting / Split / Tearing / Torn / Fraying / Frayed
+  Lifting / Lifted / Lifting at edges / Lifting to edges (flooring lifting from subfloor)
+  Curling / Curled / Curling at edges (vinyl or lino edges lifting)
+  Delamination / Delaminating / Delaminated (surface layers separating)
 
 Soiling:
-  Dirty / Soiled / Grimy / Greasy / Dusty
-  Mould / Mouldy / Mildew / Mildewed / Black mould
+  Dirty / Soiled / Soiling / Grimy / Greasy / Dusty
+  Mould / Mouldy / Mildew / Mildewed / Black mould / Mould growth
   Damp / Dampness / Water damage / Water ingress
   Limescale / Scale / Scaling / Scale build-up / Ingrained dirt
 
@@ -174,6 +182,28 @@ Functional observations (always condition, never description):
   Tested / Tested for power / Tested for function / Tested and working / Working / Not working
   Appears working / Appears complete / Appear complete / Appears functional / Operated / Does not operate
   Note / Noted / Please note / Worth noting
+
+Alterations & fixings (always condition — items fitted to a surface indicate alteration or damage):
+  Nail / Nails / Nail hole / Nail holes / Nail mark / Nail marks
+  Screw / Screws / Screw hole / Screw holes
+  Hook / Hooks / Picture hook / Picture hooks
+  Rawl plug / Rawl plugs / Plug hole / Plug holes
+  Blu-Tack / Blu-tack mark / Blu-tack marks / Tack mark / Tack marks
+  Removal mark / Removal marks / Removal hole / Removal holes
+  Cabling / Cable / Cables (when attached to a surface)
+  Fitted to / Fitted at / Fixed to / Attached to / Attached / Secured to
+  Tape / Tape mark / Tape marks / Tape removal mark / Adhesive mark / Adhesive residue / Sticker mark
+
+Surface observations (always condition — present on a surface but not part of its original specification):
+  Seam / Seams / Seam visible / Seams visible (repair lines or joins in plaster/wallpaper/flooring)
+  Gapping / Gaps / Gap (separation between boards, tiles, or panels)
+  Swelling / Swollen (raised or deformed surface area)
+  Patchy / Patchiness / Patchy marks / Patchy paint (uneven surface treatment)
+  Spatter / Spatter marks / Overspray / Paint spatter
+  Overpainted / Over-painted / Overpaint (subsequent layers applied over original)
+  Condensation / Condensation between panes / Blown unit / Misted / Fogged (glazing failure)
+  Damp patch / Damp patches / Water patch / Tide mark / Tide marks
+  Efflorescence / Salt deposit / Salt staining
 """
 
 _DESCRIPTION_VOCABULARY = """

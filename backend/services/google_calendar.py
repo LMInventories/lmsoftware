@@ -60,12 +60,28 @@ def _build_event(inspection) -> dict:
     lines = []
     if inspection.reference_number:
         lines.append(f'Ref: {inspection.reference_number}')
+
+    bed  = prop.bedrooms  if prop else None
+    bath = prop.bathrooms if prop else None
+    if bed or bath:
+        parts = []
+        if bed:
+            parts.append(f'{bed} bed')
+        if bath:
+            parts.append(f'{bath} bath')
+        lines.append(' / '.join(parts))
+
     if inspection.inspector and inspection.inspector.name:
         lines.append(f'Clerk: {inspection.inspector.name}')
     if inspection.tenant_name:
         lines.append(f'Tenant: {inspection.tenant_name}')
     if inspection.conduct_time_preference:
         lines.append(f'Time preference: {inspection.conduct_time_preference}')
+    if inspection.key_location:
+        lines.append(f'Key location: {inspection.key_location}')
+    if inspection.key_return:
+        lines.append(f'Key return: {inspection.key_return}')
+
     description = '\n'.join(lines)
 
     # All-day event — conduct_date has no precise time stored

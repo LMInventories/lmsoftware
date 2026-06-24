@@ -1425,6 +1425,17 @@ A chapter heading is ONLY when the clerk speaks the item name BY ITSELF — the 
 with no preceding adjectives, no descriptive words, no prepositions, no qualifiers, nothing else.
 Case-insensitive; "&" and "and" are interchangeable.
 
+UNRECOGNISED HEADINGS — CRITICAL RULE:
+If the clerk announces a standalone name that does NOT match any item in the list above,
+you MUST ignore it completely — do not route its content to any other item.
+The clerk may have deleted an item before recording and then mentioned it out of habit
+(e.g. "Heating. Not applicable." when Heating is not in the list).
+When this happens:
+  - Skip the unrecognised name and everything the clerk says about it, up to the next
+    recognised chapter heading.
+  - Do NOT attach that skipped content to the item that was open before the unrecognised heading.
+  - Do NOT include the unrecognised item in your output at all.
+
   ✓ "Flooring" alone → triggers "Flooring"
   ✓ "Built-in storage" alone → triggers "Built-In Storage"
   ✓ "Ceiling" alone → triggers "Ceiling"
@@ -2057,6 +2068,9 @@ RULES:
    "&" and "and" are interchangeable). Partial words and abbreviations are NEVER chapter headings.
    Examples: "Floor" ≠ "Flooring". "Door" ≠ "Door & Frame". "Storage" ≠ "Built-In Storage".
    The clerk must say the complete item name for a heading switch to occur.
+   UNRECOGNISED HEADINGS: if the clerk announces a standalone name that does NOT appear in the
+   list above, skip it and everything the clerk says about it until the next recognised heading.
+   Do NOT attach the skipped content to any other item. Do not include it in the output.
 2. Everything the clerk says after an item name is DAMAGE CONDITION — put it all in "condition".
    Never use a "description" field.
 3. VERBATIM: use the clerk's exact words. Only remove filler sounds (um, uh, er, errr, umm, erm)

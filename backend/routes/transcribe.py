@@ -1420,32 +1420,46 @@ Item names act as CHAPTER HEADINGS. When the clerk says an item name as a standa
 EXACTLY matches a name from the list above, everything that follows belongs to that item until
 the next exact item name is spoken as a standalone heading.
 
-EXACT MATCH REQUIRED FOR CHAPTER HEADINGS:
-A chapter heading is ONLY when the clerk speaks the item name BY ITSELF — the item name alone,
-with no preceding adjectives, no descriptive words, no prepositions, no qualifiers, nothing else.
-Case-insensitive; "&" and "and" are interchangeable.
+CHAPTER HEADING MATCHING RULES:
+A chapter heading is ONLY when the clerk speaks an item reference BY ITSELF — standalone,
+with no preceding adjectives, descriptive words, prepositions, or qualifiers.
+Case-insensitive; "&" and "and" are interchangeable; hyphens are optional.
+
+TWO TIERS OF MATCHING — apply in order:
+
+TIER 1 — EXACT MATCH (preferred):
+The spoken phrase matches the full item name from the list.
+  ✓ "Flooring" → triggers "Flooring"
+  ✓ "Built-in storage" → triggers "Built-In Storage"
+  ✓ "Kitchen base units" → triggers "Kitchen Base Units"
+
+TIER 2 — UNIQUE PARTIAL MATCH (fallback when no exact match):
+The spoken phrase is a distinctive word or phrase that appears in exactly ONE item name in
+the list AND does not appear in any other item name. Use this to handle natural abbreviations.
+  ✓ "Base units" → triggers "Kitchen Base Units" (only item containing "base units")
+  ✓ "Wall units" → triggers "Kitchen Wall Units" (only item containing "wall units")
+  ✓ "Extractor" → triggers "Extractor Fan" (only item containing "extractor")
+  ✓ "Sockets" → triggers "Switches & Sockets" (only item containing "sockets")
+  ✗ "Units" → does NOT match — "units" appears in both "Kitchen Base Units" and "Kitchen Wall Units" — ambiguous
+  ✗ "Door" → does NOT match "Door & Frame" if there is also an "Internal Door" item — ambiguous
+
+SAFETY RULE: if the spoken phrase could match more than one item name, do NOT use Tier 2.
+Leave the content with the current item rather than routing it to an ambiguous heading.
 
 UNRECOGNISED HEADINGS — CRITICAL RULE:
-If the clerk announces a standalone name that does NOT match any item in the list above,
+If the clerk announces a standalone name that does NOT match any item (by Tier 1 or Tier 2),
 you MUST ignore it completely — do not route its content to any other item.
-The clerk may have deleted an item before recording and then mentioned it out of habit
-(e.g. "Heating. Not applicable." when Heating is not in the list).
+The clerk may have deleted an item before recording and then mentioned it out of habit.
 When this happens:
   - Skip the unrecognised name and everything the clerk says about it, up to the next
     recognised chapter heading.
   - Do NOT attach that skipped content to the item that was open before the unrecognised heading.
   - Do NOT include the unrecognised item in your output at all.
 
-  ✓ "Flooring" alone → triggers "Flooring"
-  ✓ "Built-in storage" alone → triggers "Built-In Storage"
-  ✓ "Ceiling" alone → triggers "Ceiling"
-  ✗ "white painted ceiling" → does NOT trigger "Ceiling" — there are words before the noun
-  ✗ "light wood flooring" → does NOT trigger "Flooring" — there are words before the noun
+  ✗ "white painted ceiling" → does NOT trigger "Ceiling" — words before the noun
+  ✗ "light wood flooring" → does NOT trigger "Flooring" — words before the noun
   ✗ "frosted glass light fitting" → does NOT trigger "Lighting" — descriptive phrase
-  ✗ "white painted walls" → does NOT trigger "Walls" — there are words before the noun
-  ✗ "white plastic switches and sockets" → does NOT trigger any item — descriptive phrase
   ✗ "heavy scratches to flooring" → does NOT trigger "Flooring" — prepositional phrase
-  ✗ "Floor" → does NOT trigger "Flooring" — different word
 
 DO NOT ROUTE BY CONTENT SEMANTICS — this rule overrides your default understanding:
 You are NOT permitted to look at what content describes and use that to decide which item it
@@ -1899,17 +1913,23 @@ The "_delete" flag is only included when the clerk says "Delete Item" or "Not Ap
 
     message = client.messages.create(
         model='claude-haiku-4-5',
-        max_tokens=4000,
+        max_tokens=8000,
         messages=[{'role': 'user', 'content': prompt}]
     )
 
     raw = message.content[0].text.strip()
     raw = raw.replace('```json', '').replace('```', '').strip()
+
+    stop_reason = getattr(message, 'stop_reason', None)
+    if stop_reason == 'max_tokens':
+        print(f'[_claude_fill_room] output truncated at max_tokens — raw[:400]: {raw[:400]}')
+        raise ValueError('AI response was too long and got cut off — please try again or record fewer items at once')
+
     try:
         return json.loads(_sanitise_json(raw)), message
-    except json.JSONDecodeError:
-        print(f'[_claude_fill_room] JSON parse error: {raw[:200]}')
-        return {}, message
+    except json.JSONDecodeError as e:
+        print(f'[_claude_fill_room] JSON parse error (stop_reason={stop_reason}): {e} — raw[:400]: {raw[:400]}')
+        raise ValueError('AI returned an invalid response — please try again')
 
 
 def _claude_fill_room_checkout(transcript: str, section_name: str, items: list) -> dict:
@@ -1986,17 +2006,23 @@ Example output:
 
     message = client.messages.create(
         model='claude-haiku-4-5',
-        max_tokens=2000,
+        max_tokens=8000,
         messages=[{'role': 'user', 'content': prompt}]
     )
 
     raw = message.content[0].text.strip()
     raw = raw.replace('```json', '').replace('```', '').strip()
+
+    stop_reason = getattr(message, 'stop_reason', None)
+    if stop_reason == 'max_tokens':
+        print(f'[_claude_fill_room_checkout] output truncated at max_tokens — raw[:400]: {raw[:400]}')
+        raise ValueError('AI response was too long and got cut off — please try again or record fewer items at once')
+
     try:
         return json.loads(_sanitise_json(raw)), message
-    except json.JSONDecodeError:
-        print(f'[_claude_fill_room_checkout] JSON parse error: {raw[:200]}')
-        return {}, message
+    except json.JSONDecodeError as e:
+        print(f'[_claude_fill_room_checkout] JSON parse error (stop_reason={stop_reason}): {e} — raw[:400]: {raw[:400]}')
+        raise ValueError('AI returned an invalid response — please try again')
 
 
 def _claude_fill_room_damage(transcript: str, section_name: str, items: list, processed_ids: list = None) -> dict:
@@ -2064,13 +2090,14 @@ Transcript:
 "{transcript}"
 
 RULES:
-1. A chapter heading MUST exactly match the full item name from the list above (case-insensitive;
-   "&" and "and" are interchangeable). Partial words and abbreviations are NEVER chapter headings.
-   Examples: "Floor" ≠ "Flooring". "Door" ≠ "Door & Frame". "Storage" ≠ "Built-In Storage".
-   The clerk must say the complete item name for a heading switch to occur.
-   UNRECOGNISED HEADINGS: if the clerk announces a standalone name that does NOT appear in the
-   list above, skip it and everything the clerk says about it until the next recognised heading.
-   Do NOT attach the skipped content to any other item. Do not include it in the output.
+1. CHAPTER HEADING MATCHING — two tiers, applied in order:
+   TIER 1 (exact): spoken phrase matches the full item name (case-insensitive; "&"/"and" interchangeable).
+   TIER 2 (unique partial): spoken phrase is a distinctive word/phrase found in exactly ONE item name
+     and no other — e.g. "Base units" → "Kitchen Base Units" if that is the only match.
+     If the phrase could match more than one item, do NOT use Tier 2 — leave content with current item.
+   UNRECOGNISED HEADINGS: if a standalone phrase matches nothing by either tier, skip it and
+     everything the clerk says about it until the next recognised heading. Do not attach skipped
+     content to any other item.
 2. Everything the clerk says after an item name is DAMAGE CONDITION — put it all in "condition".
    Never use a "description" field.
 3. VERBATIM: use the clerk's exact words. Only remove filler sounds (um, uh, er, errr, umm, erm)
@@ -2143,17 +2170,23 @@ Return ONLY valid JSON — no markdown, no extra text.
 
     message = client.messages.create(
         model='claude-haiku-4-5',
-        max_tokens=3000,
+        max_tokens=8000,
         messages=[{'role': 'user', 'content': prompt}]
     )
 
     raw = message.content[0].text.strip()
     raw = raw.replace('```json', '').replace('```', '').strip()
+
+    stop_reason = getattr(message, 'stop_reason', None)
+    if stop_reason == 'max_tokens':
+        print(f'[_claude_fill_room_damage] output truncated at max_tokens — raw[:400]: {raw[:400]}')
+        raise ValueError('AI response was too long and got cut off — please try again or record fewer items at once')
+
     try:
         return json.loads(_sanitise_json(raw)), message
-    except json.JSONDecodeError:
-        print(f'[_claude_fill_room_damage] JSON parse error: {raw[:200]}')
-        return {}, message
+    except json.JSONDecodeError as e:
+        print(f'[_claude_fill_room_damage] JSON parse error (stop_reason={stop_reason}): {e} — raw[:400]: {raw[:400]}')
+        raise ValueError('AI returned an invalid response — please try again')
 
 
 def _claude_fill_fixed_section(transcript: str, section_name: str, section_type: str, items: list) -> dict:

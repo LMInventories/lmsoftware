@@ -2633,8 +2633,13 @@ ASSIGNMENT AND FORMATTING RULES
    Do NOT repeat the same item in multiple sections.
 
 3. GROUP BY ROOM
-   Write the room name alone on its own line. List each finding for that room on the
-   line(s) below. Leave one blank line between room groups.
+   Write the room name alone on its own line as a header. List each finding for that
+   room on the line(s) immediately below it. Separate each room group from the next
+   with ONE blank line (two newlines: \\n\\n). Do NOT run room groups together with
+   only a single newline. Example of correct structure:
+     Kitchen\\nCrack to plaster above window\\n\\nBedroom 1\\nHole to wall left of window
+   Example of WRONG structure (no blank line between rooms):
+     Kitchen\\nCrack to plaster above window\\nBedroom 1\\nHole to wall left of window
 
 4. SEVERITY FILTER — applies to ALL sections except Lighting, Appliances, and Overview
    INCLUDE: chips, cracks, breaks, gouges, holes, burns, damp, mould, water damage,
@@ -2666,7 +2671,15 @@ ASSIGNMENT AND FORMATTING RULES
    Exception — Overview: return the one-sentence property summary only (no "In good order").
    NEVER write "None noted", "No issues found", or "No defects noted".
 
-9. FORMAT
+9. NO ROOM OR ITEM SUFFIXES
+   Never append "in [room]", "in the [room]", "to [item] in [room]", or any location
+   reference that repeats the room header. The room header already establishes the
+   location — adding it again is redundant.
+   WRONG: "Crack to wall in Kitchen"  →  RIGHT: "Crack to wall"
+   WRONG: "Mould to corner in Bedroom 1"  →  RIGHT: "Mould to corner"
+   WRONG: "Worn carpet in Reception"  →  RIGHT: "Worn carpet"
+
+10. FORMAT
    - Capitalise the first word of each line.
    - No bullet points, dashes, or numbering on observation lines.
    - UK English: "discolouration", "colour", "grey", "mould", "centre".
@@ -2687,8 +2700,12 @@ Return ONLY valid JSON — no markdown, no extra text:
   "<itemId>": {{"condition": "..."}}
 }}
 
-Use \\n between lines within a condition value. Use \\n\\n between room groups.
-Sections with no defects: {{"condition": "In good order"}} (or "All tested for power" for Lighting/Appliances)."""
+CRITICAL JSON FORMATTING:
+- Use \\n between individual finding lines within a room group.
+- Use \\n\\n (a blank line) between each room group — this is mandatory.
+- Never use \\n\\n within a room group, only between them.
+- Sections with no defects: {{"condition": "In good order"}} (or "All tested for power" for Lighting/Appliances).
+- Do NOT append room names to findings — the room header already shows the location."""
 
     message = client.messages.create(
         model='claude-haiku-4-5',

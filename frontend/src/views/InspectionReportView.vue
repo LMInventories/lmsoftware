@@ -2520,7 +2520,7 @@ async function moveToReview() {
                     <tr v-show="!isHidden(sec.id, row.id)">
                       <td class="td-drag"><span class="drag-handle" title="Drag to reorder">⠿</span></td>
                       <td class="td-name"><span class="sec-ref-badge">{{ fixedRowRef(sec, row.id) }}</span>{{ row.name }}</td>
-                      <td><textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" placeholder="Describe condition…" :value="get(sec.id,row.id,'condition')" @input="set(sec.id,row.id,'condition',$event.target.value)"></textarea></td>
+                      <td><textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" placeholder="No issues" :value="get(sec.id,row.id,'condition')" @input="set(sec.id,row.id,'condition',$event.target.value)"></textarea></td>
                       <td class="td-btn-group"><div class="item-btn-col"><button class="cam-btn" :class="{ 'cam-has': getPhotos(sec.id,row.id).length }" @click="togglePanel(sec.id,row.id)" :title="getPhotos(sec.id,row.id).length + ' photo(s)'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,row.id).length" class="cam-count">{{ getPhotos(sec.id,row.id).length }}</span></button><button v-if="canDelete" class="del-btn" @click="hideRow(sec.id,row.id)">×</button></div></td>
                     </tr>
                     <tr v-if="isPanelOpen(sec.id,row.id)" class="photo-panel-row">
@@ -2531,7 +2531,7 @@ async function moveToReview() {
                     <tr class="extra-row" draggable="true" @dragstart="onFixedDragStart(sec.id,idx)" @dragover.prevent @drop.prevent="onFixedDrop(sec.id,idx)">
                       <td class="td-drag"><span class="drag-handle">⠿</span></td>
                       <td class="td-extra-name"><span class="sec-ref-badge sec-ref-extra">{{ fixedRowRef(sec, ex._eid) }}</span><input class="fld-input" type="text" :disabled="!canEdit" placeholder="Item name…" :value="ex.name" @input="setExtraField(sec.id,ex._eid,'name',$event.target.value)" /></td>
-                      <td><textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" placeholder="Describe condition…" :value="ex.condition" @input="setExtraField(sec.id,ex._eid,'condition',$event.target.value)"></textarea></td>
+                      <td><textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" placeholder="No issues" :value="ex.condition" @input="setExtraField(sec.id,ex._eid,'condition',$event.target.value)"></textarea></td>
                       <td class="td-btn-group"><div class="item-btn-col"><button class="cam-btn" :class="{ 'cam-has': getPhotos(sec.id,ex._eid).length }" @click="togglePanel(sec.id,ex._eid)" :title="getPhotos(sec.id,ex._eid).length + ' photo(s)'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span v-if="getPhotos(sec.id,ex._eid).length" class="cam-count">{{ getPhotos(sec.id,ex._eid).length }}</span></button><button v-if="canDelete" class="del-btn" @click="removeExtraRow(sec.id,ex._eid)">×</button></div></td>
                     </tr>
                     <tr v-if="isPanelOpen(sec.id,ex._eid)" class="photo-panel-row">

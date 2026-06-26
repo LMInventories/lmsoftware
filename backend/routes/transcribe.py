@@ -2666,10 +2666,10 @@ ASSIGNMENT AND FORMATTING RULES
    Then list appliances with no power, non-functional, or major physical damage only.
 
 8. EMPTY SECTIONS
-   If no qualifying findings exist for a section, return "In good order".
+   If no qualifying findings exist for a section, return an empty string "".
    Exception — Lighting and Appliances: return "All tested for power" (no additional text).
-   Exception — Overview: return the one-sentence property summary only (no "In good order").
-   NEVER write "None noted", "No issues found", or "No defects noted".
+   Exception — Overview: return the one-sentence property summary only.
+   NEVER write "In good order", "In fair order", "None noted", "No issues found", or "No defects noted".
 
 9. NO ROOM OR ITEM SUFFIXES
    Never append "in [room]", "in the [room]", "to [item] in [room]", or any location
@@ -2704,7 +2704,7 @@ CRITICAL JSON FORMATTING:
 - Use \\n between individual finding lines within a room group.
 - Use \\n\\n (a blank line) between each room group — this is mandatory.
 - Never use \\n\\n within a room group, only between them.
-- Sections with no defects: {{"condition": "In good order"}} (or "All tested for power" for Lighting/Appliances).
+- Sections with no defects: {{"condition": ""}} (or "All tested for power" for Lighting/Appliances).
 - Do NOT append room names to findings — the room header already shows the location."""
 
     message = client.messages.create(

@@ -407,7 +407,7 @@ const cleanlinessOpts = [
             <!-- Condition summary -->
             <div v-if="sec.type === 'condition_summary'" class="mst-field">
               <label class="mst-label">Condition</label>
-              <input class="mst-input" type="text" placeholder="Describe condition…"
+              <input class="mst-input" type="text" placeholder="No issues"
                 :value="get(sec.id, row.id, 'condition')"
                 @input="set(sec.id, row.id, 'condition', $event.target.value)" />
             </div>

@@ -636,21 +636,38 @@ class _PDFBuilder:
 
     def _p_room_links(self, text, style=None):
         """Like _p, but any line that matches a room name becomes a clickable
-        link jumping to that room's section (Condition Summary room headings)."""
-        style = style or self.s_cell
-        text  = str(text or '')
-        text  = text.replace('\r\n', '\n').replace('\r', '\n')
-        lines = [l.strip() for l in text.split('\n') if l.strip()]
-        if not lines:
-            return Paragraph('—', style)
-        out = []
-        for line in lines:
-            esc = line.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-            rid = self._room_anchor_map.get(line.lower())
+        link jumping to that room's section (Condition Summary room headings).
+        Blank lines between room groups are preserved as visual spacers.
+        Empty or 'In good order' content renders as 'No issues'."""
+        style  = style or self.s_cell
+        text   = str(text or '').strip()
+        _GOOD_ORDER = {'in good order', 'in fair order', 'all tested for power'}
+        if not text or text.lower() in _GOOD_ORDER:
+            if text.lower() == 'all tested for power':
+                return Paragraph('All tested for power', style)
+            return Paragraph('No issues', style)
+        text = text.replace('\r\n', '\n').replace('\r', '\n')
+        out  = []
+        for line in text.split('\n'):
+            stripped = line.strip()
+            if not stripped:
+                # Blank line between room groups — emit an empty fragment so
+                # <br/>s produce a visible gap between sections.
+                out.append('')
+                continue
+            esc = stripped.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            rid = self._room_anchor_map.get(stripped.lower())
             if rid is not None:
                 out.append(f'<a href="#anchor_room_{rid}" color="#3b82f6"><u>{esc}</u></a>')
             else:
                 out.append(esc)
+        # Strip leading/trailing blank entries, then check if anything remains
+        while out and out[0] == '':
+            out.pop(0)
+        while out and out[-1] == '':
+            out.pop()
+        if not out:
+            return Paragraph('No issues', style)
         return Paragraph('<br/>'.join(out), style)
 
     def _uw(self):

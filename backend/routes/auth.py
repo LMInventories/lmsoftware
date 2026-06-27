@@ -34,8 +34,9 @@ def login():
             'role':        user.role,
             'color':       user.color,
             'is_ai':       user.is_ai,
-            'typist_mode': user.typist_mode,   # 'ai_instant' | 'ai_room' | 'human' | null
-            'client_id':   user.client_id,
+            'typist_mode':   user.typist_mode,   # 'ai_instant' | 'ai_room' | 'human' | null
+            'camera_option': user.camera_option,
+            'client_id':     user.client_id,
         }
     })
 
@@ -56,8 +57,35 @@ def get_current_user():
         'role':        user.role,
         'color':       user.color,
         'is_ai':       user.is_ai,
-        'typist_mode': user.typist_mode,
-        'client_id':   user.client_id,
+        'typist_mode':   user.typist_mode,
+        'camera_option': user.camera_option,
+        'client_id':     user.client_id,
+    })
+
+
+@auth_bp.route('/me', methods=['PATCH'])
+@jwt_required()
+def update_my_defaults():
+    user_id = get_jwt_identity()
+    user = db.session.get(User, int(user_id))
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    data = request.get_json() or {}
+    if 'typist_mode' in data:
+        user.typist_mode = data['typist_mode'] or None
+    if 'camera_option' in data:
+        user.camera_option = data['camera_option'] or None
+    db.session.commit()
+    return jsonify({
+        'id':            user.id,
+        'name':          user.name,
+        'email':         user.email,
+        'role':          user.role,
+        'color':         user.color,
+        'is_ai':         user.is_ai,
+        'typist_mode':   user.typist_mode,
+        'camera_option': user.camera_option,
+        'client_id':     user.client_id,
     })
 
 

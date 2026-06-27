@@ -26,6 +26,7 @@ class User(db.Model):
     # ai_room    — whole-room recorder + AI Transcribe button, fills all items at once
     # human      — audio clips synced to server; typist receives email and types the report
     typist_mode        = db.Column(db.String(20), nullable=True)
+    camera_option      = db.Column(db.String(20), nullable=True)
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -43,7 +44,8 @@ class User(db.Model):
             'color':       self.color,
             'is_ai':       self.is_ai,
             'client_id':   self.client_id,
-            'typist_mode': self.typist_mode,
+            'typist_mode':   self.typist_mode,
+            'camera_option': self.camera_option,
             'created_at':  self.created_at.isoformat() if self.created_at else None,
         }
 

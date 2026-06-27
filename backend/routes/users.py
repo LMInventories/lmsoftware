@@ -92,6 +92,8 @@ def update_user(user_id):
             user.client_id = data['client_id'] or None
         if 'typist_mode' in data:
             user.typist_mode = data['typist_mode'] or None
+        if 'camera_option' in data:
+            user.camera_option = data['camera_option'] or None
         if 'password' in data and data['password']:
             user.set_password(data['password'])
 

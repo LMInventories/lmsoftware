@@ -2492,10 +2492,12 @@ def generate_condition_summary():
     if not data:
         return jsonify({'error': 'No data provided'}), 400
 
-    sections      = data.get('sections', [])
-    summary_items = data.get('summaryItems', [])
-    inspection_id = int(data['inspectionId']) if data.get('inspectionId') else None
-    prop_details  = data.get('propertyDetails') or {}
+    sections          = data.get('sections', [])
+    summary_items     = data.get('summaryItems', [])
+    inspection_id     = int(data['inspectionId']) if data.get('inspectionId') else None
+    prop_details      = data.get('propertyDetails') or {}
+    is_check_out      = bool(data.get('isCheckOut'))
+    check_in_sections = data.get('checkInSections') or []
 
     if not sections:
         return jsonify({'error': 'No inspection data provided'}), 400
@@ -2504,6 +2506,53 @@ def generate_condition_summary():
 
     if not os.environ.get('ANTHROPIC_API_KEY'):
         return jsonify({'error': 'ANTHROPIC_API_KEY not configured on server'}), 503
+
+    # ── For Check Out: merge CI baseline into CO data ─────────────────────
+    # CO condition/description wins where recorded; CI fills items with no CO note.
+    if is_check_out and check_in_sections:
+        ci_lookup: dict = {}
+        for ci_sec in check_in_sections:
+            for ci_item in ci_sec.get('items', []):
+                key = (ci_sec.get('name', '').lower(), ci_item.get('name', '').lower())
+                ci_lookup[key] = ci_item
+
+        merged: list = []
+        co_sec_names: set = set()
+        for co_sec in sections:
+            sec_name = co_sec.get('name', '')
+            co_sec_names.add(sec_name.lower())
+            merged_items: list = []
+            covered: set = set()
+            for item in co_sec.get('items', []):
+                key = (sec_name.lower(), item.get('name', '').lower())
+                covered.add(key)
+                ci = ci_lookup.get(key, {})
+                merged_items.append({
+                    'name':        item.get('name', ''),
+                    'description': item.get('description') or ci.get('description', ''),
+                    'condition':   item.get('condition')   or ci.get('condition', ''),
+                    'subs':        item.get('subs', []),
+                })
+            # Add CI items for this room that have no CO entry
+            for ci_sec in check_in_sections:
+                if ci_sec.get('name', '').lower() == sec_name.lower():
+                    for ci_item in ci_sec.get('items', []):
+                        key = (sec_name.lower(), ci_item.get('name', '').lower())
+                        if key not in covered:
+                            covered.add(key)
+                            merged_items.append({
+                                'name':        ci_item.get('name', ''),
+                                'description': ci_item.get('description', ''),
+                                'condition':   ci_item.get('condition', ''),
+                                'subs':        [],
+                            })
+            if merged_items:
+                merged.append({'name': sec_name, 'items': merged_items})
+        # Rooms only in CI (not visited at CO)
+        for ci_sec in check_in_sections:
+            if ci_sec.get('name', '').lower() not in co_sec_names:
+                merged.append(ci_sec)
+        sections = merged
 
     # ── Build property description sentence ───────────────────────────────
     prop_type  = (prop_details.get('property_type') or '').strip()
@@ -2572,7 +2621,30 @@ def generate_condition_summary():
 
     client = anthropic.Anthropic(api_key=os.environ.get('ANTHROPIC_API_KEY'))
 
-    prompt = f"""You are writing a Condition Summary for a UK property inspection report.
+    if is_check_out:
+        summary_type_label = 'Check Out Condition Summary'
+        severity_rule = """\
+4. INCLUDE ALL CONDITIONS
+   This is a comprehensive overview — include every item that has recorded data,
+   whether the condition is good, fair, or defective.
+   Do NOT filter out minor wear or good condition items.
+   Do NOT write vague placeholders like "In good order" — describe the actual condition briefly.
+   Good condition examples: "Walls clean and unmarked", "Carpet in good condition throughout"
+   Defect examples: "Chip to plaster above window", "Carpet worn to threshold\""""
+        overview_prefix = 'Check out: '
+    else:
+        summary_type_label = 'Check In Condition Summary'
+        severity_rule = """\
+4. SEVERITY FILTER — applies to ALL sections except Lighting, Appliances, and Overview
+   INCLUDE: chips, cracks, breaks, gouges, holes, burns, damp, mould, water damage,
+            missing items or fittings, non-functional items (no power, seized, jammed,
+            does not operate), failed silicone/grout, heavy peeling paint, dropped hinges,
+            broken locks/handles, moderate-to-major wear or damage
+   EXCLUDE: anything described as "light", "slight", "minor", or "superficial";
+            fair wear and tear; "in good order"; "in fair order"; "as new"; "as inventory\""""
+        overview_prefix = ''
+
+    prompt = f"""You are writing a {summary_type_label} for a UK property inspection report.
 
 ════════════════════════════════════════════════════
 PHASE 1 — INTERNALIZE THE SUMMARY SECTIONS
@@ -2641,18 +2713,12 @@ ASSIGNMENT AND FORMATTING RULES
    Example of WRONG structure (no blank line between rooms):
      Kitchen\\nCrack to plaster above window\\nBedroom 1\\nHole to wall left of window
 
-4. SEVERITY FILTER — applies to ALL sections except Lighting, Appliances, and Overview
-   INCLUDE: chips, cracks, breaks, gouges, holes, burns, damp, mould, water damage,
-            missing items or fittings, non-functional items (no power, seized, jammed,
-            does not operate), failed silicone/grout, heavy peeling paint, dropped hinges,
-            broken locks/handles, moderate-to-major wear or damage
-   EXCLUDE: anything described as "light", "slight", "minor", or "superficial";
-            fair wear and tear; "in good order"; "in fair order"; "as new"; "as inventory"
+{severity_rule}
 
 5. OVERVIEW RULE
    If a section is named "Overview" or "Property Description" (or similar), write exactly
    one sentence using PROPERTY DETAILS above. No findings, no defects, no other content.
-   Format: "{property_description}"
+   Format: "{overview_prefix}{property_description}"
    Append outdoor features if present in the data (e.g. "with garden", "with garage").
 
 6. LIGHTING RULE

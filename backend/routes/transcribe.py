@@ -1306,8 +1306,8 @@ def transcribe_usage():
             'latest_at':              g['latest_at'].isoformat() if g['latest_at'] else None,
         })
 
-    # Sort most expensive first (secondary sort = most recent)
-    inspections_list.sort(key=lambda x: x['total_cost_gbp'], reverse=True)
+    # Sort most recent first
+    inspections_list.sort(key=lambda x: x['latest_at'] or '', reverse=True)
 
     return jsonify({
         'period_days':      int(period),

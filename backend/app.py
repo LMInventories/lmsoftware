@@ -276,6 +276,11 @@ def _setup_database():
         _alter_column("users.typist_mode",
                       "ALTER TABLE users ADD COLUMN typist_mode VARCHAR(20)")
 
+    # users.camera_option — 'perItem' | 'floating' | null (clerk-level default)
+    if not column_exists('users', 'camera_option'):
+        _alter_column("users.camera_option",
+                      "ALTER TABLE users ADD COLUMN camera_option VARCHAR(20)")
+
     # inspections.typist_mode — per-inspection override of clerk-level typist_mode
     if not column_exists('inspections', 'typist_mode'):
         _alter_column("inspections.typist_mode",

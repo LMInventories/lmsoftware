@@ -647,9 +647,11 @@ def update_inspection(inspection_id):
         inspection.invoice_paid = bool(data['invoice_paid'])
         try:
             from services.google_sheets import write_invoice_paid
-            write_invoice_paid(inspection, inspection.invoice_paid)
+            _inv_ok, _inv_err = write_invoice_paid(inspection, inspection.invoice_paid)
+            if not _inv_ok:
+                print(f'[sheets] invoice_paid sync failed (non-fatal): {_inv_err}')
         except Exception as _inv_exc:
-            print(f'[sheets] invoice_paid sync failed (non-fatal): {_inv_exc}')
+            print(f'[sheets] invoice_paid sync exception (non-fatal): {_inv_exc}')
     if 'report_data' in data:
         inspection.report_data = data['report_data']
         # ── Extract overview photo from report_data and save to property ──────

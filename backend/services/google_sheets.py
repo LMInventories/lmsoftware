@@ -107,11 +107,24 @@ def _write_invoice_paid(inspection, paid: bool) -> tuple[bool, Optional[str]]:
     if target_row is None:
         return False, f'no sheet row found for inspection {inspection.id}'
 
-    target_range = f'J{target_row}'
-    url = f'{_SHEETS_BASE}/{sheet_id}/values/{target_range}?valueInputOption=USER_ENTERED'
+    # batchUpdate with boolValue sets the actual boolean in the cell,
+    # which is what checkbox data validation requires. The values API
+    # only supports strings/numbers and cannot reliably tick a checkbox.
+    url = f'{_SHEETS_BASE}/{sheet_id}:batchUpdate'
     payload = json.dumps({
-        'range':  target_range,
-        'values': [['=TRUE()' if paid else '=FALSE()']],
+        'requests': [{
+            'updateCells': {
+                'range': {
+                    'sheetId': 0,
+                    'startRowIndex': target_row - 1,
+                    'endRowIndex':   target_row,
+                    'startColumnIndex': 9,   # J (0-based)
+                    'endColumnIndex':   10,
+                },
+                'rows': [{'values': [{'userEnteredValue': {'boolValue': paid}}]}],
+                'fields': 'userEnteredValue',
+            }
+        }]
     }).encode('utf-8')
     req = urllib.request.Request(
         url,
@@ -120,7 +133,7 @@ def _write_invoice_paid(inspection, paid: bool) -> tuple[bool, Optional[str]]:
             'Authorization': f'Bearer {token}',
             'Content-Type':  'application/json',
         },
-        method='PUT',
+        method='POST',
     )
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
@@ -129,7 +142,7 @@ def _write_invoice_paid(inspection, paid: bool) -> tuple[bool, Optional[str]]:
         return True, None
     except urllib.error.HTTPError as e:
         body = e.read().decode('utf-8', errors='replace')
-        return False, f'Sheets PUT {e.code}: {body[:400]}'
+        return False, f'Sheets batchUpdate {e.code}: {body[:400]}'
     except Exception as exc:
         return False, str(exc)
 

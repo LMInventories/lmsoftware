@@ -503,6 +503,7 @@ def update_inspection(inspection_id):
     user = get_current_user()
     inspection = Inspection.query.get_or_404(inspection_id)
     data = request.json
+    _sheets_warning = None
     # Clients cannot modify inspections via the API
     if user.role == 'client':
         return jsonify({'error': 'Forbidden'}), 403
@@ -646,11 +647,15 @@ def update_inspection(inspection_id):
     if 'invoice_paid' in data:
         inspection.invoice_paid = bool(data['invoice_paid'])
         try:
-            from services.google_sheets import write_invoice_paid
+            from services.google_sheets import write_invoice_paid, sync_inspection_row
+            # Ensure the row exists in the sheet before writing to column J
+            sync_inspection_row(inspection)
             _inv_ok, _inv_err = write_invoice_paid(inspection, inspection.invoice_paid)
             if not _inv_ok:
+                _sheets_warning = _inv_err
                 print(f'[sheets] invoice_paid sync failed (non-fatal): {_inv_err}')
         except Exception as _inv_exc:
+            _sheets_warning = str(_inv_exc)
             print(f'[sheets] invoice_paid sync exception (non-fatal): {_inv_exc}')
     if 'report_data' in data:
         inspection.report_data = data['report_data']
@@ -882,10 +887,13 @@ def update_inspection(inspection_id):
         # The 30-second timeout in _send() prevents it from hanging forever.
         threading.Thread(target=_generate_and_send, daemon=False).start()
 
-    return jsonify({
+    resp = {
         'message':    'Inspection updated',
         'updated_at': inspection.updated_at.isoformat() if inspection.updated_at else None,
-    })
+    }
+    if _sheets_warning:
+        resp['sheets_warning'] = _sheets_warning
+    return jsonify(resp)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

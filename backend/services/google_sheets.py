@@ -72,6 +72,68 @@ def sync_inspection_row(inspection) -> tuple[bool, Optional[str]]:
 append_inspection_row = sync_inspection_row
 
 
+def write_invoice_paid(inspection, paid: bool) -> tuple[bool, Optional[str]]:
+    """
+    Write TRUE/FALSE to column J (Invoice Paid tick box) for this inspection's row.
+
+    Finds the row by inspection ID in column K, same as sync_inspection_row.
+    Returns (True, None) on success, (False, error_message) on failure.
+    Safe to call fire-and-forget — never raises.
+    """
+    if getattr(inspection, 'inspection_type', None) == 'heads_up':
+        return True, None
+    try:
+        return _write_invoice_paid(inspection, paid)
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _write_invoice_paid(inspection, paid: bool) -> tuple[bool, Optional[str]]:
+    from routes.google import get_valid_access_token
+
+    sheet_id = _get_sheet_id()
+    if not sheet_id:
+        return False, 'google_master_sheet_id not configured'
+
+    token = get_valid_access_token()
+    if not token:
+        return False, 'Google not connected (no valid access token)'
+
+    try:
+        target_row = _find_existing_row(sheet_id, token, inspection)
+    except Exception as exc:
+        return False, f'row lookup failed: {exc}'
+
+    if target_row is None:
+        return False, f'no sheet row found for inspection {inspection.id}'
+
+    target_range = f'J{target_row}'
+    url = f'{_SHEETS_BASE}/{sheet_id}/values/{target_range}?valueInputOption=USER_ENTERED'
+    payload = json.dumps({
+        'range':  target_range,
+        'values': [['TRUE' if paid else 'FALSE']],
+    }).encode('utf-8')
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={
+            'Authorization': f'Bearer {token}',
+            'Content-Type':  'application/json',
+        },
+        method='PUT',
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            resp.read()
+        print(f'[sheets] invoice_paid={paid} written to J{target_row} for inspection {inspection.id}')
+        return True, None
+    except urllib.error.HTTPError as e:
+        body = e.read().decode('utf-8', errors='replace')
+        return False, f'Sheets PUT {e.code}: {body[:400]}'
+    except Exception as exc:
+        return False, str(exc)
+
+
 # ── Internal ──────────────────────────────────────────────────────────────────
 
 def _get_sheet_id() -> Optional[str]:

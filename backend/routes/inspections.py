@@ -123,6 +123,7 @@ def inspection_detail(inspection):
         'deposit_ref': inspection.deposit_ref,
         'depositary_tenancy_id': inspection.depositary_tenancy_id,
         'depositary_pushed_at': inspection.depositary_pushed_at.isoformat() if inspection.depositary_pushed_at else None,
+        'invoice_paid': inspection.invoice_paid,
         'confirmed': inspection.confirmed,
         'confirmed_at': inspection.confirmed_at.isoformat() if inspection.confirmed_at else None,
         'client_booked': inspection.client_booked,
@@ -642,6 +643,13 @@ def update_inspection(inspection_id):
                         print(f'[email] booking confirmation failed (non-fatal): {err}')
             except Exception as _conf_exc:
                 print(f'[email] booking confirmation exception (non-fatal): {_conf_exc}')
+    if 'invoice_paid' in data:
+        inspection.invoice_paid = bool(data['invoice_paid'])
+        try:
+            from services.google_sheets import write_invoice_paid
+            write_invoice_paid(inspection, inspection.invoice_paid)
+        except Exception as _inv_exc:
+            print(f'[sheets] invoice_paid sync failed (non-fatal): {_inv_exc}')
     if 'report_data' in data:
         inspection.report_data = data['report_data']
         # ── Extract overview photo from report_data and save to property ──────

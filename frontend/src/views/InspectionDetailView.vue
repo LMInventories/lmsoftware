@@ -1090,30 +1090,50 @@ onMounted(() => {
         <!-- ── Right column ── -->
         <div class="right-col">
 
-          <!-- BOOKING CONFIRMATION -->
-          <div class="info-card" v-if="authStore.isAdmin">
-            <div class="card-header">
-              <h3>Booking Confirmation</h3>
-            </div>
-            <div class="card-content">
-              <div class="confirmation-toggle-row">
-                <button
-                  class="confirmation-toggle"
-                  :class="inspection.confirmed ? 'confirmed' : 'unconfirmed'"
-                  :disabled="!inspection.inspector_id"
-                  :title="!inspection.inspector_id ? 'Assign a clerk before confirming' : ''"
-                  @click="updateField('confirmed', !inspection.confirmed)"
-                >
-                  <span class="toggle-dot"></span>
-                  <span>{{ inspection.confirmed ? 'Confirmed' : 'Unconfirmed' }}</span>
-                </button>
-                <span v-if="!inspection.inspector_id" class="helper-text" style="margin-left:10px;">Requires a clerk</span>
-                <span v-else-if="inspection.confirmed_at" class="helper-text" style="margin-left:10px;">{{ formatDate(inspection.confirmed_at) }}</span>
+          <!-- BOOKING CONFIRMATION + INVOICE PAID (split card) -->
+          <div class="info-card split-card" v-if="authStore.isAdmin">
+
+            <!-- Left: Booking Confirmation -->
+            <div class="split-pane">
+              <div class="card-header"><h3>Booking Confirmation</h3></div>
+              <div class="card-content">
+                <div class="confirmation-toggle-row">
+                  <button
+                    class="confirmation-toggle"
+                    :class="inspection.confirmed ? 'confirmed' : 'unconfirmed'"
+                    :disabled="!inspection.inspector_id"
+                    :title="!inspection.inspector_id ? 'Assign a clerk before confirming' : ''"
+                    @click="updateField('confirmed', !inspection.confirmed)"
+                  >
+                    <span class="toggle-dot"></span>
+                    <span>{{ inspection.confirmed ? 'Confirmed' : 'Unconfirmed' }}</span>
+                  </button>
+                  <span v-if="!inspection.inspector_id" class="helper-text" style="margin-left:10px;">Requires a clerk</span>
+                  <span v-else-if="inspection.confirmed_at" class="helper-text" style="margin-left:10px;">{{ formatDate(inspection.confirmed_at) }}</span>
+                </div>
+                <p class="helper-text" style="margin-top:8px;">
+                  Confirming will send a booking confirmation email to the client.
+                </p>
               </div>
-              <p class="helper-text" style="margin-top:8px;">
-                Confirming will send a booking confirmation email to the client.
-              </p>
             </div>
+
+            <!-- Right: Invoice Paid -->
+            <div class="split-pane split-pane-divider">
+              <div class="card-header"><h3>Invoice</h3></div>
+              <div class="card-content">
+                <div class="confirmation-toggle-row">
+                  <button
+                    class="confirmation-toggle"
+                    :class="inspection.invoice_paid ? 'confirmed' : 'unconfirmed'"
+                    @click="updateField('invoice_paid', !inspection.invoice_paid)"
+                  >
+                    <span class="toggle-dot"></span>
+                    <span>{{ inspection.invoice_paid ? 'Invoice Paid' : 'Invoice Unpaid' }}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
           </div>
 
           <!-- CONDUCT DATE & TIME -->
@@ -2418,6 +2438,10 @@ onMounted(() => {
 .btn-edit-inline:hover { color: #6366f1; border-color: #a5b4fc; background: #eef2ff; }
 
 .card-content { padding: 16px 20px; }
+
+.split-card { display: flex; }
+.split-pane { flex: 1; min-width: 0; }
+.split-pane-divider { border-left: 1px solid #f1f5f9; }
 
 /* Photo Card */
 .photo-card .card-content { padding: 0; }

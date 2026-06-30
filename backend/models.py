@@ -206,6 +206,7 @@ class Inspection(db.Model):
     # Once True, subsequent complete->active->complete cycles skip the auto email
     # so clients only receive it once.  Manual 'Share PDF' is unaffected.
     completion_email_sent = db.Column(db.Boolean, default=False, nullable=False)
+    invoice_paid  = db.Column(db.Boolean, default=False, nullable=False)
     confirmed    = db.Column(db.Boolean, default=False, nullable=False)
     confirmed_at = db.Column(db.DateTime, nullable=True)
     client_booked = db.Column(db.Boolean, default=False, nullable=False)
@@ -251,6 +252,7 @@ class Inspection(db.Model):
             'internal_notes':          self.internal_notes,
             'notes':                   self.notes,
             'report_data':             self.report_data,
+            'invoice_paid':            self.invoice_paid,
             'confirmed':               self.confirmed,
             'confirmed_at':            self.confirmed_at.isoformat() if self.confirmed_at else None,
             'client_booked':           self.client_booked,

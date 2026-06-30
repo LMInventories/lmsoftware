@@ -658,6 +658,10 @@ class _PDFBuilder:
             esc = stripped.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
             rid = self._room_anchor_map.get(stripped.lower())
             if rid is not None:
+                # Add a blank line before each room heading (except the very first)
+                # so room groups are visually separated rather than running together.
+                if out and out[-1] != '':
+                    out.append('')
                 out.append(f'<a href="#anchor_room_{rid}" color="#3b82f6"><u>{esc}</u></a>')
             else:
                 out.append(esc)

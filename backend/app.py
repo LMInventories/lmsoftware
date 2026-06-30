@@ -370,6 +370,12 @@ def _setup_database():
         _alter_column("inspections.completion_email_sent",
                       f"ALTER TABLE inspections ADD COLUMN completion_email_sent BOOLEAN NOT NULL DEFAULT {default}")
 
+    # inspections.invoice_paid — admin toggle synced to Google Sheets column J
+    if not column_exists('inspections', 'invoice_paid'):
+        default = "0" if _is_sqlite() else "FALSE"
+        _alter_column("inspections.invoice_paid",
+                      f"ALTER TABLE inspections ADD COLUMN invoice_paid BOOLEAN NOT NULL DEFAULT {default}")
+
     # inspections.confirmed / confirmed_at — booking confirmation toggle
     if not column_exists('inspections', 'confirmed'):
         default = "0" if _is_sqlite() else "FALSE"

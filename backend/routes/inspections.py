@@ -648,8 +648,7 @@ def update_inspection(inspection_id):
     if 'invoice_paid' in data:
         inspection.invoice_paid = bool(data['invoice_paid'])
         try:
-            from services.google_sheets import write_invoice_paid, sync_inspection_row
-            sync_inspection_row(inspection)
+            from services.google_sheets import write_invoice_paid
             _inv_ok, _inv_detail = write_invoice_paid(inspection, inspection.invoice_paid)
             _sheets_debug = {'ok': _inv_ok, 'detail': _inv_detail}
             if not _inv_ok:

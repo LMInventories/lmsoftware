@@ -86,6 +86,24 @@ def write_invoice_paid(inspection, paid: bool) -> tuple[bool, Optional[str]]:
         return False, str(exc)
 
 
+def _find_row_by_reference(sheet_id: str, token: str, reference: str) -> Optional[int]:
+    """Return the 1-based row number whose column D matches the given reference number."""
+    url = f'{_SHEETS_BASE}/{sheet_id}/values/D:D'
+    req = urllib.request.Request(
+        url,
+        headers={'Authorization': f'Bearer {token}'},
+        method='GET',
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        data = json.loads(resp.read())
+    rows = data.get('values', [])
+    ref = reference.strip().lower()
+    for row_idx, row in enumerate(rows[1:], start=2):  # skip header
+        if row and str(row[0]).strip().lower() == ref:
+            return row_idx
+    return None
+
+
 def _write_invoice_paid(inspection, paid: bool) -> tuple[bool, Optional[str]]:
     from routes.google import get_valid_access_token
 
@@ -97,13 +115,17 @@ def _write_invoice_paid(inspection, paid: bool) -> tuple[bool, Optional[str]]:
     if not token:
         return False, 'Google not connected (no valid access token)'
 
+    reference = (inspection.reference_number or '').strip()
+    if not reference:
+        return False, f'inspection {inspection.id} has no reference number'
+
     try:
-        target_row = _find_existing_row(sheet_id, token, inspection)
+        target_row = _find_row_by_reference(sheet_id, token, reference)
     except Exception as exc:
         return False, f'row lookup failed: {exc}'
 
     if target_row is None:
-        return False, f'no sheet row found for inspection {inspection.id}'
+        return False, f'no row found in column D for reference "{reference}"'
 
     url = f'{_SHEETS_BASE}/{sheet_id}/values/J{target_row}?valueInputOption=RAW'
     payload = json.dumps({
@@ -122,7 +144,7 @@ def _write_invoice_paid(inspection, paid: bool) -> tuple[bool, Optional[str]]:
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             resp.read()
-        msg = f'wrote {"YES" if paid else "blank"} to J{target_row} (inspection {inspection.id})'
+        msg = f'wrote {"YES" if paid else "blank"} to J{target_row} (ref {reference})'
         print(f'[sheets] invoice_paid: {msg}')
         return True, msg
     except urllib.error.HTTPError as e:

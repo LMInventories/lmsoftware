@@ -644,18 +644,20 @@ def update_inspection(inspection_id):
                         print(f'[email] booking confirmation failed (non-fatal): {err}')
             except Exception as _conf_exc:
                 print(f'[email] booking confirmation exception (non-fatal): {_conf_exc}')
+    _sheets_debug = None
     if 'invoice_paid' in data:
         inspection.invoice_paid = bool(data['invoice_paid'])
         try:
             from services.google_sheets import write_invoice_paid, sync_inspection_row
-            # Ensure the row exists in the sheet before writing to column J
             sync_inspection_row(inspection)
-            _inv_ok, _inv_err = write_invoice_paid(inspection, inspection.invoice_paid)
+            _inv_ok, _inv_detail = write_invoice_paid(inspection, inspection.invoice_paid)
+            _sheets_debug = {'ok': _inv_ok, 'detail': _inv_detail}
             if not _inv_ok:
-                _sheets_warning = _inv_err
-                print(f'[sheets] invoice_paid sync failed (non-fatal): {_inv_err}')
+                _sheets_warning = _inv_detail
+                print(f'[sheets] invoice_paid sync failed (non-fatal): {_inv_detail}')
         except Exception as _inv_exc:
             _sheets_warning = str(_inv_exc)
+            _sheets_debug = {'ok': False, 'detail': str(_inv_exc)}
             print(f'[sheets] invoice_paid sync exception (non-fatal): {_inv_exc}')
     if 'report_data' in data:
         inspection.report_data = data['report_data']
@@ -893,6 +895,8 @@ def update_inspection(inspection_id):
     }
     if _sheets_warning:
         resp['sheets_warning'] = _sheets_warning
+    if _sheets_debug:
+        resp['sheets_debug'] = _sheets_debug
     return jsonify(resp)
 
 

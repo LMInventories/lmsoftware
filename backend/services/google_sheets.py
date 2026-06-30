@@ -74,14 +74,12 @@ append_inspection_row = sync_inspection_row
 
 def write_invoice_paid(inspection, paid: bool) -> tuple[bool, Optional[str]]:
     """
-    Write TRUE/FALSE to column J (Invoice Paid tick box) for this inspection's row.
-
-    Finds the row by inspection ID in column K, same as sync_inspection_row.
-    Returns (True, None) on success, (False, error_message) on failure.
+    Write YES/blank to column J for this inspection's row.
+    Returns (True, detail) on success, (False, error_message) on failure.
     Safe to call fire-and-forget — never raises.
     """
     if getattr(inspection, 'inspection_type', None) == 'heads_up':
-        return True, None
+        return True, 'skipped: heads_up inspection type'
     try:
         return _write_invoice_paid(inspection, paid)
     except Exception as exc:
@@ -124,8 +122,9 @@ def _write_invoice_paid(inspection, paid: bool) -> tuple[bool, Optional[str]]:
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             resp.read()
-        print(f'[sheets] invoice_paid={paid} written to J{target_row} for inspection {inspection.id}')
-        return True, None
+        msg = f'wrote {"YES" if paid else "blank"} to J{target_row} (inspection {inspection.id})'
+        print(f'[sheets] invoice_paid: {msg}')
+        return True, msg
     except urllib.error.HTTPError as e:
         body = e.read().decode('utf-8', errors='replace')
         return False, f'Sheets PUT {e.code}: {body[:400]}'

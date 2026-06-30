@@ -111,7 +111,7 @@ def _write_invoice_paid(inspection, paid: bool) -> tuple[bool, Optional[str]]:
     url = f'{_SHEETS_BASE}/{sheet_id}/values/{target_range}?valueInputOption=USER_ENTERED'
     payload = json.dumps({
         'range':  target_range,
-        'values': [['TRUE' if paid else 'FALSE']],
+        'values': [['=TRUE()' if paid else '=FALSE()']],
     }).encode('utf-8')
     req = urllib.request.Request(
         url,

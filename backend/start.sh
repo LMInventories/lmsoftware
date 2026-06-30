@@ -13,6 +13,7 @@ python3 migrate_transient_templates.py       || echo "migrate_transient_template
 python3 migrate_item_answer_options.py       || echo "migrate_item_answer_options: skipped or already done"
 python3 migrate_reference_number.py          || echo "migrate_reference_number: skipped or already done"
 python3 migrate_calendar_event_id.py         || echo "migrate_calendar_event_id: skipped or already done"
+python3 migrate_invoice_paid.py              || echo "migrate_invoice_paid: skipped or already done"
 
 echo "==> Starting Gunicorn..."
 exec gunicorn app:app --config gunicorn.conf.py

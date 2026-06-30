@@ -15,8 +15,8 @@ if not database_url:
     print('ERROR: DATABASE_URL env var not set')
     exit(1)
 
-database_url = database_url.replace('postgres://', 'postgresql+psycopg2://')
-database_url = database_url.replace('postgresql://', 'postgresql+psycopg2://')
+database_url = database_url.replace('postgres://', 'postgresql+psycopg://')
+database_url = database_url.replace('postgresql://', 'postgresql+psycopg://')
 
 engine = create_engine(database_url)
 

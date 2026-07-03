@@ -2456,6 +2456,53 @@ def transcribe_room():
     })
 
 
+def _is_good_order(condition: str) -> bool:
+    """Return True if a condition string indicates no issues (blank or good-state phrase)."""
+    if not condition:
+        return True
+    c = condition.strip().lower().rstrip('.')
+    good_phrases = {
+        'in good order', 'good order', 'in very good order', 'very good order',
+        'in excellent order', 'excellent order', 'as new', 'as inventory',
+        'in good condition', 'good condition', 'in clean condition', 'clean condition',
+        'in fair order', 'fair order', 'in fair condition', 'fair condition',
+    }
+    # Condition may have multiple lines — check each line
+    lines = [l.strip().lower().rstrip('.') for l in c.split('\n') if l.strip()]
+    if not lines:
+        return True
+    # Consider "good order" only when ALL lines are good-state phrases
+    return all(l in good_phrases for l in lines)
+
+
+def _filter_issues_only(sections: list) -> list:
+    """
+    Remove items where condition is blank or a good-state phrase (in good order, as new, etc.).
+    Items are kept if the main condition OR any sub's condition has an actual issue.
+    Returns a new sections list with only rooms/items that have real issues.
+    """
+    filtered = []
+    for section in sections:
+        kept_items = []
+        for item in section.get('items', []):
+            cond = (item.get('condition') or '').strip()
+            subs = item.get('subs', [])
+
+            main_has_issue = bool(cond) and not _is_good_order(cond)
+            issue_subs = [s for s in subs if not _is_good_order((s.get('condition') or '').strip())]
+
+            if main_has_issue or issue_subs:
+                kept = dict(item)
+                kept['subs'] = issue_subs
+                if not main_has_issue:
+                    kept['condition'] = ''  # sub(s) have the issue; don't echo good-order main cond
+                kept_items.append(kept)
+
+        if kept_items:
+            filtered.append({'name': section.get('name', ''), 'items': kept_items})
+    return filtered
+
+
 @transcribe_bp.route('/condition-summary', methods=['POST'])
 @jwt_required()
 def generate_condition_summary():
@@ -2554,6 +2601,12 @@ def generate_condition_summary():
                 merged.append(ci_sec)
         sections = merged
 
+    # ── For Check In: strip items that have no real issues ────────────────
+    # Pre-filtering means Claude never sees "in good order" items, so it cannot
+    # accidentally include them or route them to the wrong summary section.
+    if not is_check_out:
+        sections = _filter_issues_only(sections)
+
     # ── Build property description sentence ───────────────────────────────
     prop_type  = (prop_details.get('property_type') or '').strip()
     bedrooms   = prop_details.get('bedrooms')
@@ -2635,13 +2688,43 @@ def generate_condition_summary():
     else:
         summary_type_label = 'Check In Condition Summary'
         severity_rule = """\
-4. SEVERITY FILTER — applies to ALL sections except Lighting, Appliances, and Overview
-   INCLUDE: chips, cracks, breaks, gouges, holes, burns, damp, mould, water damage,
-            missing items or fittings, non-functional items (no power, seized, jammed,
-            does not operate), failed silicone/grout, heavy peeling paint, dropped hinges,
-            broken locks/handles, moderate-to-major wear or damage
-   EXCLUDE: anything described as "light", "slight", "minor", or "superficial";
-            fair wear and tear; "in good order"; "in fair order"; "as new"; "as inventory\""""
+4. NOTEWORTHY THRESHOLD — what belongs in a condition summary
+   You are writing for a client, landlord, or agent who wants a quick professional overview.
+   This is a SUMMARY — not every detail from the inspection needs to appear here.
+   Include ONLY findings that a property professional would flag as worth attention.
+
+   INCLUDE (examples — not exhaustive):
+   • Damage needing repair or replacement: chips to plaster, cracks to tiles or walls,
+     holes, burns, gouges, broken fittings, damaged or failed glazing
+   • Missing items or fittings that should be present
+   • Non-functional items: no power, seized locks, jammed mechanisms, does not operate
+   • Damp, mould, water damage, water ingress, tide marks
+   • Significant staining — ingrained, large area, or from an identifiable cause (not light marks)
+   • Peeling or flaking paint (not just lightly marked); failed silicone or grout
+   • Structural observations: settlement cracks, dropped hinges, warped frames or doors
+   • Anything clearly beyond normal fair wear and tear for a property of this type and age
+
+   EXCLUDE — these must NEVER appear in a check-in condition summary:
+   • Items in good order, fair order, excellent condition, as new, as inventory — already filtered
+   • Light, slight, minor, or superficial marks — these are normal cosmetic wear
+   • Fair wear and tear (even if the inspector mentioned it explicitly)
+   • Observations that only confirm an item is working, complete, or functional
+   • Serial numbers, model numbers, or purely descriptive notes with no condition defect
+
+   WHEN IN DOUBT: omit it. A shorter, accurate summary is more useful than a long one
+   padded with minor observations.
+
+4b. DISTIL — write a summary, not a transcript
+   Each finding should be ONE concise line — the single most important observation
+   about that item in that room. Do NOT copy condition notes verbatim.
+   If an item's condition mentions several issues, write only the most significant.
+   Example — condition note: "Light surface scratching to hob plate\\nGrease build-up to surround"
+   → Summary line: "Grease build-up to hob surround"  (skip the light scratch)
+
+4c. CONSOLIDATE — do not repeat the same issue across many rooms
+   If the same minor issue appears in most rooms (e.g., scuffs to walls throughout),
+   either omit it entirely (if it is cosmetic/minor) or note it once under the most
+   relevant room only — do not list it under every room."""
         overview_prefix = ''
 
     prompt = f"""You are writing a {summary_type_label} for a UK property inspection report.

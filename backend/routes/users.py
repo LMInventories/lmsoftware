@@ -126,5 +126,14 @@ def change_password():
     if not user.check_password(data.get('current_password', '')):
         return jsonify({'error': 'Current password is incorrect'}), 400
     user.set_password(data['new_password'])
+    # Propagate to all other User rows for the same client account
+    if user.client_id and user.role == 'client':
+        siblings = User.query.filter(
+            User.client_id == user.client_id,
+            User.role == 'client',
+            User.id != user.id
+        ).all()
+        for sibling in siblings:
+            sibling.password_hash = user.password_hash
     db.session.commit()
     return jsonify({'message': 'Password changed successfully'})

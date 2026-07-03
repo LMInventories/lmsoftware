@@ -564,12 +564,15 @@ def send_welcome_client(client, plain_password):
 
 # ── 4. Password reset ────────────────────────────────────────────────────────
 
-def send_password_reset(user, reset_url):
+def send_password_reset(user, reset_url, to_email=None):
     """
     Send a password reset link to the user.
     reset_url: full URL including token, e.g. https://app.lminventories.co.uk/reset-password?token=abc123
+    to_email: override the send address (used when the user typed a specific address
+              from a comma-separated email field, so we send only to that address).
     """
-    if not getattr(user, 'email', ''):
+    recipient = to_email or getattr(user, 'email', '')
+    if not recipient:
         return False, 'No email address'
 
     body = (
@@ -580,7 +583,7 @@ def send_password_reset(user, reset_url):
     )
 
     subject = 'InspectPro — Reset your password'
-    return _send(SMTP_FROM, user.email, subject, _wrap(body, subject))
+    return _send(SMTP_FROM, recipient, subject, _wrap(body, subject))
 
 
 # ── 5. Typist assigned to inspection (processing stage) ──────────────────────

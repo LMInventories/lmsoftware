@@ -457,6 +457,33 @@ def _setup_database():
             db.session.rollback()
     db.session.commit()
 
+    # ── Fix legacy comma-string User.email records for client users ─────────────
+    # Historically, a client with email 'a@x.com, b@x.com' got ONE User row with
+    # that whole string as its email.  Neither address could log in or reset.
+    # This pass splits each such record into individual User rows (same password).
+    _bad_comma_users = User.query.filter(
+        User.role == 'client', User.email.contains(',')
+    ).all()
+    if _bad_comma_users:
+        print(f'[migration] Fixing {len(_bad_comma_users)} comma-string client email(s)...')
+        for _u in _bad_comma_users:
+            _parts = [e.strip().lower() for e in _u.email.split(',') if e.strip()]
+            if not _parts:
+                continue
+            _u.email = _parts[0]
+            for _em in _parts[1:]:
+                if not User.query.filter(db.func.lower(User.email) == _em).first():
+                    _extra = User(
+                        name=_u.name, email=_em, phone=_u.phone or '',
+                        role='client', client_id=_u.client_id,
+                        color=_u.color or '#6366f1',
+                        password_hash=_u.password_hash,
+                    )
+                    db.session.add(_extra)
+                    print(f'[migration]   Created User for {_em!r}')
+        db.session.commit()
+        print('[migration] Comma-string email fix complete.')
+
     # ── Seed standard midterm room section presets ───────────────────────────────
     # These presets appear in the template editor "From Preset" picker and give
     # clerks a one-click starting point for each midterm room section.

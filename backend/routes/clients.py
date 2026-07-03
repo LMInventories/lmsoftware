@@ -1,5 +1,6 @@
 import secrets
 import string
+import types
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required
 from models import db, Client, User
@@ -10,6 +11,80 @@ def _generate_password(length=12):
     """Generate a secure random password."""
     alphabet = string.ascii_letters + string.digits + '!@#$%^&*'
     return ''.join(secrets.choice(alphabet) for _ in range(length))
+
+def _parse_emails(email_str):
+    """Return a list of lowercase stripped individual email addresses."""
+    if not email_str:
+        return []
+    return [e.strip().lower() for e in str(email_str).split(',') if e.strip()]
+
+def _sync_client_users(client, plain_password=None):
+    """
+    Ensure exactly one User row exists per email in client.email (comma-separated).
+    Also fixes any legacy comma-string User.email records in-place (pre-migration
+    records where the whole 'a@x.com, b@x.com' string was stored in User.email).
+
+    plain_password: shared password for newly-created users; auto-generated if None.
+    Returns list of (new_user, plain_password) for newly created users only.
+    """
+    target_email_set = set(_parse_emails(client.email))
+    if not target_email_set:
+        return []
+
+    # Fix any legacy comma-string User.email records for this client in-place.
+    legacy_users = User.query.filter(
+        User.client_id == client.id,
+        User.role == 'client',
+        User.email.contains(',')
+    ).all()
+    for lu in legacy_users:
+        parts = _parse_emails(lu.email)
+        if not parts:
+            continue
+        lu.email = parts[0]
+        for em in parts[1:]:
+            conflict = User.query.filter(db.func.lower(User.email) == em).first()
+            if not conflict:
+                extra = User(
+                    name=lu.name, email=em, phone=lu.phone or '',
+                    role='client', client_id=lu.client_id,
+                    color=lu.color or '#6366f1',
+                    password_hash=lu.password_hash,
+                )
+                db.session.add(extra)
+    db.session.flush()
+
+    # Re-fetch after fixing legacy records
+    existing_users = User.query.filter_by(client_id=client.id, role='client').all()
+    existing_email_set = {u.email.lower() for u in existing_users}
+
+    created = []
+    pw = plain_password or _generate_password()
+
+    for em in target_email_set:
+        if em not in existing_email_set:
+            conflict = User.query.filter(
+                db.func.lower(User.email) == em,
+                User.client_id != client.id
+            ).first()
+            if conflict:
+                print(f'[clients] {em} already used by user {conflict.id} (client {conflict.client_id}), skipping')
+                continue
+            new_user = User(
+                name=client.name, email=em, phone=client.phone or '',
+                role='client', client_id=client.id, color='#6366f1',
+            )
+            new_user.set_password(pw)
+            db.session.add(new_user)
+            created.append((new_user, pw))
+
+    # Remove users whose emails are no longer in the target list
+    for u in existing_users:
+        if u.email.lower() not in target_email_set:
+            db.session.delete(u)
+
+    return created
+
 
 @clients_bp.route('', methods=['GET'])
 @jwt_required()
@@ -49,23 +124,12 @@ def create_client():
     db.session.add(client)
     db.session.commit()
 
-    # Always create a linked User account so the client can log in immediately
+    # Create one User account per email address with a shared password
     plain_password = _generate_password()
-    existing_user = User.query.filter_by(email=client.email).first() if client.email else None
-    if client.email and not existing_user:
-        portal_user = User(
-            name=client.name,
-            email=client.email,
-            phone=client.phone or '',
-            role='client',
-            client_id=client.id,
-            color='#6366f1',
-        )
-        portal_user.set_password(plain_password)
-        db.session.add(portal_user)
-        db.session.commit()
+    created_users = _sync_client_users(client, plain_password=plain_password)
+    db.session.commit()
 
-        # Send welcome email with credentials
+    if created_users:
         try:
             from routes.email_notifications import trigger_welcome_client
             trigger_welcome_client(client, plain_password)
@@ -112,7 +176,55 @@ def update_client(client_id):
         client.report_footer_text_color = data['report_footer_text_color']
 
     db.session.commit()
+
+    # Sync user accounts whenever email is present in the update payload
+    if 'email' in data:
+        new_users = _sync_client_users(client)
+        db.session.commit()
+        for new_user, pw in new_users:
+            try:
+                from routes.email_service import send_welcome_client
+                # Send welcome to this specific new email only
+                mock = types.SimpleNamespace(
+                    name=client.name,
+                    email=new_user.email,
+                    company=client.company,
+                )
+                send_welcome_client(mock, pw)
+            except Exception as email_err:
+                print(f'[email] welcome for {new_user.email} failed (non-fatal): {email_err}')
+
     return jsonify(client.to_dict())
+
+@clients_bp.route('/<int:client_id>/push-credentials', methods=['POST'])
+@jwt_required()
+def push_credentials(client_id):
+    """
+    Generate a new password for all User accounts linked to this client,
+    then email the login details to every email address on the account.
+    Admin-only action — the calling view enforces this on the frontend,
+    but JWT presence is the hard gate.
+    """
+    client = Client.query.get_or_404(client_id)
+
+    users = User.query.filter_by(client_id=client.id, role='client').all()
+    if not users:
+        return jsonify({'error': 'No portal accounts found for this client. Save the client to create one.'}), 404
+
+    plain_password = _generate_password()
+    for u in users:
+        u.set_password(plain_password)
+    db.session.commit()
+
+    try:
+        from routes.email_service import send_welcome_client
+        send_welcome_client(client, plain_password)
+    except Exception as e:
+        print(f'[email] push_credentials email failed: {e}')
+        return jsonify({'error': f'Password reset but email failed to send: {e}'}), 500
+
+    return jsonify({'message': f'Credentials sent to {client.email}'}), 200
+
 
 @clients_bp.route('/<int:client_id>', methods=['DELETE'])
 @jwt_required()

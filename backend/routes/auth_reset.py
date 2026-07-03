@@ -24,9 +24,30 @@ def forgot_password():
     if not email:
         return jsonify({'message': 'If that email exists, a reset link has been sent.'}), 200
 
+    # 1. Primary lookup: exact match on User.email
     user = User.query.filter(
         db.func.lower(User.email) == email
     ).first()
+
+    # 2. Fallback: legacy comma-string User.email (e.g. 'a@x.com, b@x.com')
+    if not user:
+        candidates = User.query.filter(
+            User.role == 'client',
+            User.email.contains(',')
+        ).all()
+        for candidate in candidates:
+            if email in [e.strip().lower() for e in candidate.email.split(',')]:
+                user = candidate
+                break
+
+    # 3. Fallback: email is in Client.email list but no User row exists yet
+    if not user:
+        from models import Client
+        for c in Client.query.filter(Client.email.contains(email)).all():
+            if email in [e.strip().lower() for e in (c.email or '').split(',')]:
+                user = User.query.filter_by(client_id=c.id, role='client').first()
+                if user:
+                    break
 
     if user:
         token  = secrets.token_urlsafe(32)
@@ -39,7 +60,8 @@ def forgot_password():
         reset_url = f"{APP_BASE_URL}/reset-password?token={token}"
         try:
             from routes.email_service import send_password_reset
-            send_password_reset(user, reset_url)
+            # Send to the exact address the user typed (handles legacy comma-string users)
+            send_password_reset(user, reset_url, to_email=email)
         except Exception as e:
             print(f'[email] password reset send failed: {e}')
 
@@ -69,6 +91,20 @@ def reset_password():
     user.set_password(password)
     user.reset_token        = None
     user.reset_token_expiry = None
+
+    # Propagate the new password to all other User rows for the same client account
+    # so every email address for this client shares the same password.
+    if user.client_id and user.role == 'client':
+        siblings = User.query.filter(
+            User.client_id == user.client_id,
+            User.role == 'client',
+            User.id != user.id
+        ).all()
+        for sibling in siblings:
+            sibling.password_hash      = user.password_hash
+            sibling.reset_token        = None
+            sibling.reset_token_expiry = None
+
     db.session.commit()
 
     return jsonify({'message': 'Password updated successfully. You can now log in.'}), 200

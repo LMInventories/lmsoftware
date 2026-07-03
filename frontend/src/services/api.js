@@ -146,11 +146,12 @@ const api = {
   deleteUser(id)        { return http.delete(`/api/users/${id}`) },
 
   // ── Clients ───────────────────────────────────────────────────────────────
-  getClients()            { return http.get('/api/clients') },
-  getClient(id)           { return http.get(`/api/clients/${id}`) },
-  createClient(data)      { return http.post('/api/clients', data) },
-  updateClient(id, data)  { return http.put(`/api/clients/${id}`, data) },
-  deleteClient(id)        { return http.delete(`/api/clients/${id}`) },
+  getClients()                  { return http.get('/api/clients') },
+  getClient(id)                 { return http.get(`/api/clients/${id}`) },
+  createClient(data)            { return http.post('/api/clients', data) },
+  updateClient(id, data)        { return http.put(`/api/clients/${id}`, data) },
+  deleteClient(id)              { return http.delete(`/api/clients/${id}`) },
+  pushClientCredentials(id)     { return http.post(`/api/clients/${id}/push-credentials`) },
 
   // ── Properties ────────────────────────────────────────────────────────────
   getProperties()                { return http.get('/api/properties') },

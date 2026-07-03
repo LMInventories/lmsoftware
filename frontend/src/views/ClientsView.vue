@@ -91,6 +91,7 @@ async function fetchClients() {
 }
 
 async function openViewModal(client) {
+  pushCredentialsMessage.value = ''
   try {
     const response = await api.getClient(client.id)
     viewingClient.value = response.data
@@ -155,6 +156,23 @@ async function deleteClient(id) {
   } catch (error) {
     console.error('Failed to delete client:', error)
     alert('Failed to delete client')
+  }
+}
+
+const pushingCredentials = ref(false)
+const pushCredentialsMessage = ref('')
+
+async function pushAccountDetails(client) {
+  if (!confirm(`This will reset the password for ${client.name} and email their new login details to ${client.email}. Continue?`)) return
+  pushingCredentials.value = true
+  pushCredentialsMessage.value = ''
+  try {
+    await api.pushClientCredentials(client.id)
+    pushCredentialsMessage.value = `Login details sent to ${client.email}`
+  } catch (err) {
+    pushCredentialsMessage.value = err.response?.data?.error || 'Failed to send credentials'
+  } finally {
+    pushingCredentials.value = false
   }
 }
 
@@ -354,6 +372,16 @@ onMounted(() => {
           </div>
 
           <div class="view-footer">
+            <button
+              v-if="authStore.isAdmin"
+              @click="pushAccountDetails(viewingClient)"
+              :disabled="pushingCredentials"
+              class="btn-push-creds"
+              title="Reset password and email login details to client"
+            >
+              {{ pushingCredentials ? 'Sending…' : 'Push Account Details' }}
+            </button>
+            <div class="push-creds-feedback" v-if="pushCredentialsMessage">{{ pushCredentialsMessage }}</div>
             <button @click="showViewModal = false; openEditModal(viewingClient)" class="btn-secondary">Edit Client</button>
             <button @click="showViewModal = false" class="btn-primary">Close</button>
           </div>
@@ -604,7 +632,11 @@ h1 { font-size: 21px; font-weight: 700; color: #0f172a; margin: 0 0 1px; }
 .logo-preview-img { max-height: 48px; max-width: 160px; object-fit: contain; border: 1px solid #e5e7eb; border-radius: 5px; padding: 5px; background: #f8fafc; }
 .disclaimer-preview { font-size: 12px; color: #475569; line-height: 1.6; padding: 12px; background: #f8fafc; border-radius: 7px; border: 1px solid #e5e7eb; white-space: pre-wrap; }
 
-.view-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 24px; border-top: 1px solid #f1f5f9; background: #f8fafc; border-radius: 0 0 12px 12px; }
+.view-footer { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 14px 24px; border-top: 1px solid #f1f5f9; background: #f8fafc; border-radius: 0 0 12px 12px; flex-wrap: wrap; }
+.btn-push-creds { padding: 7px 14px; background: #0f766e; color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; margin-right: auto; transition: background 0.15s; }
+.btn-push-creds:hover:not(:disabled) { background: #0d6b63; }
+.btn-push-creds:disabled { opacity: 0.6; cursor: not-allowed; }
+.push-creds-feedback { font-size: 12px; color: #0f766e; margin-right: auto; margin-left: 4px; }
 
 /* ── Edit modal ── */
 .modal-edit { max-width: 820px; }

@@ -207,11 +207,20 @@ def push_credentials(client_id):
     """
     client = Client.query.get_or_404(client_id)
 
-    users = User.query.filter_by(client_id=client.id, role='client').all()
-    if not users:
-        return jsonify({'error': 'No portal accounts found for this client. Save the client to create one.'}), 404
+    if not client.email:
+        return jsonify({'error': 'This client has no email address. Add one before pushing credentials.'}), 400
 
     plain_password = _generate_password()
+
+    # Create missing User rows for any email addresses not yet in the database
+    _sync_client_users(client, plain_password=plain_password)
+    db.session.commit()
+
+    # Now set the generated password on ALL user rows for this client
+    users = User.query.filter_by(client_id=client.id, role='client').all()
+    if not users:
+        return jsonify({'error': 'Could not create portal accounts — check the email address is valid.'}), 500
+
     for u in users:
         u.set_password(plain_password)
     db.session.commit()

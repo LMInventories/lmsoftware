@@ -519,6 +519,7 @@ def sheets_force_sync():
     inspections = (
         Inspection.query
         .filter(Inspection.created_at >= since)
+        .filter(Inspection.pdf_import.is_(False))
         .order_by(Inspection.created_at.desc())
         .limit(100)
         .all()

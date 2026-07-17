@@ -62,6 +62,8 @@ def sync_inspection_row(inspection) -> tuple[bool, Optional[str]]:
     """
     if getattr(inspection, 'inspection_type', None) == 'heads_up':
         return True, None
+    if getattr(inspection, 'pdf_import', False):
+        return True, None
     try:
         return _sync(inspection)
     except Exception as exc:

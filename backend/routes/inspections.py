@@ -419,6 +419,7 @@ def create_inspection():
         conduct_time_preference=data.get('conduct_time_preference'),
         report_data=seeded_report_data,
         client_booked=is_client(user),
+        pdf_import=bool(data.get('pdf_import')),
     )
 
     db.session.add(inspection)

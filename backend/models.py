@@ -211,6 +211,10 @@ class Inspection(db.Model):
     confirmed    = db.Column(db.Boolean, default=False, nullable=False)
     confirmed_at = db.Column(db.DateTime, nullable=True)
     client_booked = db.Column(db.Boolean, default=False, nullable=False)
+    # Digitized historical paper record (see PdfImportModal.vue) — a backdated
+    # reference inspection, not a billable job. Must never sync to Google
+    # Sheets/Calendar, even after a later edit touches a normally-synced field.
+    pdf_import    = db.Column(db.Boolean, default=False, nullable=False)
     created_at  = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at  = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 

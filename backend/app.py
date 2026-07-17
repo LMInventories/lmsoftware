@@ -342,6 +342,14 @@ def _setup_database():
         _alter_column("inspections.drive_file_id",
                       "ALTER TABLE inspections ADD COLUMN drive_file_id VARCHAR(128)")
 
+    # inspections.pdf_import — persists the digitized-historical-record flag
+    # (previously only a transient create-request flag, so later edits/re-syncs
+    # had no way to know a row should stay out of Sheets/Calendar)
+    if not column_exists('inspections', 'pdf_import'):
+        default = "0" if _is_sqlite() else "FALSE"
+        _alter_column("inspections.pdf_import",
+                      f"ALTER TABLE inspections ADD COLUMN pdf_import BOOLEAN NOT NULL DEFAULT {default}")
+
     # items.answer_options — JSON array of selectable answers for question-type template items
     if not column_exists('items', 'answer_options'):
         _alter_column("items.answer_options",

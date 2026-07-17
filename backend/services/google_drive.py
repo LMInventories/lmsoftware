@@ -138,7 +138,7 @@ def _multipart_upload(filename: str, pdf_bytes: bytes,
 
 # ── Public upload function ────────────────────────────────────────────────────
 
-def upload_report(inspection, pdf_bytes: bytes) -> tuple[bool, str]:
+def upload_report(inspection, pdf_bytes: bytes) -> tuple[bool, dict | str]:
     """
     Upload a completed inspection PDF to the connected Google Drive account.
 
@@ -146,8 +146,8 @@ def upload_report(inspection, pdf_bytes: bytes) -> tuple[bool, str]:
       InspectPro Reports / {Client Name} / {Property Address} / {filename}.pdf
 
     Returns:
-      (True, drive_file_url)   on success
-      (False, error_message)   on failure
+      (True, {'file_id': ..., 'url': ...})   on success
+      (False, error_message)                 on failure
     """
     from routes.google import get_valid_access_token
 
@@ -183,7 +183,7 @@ def upload_report(inspection, pdf_bytes: bytes) -> tuple[bool, str]:
 
         drive_url = f'https://drive.google.com/file/d/{file_id}/view' if file_id else ''
         print(f'[google_drive] uploaded OK — {filename} → {drive_url}')
-        return True, drive_url
+        return True, {'file_id': file_id, 'url': drive_url}
 
     except urllib.error.HTTPError as e:
         body = ''
@@ -197,4 +197,45 @@ def upload_report(inspection, pdf_bytes: bytes) -> tuple[bool, str]:
 
     except Exception as e:
         print(f'[google_drive] upload error: {e}')
+        return False, str(e)
+
+
+# ── Public delete function ────────────────────────────────────────────────────
+
+def delete_file(file_id: str) -> tuple[bool, Optional[str]]:
+    """
+    Delete a file from Google Drive by ID.
+
+    Returns (True, None) on success (a 404 also counts as success — the file
+    is already gone), (False, error_message) on any other failure.
+    """
+    from routes.google import get_valid_access_token
+
+    access_token = get_valid_access_token()
+    if not access_token:
+        return False, 'Google not connected or token refresh failed'
+
+    url = f'{_DRIVE_FILES_URL}/{file_id}'
+    req = urllib.request.Request(
+        url,
+        headers={'Authorization': f'Bearer {access_token}'},
+        method='DELETE',
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            resp.read()
+        return True, None
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return True, None
+        body = ''
+        try:
+            body = e.read().decode('utf-8')[:300]
+        except Exception:
+            pass
+        msg = f'Drive API HTTP {e.code}: {body}'
+        print(f'[google_drive] delete error: {msg}')
+        return False, msg
+    except Exception as e:
+        print(f'[google_drive] delete error: {e}')
         return False, str(e)

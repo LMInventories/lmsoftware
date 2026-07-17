@@ -871,7 +871,9 @@ def update_inspection(inspection_id):
                             print(f'[google_drive] uploading PDF for inspection {_insp_id}...')
                             drive_ok, drive_result = upload_report(insp, pdf_bytes)
                             if drive_ok:
-                                print(f'[google_drive] upload OK — {drive_result}')
+                                print(f'[google_drive] upload OK — {drive_result["url"]}')
+                                insp.drive_file_id = drive_result['file_id']
+                                db.session.commit()
                             else:
                                 print(f'[google_drive] upload FAILED: {drive_result}')
                         else:
@@ -917,6 +919,25 @@ def delete_inspection(inspection_id):
             delete_calendar_event(inspection.calendar_event_id)
         except Exception as _cal_exc:
             print(f'[calendar] delete error (non-fatal): {_cal_exc}')
+
+    # ── Delete uploaded report PDF from Google Drive, if one exists ──────────
+    if inspection.drive_file_id:
+        try:
+            from services.google_drive import delete_file
+            _drive_ok, _drive_err = delete_file(inspection.drive_file_id)
+            if not _drive_ok:
+                print(f'[google_drive] delete error (non-fatal): {_drive_err}')
+        except Exception as _drive_exc:
+            print(f'[google_drive] delete error (non-fatal): {_drive_exc}')
+
+    # ── Delete the corresponding row from the master Google Sheet ────────────
+    try:
+        from services.google_sheets import delete_inspection_row
+        _sheets_ok, _sheets_err = delete_inspection_row(inspection)
+        if not _sheets_ok:
+            print(f'[sheets] delete row error (non-fatal): {_sheets_err}')
+    except Exception as _sheets_exc:
+        print(f'[sheets] delete row error (non-fatal): {_sheets_exc}')
 
     db.session.delete(inspection)
     db.session.commit()

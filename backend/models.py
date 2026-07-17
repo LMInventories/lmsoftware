@@ -193,6 +193,7 @@ class Inspection(db.Model):
     depositary_tenancy_id   = db.Column(db.String(255))      # ID returned by The Depositary API after push
     depositary_pushed_at    = db.Column(db.DateTime)
     calendar_event_id       = db.Column(db.String(255))      # Google Calendar event ID after push
+    drive_file_id           = db.Column(db.String(128))      # Google Drive file ID after report upload
     conduct_date            = db.Column(db.DateTime, index=True)
     conduct_time_preference = db.Column(db.String(50))
     scheduled_date          = db.Column(db.DateTime)

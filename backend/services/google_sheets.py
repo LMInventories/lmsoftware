@@ -72,6 +72,21 @@ def sync_inspection_row(inspection) -> tuple[bool, Optional[str]]:
 append_inspection_row = sync_inspection_row
 
 
+def delete_inspection_row(inspection) -> tuple[bool, Optional[str]]:
+    """
+    Delete this inspection's row from the master sheet (found via the column K
+    stamp / legacy address+type+date fallback, same lookup used by sync).
+
+    Returns (True, detail) if a row was deleted or none was found (nothing to
+    do isn't a failure). Returns (False, error_message) only on an actual API
+    error. Safe to call fire-and-forget — never raises.
+    """
+    try:
+        return _delete_row(inspection)
+    except Exception as exc:
+        return False, str(exc)
+
+
 def write_invoice_paid(inspection, paid: bool) -> tuple[bool, Optional[str]]:
     """
     Write YES/blank to column J for this inspection's row.
@@ -331,6 +346,79 @@ def _stamp_inspection_id(sheet_id: str, token: str,
     )
     with urllib.request.urlopen(req, timeout=10) as resp:
         resp.read()
+
+
+def _get_first_sheet_tab_id(sheet_id: str, token: str) -> int:
+    """Return the numeric sheetId (gid) of the first tab — the tab all A:K
+    range operations in this module implicitly target."""
+    url = f'{_SHEETS_BASE}/{sheet_id}?fields=sheets.properties'
+    req = urllib.request.Request(
+        url,
+        headers={'Authorization': f'Bearer {token}'},
+        method='GET',
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        data = json.loads(resp.read())
+    return data['sheets'][0]['properties']['sheetId']
+
+
+def _delete_row(inspection) -> tuple[bool, Optional[str]]:
+    from routes.google import get_valid_access_token
+
+    sheet_id = _get_sheet_id()
+    if not sheet_id:
+        return False, 'google_master_sheet_id not configured'
+
+    token = get_valid_access_token()
+    if not token:
+        return False, 'Google not connected (no valid access token)'
+
+    try:
+        target_row = _find_existing_row(sheet_id, token, inspection)
+    except Exception as exc:
+        return False, f'row lookup failed: {exc}'
+
+    if target_row is None:
+        return True, f'no matching row for inspection {inspection.id}'
+
+    try:
+        tab_id = _get_first_sheet_tab_id(sheet_id, token)
+    except Exception as exc:
+        return False, f'could not resolve sheet tab id: {exc}'
+
+    url = f'{_SHEETS_BASE}/{sheet_id}:batchUpdate'
+    payload = json.dumps({
+        'requests': [{
+            'deleteDimension': {
+                'range': {
+                    'sheetId':    tab_id,
+                    'dimension':  'ROWS',
+                    'startIndex': target_row - 1,
+                    'endIndex':   target_row,
+                },
+            },
+        }],
+    }).encode('utf-8')
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={
+            'Authorization': f'Bearer {token}',
+            'Content-Type':  'application/json',
+        },
+        method='POST',
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            resp.read()
+        msg = f'deleted row {target_row} (inspection {inspection.id})'
+        print(f'[sheets] {msg}')
+        return True, msg
+    except urllib.error.HTTPError as e:
+        body = e.read().decode('utf-8', errors='replace')
+        return False, f'Sheets batchUpdate {e.code}: {body[:400]}'
+    except Exception as exc:
+        return False, str(exc)
 
 
 def _sync(inspection) -> tuple[bool, Optional[str]]:

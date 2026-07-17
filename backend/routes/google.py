@@ -418,7 +418,7 @@ def drive_force_sync():
     import time as _time
     from routes.pdf_generator import generate_inspection_pdf
     from services.google_drive import upload_report, is_drive_connected
-    from models import Inspection
+    from models import db, Inspection
 
     if not is_drive_connected():
         return jsonify({'error': 'Google Drive is not connected'}), 400
@@ -458,6 +458,8 @@ def drive_force_sync():
             pdf_bytes = generate_inspection_pdf(insp.id, deadline=deadline)
             ok, outcome = upload_report(insp, pdf_bytes)
             if ok:
+                insp.drive_file_id = outcome['file_id']
+                db.session.commit()
                 results['synced'] += 1
                 print(f'[drive_force_sync] synced inspection {insp.id}')
             else:
@@ -466,5 +468,71 @@ def drive_force_sync():
         except Exception as e:
             results['failed'].append({'id': insp.id, 'error': str(e)[:120]})
             print(f'[drive_force_sync] exception on inspection {insp.id}: {e}')
+
+    return jsonify(results)
+
+
+@google_bp.route('/sheets/force-sync', methods=['POST'])
+@jwt_required()
+def sheets_force_sync():
+    """
+    Re-sync inspections to the master Google Sheet.
+    Used when new inspections weren't added because the connector was
+    disconnected (upserts idempotently — safe to re-run on rows already synced).
+
+    Body (optional):
+      { "since": "2025-01-01" }  — only process inspections created on or after this date
+                                   defaults to the last 30 days
+
+    Returns:
+      { total, synced, failed: [{id, error}, ...], truncated }
+    """
+    import datetime as dt
+    import time as _time
+    from services.google_sheets import sync_inspection_row
+    from models import Inspection, SystemSetting
+
+    if not is_connected():
+        return jsonify({'error': 'Google is not connected'}), 400
+    sheet_id_row = SystemSetting.query.filter_by(key='google_master_sheet_id').first()
+    if not (sheet_id_row and (sheet_id_row.value or '').strip()):
+        return jsonify({'error': 'Master Sheet ID is not configured'}), 400
+
+    body = request.get_json(silent=True) or {}
+    since_str = body.get('since')
+
+    if since_str:
+        try:
+            since = dt.datetime.fromisoformat(since_str)
+            if since.tzinfo is None:
+                since = since.replace(tzinfo=dt.timezone.utc)
+        except (ValueError, TypeError):
+            return jsonify({'error': 'Invalid date — use YYYY-MM-DD'}), 400
+    else:
+        since = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=30)
+
+    inspections = (
+        Inspection.query
+        .filter(Inspection.created_at >= since)
+        .order_by(Inspection.created_at.desc())
+        .limit(100)
+        .all()
+    )
+
+    results  = {'total': len(inspections), 'synced': 0, 'failed': [], 'truncated': False}
+    deadline = _time.monotonic() + 100  # stay inside Gunicorn's 120s timeout
+
+    for insp in inspections:
+        if _time.monotonic() > deadline:
+            results['truncated'] = True
+            print(f'[sheets_force_sync] time budget exhausted — stopping early')
+            break
+        ok, outcome = sync_inspection_row(insp)
+        if ok:
+            results['synced'] += 1
+            print(f'[sheets_force_sync] synced inspection {insp.id}')
+        else:
+            results['failed'].append({'id': insp.id, 'error': outcome})
+            print(f'[sheets_force_sync] failed inspection {insp.id}: {outcome}')
 
     return jsonify(results)

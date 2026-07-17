@@ -651,6 +651,9 @@ app = create_app()
 from routes.email_notifications import schedule_clerk_summaries  # noqa
 schedule_clerk_summaries(app)
 
+from routes.google import schedule_expiry_check  # noqa
+schedule_expiry_check(app)
+
 
 if __name__ == '__main__':
     app.run(debug=False)

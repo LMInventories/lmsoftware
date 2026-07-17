@@ -66,6 +66,7 @@ _TOKEN_KEYS = (
     'google_token_expiry',
     'google_scopes',
     'google_email',
+    'google_connected_at',
 )
 
 
@@ -103,9 +104,13 @@ def _save_tokens(tokens: dict) -> None:
         'google_scopes':        tokens.get('scope', ' '.join(SCOPES)),
     }
     # Only overwrite refresh_token if a new one was supplied (Google only
-    # sends it on first authorisation, not on every token refresh).
+    # sends it on first authorisation, not on every token refresh). This is
+    # also the moment that starts the 7-day refresh-token countdown (see
+    # refresh_token_expiry_estimate), since it's the last time consent was
+    # actually granted.
     if tokens.get('refresh_token'):
         data['google_refresh_token'] = tokens['refresh_token']
+        data['google_connected_at']  = datetime.now(timezone.utc).isoformat()
 
     for key, value in data.items():
         row = SystemSetting.query.filter_by(key=key).first()
@@ -213,6 +218,125 @@ def is_connected() -> bool:
     """Quick check — True if both access and refresh tokens exist."""
     tokens = _load_tokens()
     return bool(tokens.get('google_access_token') and tokens.get('google_refresh_token'))
+
+
+# ── Refresh-token expiry estimate ─────────────────────────────────────────────
+# Google enforces a hard 7-day refresh-token lifetime for OAuth apps whose
+# consent screen is in "Testing" publishing status (this app currently is —
+# see Settings → Integrations). There's no API to ask Google when a refresh
+# token will stop working, so we estimate it from when it was last (re)issued.
+
+def refresh_token_expiry_estimate() -> Optional[datetime]:
+    """Best-effort estimate of when the current refresh token stops working.
+    Returns None if not connected, or if connected before this field existed."""
+    tokens = _load_tokens()
+    if not tokens.get('google_refresh_token'):
+        return None
+    connected_at_str = tokens.get('google_connected_at')
+    if not connected_at_str:
+        return None
+    try:
+        connected_at = datetime.fromisoformat(connected_at_str)
+        if connected_at.tzinfo is None:
+            connected_at = connected_at.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+    return connected_at + timedelta(days=7)
+
+
+def expiry_warning_state() -> dict:
+    """{'expires_at': iso_str|None, 'hours_left': float|None, 'expiring_soon': bool}"""
+    expiry = refresh_token_expiry_estimate()
+    if expiry is None:
+        return {'expires_at': None, 'hours_left': None, 'expiring_soon': False}
+    hours_left = (expiry - datetime.now(timezone.utc)).total_seconds() / 3600
+    return {
+        'expires_at':    expiry.isoformat(),
+        'hours_left':    round(hours_left, 1),
+        'expiring_soon': 0 <= hours_left <= 24,
+    }
+
+
+def _check_and_send_expiry_warning():
+    """
+    Email info@lminventories.co.uk once per connection cycle when the Google
+    connection is within 24 hours of the 7-day refresh-token cliff. Safe to
+    call repeatedly — tracks the connected_at it last warned for so it won't
+    re-send until the connection is renewed (a fresh 7-day cycle starts).
+    """
+    from models import db, SystemSetting
+
+    state = expiry_warning_state()
+    if not state['expiring_soon']:
+        return
+
+    tokens = _load_tokens()
+    connected_at = tokens.get('google_connected_at', '')
+    sent_row = SystemSetting.query.filter_by(key='google_expiry_warning_sent_for').first()
+    if sent_row and sent_row.value == connected_at:
+        return  # already warned for this connection cycle
+
+    try:
+        from routes.email_service import _send, _wrap
+        email = tokens.get('google_email', 'the connected account')
+        hours_left = int(state['hours_left'])
+        body = _wrap(
+            f'<h2>Google connection expiring soon</h2>'
+            f'<p>The Google integration ({email}) will disconnect in approximately '
+            f'{hours_left} hour{"s" if hours_left != 1 else ""}.</p>'
+            f'<p>This happens because the Google OAuth app is in "Testing" mode, '
+            f'which caps every connection at 7 days. Reconnect from '
+            f'<a href="{_frontend_url("/settings?tab=integrations")}">Settings &rarr; Integrations &rarr; Google</a> '
+            f'to avoid an interruption to Sheets, Drive and Calendar syncing.</p>',
+            'Google Connection Expiring Soon',
+        )
+        ok, err = _send(
+            os.environ.get('SMTP_FROM', 'no-reply@lminventories.co.uk'),
+            'info@lminventories.co.uk',
+            'Action needed: Google connection expires in 24 hours',
+            body,
+        )
+    except Exception as exc:
+        print(f'[google] expiry warning email exception: {exc}')
+        return
+
+    if not ok:
+        print(f'[google] expiry warning email failed (will retry next check): {err}')
+        return
+
+    print('[google] expiry warning email sent')
+    if sent_row:
+        sent_row.value = connected_at
+    else:
+        db.session.add(SystemSetting(key='google_expiry_warning_sent_for', value=connected_at))
+    db.session.commit()
+
+
+def schedule_expiry_check(app):
+    """
+    Register a periodic check (every 6h) that emails a warning when the
+    Google connection is within 24 hours of expiry. Call once after
+    create_app():
+        from routes.google import schedule_expiry_check
+        schedule_expiry_check(app)
+    """
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from apscheduler.triggers.cron import CronTrigger
+
+        scheduler = BackgroundScheduler(timezone='Europe/London')
+
+        def job():
+            with app.app_context():
+                _check_and_send_expiry_warning()
+
+        scheduler.add_job(job, CronTrigger(hour='*/6', minute=0, timezone='Europe/London'))
+        scheduler.start()
+        print('[google] expiry-warning scheduler started — checks every 6h')
+        return scheduler
+    except ImportError:
+        print('[google] APScheduler not installed — expiry warning email disabled')
+        return None
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -349,6 +473,17 @@ def google_health():
                 'key':     'google',
                 'label':   'Google',
                 'message': 'Google disconnected — Sheets, Drive and Calendar sync are paused.',
+            })
+    else:
+        state = expiry_warning_state()
+        if state['expiring_soon']:
+            hours_left = int(state['hours_left'])
+            issues.append({
+                'key':     'google_expiring',
+                'label':   'Google',
+                'message': f'Google connection expires in about {hours_left} hour'
+                           f'{"s" if hours_left != 1 else ""} — reconnect in Settings → '
+                           f'Integrations to avoid interrupting Sheets/Drive/Calendar sync.',
             })
 
     return jsonify({'issues': issues})

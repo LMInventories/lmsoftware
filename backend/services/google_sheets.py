@@ -101,6 +101,44 @@ def write_invoice_paid(inspection, paid: bool) -> tuple[bool, Optional[str]]:
         return False, str(exc)
 
 
+def get_existing_reference_numbers() -> tuple[Optional[set], Optional[str]]:
+    """
+    Return the set of reference numbers (lower-cased) already present in
+    column D of the master sheet, via a single bulk read.
+
+    Returns (set, None) on success, (None, error_message) if the sheet
+    couldn't be read (not configured / not connected / API error).
+    """
+    from routes.google import get_valid_access_token
+
+    sheet_id = _get_sheet_id()
+    if not sheet_id:
+        return None, 'google_master_sheet_id not configured'
+
+    token = get_valid_access_token()
+    if not token:
+        return None, 'Google not connected (no valid access token)'
+
+    url = f'{_SHEETS_BASE}/{sheet_id}/values/D:D'
+    req = urllib.request.Request(
+        url,
+        headers={'Authorization': f'Bearer {token}'},
+        method='GET',
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode('utf-8', errors='replace')
+        return None, f'Sheets GET {e.code}: {body[:400]}'
+    except Exception as exc:
+        return None, str(exc)
+
+    rows = data.get('values', [])
+    refs = {str(row[0]).strip().lower() for row in rows[1:] if row and row[0]}
+    return refs, None
+
+
 def _find_row_by_reference(sheet_id: str, token: str, reference: str) -> Optional[int]:
     """Return the 1-based row number whose column D matches the given reference number."""
     url = f'{_SHEETS_BASE}/{sheet_id}/values/D:D'

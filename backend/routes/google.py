@@ -447,7 +447,7 @@ def drive_force_sync():
     )
 
     results  = {'total': len(inspections), 'synced': 0, 'failed': [], 'truncated': False}
-    deadline = _time.monotonic() + 100  # stay inside Gunicorn's 120s timeout
+    deadline = _time.monotonic() + 100  # stay inside Gunicorn's timeout (gunicorn.conf.py)
 
     for insp in inspections:
         if _time.monotonic() > deadline:
@@ -478,18 +478,19 @@ def sheets_force_sync():
     """
     Re-sync inspections to the master Google Sheet.
     Used when new inspections weren't added because the connector was
-    disconnected (upserts idempotently — safe to re-run on rows already synced).
+    disconnected. Only inspections whose reference number isn't already
+    present in the sheet are synced — existing rows are left untouched.
 
     Body (optional):
       { "since": "2025-01-01" }  — only process inspections created on or after this date
                                    defaults to the last 30 days
 
     Returns:
-      { total, synced, failed: [{id, error}, ...], truncated }
+      { total, synced, skipped, failed: [{id, error}, ...], truncated }
     """
     import datetime as dt
     import time as _time
-    from services.google_sheets import sync_inspection_row
+    from services.google_sheets import sync_inspection_row, get_existing_reference_numbers
     from models import Inspection, SystemSetting
 
     if not is_connected():
@@ -497,6 +498,10 @@ def sheets_force_sync():
     sheet_id_row = SystemSetting.query.filter_by(key='google_master_sheet_id').first()
     if not (sheet_id_row and (sheet_id_row.value or '').strip()):
         return jsonify({'error': 'Master Sheet ID is not configured'}), 400
+
+    existing_refs, refs_err = get_existing_reference_numbers()
+    if existing_refs is None:
+        return jsonify({'error': f'Could not read master sheet: {refs_err}'}), 400
 
     body = request.get_json(silent=True) or {}
     since_str = body.get('since')
@@ -519,14 +524,19 @@ def sheets_force_sync():
         .all()
     )
 
-    results  = {'total': len(inspections), 'synced': 0, 'failed': [], 'truncated': False}
-    deadline = _time.monotonic() + 100  # stay inside Gunicorn's 120s timeout
+    results  = {'total': len(inspections), 'synced': 0, 'skipped': 0, 'failed': [], 'truncated': False}
+    deadline = _time.monotonic() + 180  # 3-minute budget — see gunicorn.conf.py timeout
 
     for insp in inspections:
         if _time.monotonic() > deadline:
             results['truncated'] = True
             print(f'[sheets_force_sync] time budget exhausted — stopping early')
             break
+
+        reference = (insp.reference_number or '').strip().lower()
+        if reference and reference in existing_refs:
+            results['skipped'] += 1
+            continue
         ok, outcome = sync_inspection_row(insp)
         if ok:
             results['synced'] += 1

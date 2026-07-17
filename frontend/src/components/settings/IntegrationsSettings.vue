@@ -93,7 +93,7 @@ async function forceSyncSheets() {
   sheetsSyncResult.value = null
   try {
     const body = sheetsSyncDate.value ? { since: sheetsSyncDate.value } : {}
-    const res  = await api.http.post('/api/google/sheets/force-sync', body, { timeout: 120000 })
+    const res  = await api.http.post('/api/google/sheets/force-sync', body, { timeout: 200000 })
     sheetsSyncResult.value = res.data
   } catch (e) {
     const msg = e.response?.data?.error || e.message || 'Sync failed — check your Google connection and try again.'
@@ -639,12 +639,13 @@ function handleConnect(integration) {
         </div>
 
         <div v-if="sheetsSyncResult && !sheetsSyncResult.error" style="margin-top:12px; width:100%;">
-          <div class="config-status" v-if="sheetsSyncResult.synced > 0 || sheetsSyncResult.total === 0">
+          <div class="config-status">
             <template v-if="sheetsSyncResult.total === 0">
               No inspections found in the selected date range.
             </template>
             <template v-else>
-              ✅ Synced {{ sheetsSyncResult.synced }} of {{ sheetsSyncResult.total }} inspection{{ sheetsSyncResult.total !== 1 ? 's' : '' }} to the master sheet.
+              ✅ Synced {{ sheetsSyncResult.synced }} new inspection{{ sheetsSyncResult.synced !== 1 ? 's' : '' }}
+              to the master sheet ({{ sheetsSyncResult.skipped }} already present, skipped).
             </template>
           </div>
           <div v-if="sheetsSyncResult.failed && sheetsSyncResult.failed.length" class="config-status config-status--warn" style="margin-top:8px;">

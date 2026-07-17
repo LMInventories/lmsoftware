@@ -7,7 +7,9 @@ Key decisions:
   core and hurts rather than helps. Increase to 8 on a dedicated-CPU plan.
 - sync worker class: our endpoints are DB-bound (fast SQLAlchemy calls), not
   I/O-bound with long waits, so sync workers are the right fit.
-- timeout=120: covers large sync payloads and AI transcription calls.
+- timeout=210: covers large sync payloads, AI transcription calls, and the
+  Sheets force-sync's 180s internal time budget (routes/google.py) — must
+  stay comfortably above that budget or the worker gets killed mid-request.
 - graceful_timeout=30: when Railway sends SIGTERM during a deploy, workers
   get 30s to finish any in-flight request before being force-killed.
   This prevents mid-flight PDF exports or mobile syncs being dropped.
@@ -21,7 +23,7 @@ import os
 bind             = f"0.0.0.0:{os.environ.get('PORT', '5000')}"
 workers          = int(os.environ.get('GUNICORN_WORKERS', '4'))
 worker_class     = 'sync'
-timeout          = 120
+timeout          = 210
 graceful_timeout = 30   # finish in-flight requests after SIGTERM before hard kill
 keepalive        = 5    # keep TCP connection alive for 5s between requests
 preload_app      = True # load app once, share across workers; scheduler runs once

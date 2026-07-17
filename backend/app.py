@@ -337,6 +337,11 @@ def _setup_database():
         _alter_column("inspections.calendar_event_id",
                       "ALTER TABLE inspections ADD COLUMN calendar_event_id VARCHAR(255)")
 
+    # inspections.drive_file_id — Google Drive file ID stored after report upload
+    if not column_exists('inspections', 'drive_file_id'):
+        _alter_column("inspections.drive_file_id",
+                      "ALTER TABLE inspections ADD COLUMN drive_file_id VARCHAR(128)")
+
     # items.answer_options — JSON array of selectable answers for question-type template items
     if not column_exists('items', 'answer_options'):
         _alter_column("items.answer_options",

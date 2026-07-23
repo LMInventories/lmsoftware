@@ -387,8 +387,8 @@ class SectionPreset(db.Model):
 # Update these when OpenAI / Anthropic change their pricing.
 USD_TO_GBP           = 0.79
 WHISPER_PER_MIN_USD  = 0.006
-HAIKU_IN_PER_1M_USD  = 0.80
-HAIKU_OUT_PER_1M_USD = 4.00
+HAIKU_IN_PER_1M_USD  = 1.00
+HAIKU_OUT_PER_1M_USD = 5.00
 
 
 class TranscriptionUsage(db.Model):

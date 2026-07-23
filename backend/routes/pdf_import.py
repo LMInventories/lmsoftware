@@ -975,13 +975,22 @@ def _split_into_chunks(text, max_chars=MAX_CHUNK_CHARS):
 
 # ── Claude call helpers ───────────────────────────────────────────────────────
 
-def _call_claude(client, messages, max_tokens):
-    """Single Claude call, returns parsed JSON dict or raises."""
+def _call_claude(client, messages, max_tokens, usage_acc=None):
+    """
+    Single Claude call, returns parsed JSON dict or raises.
+    usage_acc: optional {'input_tokens', 'output_tokens', 'calls'} dict that is
+    incremented with the actual token usage reported by the API — used for
+    per-inspection cost tracking in Settings > Transcription.
+    """
     response = client.messages.create(
         model='claude-sonnet-4-6',
         max_tokens=max_tokens,
         messages=messages,
     )
+    if usage_acc is not None and response.usage:
+        usage_acc['input_tokens']  += response.usage.input_tokens or 0
+        usage_acc['output_tokens'] += response.usage.output_tokens or 0
+        usage_acc['calls']         += 1
     raw = response.content[0].text.strip()
     raw = raw.replace('```json', '').replace('```', '').strip()
     return json.loads(raw)
@@ -1043,6 +1052,10 @@ def _run_import_job(job_id, api_key, extracted_text, pdf_b64, template_structure
         from anthropic import Anthropic
         client = Anthropic(api_key=api_key)
 
+        # Actual API token usage across all extraction calls. Attached to the
+        # result as _usage and logged against the inspection at apply time.
+        usage_acc = {'input_tokens': 0, 'output_tokens': 0, 'calls': 0}
+
         # ── Image extraction (before Claude, mapping deferred until after) ────
         # S3 uploads happen here before the long Claude call.
         # Room mapping is done AFTER Claude so we can use Claude's room names.
@@ -1082,7 +1095,7 @@ def _run_import_job(job_id, api_key, extracted_text, pdf_b64, template_structure
                     ],
                 }
             ]
-            parsed = _call_claude(client, messages, MAX_TOKENS_SINGLE)
+            parsed = _call_claude(client, messages, MAX_TOKENS_SINGLE, usage_acc)
 
         elif len(extracted_text) <= CHUNK_THRESHOLD:
             # Small PDF — single call
@@ -1095,7 +1108,7 @@ def _run_import_job(job_id, api_key, extracted_text, pdf_b64, template_structure
             })
             prompt = PROMPT_TEMPLATE.replace('__TEMPLATE_STRUCTURE__', template_structure)
             messages = [{'role': 'user', 'content': prompt + '\n\n---\nPDF TEXT CONTENT:\n' + extracted_text}]
-            parsed = _call_claude(client, messages, MAX_TOKENS_SINGLE)
+            parsed = _call_claude(client, messages, MAX_TOKENS_SINGLE, usage_acc)
 
         else:
             # Large PDF — split into chunks and merge
@@ -1118,7 +1131,7 @@ def _run_import_job(job_id, api_key, extracted_text, pdf_b64, template_structure
                 )
                 messages = [{'role': 'user', 'content': chunk_prompt}]
                 try:
-                    chunk_result = _call_claude(client, messages, MAX_TOKENS_CHUNK)
+                    chunk_result = _call_claude(client, messages, MAX_TOKENS_CHUNK, usage_acc)
                     chunk_rooms = len(chunk_result.get('rooms', []))
                     chunk_items = sum(len(r.get('items', [])) for r in chunk_result.get('rooms', []))
                     print('[pdf-import] job ' + job_id + ' chunk ' + str(i + 1) + ' → ' + str(chunk_rooms) + ' rooms, ' + str(chunk_items) + ' items')
@@ -1229,10 +1242,14 @@ def _run_import_job(job_id, api_key, extracted_text, pdf_b64, template_structure
                       f'{len(keys_photos)} keys, {len(meter_photos)} meters, '
                       f'{len(overview_photos)} overview')
 
+                # Sort by document position — these lists are matched photo-by-row
+                # in order during apply, so they must follow visual order, not
+                # PyMuPDF extraction order.
+                _doc_order = lambda p: (p.get('page') or 0, p.get('y') or 0.0)
                 if keys_photos:
-                    parsed['_keysPhotos'] = [p['url'] for p in keys_photos]
+                    parsed['_keysPhotos'] = [p['url'] for p in sorted(keys_photos, key=_doc_order)]
                 if meter_photos:
-                    parsed['_meterPhotos'] = [p['url'] for p in meter_photos]
+                    parsed['_meterPhotos'] = [p['url'] for p in sorted(meter_photos, key=_doc_order)]
 
             except Exception as map_e:
                 import traceback as _tb
@@ -1260,6 +1277,10 @@ def _run_import_job(job_id, api_key, extracted_text, pdf_b64, template_structure
         # Cover photo (first large opaque image on page 0)
         if cover_photo_url:
             parsed['_coverPhoto'] = cover_photo_url
+
+        # Actual extraction token usage — logged against the inspection when
+        # the parsed result is applied (apply-pdf-import).
+        parsed['_usage'] = usage_acc
 
         room_count  = len(parsed.get('rooms', []))
         item_count  = sum(len(r.get('items', [])) for r in parsed.get('rooms', []))

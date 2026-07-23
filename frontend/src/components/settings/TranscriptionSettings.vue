@@ -144,10 +144,15 @@ onMounted(() => { checkApiKeys(); loadUsage() })
             <span class="cost-value">{{ formatGBP((usage.claude_cost_gbp || 0) + (usage.photo_cost_gbp || 0)) }}</span>
             <span class="cost-sub">{{ (usage.item_calls || 0) + (usage.room_calls || 0) }} fill · {{ usage.photo_calls || 0 }} photo (Opus)</span>
           </div>
+          <div class="cost-card pdf">
+            <span class="cost-label">PDF Import</span>
+            <span class="cost-value">{{ formatGBP(usage.pdf_cost_gbp) }}</span>
+            <span class="cost-sub">{{ usage.pdf_import_inspections || 0 }} inspection{{ (usage.pdf_import_inspections || 0) !== 1 ? 's' : '' }} imported (Sonnet)</span>
+          </div>
         </div>
 
         <p class="usage-disclaimer">
-          Estimates only. Whisper-1 at $0.006/min · Claude Haiku (transcription fill) at $0.80/$4.00 per 1M tokens · Claude Opus (photo classification) at $15/$75 per 1M tokens · converted at £1 = $1.27. Verify actual charges in your provider billing dashboards above.
+          Estimates only. Whisper-1 at $0.006/min · Claude Haiku (transcription fill) at $1.00/$5.00 per 1M tokens · Claude Opus (photo classification) at $15/$75 per 1M tokens · Claude Sonnet (PDF import) at $3/$15 per 1M tokens · converted at £1 = $1.27. Verify actual charges in your provider billing dashboards above.
         </p>
 
         <!-- Inspection-grouped accordion -->
@@ -174,7 +179,7 @@ onMounted(() => { checkApiKeys(); loadUsage() })
 
             <!-- Expanded breakdown -->
             <div v-if="expandedInsp.has(insp.inspection_id ?? 'unlinked')" class="insp-breakdown">
-              <div v-if="insp.audio_minutes === 0 && insp.photo_calls === 0" class="breakdown-empty">
+              <div v-if="insp.audio_minutes === 0 && insp.photo_calls === 0 && !(insp.pdf_calls > 0)" class="breakdown-empty">
                 No AI calls recorded for this inspection.
               </div>
               <div v-else class="breakdown-cards">
@@ -196,6 +201,12 @@ onMounted(() => { checkApiKeys(); loadUsage() })
                   <span class="bc-value">{{ formatGBP(insp.photo_cost_gbp) }}</span>
                   <span class="bc-meta">{{ insp.photo_calls }} photo{{ insp.photo_calls !== 1 ? 's' : '' }}</span>
                 </div>
+                <div class="bc" v-if="insp.pdf_calls > 0">
+                  <span class="bc-icon">📄</span>
+                  <span class="bc-label">PDF Import</span>
+                  <span class="bc-value">{{ formatGBP(insp.pdf_import_cost_gbp) }}</span>
+                  <span class="bc-meta">{{ (insp.pdf_tokens || 0).toLocaleString() }} tokens (Sonnet)</span>
+                </div>
                 <div class="bc bc-total">
                   <span class="bc-icon">£</span>
                   <span class="bc-label">Total</span>
@@ -210,6 +221,50 @@ onMounted(() => { checkApiKeys(); loadUsage() })
       </div>
 
       <div v-else class="usage-empty">Usage tracking not available — deploy the latest backend to enable it.</div>
+    </div>
+
+    <!-- PDF Import cost estimate -->
+    <div class="pdf-panel">
+      <h3>📄 PDF Import — Cost per Inspection</h3>
+      <p class="pdf-intro">
+        Importing a PDF report uses Claude Sonnet to extract rooms, items and conditions
+        (plus a second AI pass when "Smart redistribution" is selected). Actual token usage
+        is recorded per inspection and shown in the cost breakdown above.
+      </p>
+
+      <div class="pdf-estimate-row">
+        <div class="pdf-estimate-card">
+          <span class="pdf-est-label">Average cost per imported inspection</span>
+          <span class="pdf-est-value">
+            {{ usage && usage.pdf_import_inspections > 0 ? formatGBP(usage.pdf_avg_cost_gbp) : '—' }}
+          </span>
+          <span class="pdf-est-meta">
+            <template v-if="usage && usage.pdf_import_inspections > 0">
+              based on {{ usage.pdf_import_inspections }} import{{ usage.pdf_import_inspections !== 1 ? 's' : '' }} in this period
+            </template>
+            <template v-else>
+              no PDF imports recorded in this period — typically £0.10–£0.50 per inspection
+            </template>
+          </span>
+        </div>
+        <div class="pdf-estimate-notes">
+          <div class="pdf-note">
+            <strong>With photos:</strong> photos are pulled straight out of the PDF file and stored —
+            they are <em>not</em> sent to the AI, so ticking "Import photos" adds no AI cost
+            for normal text-based PDFs (only a small amount of photo storage).
+          </div>
+          <div class="pdf-note">
+            <strong>Scanned / photo-only PDFs:</strong> when a PDF has no readable text, the whole
+            document (pages and photos included) is sent to Claude as images — these imports cost
+            noticeably more, and the extra shows up in the per-inspection figures above.
+          </div>
+          <div class="pdf-note">
+            <strong>Import mode:</strong> "Keep PDF layout" makes extraction calls only.
+            "Smart redistribution" adds one more Claude call to place items into your template,
+            so it costs slightly more per inspection.
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- How AI Typist works -->
@@ -292,12 +347,14 @@ onMounted(() => { checkApiKeys(); loadUsage() })
 .cost-card.total   { background: #1e293b; }
 .cost-card.whisper { background: #eff6ff; border: 1px solid #bfdbfe; }
 .cost-card.claude  { background: #faf5ff; border: 1px solid #e9d5ff; }
+.cost-card.pdf     { background: #fffbeb; border: 1px solid #fde68a; }
 .cost-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #64748b; }
 .cost-card.total .cost-label { color: rgba(255,255,255,0.6); }
 .cost-value { font-size: 28px; font-weight: 800; line-height: 1.1; color: #1e293b; }
 .cost-card.total   .cost-value { color: white; }
 .cost-card.whisper .cost-value { color: #1d4ed8; }
 .cost-card.claude  .cost-value { color: #7c3aed; }
+.cost-card.pdf     .cost-value { color: #b45309; }
 .cost-sub { font-size: 11px; color: #64748b; }
 .cost-card.total .cost-sub { color: rgba(255,255,255,0.5); }
 .usage-disclaimer { font-size: 11px; color: #94a3b8; margin-bottom: 20px; line-height: 1.5; }
@@ -338,6 +395,22 @@ onMounted(() => { checkApiKeys(); loadUsage() })
 .bc-value { font-size: 18px; font-weight: 800; color: #1e293b; line-height: 1.1; }
 .bc-total .bc-value { color: #16a34a; }
 .bc-meta { font-size: 11px; color: #94a3b8; margin-top: 1px; }
+
+/* PDF Import cost estimate panel */
+.pdf-panel { background: #fffbeb; border: 1px solid #fde68a; border-radius: 10px; padding: 20px 24px; margin-bottom: 28px; }
+.pdf-panel h3 { font-size: 15px; font-weight: 700; color: #92400e; margin-bottom: 8px; }
+.pdf-intro { font-size: 13px; color: #a16207; margin: 0 0 16px; line-height: 1.5; }
+.pdf-estimate-row { display: flex; gap: 16px; flex-wrap: wrap; align-items: stretch; }
+.pdf-estimate-card {
+  flex: 0 0 220px; min-width: 200px; background: white; border: 1px solid #fde68a;
+  border-radius: 8px; padding: 16px 20px; display: flex; flex-direction: column; gap: 4px;
+}
+.pdf-est-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #a16207; }
+.pdf-est-value { font-size: 28px; font-weight: 800; line-height: 1.1; color: #b45309; }
+.pdf-est-meta { font-size: 11px; color: #a16207; line-height: 1.4; }
+.pdf-estimate-notes { flex: 1; min-width: 260px; display: flex; flex-direction: column; gap: 8px; }
+.pdf-note { background: white; border: 1px solid #fef3c7; border-radius: 8px; padding: 10px 14px; font-size: 12px; color: #78716c; line-height: 1.5; }
+.pdf-note strong { color: #92400e; }
 
 .info-panel { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px; padding: 20px 24px; margin-bottom: 28px; }
 .info-panel h3 { font-size: 15px; font-weight: 700; color: #1e3a8a; margin-bottom: 16px; }

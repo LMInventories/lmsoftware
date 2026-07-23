@@ -824,6 +824,9 @@ CRITICAL LANGUAGE RULES:
 - This is a legal document — preserve all professional terminology exactly
 - ONLY remove filler sounds (um, uh, er, errr, umm, erm) — do NOT remove, shorten, or alter any actual content words
 - Do NOT summarise or abbreviate what the clerk said — reproduce their words in full
+- DUPLICATE SPEECH: the recording may contain repeated or restarted phrases. If the clerk
+  says the same thing twice, output it once. Never repeat an observation in your output,
+  and never place the same phrase in both the description and the condition fields.
 - USE UK ENGLISH SPELLING THROUGHOUT — mandatory for every word in the output:
   "discolouration" not "discoloration", "colour" not "color", "centre" not "center",
   "neighbour" not "neighbor", "recognise" not "recognize", "labelled" not "labeled",
@@ -873,6 +876,9 @@ Instructions:
 - The clerk's terminology is professional and intentional — this is a legal document
 - ONLY remove filler sounds (um, uh, er, errr, umm, erm) — do NOT remove, shorten, or alter any actual content words
 - Do NOT summarise or abbreviate what the clerk said — reproduce their words in full
+- DUPLICATE SPEECH: the recording may contain repeated or restarted phrases. If the clerk
+  says the same thing twice, output it once. Never repeat an observation in your output,
+  and never place the same phrase in both the description and the condition fields.
 - USE UK ENGLISH SPELLING THROUGHOUT — every word in your output: "discolouration" not "discoloration",
   "colour" not "color", "mould" not "mold", "grey" not "gray", "centre" not "center"
 - MULTI-COMPONENT FORMATTING: when description or condition has multiple distinct components or observations,
@@ -1197,11 +1203,14 @@ def transcribe_usage():
     # ── Pricing constants ──────────────────────────────────────────────────
     USD_TO_GBP            = 0.79
     WHISPER_PER_MIN_USD   = 0.006          # Whisper-1 ($0.006/min)
-    HAIKU_IN_PER_1M_USD   = 0.80           # claude-haiku-4-5 input
-    HAIKU_OUT_PER_1M_USD  = 4.00           # claude-haiku-4-5 output
+    HAIKU_IN_PER_1M_USD   = 1.00           # claude-haiku-4-5 input
+    HAIKU_OUT_PER_1M_USD  = 5.00           # claude-haiku-4-5 output
     # Photo classification uses claude-opus-4-5 — apply Opus-tier pricing
     OPUS_IN_PER_1M_USD    = 15.00          # claude-opus-4-5 input
     OPUS_OUT_PER_1M_USD   = 75.00          # claude-opus-4-5 output
+    # PDF import (extraction + redistribution) uses claude-sonnet-4-6
+    SONNET_IN_PER_1M_USD  = 3.00           # claude-sonnet-4-6 input
+    SONNET_OUT_PER_1M_USD = 15.00          # claude-sonnet-4-6 output
 
     def _row_cost_usd(r):
         """Compute USD cost for a single usage row using the correct model pricing."""
@@ -1209,6 +1218,10 @@ def transcribe_usage():
             # Vision + Opus pricing
             return (r.input_tokens  / 1_000_000) * OPUS_IN_PER_1M_USD  + \
                    (r.output_tokens / 1_000_000) * OPUS_OUT_PER_1M_USD
+        elif r.call_type == 'pdf_import':
+            # Sonnet pricing (PDF extraction + AI redistribution)
+            return (r.input_tokens  / 1_000_000) * SONNET_IN_PER_1M_USD + \
+                   (r.output_tokens / 1_000_000) * SONNET_OUT_PER_1M_USD
         else:
             # Whisper + Haiku pricing (item / room / full)
             whisper = (r.audio_seconds / 60) * WHISPER_PER_MIN_USD
@@ -1221,9 +1234,11 @@ def transcribe_usage():
     room_count  = sum(1 for r in rows if r.call_type == 'room')
     full_count  = sum(1 for r in rows if r.call_type == 'full')
     photo_count = sum(1 for r in rows if r.call_type == 'photo')
+    pdf_count   = sum(1 for r in rows if r.call_type == 'pdf_import')
 
     trans_rows = [r for r in rows if r.call_type in ('item', 'room', 'full')]
     photo_rows = [r for r in rows if r.call_type == 'photo']
+    pdf_rows   = [r for r in rows if r.call_type == 'pdf_import']
 
     total_audio_secs = sum(r.audio_seconds for r in trans_rows)
 
@@ -1234,7 +1249,10 @@ def transcribe_usage():
     photo_opus_usd  = sum((r.input_tokens / 1_000_000) * OPUS_IN_PER_1M_USD +
                           (r.output_tokens / 1_000_000) * OPUS_OUT_PER_1M_USD
                           for r in photo_rows)
-    total_usd = whisper_usd + haiku_usd + photo_opus_usd
+    pdf_sonnet_usd  = sum((r.input_tokens / 1_000_000) * SONNET_IN_PER_1M_USD +
+                          (r.output_tokens / 1_000_000) * SONNET_OUT_PER_1M_USD
+                          for r in pdf_rows)
+    total_usd = whisper_usd + haiku_usd + photo_opus_usd + pdf_sonnet_usd
 
     # ── Group by inspection ────────────────────────────────────────────────
     from collections import defaultdict
@@ -1242,7 +1260,8 @@ def transcribe_usage():
         'trans_seconds': 0.0,
         'trans_in': 0, 'trans_out': 0,
         'photo_in': 0, 'photo_out': 0,
-        'item_calls': 0, 'room_calls': 0, 'photo_calls': 0,
+        'pdf_in':   0, 'pdf_out':   0,
+        'item_calls': 0, 'room_calls': 0, 'photo_calls': 0, 'pdf_calls': 0,
         'latest_at': None,
     })
 
@@ -1261,6 +1280,10 @@ def transcribe_usage():
             g['photo_in']    += r.input_tokens
             g['photo_out']   += r.output_tokens
             g['photo_calls'] += 1
+        elif r.call_type == 'pdf_import':
+            g['pdf_in']    += r.input_tokens
+            g['pdf_out']   += r.output_tokens
+            g['pdf_calls'] += 1
         if g['latest_at'] is None or r.created_at > g['latest_at']:
             g['latest_at'] = r.created_at
 
@@ -1286,6 +1309,8 @@ def transcribe_usage():
                  (g['trans_out'] / 1_000_000) * HAIKU_OUT_PER_1M_USD
         op_usd = (g['photo_in']  / 1_000_000) * OPUS_IN_PER_1M_USD  + \
                  (g['photo_out'] / 1_000_000) * OPUS_OUT_PER_1M_USD
+        pd_usd = (g['pdf_in']    / 1_000_000) * SONNET_IN_PER_1M_USD + \
+                 (g['pdf_out']   / 1_000_000) * SONNET_OUT_PER_1M_USD
 
         meta = insp_meta.get(insp_id, {}) if insp_id else {}
 
@@ -1294,14 +1319,17 @@ def transcribe_usage():
             'property_address':       meta.get('address', 'Unknown property') if insp_id else 'Unlinked calls',
             'inspection_type':        meta.get('type', ''),
             'reference_number':       meta.get('reference', ''),
-            'total_cost_gbp':         round((w_usd + hk_usd + op_usd) * USD_TO_GBP, 4),
+            'total_cost_gbp':         round((w_usd + hk_usd + op_usd + pd_usd) * USD_TO_GBP, 4),
             'whisper_cost_gbp':       round(w_usd  * USD_TO_GBP, 4),
             'claude_cost_gbp':        round(hk_usd * USD_TO_GBP, 4),
             'photo_cost_gbp':         round(op_usd * USD_TO_GBP, 4),
+            'pdf_import_cost_gbp':    round(pd_usd * USD_TO_GBP, 4),
             'transcription_cost_gbp': round((w_usd + hk_usd) * USD_TO_GBP, 4),
             'item_calls':             g['item_calls'],
             'room_calls':             g['room_calls'],
             'photo_calls':            g['photo_calls'],
+            'pdf_calls':              g['pdf_calls'],
+            'pdf_tokens':             g['pdf_in'] + g['pdf_out'],
             'audio_minutes':          round(g['trans_seconds'] / 60, 1),
             'latest_at':              g['latest_at'].isoformat() if g['latest_at'] else None,
         })
@@ -1309,20 +1337,127 @@ def transcribe_usage():
     # Sort most recent first
     inspections_list.sort(key=lambda x: x['latest_at'] or '', reverse=True)
 
+    # PDF import: distinct inspections + average cost per import, for the
+    # per-inspection estimate shown in Settings > Transcription.
+    pdf_insp_ids = {r.inspection_id for r in pdf_rows}
+    pdf_import_inspections = len(pdf_insp_ids)
+    pdf_avg_usd = (pdf_sonnet_usd / pdf_import_inspections) if pdf_import_inspections else 0
+
     return jsonify({
         'period_days':      int(period),
         'item_calls':       item_count,
         'room_calls':       room_count,
         'full_calls':       full_count,
         'photo_calls':      photo_count,
+        'pdf_import_calls': pdf_count,
+        'pdf_import_inspections': pdf_import_inspections,
         'total_calls':      len(rows),
         'audio_minutes':    round(total_audio_secs / 60, 1),
         'whisper_cost_gbp': round(whisper_usd   * USD_TO_GBP, 4),
         'claude_cost_gbp':  round(haiku_usd     * USD_TO_GBP, 4),
         'photo_cost_gbp':   round(photo_opus_usd * USD_TO_GBP, 4),
+        'pdf_cost_gbp':     round(pdf_sonnet_usd * USD_TO_GBP, 4),
+        'pdf_avg_cost_gbp': round(pdf_avg_usd    * USD_TO_GBP, 4),
         'total_cost_gbp':   round(total_usd     * USD_TO_GBP, 4),
         'inspections':      inspections_list,
     })
+
+
+# ── Deterministic fill guards ─────────────────────────────────────────────────
+# The prompts instruct Claude to skip already-transcribed items and never to
+# duplicate content — but prompt compliance is advisory. These pure helpers
+# enforce the same rules deterministically on the model's output, so a prompt
+# slip can't double up field content on the device.
+
+def _norm_fill_line(s: str) -> str:
+    return ' '.join((s or '').strip().lower().rstrip('.').split())
+
+
+def _enforce_processed_skip(filled: dict, processed_ids: list) -> dict:
+    """
+    Drop any already-transcribed item that Claude re-emitted WITHOUT an explicit
+    amendment marker (_descAction / _condAction / _subs / _delete). Hard-enforces
+    the prompt's "skip unless explicitly amended" rule.
+    """
+    if not processed_ids or not isinstance(filled, dict):
+        return filled
+    processed = {str(pid) for pid in processed_ids}
+    out = {}
+    for item_id, fields in filled.items():
+        if (str(item_id) in processed
+                and isinstance(fields, dict)
+                and not fields.get('_descAction')
+                and not fields.get('_condAction')
+                and not fields.get('_subs')
+                and not fields.get('_delete')):
+            print(f'[transcribe/room] dropped re-emitted already-transcribed item {item_id}')
+            continue
+        out[item_id] = fields
+    return out
+
+
+def _dedupe_filled(filled: dict) -> dict:
+    """
+    Remove duplicated content within a room-fill result:
+      - repeated lines within description / condition / checkOutCondition
+        (clip overlap or the clerk repeating themselves)
+      - description lines repeated verbatim in the same item's condition
+        (condition wins — "each piece of content appears in ONE field only")
+      - duplicate newly-created _subs entries, or a sub identical to the main
+        item (check-out subs targeting an existing _sid are never dropped)
+    """
+    if not isinstance(filled, dict):
+        return filled
+
+    def dedupe_lines(text):
+        seen, lines = set(), []
+        for line in text.split('\n'):
+            n = _norm_fill_line(line)
+            if n and n in seen:
+                continue
+            if n:
+                seen.add(n)
+            lines.append(line)
+        return '\n'.join(lines)
+
+    out = {}
+    for item_id, fields in filled.items():
+        if not isinstance(fields, dict):
+            out[item_id] = fields
+            continue
+        f = dict(fields)
+        for key in ('description', 'condition', 'checkOutCondition'):
+            if isinstance(f.get(key), str) and f[key]:
+                f[key] = dedupe_lines(f[key])
+
+        # Same line in both fields → keep it in condition only
+        if isinstance(f.get('description'), str) and isinstance(f.get('condition'), str) and f['condition']:
+            cond_lines = {_norm_fill_line(l) for l in f['condition'].split('\n') if _norm_fill_line(l)}
+            kept = [l for l in f['description'].split('\n') if _norm_fill_line(l) not in cond_lines]
+            f['description'] = '\n'.join(kept)
+
+        if isinstance(f.get('_subs'), list):
+            main_key  = (_norm_fill_line(f.get('description') or ''), _norm_fill_line(f.get('condition') or ''))
+            seen_subs = {main_key}
+            uniq = []
+            for sub in f['_subs']:
+                if not isinstance(sub, dict):
+                    continue
+                for k in ('description', 'condition', 'checkOutCondition'):
+                    if isinstance(sub.get(k), str) and sub[k]:
+                        sub = {**sub, k: dedupe_lines(sub[k])}
+                if not sub.get('_sid'):
+                    sub_key = (
+                        _norm_fill_line(sub.get('description') or ''),
+                        _norm_fill_line(sub.get('condition') or ''),
+                    )
+                    if sub_key in seen_subs:
+                        continue
+                    seen_subs.add(sub_key)
+                uniq.append(sub)
+            f['_subs'] = uniq
+        out[item_id] = f
+    return out
 
 
 def _claude_fill_room(transcript: str, section_name: str, items: list, processed_ids: list = None) -> dict:
@@ -1527,6 +1662,15 @@ RULES:
    "discolouration" not "discoloration", "colour" not "color", "centre" not "center",
    "mould" not "mold", "grey" not "gray", "neighbour" not "neighbor", "recognise" not "recognize".
 7. If only one piece of information is given for an item, put it in description.
+8. REPEATED OR OVERLAPPING CONTENT — treat duplicates as ONE:
+   The transcript is stitched together from several audio clips and may contain the same
+   passage twice — overlapping recordings, restarted sentences, or the clerk repeating
+   themselves. If the same or nearly the same wording appears more than once for an item,
+   use it ONCE only. Never output the same observation twice in any field, and never
+   create a duplicate sub-item from repeated speech.
+   A repeated plain mention of an already-covered item is NEVER an amendment or an append —
+   only the explicit command words ("Amend", "Add to", "Sub-item", "Delete item",
+   "Not Applicable") make it one.
 
 FORMATTING NUMBERS AND QUANTITIES:
 - Convert spoken numbers to numerals: "two" → "2", "three" → "3"
@@ -1613,6 +1757,8 @@ SPLITTING description vs condition:
     → description: "White painted skirting"
     → condition:   "Cabling attached"
   Do NOT put condition content in both fields. Each piece of content appears in ONE field only.
+  NEVER output the same sentence, phrase, or observation in both description and condition.
+  If you are unsure which field a phrase belongs to, put it in condition ONLY.
 
 HOW TO PARSE EACH ITEM — follow this algorithm exactly:
 
@@ -1989,6 +2135,10 @@ VERBATIM RULES — absolute, no exceptions:
      CORRECT:   "Handles slightly loose\\nOne screw missing to interior handle"
      INCORRECT: "Handles slightly loose, one screw missing to interior handle"
    A single observation about one thing may still use commas within that one line.
+10. REPEATED CONTENT: the transcript is stitched from several clips and may contain the same
+    passage twice (overlapping recordings or the clerk repeating themselves). If the same or
+    nearly the same wording appears more than once for an item, use it ONCE only — never
+    output the same observation twice.
 
 Return ONLY valid JSON — no markdown, no extra text.
 Use "checkOutCondition" (not "condition") for all fields.
@@ -2113,6 +2263,11 @@ RULES:
 8. If a single component has multiple distinct damage observations, each goes on its own line.
 9. USE UK ENGLISH SPELLING — "discolouration" not "discoloration", "colour" not "color",
    "mould" not "mold", "grey" not "gray", "centre" not "center".
+10. REPEATED CONTENT: the transcript is stitched from several clips and may contain the same
+    passage twice (overlapping recordings or the clerk repeating themselves). If the same or
+    nearly the same wording appears more than once for an item, use it ONCE only — never
+    output the same observation twice. A repeated plain mention of an already-covered item
+    is NEVER an amendment — only the explicit command words above are.
 
 ══════════════════════════════════════════════════════
 DELETE ITEM
@@ -2416,7 +2571,16 @@ def transcribe_room():
         except Exception as e:
             print(f'[transcribe/room] clip {i} whisper error: {e}')
 
-    full_transcript = ' '.join(transcripts)
+    # Drop consecutive identical clip transcripts — duplicate clip rows can be
+    # restored from the mobile app's local DB after a remount, and a duplicated
+    # passage in the joined transcript gets faithfully doubled into the fill.
+    deduped = []
+    for t in transcripts:
+        if deduped and deduped[-1].strip() == t.strip():
+            print('[transcribe/room] dropped duplicate adjacent clip transcript')
+            continue
+        deduped.append(t)
+    full_transcript = ' '.join(deduped)
     if not full_transcript:
         return jsonify({'error': 'No speech detected in recording'}), 422
 
@@ -2426,8 +2590,13 @@ def transcribe_room():
                 filled, fill_msg = _claude_fill_room_checkout(full_transcript, section_name, items)
             elif is_damage_report:
                 filled, fill_msg = _claude_fill_room_damage(full_transcript, section_name, items, processed_item_ids or None)
+                filled = _enforce_processed_skip(filled, processed_item_ids)
             else:
                 filled, fill_msg = _claude_fill_room(full_transcript, section_name, items, processed_item_ids or None)
+                filled = _enforce_processed_skip(filled, processed_item_ids)
+            # Deterministic dedupe of repeated lines / cross-field duplicates —
+            # applies to all room fill types including check-out.
+            filled = _dedupe_filled(filled)
         else:
             filled, fill_msg = _claude_fill_fixed_section(full_transcript, section_name, section_type, items)
     except Exception as e:

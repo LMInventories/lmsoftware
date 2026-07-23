@@ -38,6 +38,11 @@ MAX_TOKENS_CHUNK  = 8192    # per-chunk ceiling — full model output capacity
 MIN_IMAGE_PX      = 100     # skip images smaller than 100 px in either dimension
 MAX_IMAGES_TOTAL  = 150     # hard cap to avoid runaway S3 uploads
 
+# Scanned/flattened-page fallback — see _rasterize_page_fallback.
+MIN_PAGE_TEXT_CHARS_FALLBACK = 40    # per-page (not whole-document like MIN_TEXT_CHARS) —
+                                      # below this a page is treated as having no real text layer
+FALLBACK_RENDER_DPI          = 150   # render resolution for the whole-page fallback photo
+
 # Headings that indicate fixed/admin sections of a UK inventory report (not rooms).
 # Images on pages whose first visible heading matches this pattern should NOT be
 # assigned to any room — they go to the overview fallback.
@@ -454,7 +459,46 @@ def _extract_pdf_text(raw_bytes):
 
 # ── PDF image extraction ──────────────────────────────────────────────────────
 
-def _extract_pdf_images(raw_bytes, job_id):
+def _rasterize_page_fallback(page, page_num, prefix):
+    """
+    Render a full page to a JPEG and upload it as a single synthetic photo
+    entry. Used when a page has no usable embedded images and no extracted
+    text — the signature of a scanned/photographed/flattened legacy inventory
+    page, where photos exist visually but not as extractable image XObjects
+    (or the embedded image failed to decode).
+
+    The returned entry is shaped identically to a normal extracted-image
+    entry (ref=None, y=None) so it flows through the existing
+    _map_images_to_rooms page-order heuristic unchanged: ref=None skips the
+    "Ref #X.Y" direct-assignment pass, and y=None hits the existing
+    "assign to current_room" branch rather than trying to compare against
+    room-heading y-coordinates on the page.
+
+    Never raises — extraction must degrade gracefully like the rest of this
+    file. Returns None on any failure.
+    """
+    try:
+        from utils.s3 import upload_bytes, new_key
+        pix = page.get_pixmap(dpi=FALLBACK_RENDER_DPI)
+        try:
+            img_bytes = pix.tobytes('jpg')
+            ext, ctype = 'jpg', 'image/jpeg'
+        except Exception:
+            # Some PyMuPDF builds/pixmap modes don't support JPEG encoding
+            # (e.g. images with an alpha channel) — PNG always works.
+            img_bytes = pix.tobytes('png')
+            ext, ctype = 'png', 'image/png'
+        key = new_key(prefix, ext)
+        url = upload_bytes(img_bytes, key, ctype)
+        print(f'[pdf-import] page {page_num}: no text/embedded images — '
+              f'rasterized whole page as fallback photo ({pix.width}x{pix.height}px)')
+        return {'url': url, 'ref': None, 'y': None, 'page': page_num}
+    except Exception as e:
+        print(f'[pdf-import] page {page_num} rasterize-fallback failed: {e}')
+        return None
+
+
+def _extract_pdf_images(raw_bytes, job_id, page_texts=None):
     """
     Extract embedded images from a PDF and upload to S3.
 
@@ -471,6 +515,16 @@ def _extract_pdf_images(raw_bytes, job_id):
     Cover photo identification:
       The first sufficiently large opaque image on page 0 is treated as the
       property / cover photo and returned separately (not added to page_images).
+      An image covering ~the whole page (a full-page scan/bleed) is never
+      chosen as the cover photo — it's not a discrete property shot.
+
+    Scanned/flattened-page fallback:
+      page_texts (optional, {page_num: text} from pdfplumber) lets this
+      function detect pages with no real text layer. If such a page also has
+      no embedded image that survives the filters above, the whole page is
+      rasterized and uploaded as a single fallback photo — see
+      _rasterize_page_fallback. Pages where normal extraction already found
+      images are never rasterized, so working PDFs are unaffected.
     """
     try:
         from utils.s3 import is_configured, upload_bytes, new_key
@@ -504,10 +558,13 @@ def _extract_pdf_images(raw_bytes, job_id):
         for page_num in range(len(doc)):
             if total >= MAX_IMAGES_TOTAL:
                 break
-            page       = doc[page_num]
-            img_list   = page.get_images(full=True)
-            text_spans = _page_text_spans(page)
-            entries    = []
+            page          = doc[page_num]
+            img_list      = page.get_images(full=True)
+            text_spans    = _page_text_spans(page)
+            entries       = []
+            page_had_image = False   # true once ANY image is successfully extracted
+                                      # on this page — even if diverted to cover_photo
+                                      # rather than added to entries (see below)
             for img in img_list:
                 if total >= MAX_IMAGES_TOTAL:
                     break
@@ -544,23 +601,52 @@ def _extract_pdf_images(raw_bytes, job_id):
                     key       = new_key(prefix, ext)
                     url       = upload_bytes(img_bytes, key, ctype)
                     total    += 1
-
-                    # First large image on page 0 = property cover photo
-                    if page_num == 0 and cover_photo is None and w >= 300 and h >= 200:
-                        cover_photo = url
-                        continue   # don't add to room images
+                    page_had_image = True
 
                     img_y = None
+                    is_full_page = False
                     try:
                         ir_list = page.get_image_rects(xref)
                         if ir_list:
-                            img_y = ir_list[0].y0
+                            ir = ir_list[0]
+                            img_y = ir.y0
+                            pr = page.rect
+                            is_full_page = (pr.width > 0 and pr.height > 0
+                                             and ir.width  >= 0.95 * pr.width
+                                             and ir.height >= 0.95 * pr.height)
                     except Exception:
                         pass
+
+                    # First large, non-full-page image on page 0 = property cover photo.
+                    # A full-page image is a scan/bleed, not a discrete property shot —
+                    # it still gets extracted normally below, just isn't the cover.
+                    if page_num == 0 and cover_photo is None and w >= 300 and h >= 200 and not is_full_page:
+                        cover_photo = url
+                        continue   # don't add to room images
+
                     ref = _extract_image_ref(page, xref, text_spans)
                     entries.append({'url': url, 'ref': ref, 'y': img_y, 'page': page_num})
                 except Exception as e:
                     print(f'[pdf-import] image xref {xref} extract error: {e}')
+
+            # Scanned/flattened-page fallback: this page yielded NO successfully
+            # extracted image at all (not even one diverted to cover_photo) and
+            # has no real text layer, but does have some image or vector content
+            # (guards against rasterizing genuinely blank pages into junk "photos").
+            # Checking page_had_image rather than `not entries` matters: on page 0
+            # a real photo can be fully extracted yet still leave entries empty
+            # because it was consumed as the cover photo — that page must NOT
+            # also get a redundant rasterized duplicate.
+            page_text_len = len((page_texts or {}).get(page_num, '').strip())
+            if (not page_had_image
+                    and page_text_len < MIN_PAGE_TEXT_CHARS_FALLBACK
+                    and total < MAX_IMAGES_TOTAL
+                    and (img_list or page.get_drawings())):
+                fallback = _rasterize_page_fallback(page, page_num, prefix)
+                if fallback:
+                    entries.append(fallback)
+                    total += 1
+
             if entries:
                 page_images[page_num] = entries
         doc.close()
@@ -1069,7 +1155,7 @@ def _run_import_job(job_id, api_key, extracted_text, pdf_b64, template_structure
                     'inspection_id': inspection_id,
                     'filename':      filename,
                 })
-                page_images, cover_photo_url = _extract_pdf_images(raw_bytes, job_id)
+                page_images, cover_photo_url = _extract_pdf_images(raw_bytes, job_id, page_texts=page_texts)
                 img_count = sum(len(v) for v in page_images.values())
                 print(f'[pdf-import] job {job_id}: extracted {img_count} images, '
                       f'cover={cover_photo_url is not None}')

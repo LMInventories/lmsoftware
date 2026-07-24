@@ -157,18 +157,32 @@ watch(
         }
       } else if (iType === 'check_in') {
         // Seed from most recent check_out with report data
-        const source = res.data.find(h =>
+        let source = res.data.find(h =>
           h.id !== undefined && h.inspection_type === 'check_out' && h.has_report_data
         )
+        let sourceType = 'check_out'
+        let sourceLabel = 'Check Out'
+
+        // No Check Out on record — fall back to continuing from the most
+        // recent Check In instead (e.g. tenant never had a move-out done).
+        if (!source) {
+          source = res.data.find(h =>
+            h.id !== undefined && h.inspection_type === 'check_in' && h.has_report_data
+          )
+          sourceType = 'check_in'
+          sourceLabel = 'Check In'
+        }
+
         if (source) {
           const dateStr = source.conduct_date
             ? new Date(source.conduct_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
             : new Date(source.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
           lifecycleSuggestion.value = {
             sourceId: source.id,
-            sourceType: 'check_out',
+            sourceType,
             sourceDateStr: dateStr,
-            label: 'Check Out'
+            label: sourceLabel,
+            noCheckOut: sourceType === 'check_in'
           }
           form.value.source_inspection_id = source.id
         }
@@ -1170,10 +1184,18 @@ onMounted(async () => {
           <div v-else-if="lifecycleSuggestion" class="lc-banner">
             <div class="lc-banner-icon">🔗</div>
             <div class="lc-banner-body">
-              <strong class="lc-banner-title">
+              <strong class="lc-banner-title" v-if="lifecycleSuggestion.noCheckOut">
+                No Check Out found — continue from the previous Check In instead
+              </strong>
+              <strong class="lc-banner-title" v-else>
                 Completed {{ lifecycleSuggestion.label }} found for this property
               </strong>
-              <p class="lc-banner-desc">
+              <p class="lc-banner-desc" v-if="lifecycleSuggestion.noCheckOut">
+                This property has no Check Out on record, so there's nothing to base a fresh
+                move-out condition on. You can instead pre-fill this Check In with conditions from
+                the previous Check In ({{ lifecycleSuggestion.sourceDateStr }}) and note what's changed.
+              </p>
+              <p class="lc-banner-desc" v-else>
                 Pre-fill this {{ form.inspection_type === 'check_out' ? 'Check Out' : 'Check In' }}
                 with conditions from the
                 {{ lifecycleSuggestion.label }} ({{ lifecycleSuggestion.sourceDateStr }}).

@@ -2484,6 +2484,12 @@ def _transform_report_data(source_type, target_type, raw, include_photos=False):
                     if not include_photos:
                         new_ex.pop('_photos', None)
                         new_ex.pop('_photoTs', None)
+                else:
+                    # Same-schema carry-through (e.g. check_in → check_in) — fields
+                    # already copied above; just respect the include_photos toggle.
+                    if not include_photos:
+                        new_ex.pop('_photos', None)
+                        new_ex.pop('_photoTs', None)
                 extras.append(new_ex)
             new_section['_extra'] = extras
 
@@ -2546,6 +2552,24 @@ def _transform_report_data(source_type, target_type, raw, include_photos=False):
                                 sub.get('inventoryCondition'), sub.get('checkOutCondition'),
                                 fallback=sub.get('condition', '')
                             ),
+                        }
+                        for sub in row_data['_subs']
+                    ]
+
+            else:
+                # Same-schema carry-through — e.g. check_in → check_in (continuing
+                # from a previous Check In when no Check Out exists yet), or
+                # inventory → inventory/check_in. Copy fields through as-is.
+                new_row = {k: v for k, v in row_data.items() if not k.startswith('_actions_')}
+                if not include_photos:
+                    new_row.pop('_photos', None)
+                    new_row.pop('_photoTs', None)
+                if '_subs' in row_data and isinstance(row_data['_subs'], list):
+                    new_row['_subs'] = [
+                        {
+                            k: v for k, v in sub.items()
+                            if not k.startswith('_actions_')
+                            and (include_photos or k not in ('_photos', '_photoTs'))
                         }
                         for sub in row_data['_subs']
                     ]

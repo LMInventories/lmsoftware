@@ -1460,6 +1460,89 @@ def _dedupe_filled(filled: dict) -> dict:
     return out
 
 
+def _dedupe_redirect_leaks(filled: dict) -> dict:
+    """
+    Cross-item safety net for "Return to [item], add to condition/description, ..." commands.
+    _dedupe_filled only dedupes lines *within* one item, but a redirect names a different item
+    as its target — so when the model both (a) correctly appends/overwrites text on the named
+    target item AND (b) leaves a copy of that same text on the item/sub-item that was open right
+    before the redirect fired, _dedupe_filled never sees the two copies together to catch it.
+
+    Any line long enough to be a specific observation (short generic phrases like "In good
+    order" are excluded) that appears on a _descAction/_condAction target is treated as
+    redirected text and stripped from every other item/sub-item in this same batch.
+    """
+    if not isinstance(filled, dict):
+        return filled
+
+    redirected = set()
+    for fields in filled.values():
+        if not isinstance(fields, dict):
+            continue
+        for key, action_key in (('description', '_descAction'), ('condition', '_condAction')):
+            if fields.get(action_key) and isinstance(fields.get(key), str):
+                for line in fields[key].split('\n'):
+                    n = _norm_fill_line(line)
+                    if n and len(n) > 20:
+                        redirected.add(n)
+
+    if not redirected:
+        return filled
+
+    def strip(text, is_target):
+        if is_target or not isinstance(text, str) or not text:
+            return text
+        kept = [l for l in text.split('\n') if _norm_fill_line(l) not in redirected]
+        return '\n'.join(kept)
+
+    out = {}
+    for item_id, fields in filled.items():
+        if not isinstance(fields, dict):
+            out[item_id] = fields
+            continue
+        f = dict(fields)
+        f['description'] = strip(f.get('description'), bool(f.get('_descAction')))
+        f['condition']   = strip(f.get('condition'),    bool(f.get('_condAction')))
+        if isinstance(f.get('_subs'), list):
+            new_subs = []
+            for sub in f['_subs']:
+                if not isinstance(sub, dict):
+                    new_subs.append(sub)
+                    continue
+                s = dict(sub)
+                s['description'] = strip(s.get('description'), False)
+                s['condition']   = strip(s.get('condition'), False)
+                new_subs.append(s)
+            f['_subs'] = new_subs
+        out[item_id] = f
+    return out
+
+
+_SUBITEM_TRIGGER_RE = _re.compile(
+    r'\badd\s+(?:a\s+)?sub[\s-]?items?\b|\b(?:next\s+)?sub[\s-]?item\b', _re.IGNORECASE
+)
+
+
+def _warn_on_subitem_trigger_mismatch(transcript: str, filled: dict, section_name: str, fn_name: str) -> None:
+    """
+    Diagnostic-only: an explicit "add sub item" / "sub-item" trigger must always produce a
+    _subs entry (see the EXPLICIT SUB-ITEM TRIGGER prompt rule). If the model drops one, the
+    trigger count in the transcript won't match the number of sub-items actually emitted —
+    log it so a silent Claude compliance slip shows up instead of being unnoticed.
+    """
+    trigger_count = len(_SUBITEM_TRIGGER_RE.findall(transcript or ''))
+    if not trigger_count:
+        return
+    sub_count = 0
+    if isinstance(filled, dict):
+        for fields in filled.values():
+            if isinstance(fields, dict) and isinstance(fields.get('_subs'), list):
+                sub_count += len(fields['_subs'])
+    if sub_count < trigger_count:
+        print(f'[{fn_name}] possible dropped sub-item trigger in "{section_name}": '
+              f'{trigger_count} trigger phrase(s) in transcript but only {sub_count} _subs emitted')
+
+
 def _claude_fill_room(transcript: str, section_name: str, items: list, processed_ids: list = None) -> dict:
     """
     Fill a single room's items from a continuous dictation transcript.
@@ -1671,6 +1754,13 @@ RULES:
    A repeated plain mention of an already-covered item is NEVER an amendment or an append —
    only the explicit command words ("Amend", "Add to", "Sub-item", "Delete item",
    "Not Applicable") make it one.
+   EXCEPTION — this dedup rule NEVER suppresses an explicit sub-item trigger. If the clerk
+   says "sub-item" / "add sub item" and the content that follows happens to reuse the exact
+   same condition wording as the main item or an earlier sub-item (e.g. two elements both
+   ending "tested for power"), that is NOT a repeated/stitched passage — it is the clerk
+   independently giving the same verdict for a second, genuinely different component. Create
+   the sub-item regardless of wording overlap. Only collapse content when there was NO
+   explicit trigger and the wording is a stitching artefact.
 
 FORMATTING NUMBERS AND QUANTITIES:
 - Convert spoken numbers to numerals: "two" → "2", "three" → "3"
@@ -1893,6 +1983,24 @@ EXPLICIT SUB-ITEM TRIGGER — highest priority rule
 The clerk may use ANY of the following phrases to EXPLICITLY signal a new sub-item:
   "sub-item", "sub item", "next sub-item", "next sub item",
   "add sub item", "add sub-item", "add a sub item", "add a sub-item"
+
+THIS TRIGGER IS ABSOLUTE AND UNCONDITIONAL — it fires every single time it is spoken, with
+NO exceptions, regardless of:
+  - How long or short the current item's condition list already is. Even if the main item
+    already has five, six, or more condition observations stacked up, "add sub item" still
+    immediately closes that list and starts a new element — it never gets lost or ignored
+    as "just one more item in the list."
+  - Whether the sub-item's own description or condition wording repeats or resembles wording
+    already used earlier in the same item (see the dedup exception above) — a repeated
+    condition phrase is NOT a reason to skip creating the sub-item.
+  - Whether this is the first sub-item trigger in the room or the sixth in a row (e.g. a
+    Contents item with many small objects each added via "add sub item") — every occurrence
+    creates its own new element with equal priority; a long streak of triggers must not cause
+    later ones to be dropped or merged back into the main item.
+If you find yourself about to append post-trigger content into the main item's description or
+condition field (or drop it there because a run of conditions was already in progress), STOP —
+that is always wrong. The content belongs in a new _subs entry.
+
 When you encounter any variation of these phrases:
   - Immediately close the current element (its description + condition are complete)
   - Begin collecting a fresh description and condition for the next _subs entry
@@ -1910,6 +2018,29 @@ Example — two-wall room with explicit trigger:
   "Walls. White emulsion. In good order. Sub-item. Light scuffing to base of wall."
   → main:   description="White emulsion"  condition="In good order"
   → sub[0]: description=""               condition="Light scuffing to base of wall"
+
+Example — LONG condition run before the trigger (do NOT lose the trigger in the list):
+  "Walls. Painted white. White scuff marks below left window. Odd scuff marks to left-hand
+   wall. Line removal mark right of windows. 2 large shaded sections to facing wall. Odd
+   patchy marks around light switches. Plastic fixture next to entry door. Add sub item.
+   Part beige tiled. In good order."
+  → main:   description="Painted white"
+            condition="White scuff marks below left window\nOdd scuff marks to left-hand wall\n
+                       Line removal mark right of windows\n2 x large shaded sections to facing wall\n
+                       Odd patchy marks around light switches\nPlastic fixture next to entry door"
+  → sub[0]: description="Part beige tiled"  condition="In good order"
+  ✗ WRONG: appending "Part beige tiled" as a seventh line onto the main item's condition list —
+    the six items before the trigger do NOT make the trigger any less binding on item seven.
+
+Example — sub-item condition wording matches the main item's condition wording exactly:
+  "Light. Pendant hanging light fixture with white metal shade. Tested for power.
+   Add sub item. Plastic domed light fixture. Tested for power."
+  → main:   description="Pendant hanging light fixture with white metal shade"  condition="Tested for power"
+  → sub[0]: description="Plastic domed light fixture"                          condition="Tested for power"
+  ✗ WRONG: merging "Plastic domed light fixture" into the main item's description because its
+    condition ("Tested for power") repeats the main item's condition verbatim — the repeated
+    wording is a coincidence of two different fittings both being tested and working, not a
+    stitched/duplicated recording. The explicit "Add sub item" trigger still applies in full.
 
 Example — door and frame with "Add sub item":
   "Door and frame. White UPVC door, chrome handle. In good order. Add sub item.
@@ -2015,6 +2146,31 @@ The clerk may amend or extend an already-described item using these commands:
     → Locate the item named "Contents" and append a sub-item:
        _subs: [{{"description": "Chrome doorstop", "condition": "Slightly loose"}}]
     ("slightly loose" is a defect observation → condition, not description)
+
+══════════════════════════════════════════════════════
+CRITICAL — "RETURN TO" REDIRECTS MUST NEVER DUPLICATE CONTENT
+══════════════════════════════════════════════════════
+A "Return to [item], amend/add to/add sub item, [text]" command can appear ANYWHERE in the
+dictation — including in the middle of a different item's sub-item list, or after several
+sub-items have already been added to the CURRENT item. The instant this command is spoken:
+  - CLOSE the element that was open at that moment (the current item OR whichever sub-item
+    was most recently being filled). Its description/condition are done — nothing more is
+    added to them.
+  - Everything after the command belongs EXCLUSIVELY to the NAMED TARGET item's field.
+  - The redirected text must appear in your JSON output ONCE, on the target item only.
+    Do NOT also leave it (or a copy of it) on the item/sub-item that was open before the
+    command was spoken. That would output the same observation twice — never do this.
+
+  Example — redirect fired partway through a Contents sub-item chain:
+    "Contents. White thermostat, in good order. Add sub item. Black doormat, used condition.
+     Return to Flooring, add to condition, slight lifting left hand side next to entry."
+    → Contents:       description="White thermostat"  condition="In good order"
+      Contents _subs: [{{"description": "Black doormat", "condition": "Used condition"}}]
+                       (the doormat sub-item's condition is "Used condition" ONLY — it does
+                        NOT also contain "slight lifting…")
+    → Flooring:       {{"condition": "Slight lifting left hand side next to entry", "_condAction": "append"}}
+    ✗ WRONG: writing "Slight lifting left hand side next to entry" into the doormat sub-item's
+      condition as well as into Flooring — this duplicates the observation in two places.
 
 When you detect any amendment phrase, include these optional action flags in that item's JSON:
   "_descAction": "overwrite"  → caller will replace the existing description
@@ -2291,6 +2447,12 @@ The clerk may use ANY of these phrases to start a new damage element within the 
   "add sub item", "add sub-item", "add a sub item"
 Each sub-item has its own "condition" only. No description.
 
+This trigger is ABSOLUTE — it fires every time it is spoken, no exceptions. It still applies
+even if the current item's condition list already has many lines stacked up (don't lose the
+trigger inside a long list), and even if the sub-item's wording repeats an earlier observation
+verbatim (matching wording is not a reason to merge it back into the main item — only skip
+content when there was NO explicit trigger and the passage is a genuine stitching duplicate).
+
 "Return to [item name], add sub-item [damage content]"
   → Creates a new _subs entry on the named item. Only condition, no _descAction/_condAction.
 
@@ -2301,6 +2463,13 @@ AMENDMENT COMMANDS
 "Add to [item name] condition [new content]"      → append to condition (_condAction: "append")
 "Return to [item name], amend condition, [text]"  → overwrite condition (_condAction: "overwrite")
 "Return to [item name], add to condition, [text]" → append to condition (_condAction: "append")
+
+CRITICAL — REDIRECTS MUST NEVER DUPLICATE CONTENT:
+A "Return to [item], ..." command can fire anywhere, including mid-way through another item's
+sub-item list. The moment it fires, CLOSE whatever element (item or sub-item) was currently open
+— its condition is done, nothing more is added to it. Everything after the command belongs
+EXCLUSIVELY to the named target item. The redirected text appears ONCE, on the target item only
+— never leave a copy of it on the item/sub-item that was open before the command was spoken.
 
 Return ONLY valid JSON — no markdown, no extra text.
 {{
@@ -2591,12 +2760,17 @@ def transcribe_room():
             elif is_damage_report:
                 filled, fill_msg = _claude_fill_room_damage(full_transcript, section_name, items, processed_item_ids or None)
                 filled = _enforce_processed_skip(filled, processed_item_ids)
+                _warn_on_subitem_trigger_mismatch(full_transcript, filled, section_name, 'transcribe/room damage')
             else:
                 filled, fill_msg = _claude_fill_room(full_transcript, section_name, items, processed_item_ids or None)
                 filled = _enforce_processed_skip(filled, processed_item_ids)
+                _warn_on_subitem_trigger_mismatch(full_transcript, filled, section_name, 'transcribe/room')
             # Deterministic dedupe of repeated lines / cross-field duplicates —
             # applies to all room fill types including check-out.
             filled = _dedupe_filled(filled)
+            # Cross-item safety net: strip redirected text left behind on whatever
+            # item/sub-item was open before a "Return to X, add to ..." command fired.
+            filled = _dedupe_redirect_leaks(filled)
         else:
             filled, fill_msg = _claude_fill_fixed_section(full_transcript, section_name, section_type, items)
     except Exception as e:

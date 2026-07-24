@@ -331,10 +331,18 @@ async function loadCreateLifecycle() {
         createForm.value.source_inspection_id = src.id
       }
     } else if (inspection_type === 'check_in') {
-      const src = history.find(h => h.inspection_type === 'check_out' && h.has_report_data)
+      let src = history.find(h => h.inspection_type === 'check_out' && h.has_report_data)
       if (src) {
         createLifecycle.value = _lifecycleEntry(src, 'Check Out')
         createForm.value.source_inspection_id = src.id
+      } else {
+        // No Check Out on record — fall back to continuing from the
+        // previous Check In instead.
+        src = history.find(h => h.inspection_type === 'check_in' && h.has_report_data)
+        if (src) {
+          createLifecycle.value = _lifecycleEntry(src, 'Check In')
+          createForm.value.source_inspection_id = src.id
+        }
       }
     }
   } catch { /* offline — silently skip */ }

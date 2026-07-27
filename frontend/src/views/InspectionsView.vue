@@ -836,6 +836,7 @@ onMounted(async () => {
             <div class="card-date-rest">
               <span class="card-date-month">{{ new Date(inspection.conduct_date).toLocaleDateString('en-GB',{month:'short',year:'numeric'}) }}</span>
             </div>
+            <span class="card-date-weekday">{{ new Date(inspection.conduct_date).toLocaleDateString('en-GB',{weekday:'short'}) }}</span>
           </div>
           <div class="card-date-banner card-date-unset" v-else>
             <div class="card-date-day">—</div>
@@ -1527,6 +1528,7 @@ onMounted(async () => {
 }
 .card-date-rest { display: flex; flex-direction: column; gap: 1px; }
 .card-date-month { font-size: 11px; font-weight: 600; color: rgba(255,255,255,0.75); text-transform: uppercase; letter-spacing: 0.4px; }
+.card-date-weekday { margin-left: auto; font-size: 11px; font-weight: 600; color: rgba(255,255,255,0.75); text-transform: uppercase; letter-spacing: 0.4px; }
 
 .card-body { padding: 12px 14px 8px; flex: 1; }
 

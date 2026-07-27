@@ -1447,10 +1447,14 @@ def _dedupe_filled(filled: dict) -> dict:
                     if isinstance(sub.get(k), str) and sub[k]:
                         sub = {**sub, k: dedupe_lines(sub[k])}
                 if not sub.get('_sid'):
-                    sub_key = (
-                        _norm_fill_line(sub.get('description') or ''),
-                        _norm_fill_line(sub.get('condition') or ''),
-                    )
+                    desc_n = _norm_fill_line(sub.get('description') or '')
+                    cond_n = _norm_fill_line(sub.get('condition') or sub.get('checkOutCondition') or '')
+                    # Phantom sub-item — the model opened a new element but never actually
+                    # gave it content (e.g. a dropped self-correction). Never surface a blank
+                    # sub-item in the report; drop it rather than passing it through.
+                    if not desc_n and not cond_n:
+                        continue
+                    sub_key = (desc_n, cond_n)
                     if sub_key in seen_subs:
                         continue
                     seen_subs.add(sub_key)
@@ -1523,27 +1527,69 @@ _SUBITEM_TRIGGER_RE = _re.compile(
 )
 
 
-def _warn_on_subitem_trigger_mismatch(transcript: str, filled: dict, section_name: str, fn_name: str) -> None:
-    """
-    Diagnostic-only: an explicit "add sub item" / "sub-item" trigger must always produce a
-    _subs entry (see the EXPLICIT SUB-ITEM TRIGGER prompt rule). If the model drops one, the
-    trigger count in the transcript won't match the number of sub-items actually emitted —
-    log it so a silent Claude compliance slip shows up instead of being unnoticed.
-    """
-    trigger_count = len(_SUBITEM_TRIGGER_RE.findall(transcript or ''))
-    if not trigger_count:
-        return
-    sub_count = 0
-    if isinstance(filled, dict):
-        for fields in filled.values():
-            if isinstance(fields, dict) and isinstance(fields.get('_subs'), list):
-                sub_count += len(fields['_subs'])
-    if sub_count < trigger_count:
-        print(f'[{fn_name}] possible dropped sub-item trigger in "{section_name}": '
-              f'{trigger_count} trigger phrase(s) in transcript but only {sub_count} _subs emitted')
+def _count_subitem_triggers(transcript: str) -> int:
+    """Counts explicit 'add sub item' / 'sub-item' style trigger phrases in a transcript."""
+    return len(_SUBITEM_TRIGGER_RE.findall(transcript or ''))
 
 
-def _claude_fill_room(transcript: str, section_name: str, items: list, processed_ids: list = None) -> dict:
+def _count_subs_emitted(filled: dict) -> int:
+    """Counts total _subs entries across every item in a room-fill result."""
+    if not isinstance(filled, dict):
+        return 0
+    return sum(
+        len(fields['_subs'])
+        for fields in filled.values()
+        if isinstance(fields, dict) and isinstance(fields.get('_subs'), list)
+    )
+
+
+def _subitem_retry_note(trigger_count: int, sub_count: int) -> str:
+    """
+    Prompt addendum used when a first pass under-produced sub-items relative to the number
+    of explicit trigger phrases in the transcript (see EXPLICIT SUB-ITEM TRIGGER rule).
+    """
+    return (
+        f'\n══════════════════════════════════════════════════════\n'
+        f'RETRY — you missed a sub-item last time\n'
+        f'══════════════════════════════════════════════════════\n'
+        f'Your previous pass over this exact transcript produced only {sub_count} sub-item(s), but the\n'
+        f'transcript contains {trigger_count} explicit sub-item trigger phrase(s) ("add sub item",\n'
+        f'"sub-item", etc). That means at least one trigger was dropped or merged back into a main\n'
+        f'item instead of becoming its own _subs entry. Re-parse the transcript from scratch, find\n'
+        f'every occurrence of a trigger phrase, and confirm each one produces its own _subs entry —\n'
+        f'do not let a long run of prior content, or a repeated condition phrase, cause you to skip one.\n'
+    )
+
+
+def _fill_room_with_subitem_retry(fill_fn, full_transcript, section_name, items, processed_item_ids, fn_name):
+    """
+    Calls fill_fn (either _claude_fill_room or _claude_fill_room_damage), then checks whether
+    the number of _subs entries emitted is short of the number of explicit sub-item trigger
+    phrases in the transcript. Prompt reinforcement alone can't guarantee 100% compliance from
+    an LLM, so when a shortfall is detected this retries ONCE with a pointed correction —
+    a genuine second chance rather than just louder wording, bounded to a single extra call.
+    """
+    filled, fill_msg = fill_fn(full_transcript, section_name, items, processed_item_ids or None)
+    filled = _enforce_processed_skip(filled, processed_item_ids)
+
+    trigger_count = _count_subitem_triggers(full_transcript)
+    sub_count = _count_subs_emitted(filled)
+    if trigger_count and sub_count < trigger_count:
+        print(f'[{fn_name}] sub-item mismatch in "{section_name}": '
+              f'{trigger_count} trigger(s), {sub_count} sub(s) emitted — retrying once')
+        retry_note = _subitem_retry_note(trigger_count, sub_count)
+        retried, retry_msg = fill_fn(full_transcript, section_name, items, processed_item_ids or None, retry_note=retry_note)
+        retried = _enforce_processed_skip(retried, processed_item_ids)
+        retry_sub_count = _count_subs_emitted(retried)
+        if retry_sub_count > sub_count:
+            print(f'[{fn_name}] retry improved sub-item count: {sub_count} → {retry_sub_count}')
+            filled, fill_msg = retried, retry_msg
+        else:
+            print(f'[{fn_name}] retry did not improve ({retry_sub_count} vs {sub_count}) — keeping original')
+    return filled, fill_msg
+
+
+def _claude_fill_room(transcript: str, section_name: str, items: list, processed_ids: list = None, retry_note: str = '') -> dict:
     """
     Fill a single room's items from a continuous dictation transcript.
     Item names are used as 'chapter headings' — the clerk says the item name
@@ -1551,6 +1597,7 @@ def _claude_fill_room(transcript: str, section_name: str, items: list, processed
 
     items: [{ 'id': str, 'name': str, 'hasCondition': bool, 'hasDescription': bool }]
     processed_ids: item IDs already filled in a previous pass — skip unless explicitly amended.
+    retry_note: appended to the prompt when re-attempting after a detected sub-item mismatch.
 
     Returns: { itemId: { 'description': '...', 'condition': '...' } }
     """
@@ -1651,6 +1698,14 @@ The spoken phrase matches the full item name from the list.
   ✓ "Built-in storage" → triggers "Built-In Storage"
   ✓ "Kitchen base units" → triggers "Kitchen Base Units"
 
+SINGULAR/PLURAL OF THE SAME WORD also counts as Tier 1 — this is NOT the same thing as a
+partial word or a different word. Only apply this when the spoken word and the item-name word
+share the same root and differ ONLY by a trailing "s":
+  ✓ "Content" → triggers "Contents" (same root word, singular spoken form)
+  ✓ "Curtain" → triggers "Curtains & Blinds" (same root word "curtain")
+  ✗ "Floor" does NOT trigger "Flooring" — different word, not a singular/plural pair
+  ✗ "Door" does NOT trigger "Door & Frame" — that is a partial-word case, covered by Tier 2 rules below, not this one
+
 TIER 2 — UNIQUE PARTIAL MATCH (fallback when no exact match):
 The spoken phrase is a distinctive word or phrase that appears in exactly ONE item name in
 the list AND does not appear in any other item name. Use this to handle natural abbreviations.
@@ -1738,8 +1793,16 @@ RULES:
    - "fair wear and tear" → "Fair wear and tear"
    - "as new" or "as inventory" → preserve exactly
 4. ONLY remove filler sounds (um, uh, er, errr, umm, erm) and clear false starts where the clerk immediately restarts the same phrase (e.g. "white — white painted door" → "white painted door"). Do NOT remove, shorten, or paraphrase any actual content — reproduce the clerk's words in full.
-   SELF-CORRECTION: if the clerk says "sorry" mid-dictation, treat it as retracting the word or phrase immediately before it. Discard that retracted content and continue from what follows.
+   SELF-CORRECTION: if the clerk says "sorry" OR "correction" mid-dictation, treat it as retracting
+   everything said for the CURRENT element since the last chapter heading or sub-item trigger — not
+   just the single word or phrase immediately before it. Discard that retracted content entirely and
+   continue from what follows the correction word.
    e.g. "in good order, and sorry, and one chrome rail, tarnished" → discard "in good order"; output "1 x chrome rail" (description) + "Tarnished" (condition).
+   e.g. "Built-in storage, mirrored medicine cabinet, correction, none seen" → the correction retracts
+   "mirrored medicine cabinet" entirely, leaving nothing said for Built-in Storage except "none seen".
+   Treat this exactly as if the clerk had said "Built-in storage, none seen" from the start — apply the
+   "not seen" deletion rule below. Do NOT create an item, sub-item, or any field content from the
+   retracted material, and do NOT leave a sub-item with no description or condition.
 5. Only fill items that are mentioned. Omit unmentioned items entirely from the output.
 6. USE UK ENGLISH SPELLING THROUGHOUT — every word in the output must use UK spelling:
    "discolouration" not "discoloration", "colour" not "color", "centre" not "center",
@@ -1964,6 +2027,14 @@ no intervening description. If it appears inside a longer passage about the item
 descriptive content (e.g. referring to a serial number that could not be read) and must
 NOT trigger deletion.
 
+EXCEPTION — self-correction retracts the intervening description: if a "sorry"/"correction"
+self-correction (see the SELF-CORRECTION rule above) wipes out everything said for the item
+since its heading, "not seen" immediately after that correction counts as immediately after
+the item title too — delete the item.
+  ✓ DELETE: "Built-in storage, mirrored medicine cabinet, correction, none seen."
+      → the correction retracts "mirrored medicine cabinet", leaving "none seen" as if it were
+        the only thing said → {{"<storageId>": {{"_delete": true}}}}
+
   ✓ DELETE: "Windows & Frames. Not seen."
       → {{"<windowsId>": {{"_delete": true}}}}
   ✗ NOT DELETE: "BOSCH black glass hob, model and serial number not seen."
@@ -2013,6 +2084,25 @@ The "Add sub item" command may appear at any point in the dictation — includin
 of a new recording clip — to add a sub-item to the most recently described room item.
 It may also appear AFTER a fully described item (description + condition already given),
 in which case what follows is the new sub-item's content.
+
+CRITICAL — "most recently described room item" ALWAYS means the most recently OPENED CHAPTER
+HEADING, and this reassigns every time a new standalone item name is announced — it never
+falls back to an earlier item, no matter how many items in the room each have their own
+"add sub item" sequence. A room can contain several DIFFERENT items that each use "add sub
+item" one after another — every trigger belongs to whichever chapter is CURRENTLY open at the
+moment it is spoken, full stop.
+
+  Example — two different items each get their own sub-item sequence in one room:
+    "Smoke Alarms. One smoke alarm. Checked with power. Contents. Wall mounted alarm panel.
+     In good order. Not tested. Add sub item. White alarm panel with key. In good order.
+     Add sub item. White fitted thermostat. In good order."
+  → Smoke Alarms: description="1 x smoke alarm"  condition="Checked with power"  (NO subs)
+  → Contents:     description="Wall mounted alarm panel"  condition="In good order\nNot tested"
+                  sub[0]: description="White alarm panel with key"  condition="In good order"
+                  sub[1]: description="White fitted thermostat"     condition="In good order"
+  ✗ WRONG: attaching "White alarm panel with key" or "White fitted thermostat" as sub-items of
+    Smoke Alarms — the chapter heading "Contents" already switched the active item before either
+    trigger was spoken, so both subs belong to Contents, never to the item spoken before it.
 
 Example — two-wall room with explicit trigger:
   "Walls. White emulsion. In good order. Sub-item. Light scuffing to base of wall."
@@ -2184,7 +2274,7 @@ If no amendment phrase — omit the action flags entirely (default behaviour = f
 
 {_CONDITION_WORDS}
 {_DESCRIPTION_VOCABULARY}
-
+{retry_note}
 Return ONLY valid JSON — no markdown, no extra text.
 Items without sub-items use the flat shape. Items WITH sub-items include the "_subs" array.
 Amendment flags are optional — only include when the clerk explicitly amends/adds.
@@ -2331,7 +2421,7 @@ Example output:
         raise ValueError('AI returned an invalid response — please try again')
 
 
-def _claude_fill_room_damage(transcript: str, section_name: str, items: list, processed_ids: list = None) -> dict:
+def _claude_fill_room_damage(transcript: str, section_name: str, items: list, processed_ids: list = None, retry_note: str = '') -> dict:
     """
     Damage Report version of _claude_fill_room.
     Item names act as chapter headings; everything the clerk says maps to 'condition' only.
@@ -2339,6 +2429,7 @@ def _claude_fill_room_damage(transcript: str, section_name: str, items: list, pr
 
     Returns: { itemId: { 'condition': '...' } }
           or { itemId: { '_subs': [{ 'condition': '...' }] } }
+    retry_note: appended to the prompt when re-attempting after a detected sub-item mismatch.
     """
     client = anthropic.Anthropic(api_key=os.environ.get('ANTHROPIC_API_KEY'))
 
@@ -2397,7 +2488,9 @@ Transcript:
 
 RULES:
 1. CHAPTER HEADING MATCHING — two tiers, applied in order:
-   TIER 1 (exact): spoken phrase matches the full item name (case-insensitive; "&"/"and" interchangeable).
+   TIER 1 (exact): spoken phrase matches the full item name (case-insensitive; "&"/"and" interchangeable;
+     singular/plural of the SAME root word counts as exact — "Content" matches "Contents", "Curtain"
+     matches "Curtains" — but a genuinely different word like "Floor" does NOT match "Flooring").
    TIER 2 (unique partial): spoken phrase is a distinctive word/phrase found in exactly ONE item name
      and no other — e.g. "Base units" → "Kitchen Base Units" if that is the only match.
      If the phrase could match more than one item, do NOT use Tier 2 — leave content with current item.
@@ -2470,7 +2563,7 @@ sub-item list. The moment it fires, CLOSE whatever element (item or sub-item) wa
 — its condition is done, nothing more is added to it. Everything after the command belongs
 EXCLUSIVELY to the named target item. The redirected text appears ONCE, on the target item only
 — never leave a copy of it on the item/sub-item that was open before the command was spoken.
-
+{retry_note}
 Return ONLY valid JSON — no markdown, no extra text.
 {{
   "<itemId>": {{
@@ -2758,13 +2851,15 @@ def transcribe_room():
             if is_check_out:
                 filled, fill_msg = _claude_fill_room_checkout(full_transcript, section_name, items)
             elif is_damage_report:
-                filled, fill_msg = _claude_fill_room_damage(full_transcript, section_name, items, processed_item_ids or None)
-                filled = _enforce_processed_skip(filled, processed_item_ids)
-                _warn_on_subitem_trigger_mismatch(full_transcript, filled, section_name, 'transcribe/room damage')
+                filled, fill_msg = _fill_room_with_subitem_retry(
+                    _claude_fill_room_damage, full_transcript, section_name, items,
+                    processed_item_ids, 'transcribe/room damage'
+                )
             else:
-                filled, fill_msg = _claude_fill_room(full_transcript, section_name, items, processed_item_ids or None)
-                filled = _enforce_processed_skip(filled, processed_item_ids)
-                _warn_on_subitem_trigger_mismatch(full_transcript, filled, section_name, 'transcribe/room')
+                filled, fill_msg = _fill_room_with_subitem_retry(
+                    _claude_fill_room, full_transcript, section_name, items,
+                    processed_item_ids, 'transcribe/room'
+                )
             # Deterministic dedupe of repeated lines / cross-field duplicates —
             # applies to all room fill types including check-out.
             filled = _dedupe_filled(filled)

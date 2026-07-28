@@ -111,8 +111,9 @@ def list_orphaned_photos(inspection_id):
     if a photo was ever successfully uploaded, it should still be here.
 
     Match orphaned entries to the missing photo by size/upload time, then
-    re-attach the right one using the Upload button on that item in the
-    report editor.
+    call POST /api/photos/orphaned/<id>/reassign to attach it directly to
+    the correct room/item — no download/re-upload round-trip needed since
+    the file is already hosted and valid.
     """
     if not is_configured():
         return jsonify({'error': 'Photo storage is not configured on this server'}), 503
@@ -165,3 +166,69 @@ def list_orphaned_photos(inspection_id):
         'still_referenced':  len(objects) - len(orphaned),
         'orphaned':          orphaned,
     })
+
+
+@photos_bp.route('/orphaned/<int:inspection_id>/reassign', methods=['POST'])
+@jwt_required()
+@require_admin_or_manager
+def reassign_orphaned_photos(inspection_id):
+    """
+    Admin/manager only — attach one or more orphaned S3 photos (found via
+    GET /api/photos/orphaned/<id>) directly onto a room item's _photos array.
+
+    No download/re-upload round-trip is needed: the photo is already hosted
+    and valid, so this just writes its existing public URL into report_data —
+    the same place a normal photo capture would have put it.
+
+    Body: { "keys": ["inspections/165/photos/<uuid>.jpg", ...],
+            "section_key": "37", "item_id": "490" }
+    Supports a whole batch (e.g. every photo from one room) in a single call.
+    """
+    data        = request.json or {}
+    keys        = data.get('keys') or ([data['key']] if data.get('key') else [])
+    section_key = str(data.get('section_key', '')).strip()
+    item_id     = str(data.get('item_id', '')).strip()
+
+    if not keys or not section_key or not item_id:
+        return jsonify({'error': '"keys" (or "key"), "section_key", and "item_id" are required'}), 400
+
+    # Safety: only allow keys that actually live under THIS inspection's own
+    # S3 prefix — prevents attaching another inspection's (or a guessed)
+    # object onto this report.
+    prefix = f'inspections/{inspection_id}/photos/'
+    bad_keys = [k for k in keys if not str(k).startswith(prefix)]
+    if bad_keys:
+        return jsonify({'error': f'Key(s) do not belong to this inspection: {bad_keys}'}), 400
+
+    import json
+    from models import db, Inspection
+
+    insp = db.session.get(Inspection, inspection_id)
+    if not insp:
+        return jsonify({'error': 'Inspection not found'}), 404
+
+    rd = {}
+    if insp.report_data:
+        try:
+            rd = json.loads(insp.report_data) if isinstance(insp.report_data, str) else insp.report_data
+        except Exception:
+            rd = {}
+
+    rd.setdefault(section_key, {})
+    rd[section_key].setdefault(item_id, {})
+    photos = rd[section_key][item_id].get('_photos')
+    if not isinstance(photos, list):
+        photos = []
+
+    added = []
+    for key in keys:
+        url = public_url(key)
+        if url not in photos:
+            photos.append(url)
+            added.append(url)
+    rd[section_key][item_id]['_photos'] = photos
+
+    insp.report_data = json.dumps(rd)
+    db.session.commit()
+
+    return jsonify({'ok': True, 'added': len(added), 'photos': photos})

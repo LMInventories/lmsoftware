@@ -682,18 +682,94 @@ const orphanedLoading = ref(false)
 const orphanedModal   = ref(false)
 const orphanedResult  = ref(null)
 
+// Multi-select + reassign target — attaches selected photos directly onto a
+// room item's _photos array (no download/re-upload round-trip needed, since
+// the photo is already hosted and valid).
+const selectedOrphanKeys = ref(new Set())
+const reassignRoomKey    = ref('')
+const reassignItemId     = ref('')
+const reassigning        = ref(false)
+
+// Room/item options sourced from the inspection's own template, applying the
+// same renamed/hidden/custom-room overrides the report editor uses.
+const orphanRooms = computed(() => {
+  if (!previewTemplate.value) return []
+  let rd = {}
+  try { rd = JSON.parse(inspection.value?.report_data || '{}') } catch { rd = {} }
+  const roomNames   = rd._roomNames   || {}
+  const hiddenRooms = rd._hiddenRooms || []
+
+  const rooms = []
+  for (const sec of (previewTemplate.value.sections || [])) {
+    if (sec.section_type !== 'room') continue
+    const key = String(sec.id)
+    if (hiddenRooms.includes(key)) continue
+    rooms.push({
+      key,
+      name: roomNames[key] || sec.name,
+      items: (sec.items || []).map(i => ({ id: String(i.id), name: i.name })),
+    })
+  }
+  for (const cr of (rd._customRooms || [])) {
+    if (hiddenRooms.includes(cr.key)) continue
+    rooms.push({ key: cr.key, name: roomNames[cr.key] || cr.name || 'Room', items: [] })
+  }
+  return rooms
+})
+
+const orphanItemOptions = computed(() =>
+  orphanRooms.value.find(r => r.key === reassignRoomKey.value)?.items || []
+)
+
+function onOrphanRoomChange() {
+  reassignItemId.value = ''
+}
+
+function toggleOrphanKey(key) {
+  const next = new Set(selectedOrphanKeys.value)
+  next.has(key) ? next.delete(key) : next.add(key)
+  selectedOrphanKeys.value = next
+}
+function selectAllOrphans() {
+  selectedOrphanKeys.value = new Set((orphanedResult.value?.orphaned || []).map(o => o.key))
+}
+function clearOrphanSelection() {
+  selectedOrphanKeys.value = new Set()
+}
+
 async function openOrphanedPhotos() {
   if (orphanedLoading.value) return
   orphanedLoading.value = true
   try {
     const res = await api.getOrphanedPhotos(inspection.value.id)
     orphanedResult.value = res.data
-    orphanedModal.value  = true
+    clearOrphanSelection()
+    reassignRoomKey.value = ''
+    reassignItemId.value  = ''
+    orphanedModal.value   = true
   } catch (err) {
     console.error('Orphaned photo lookup error:', err)
     toast.error(err.response?.data?.error || 'Could not check for orphaned photos')
   } finally {
     orphanedLoading.value = false
+  }
+}
+
+async function attachSelectedOrphans() {
+  if (!selectedOrphanKeys.value.size || !reassignRoomKey.value || !reassignItemId.value || reassigning.value) return
+  reassigning.value = true
+  try {
+    const keys = Array.from(selectedOrphanKeys.value)
+    await api.reassignOrphanedPhotos(inspection.value.id, keys, reassignRoomKey.value, reassignItemId.value)
+    toast.success(`${keys.length} photo${keys.length !== 1 ? 's' : ''} attached`)
+    orphanedResult.value.orphaned = orphanedResult.value.orphaned.filter(o => !selectedOrphanKeys.value.has(o.key))
+    orphanedResult.value.still_referenced += keys.length
+    clearOrphanSelection()
+  } catch (err) {
+    console.error('Reassign error:', err)
+    toast.error(err.response?.data?.error || 'Could not attach photos')
+  } finally {
+    reassigning.value = false
   }
 }
 
@@ -1749,26 +1825,55 @@ onMounted(() => {
               Sorted oldest → newest by upload time, to roughly match the order they were taken in.
             </p>
             <div class="orphan-grid">
-              <a
+              <div
                 v-for="(o, idx) in orphanedResult.orphaned"
                 :key="o.key"
-                :href="o.public_url"
-                target="_blank"
-                rel="noopener"
                 class="orphan-card"
+                :class="{ 'orphan-card-selected': selectedOrphanKeys.has(o.key) }"
+                @click="toggleOrphanKey(o.key)"
               >
+                <input
+                  type="checkbox"
+                  class="orphan-checkbox"
+                  :checked="selectedOrphanKeys.has(o.key)"
+                  @click.stop
+                  @change="toggleOrphanKey(o.key)"
+                />
+                <a :href="o.public_url" target="_blank" rel="noopener" class="orphan-view-link" @click.stop title="View full size">↗</a>
                 <span class="orphan-order">#{{ idx + 1 }}</span>
                 <img :src="o.public_url" class="orphan-thumb" />
                 <div class="orphan-meta">
                   <span>{{ (o.size / 1024).toFixed(0) }} KB</span>
                   <span>{{ new Date(o.last_modified).toLocaleString('en-GB') }}</span>
                 </div>
-              </a>
+              </div>
             </div>
-            <p class="orphan-hint">
-              Open the right photo above, save it, then re-attach it to the correct item using
-              the <strong>Upload</strong> button in Edit Report.
-            </p>
+
+            <!-- Reassign selected photos directly to a room/item — no download/re-upload needed -->
+            <div class="orphan-reassign-bar">
+              <div class="orphan-reassign-row">
+                <button class="orphan-select-btn" @click="selectAllOrphans">Select All</button>
+                <button class="orphan-select-btn" @click="clearOrphanSelection" :disabled="!selectedOrphanKeys.size">Clear</button>
+                <span class="orphan-selected-count">{{ selectedOrphanKeys.size }} selected</span>
+              </div>
+              <div class="orphan-reassign-row">
+                <select v-model="reassignRoomKey" @change="onOrphanRoomChange" class="orphan-select">
+                  <option value="">Choose room…</option>
+                  <option v-for="r in orphanRooms" :key="r.key" :value="r.key">{{ r.name }}</option>
+                </select>
+                <select v-model="reassignItemId" class="orphan-select" :disabled="!reassignRoomKey">
+                  <option value="">Choose item…</option>
+                  <option v-for="i in orphanItemOptions" :key="i.id" :value="i.id">{{ i.name }}</option>
+                </select>
+                <button
+                  class="orphan-attach-btn"
+                  :disabled="!selectedOrphanKeys.size || !reassignRoomKey || !reassignItemId || reassigning"
+                  @click="attachSelectedOrphans"
+                >
+                  {{ reassigning ? 'Attaching…' : `Attach Selected (${selectedOrphanKeys.size})` }}
+                </button>
+              </div>
+            </div>
             </template>
           </div>
         </div>
@@ -2146,15 +2251,24 @@ onMounted(() => {
 .orphan-summary { font-size: 13px; color: #475569; margin: 0 0 12px; line-height: 1.5; }
 .orphan-empty { font-size: 13px; color: #64748b; font-style: italic; }
 .orphan-order-note { font-size: 12px; color: #64748b; font-style: italic; margin: 0 0 10px; }
-.orphan-hint { font-size: 12px; color: #92400e; margin-top: 14px; line-height: 1.5; }
 .orphan-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px;
 }
 .orphan-card {
-  display: block; position: relative; border: 1px solid #e2e8f0; border-radius: 8px;
-  overflow: hidden; text-decoration: none; transition: box-shadow 0.15s;
+  display: block; position: relative; border: 2px solid #e2e8f0; border-radius: 8px;
+  overflow: hidden; cursor: pointer; transition: box-shadow 0.15s, border-color 0.15s;
 }
 .orphan-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.12); }
+.orphan-card-selected { border-color: #6366f1; box-shadow: 0 0 0 2px rgba(99,102,241,0.25); }
+.orphan-checkbox {
+  position: absolute; top: 6px; right: 6px; z-index: 1; width: 18px; height: 18px; cursor: pointer;
+}
+.orphan-view-link {
+  position: absolute; bottom: 30px; right: 6px; z-index: 1;
+  background: rgba(15,23,42,0.75); color: white !important; text-decoration: none;
+  width: 22px; height: 22px; border-radius: 6px; display: flex; align-items: center; justify-content: center;
+  font-size: 13px;
+}
 .orphan-order {
   position: absolute; top: 6px; left: 6px; z-index: 1;
   background: rgba(15,23,42,0.75); color: white; font-size: 11px; font-weight: 700;
@@ -2165,6 +2279,28 @@ onMounted(() => {
   display: flex; flex-direction: column; gap: 2px; padding: 6px 8px;
   font-size: 10.5px; color: #64748b;
 }
+
+.orphan-reassign-bar {
+  margin-top: 16px; padding: 14px; background: #f8fafc; border: 1px solid #e2e8f0;
+  border-radius: 8px; display: flex; flex-direction: column; gap: 10px;
+}
+.orphan-reassign-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.orphan-selected-count { font-size: 12px; color: #64748b; margin-left: 4px; }
+.orphan-select-btn {
+  padding: 5px 10px; background: white; border: 1px solid #cbd5e1; border-radius: 6px;
+  font-size: 12px; font-weight: 600; color: #475569; cursor: pointer;
+}
+.orphan-select-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.orphan-select {
+  padding: 7px 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 13px;
+  color: #1e293b; background: white; flex: 1; min-width: 140px;
+}
+.orphan-attach-btn {
+  padding: 8px 16px; background: #4f46e5; border: none; border-radius: 6px;
+  color: white; font-size: 13px; font-weight: 700; cursor: pointer; white-space: nowrap;
+}
+.orphan-attach-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.orphan-attach-btn:not(:disabled):hover { filter: brightness(1.1); }
 
 .btn-share-pdf {
   padding: 9px 18px;

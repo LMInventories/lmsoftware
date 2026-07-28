@@ -283,6 +283,11 @@ const api = {
   // Lists S3 photos still in storage but no longer referenced by report_data —
   // e.g. a stale mobile sync overwrote the pointer. Admin/manager only.
   getOrphanedPhotos(inspectionId)      { return http.get(`/api/photos/orphaned/${inspectionId}`) },
+  // Attaches one or more orphaned photos directly onto a room item's _photos —
+  // no download/re-upload needed, the file is already hosted and valid.
+  reassignOrphanedPhotos(inspectionId, keys, sectionKey, itemId) {
+    return http.post(`/api/photos/orphaned/${inspectionId}/reassign`, { keys, section_key: sectionKey, item_id: itemId })
+  },
 }
 
 export default api

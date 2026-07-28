@@ -154,6 +154,11 @@ def list_orphaned_photos(inspection_id):
     objects  = list_objects(f'inspections/{inspection_id}/photos')
     orphaned = [o for o in objects if o['public_url'] not in referenced]
 
+    # Oldest → newest (upload time, the closest server-side proxy for capture
+    # time) so orphaned photos line up roughly in the order the report was
+    # walked through, making them easier to place back in the right room/item.
+    orphaned.sort(key=lambda o: o['last_modified'])
+
     return jsonify({
         'inspection_id':    inspection_id,
         'total_in_s3':       len(objects),

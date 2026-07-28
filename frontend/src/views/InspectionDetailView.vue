@@ -1744,15 +1744,20 @@ onMounted(() => {
               No orphaned photos — every photo in storage is still referenced by the report.
               If a photo won't display, the underlying upload likely never reached S3 at all.
             </p>
-            <div v-else class="orphan-grid">
+            <template v-else>
+            <p class="orphan-order-note">
+              Sorted oldest → newest by upload time, to roughly match the order they were taken in.
+            </p>
+            <div class="orphan-grid">
               <a
-                v-for="o in orphanedResult.orphaned"
+                v-for="(o, idx) in orphanedResult.orphaned"
                 :key="o.key"
                 :href="o.public_url"
                 target="_blank"
                 rel="noopener"
                 class="orphan-card"
               >
+                <span class="orphan-order">#{{ idx + 1 }}</span>
                 <img :src="o.public_url" class="orphan-thumb" />
                 <div class="orphan-meta">
                   <span>{{ (o.size / 1024).toFixed(0) }} KB</span>
@@ -1760,10 +1765,11 @@ onMounted(() => {
                 </div>
               </a>
             </div>
-            <p v-if="orphanedResult.orphaned.length" class="orphan-hint">
+            <p class="orphan-hint">
               Open the right photo above, save it, then re-attach it to the correct item using
               the <strong>Upload</strong> button in Edit Report.
             </p>
+            </template>
           </div>
         </div>
       </div>
@@ -2139,15 +2145,21 @@ onMounted(() => {
 .orphan-body { padding: 16px 20px; }
 .orphan-summary { font-size: 13px; color: #475569; margin: 0 0 12px; line-height: 1.5; }
 .orphan-empty { font-size: 13px; color: #64748b; font-style: italic; }
+.orphan-order-note { font-size: 12px; color: #64748b; font-style: italic; margin: 0 0 10px; }
 .orphan-hint { font-size: 12px; color: #92400e; margin-top: 14px; line-height: 1.5; }
 .orphan-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px;
 }
 .orphan-card {
-  display: block; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden;
-  text-decoration: none; transition: box-shadow 0.15s;
+  display: block; position: relative; border: 1px solid #e2e8f0; border-radius: 8px;
+  overflow: hidden; text-decoration: none; transition: box-shadow 0.15s;
 }
 .orphan-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.12); }
+.orphan-order {
+  position: absolute; top: 6px; left: 6px; z-index: 1;
+  background: rgba(15,23,42,0.75); color: white; font-size: 11px; font-weight: 700;
+  padding: 2px 7px; border-radius: 999px;
+}
 .orphan-thumb { width: 100%; height: 100px; object-fit: cover; display: block; background: #f1f5f9; }
 .orphan-meta {
   display: flex; flex-direction: column; gap: 2px; padding: 6px 8px;

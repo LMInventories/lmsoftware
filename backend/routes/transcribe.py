@@ -2374,13 +2374,14 @@ VERBATIM RULES — absolute, no exceptions:
 7. Only fill items/sub-items that are mentioned. Omit everything else.
 8. USE UK ENGLISH SPELLING — "discolouration" not "discoloration", "colour" not "color",
    "mould" not "mold", "grey" not "gray", "centre" not "center".
-9. SEPARATE OBSERVATIONS ON DIFFERENT LINES: if the clerk mentions two or more distinct observations
-   about different parts or fittings of the same item, put each on its own line using \\n.
-   NEVER join separate observations with a comma — use \\n instead.
-   Example: "handles slightly loose, one screw missing to interior handle"
-     CORRECT:   "Handles slightly loose\\nOne screw missing to interior handle"
-     INCORRECT: "Handles slightly loose, one screw missing to interior handle"
-   A single observation about one thing may still use commas within that one line.
+9. MULTI-COMPONENT LINES — CRITICAL: when a checkOutCondition contains more than one distinct
+   component or observation, separate each with a newline character \\n — NEVER use commas to
+   join them. This applies to every checkOutCondition without exception, main item or sub-item.
+   ✓ CORRECT:   "Handles slightly loose\\nOne screw missing to interior handle"
+   ✗ INCORRECT: "Handles slightly loose, one screw missing to interior handle"
+   ✓ CORRECT:   "2 x bulbs expired\\nLight scuffing to shade\\nSlight discolouration to base"
+   ✗ INCORRECT: "2 x bulbs expired, light scuffing to shade, slight discolouration to base"
+   Commas are only acceptable within a single observation (e.g. "Light scuff to base of door, left side").
 10. REPEATED CONTENT: the transcript is stitched from several clips and may contain the same
     passage twice (overlapping recordings or the clerk repeating themselves). If the same or
     nearly the same wording appears more than once for an item, use it ONCE only — never

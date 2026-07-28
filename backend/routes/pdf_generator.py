@@ -268,6 +268,7 @@ class _PDFBuilder:
     def __init__(self, inspection, deadline: float = None):
         self.inspection  = inspection
         self._img_deadline = deadline  # monotonic deadline; None = unlimited
+        self._img_skipped  = 0         # count of photos that failed to embed (timeout/deadline/error)
 
         self.cl   = _client_dict(inspection.property.client if inspection.property else None)
         self.prop = _prop_dict(inspection.property)
@@ -427,6 +428,24 @@ class _PDFBuilder:
 
     # ── Cached image fetch ────────────────────────────────────────────────────
 
+    def _download_image_bytes(self, url: str, attempts: int = 2, timeout: int = 8) -> bytes:
+        """
+        Fetch raw image bytes, retrying once after a transient network failure.
+        A brief S3/Drive hiccup shouldn't permanently drop a photo from the report —
+        previously a single failed request silently blanked the photo with no retry.
+        """
+        import time as _time
+        last_err = None
+        for attempt in range(attempts):
+            try:
+                req = urllib.request.Request(url, headers={'User-Agent': 'InspectPro/1.0'})
+                return urllib.request.urlopen(req, timeout=timeout).read()
+            except Exception as e:
+                last_err = e
+                if attempt < attempts - 1:
+                    _time.sleep(0.5)
+        raise last_err
+
     def _fetch_image(self, url: str, max_w_mm: float, max_h_mm: float, link_url: str = None):
         """
         Instance-level replacement for the module-level _fetch_image().
@@ -442,14 +461,27 @@ class _PDFBuilder:
                     import base64 as _b64
                     _, b64data = url.split(',', 1)
                     raw = _b64.b64decode(b64data)
+                    self._img_cache[url] = _compress_image(raw)
                 else:
                     import time as _time
                     if self._img_deadline and _time.monotonic() > self._img_deadline:
-                        return None  # time budget exhausted — skip image rather than hang
-                    req = urllib.request.Request(url, headers={'User-Agent': 'InspectPro/1.0'})
-                    raw = urllib.request.urlopen(req, timeout=4).read()
-                self._img_cache[url] = _compress_image(raw)
+                        print(f'[pdf] image skipped — time budget exhausted '
+                              f'(inspection {self.inspection.id}): {url}')
+                        self._img_skipped += 1
+                        # Cache the failure (as None) so the PDF's second build pass
+                        # doesn't burn more time re-attempting an already-doomed fetch.
+                        self._img_cache[url] = None
+                    else:
+                        try:
+                            raw = self._download_image_bytes(url)
+                            self._img_cache[url] = _compress_image(raw)
+                        except Exception as e:
+                            print(f'[pdf] image fetch failed (inspection {self.inspection.id}): {url} — {e}')
+                            self._img_skipped += 1
+                            self._img_cache[url] = None
             data = self._img_cache[url]
+            if data is None:
+                return None
             buf  = io.BytesIO(data)
             img  = RLImage(buf)
             w_pt = max_w_mm * mm
@@ -460,8 +492,30 @@ class _PDFBuilder:
             if link_url:
                 return _ClickableImage(img, link_url)
             return img
-        except Exception:
+        except Exception as e:
+            print(f'[pdf] image fetch failed (inspection {self.inspection.id}): {url} — {e}')
+            self._img_skipped += 1
             return None
+
+    def _photo_unavailable_cell(self):
+        """
+        Visible placeholder for a photo that failed to download — replaces the
+        previous plain '(photo)' caption, which was easy to mistake for a blank
+        cell rather than a flagged failure.
+        """
+        p = Paragraph(
+            '⚠ Photo unavailable',
+            ParagraphStyle('photoErr', fontName='Helvetica-Bold', fontSize=7.5,
+                            leading=10, textColor=_RED_TXT, alignment=1),
+        )
+        t = Table([[p]], colWidths=[90], rowHeights=[38])
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0,0),(0,0), _RED_BG),
+            ('BOX',        (0,0),(0,0), 0.5, _RED_TXT),
+            ('VALIGN',     (0,0),(0,0), 'MIDDLE'),
+            ('ALIGN',      (0,0),(0,0), 'CENTER'),
+        ]))
+        return t
 
     # ── Styles ────────────────────────────────────────────────────────────────
 
@@ -709,7 +763,7 @@ class _PDFBuilder:
         for i, url in enumerate(urls):
             img    = self._fetch_image(url, cell_w / mm - 4, 38, link_url=gallery_url)
             ts_txt = self._fmt_ts(ts[i] if i < len(ts) else None) if self.add_ts else ''
-            inner  = [img or Paragraph('(photo)', self.s_small)]
+            inner  = [img or self._photo_unavailable_cell()]
             if ts_txt:
                 inner.append(Paragraph(ts_txt, self.s_small))
             cells.append(inner)
@@ -821,6 +875,9 @@ class _PDFBuilder:
         buf = io.BytesIO()
         doc2 = self._make_doc(buf)
         doc2.build(self._build_story(page_map=page_map))
+        if self._img_skipped:
+            print(f'[pdf] inspection {self.inspection.id}: {self._img_skipped} photo(s) '
+                  f'failed to embed — see [pdf] warnings above for URLs/reasons')
         return buf.getvalue()
 
     # ── Cover ─────────────────────────────────────────────────────────────────
@@ -1360,7 +1417,7 @@ class _PDFBuilder:
                     for pi, url in enumerate(self._photos(room['id'], iid)):
                         img    = self._fetch_image(url, uw/mm/4-4, 38, link_url=g_url)
                         ts_txt = self._fmt_ts(ts_list[pi] if pi < len(ts_list) else None) if self.add_ts else ''
-                        cell   = [img or Paragraph('(photo)', self.s_small)]
+                        cell   = [img or self._photo_unavailable_cell()]
                         if ts_txt: cell.append(Paragraph(ts_txt, self.s_small))
                         cell.append(Paragraph(f'Ref #{ref}', self.s_small))
                         item_photo_cells.append(cell)

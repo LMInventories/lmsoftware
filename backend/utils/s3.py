@@ -168,6 +168,42 @@ def presign_get(key: str, expires: int = 3600) -> str:
     )
 
 
+# ── List ──────────────────────────────────────────────────────────────────────
+
+def list_objects(prefix: str) -> list:
+    """
+    List all objects under a prefix, e.g. 'inspections/165/photos'.
+    Returns [{ key, size, last_modified (ISO string), public_url }, ...].
+    Used for orphan-recovery: an object can exist here with no reference left
+    in any inspection's report_data if a later sync overwrote the pointer
+    (see sync's stale-local-report_data bug) — this is how those get found.
+    """
+    if not is_configured():
+        return []
+    client  = _make_client()
+    bucket  = get_bucket()
+    prefix  = prefix.strip('/')
+    out     = []
+    token   = None
+    while True:
+        kwargs = {'Bucket': bucket, 'Prefix': prefix}
+        if token:
+            kwargs['ContinuationToken'] = token
+        resp = client.list_objects_v2(**kwargs)
+        for obj in resp.get('Contents', []):
+            out.append({
+                'key':           obj['Key'],
+                'size':          obj['Size'],
+                'last_modified': obj['LastModified'].isoformat(),
+                'public_url':    public_url(obj['Key']),
+            })
+        if resp.get('IsTruncated'):
+            token = resp.get('NextContinuationToken')
+        else:
+            break
+    return out
+
+
 # ── Delete ────────────────────────────────────────────────────────────────────
 
 def delete_object(key: str):

@@ -675,6 +675,28 @@ async function submitSaveAsTemplate() {
   }
 }
 
+// ── Orphaned photo recovery ───────────────────────────────────────────
+// Lists S3 photos still in storage but no longer referenced by report_data —
+// e.g. a stale mobile sync overwrote the pointer with an old local file:// path.
+const orphanedLoading = ref(false)
+const orphanedModal   = ref(false)
+const orphanedResult  = ref(null)
+
+async function openOrphanedPhotos() {
+  if (orphanedLoading.value) return
+  orphanedLoading.value = true
+  try {
+    const res = await api.getOrphanedPhotos(inspection.value.id)
+    orphanedResult.value = res.data
+    orphanedModal.value  = true
+  } catch (err) {
+    console.error('Orphaned photo lookup error:', err)
+    toast.error(err.response?.data?.error || 'Could not check for orphaned photos')
+  } finally {
+    orphanedLoading.value = false
+  }
+}
+
 // ── Server-side PDF export ───────────────────────────────────────────
 const pdfPreviewing = ref(false)
 async function previewServerPdf() {
@@ -900,6 +922,18 @@ onMounted(() => {
             class="btn-export-pdf"
           >
             {{ pdfPreviewing ? 'Generating…' : '📄 Export PDF' }}
+          </button>
+
+          <!-- Recover Orphaned Photos — admin/manager only. Lists S3 photos that
+               uploaded successfully at some point but are no longer referenced
+               by report_data (e.g. a stale mobile sync overwrote the pointer). -->
+          <button
+            v-if="authStore.isAdmin || authStore.isManager"
+            @click="openOrphanedPhotos"
+            :disabled="orphanedLoading"
+            class="btn-recover-photos"
+          >
+            {{ orphanedLoading ? 'Checking…' : '🔍 Recover Photos' }}
           </button>
 
           <!-- Share PDF — email to specified addresses -->
@@ -1693,6 +1727,47 @@ onMounted(() => {
         </div>
       </div>
 
+      <!-- Orphaned Photo Recovery Modal -->
+      <div v-if="orphanedModal" class="orphan-overlay" @click.self="orphanedModal = false">
+        <div class="orphan-modal">
+          <div class="orphan-hd">
+            <h3>Recover Orphaned Photos</h3>
+            <button class="orphan-close" @click="orphanedModal = false">✕</button>
+          </div>
+          <div class="orphan-body" v-if="orphanedResult">
+            <p class="orphan-summary">
+              {{ orphanedResult.total_in_s3 }} photo(s) found in storage for this inspection —
+              {{ orphanedResult.still_referenced }} still referenced in the report,
+              <strong>{{ orphanedResult.orphaned.length }} orphaned</strong>.
+            </p>
+            <p v-if="orphanedResult.orphaned.length === 0" class="orphan-empty">
+              No orphaned photos — every photo in storage is still referenced by the report.
+              If a photo won't display, the underlying upload likely never reached S3 at all.
+            </p>
+            <div v-else class="orphan-grid">
+              <a
+                v-for="o in orphanedResult.orphaned"
+                :key="o.key"
+                :href="o.public_url"
+                target="_blank"
+                rel="noopener"
+                class="orphan-card"
+              >
+                <img :src="o.public_url" class="orphan-thumb" />
+                <div class="orphan-meta">
+                  <span>{{ (o.size / 1024).toFixed(0) }} KB</span>
+                  <span>{{ new Date(o.last_modified).toLocaleString('en-GB') }}</span>
+                </div>
+              </a>
+            </div>
+            <p v-if="orphanedResult.orphaned.length" class="orphan-hint">
+              Open the right photo above, save it, then re-attach it to the correct item using
+              the <strong>Upload</strong> button in Edit Report.
+            </p>
+          </div>
+        </div>
+      </div>
+
       <!-- Template Preview Modal -->
       <TemplatePreviewModal
         v-if="showPreview && previewTemplate"
@@ -2026,6 +2101,58 @@ onMounted(() => {
   margin-left: auto;
 }
 .btn-export-pdf:hover { filter: brightness(1.15); }
+
+.btn-recover-photos {
+  padding: 9px 18px;
+  background: #92400e;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: white;
+  cursor: pointer;
+  transition: filter 0.15s;
+}
+.btn-recover-photos:hover { filter: brightness(1.15); }
+.btn-recover-photos:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* Orphaned Photo Recovery modal */
+.orphan-overlay {
+  position: fixed; inset: 0; background: rgba(15,23,42,0.6);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 2000; padding: 20px;
+}
+.orphan-modal {
+  background: white; border-radius: 12px; width: 100%; max-width: 720px;
+  max-height: 85vh; overflow-y: auto; box-shadow: 0 20px 50px rgba(0,0,0,0.3);
+}
+.orphan-hd {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 20px; border-bottom: 1px solid #e2e8f0; position: sticky; top: 0;
+  background: white; border-radius: 12px 12px 0 0;
+}
+.orphan-hd h3 { margin: 0; font-size: 16px; color: #1e293b; }
+.orphan-close {
+  background: #f1f5f9; border: none; border-radius: 50%; width: 28px; height: 28px;
+  cursor: pointer; font-size: 13px; color: #64748b;
+}
+.orphan-body { padding: 16px 20px; }
+.orphan-summary { font-size: 13px; color: #475569; margin: 0 0 12px; line-height: 1.5; }
+.orphan-empty { font-size: 13px; color: #64748b; font-style: italic; }
+.orphan-hint { font-size: 12px; color: #92400e; margin-top: 14px; line-height: 1.5; }
+.orphan-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px;
+}
+.orphan-card {
+  display: block; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden;
+  text-decoration: none; transition: box-shadow 0.15s;
+}
+.orphan-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.12); }
+.orphan-thumb { width: 100%; height: 100px; object-fit: cover; display: block; background: #f1f5f9; }
+.orphan-meta {
+  display: flex; flex-direction: column; gap: 2px; padding: 6px 8px;
+  font-size: 10.5px; color: #64748b;
+}
 
 .btn-share-pdf {
   padding: 9px 18px;

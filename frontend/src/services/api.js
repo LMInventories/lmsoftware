@@ -278,6 +278,11 @@ const api = {
 
   // ── PDF ───────────────────────────────────────────────────────────────────
   previewPdf(inspectionId)             { return http.get(`/api/inspections/${inspectionId}/preview-pdf`, { responseType: 'blob', timeout: 120_000 }) },
+
+  // ── Photo recovery ───────────────────────────────────────────────────────
+  // Lists S3 photos still in storage but no longer referenced by report_data —
+  // e.g. a stale mobile sync overwrote the pointer. Admin/manager only.
+  getOrphanedPhotos(inspectionId)      { return http.get(`/api/photos/orphaned/${inspectionId}`) },
 }
 
 export default api

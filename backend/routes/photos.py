@@ -13,6 +13,7 @@ This means the sync payload goes from ~18 MB (base64 photos) to ~50 KB (text onl
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required
 from utils.s3 import is_configured, new_key, presign_put, public_url
+from permissions import require_admin_or_manager
 
 photos_bp = Blueprint('photos', __name__)
 
@@ -91,3 +92,71 @@ def delete_photo():
     from utils.s3 import delete_object
     delete_object(key)
     return jsonify({'ok': True})
+
+
+@photos_bp.route('/orphaned/<int:inspection_id>', methods=['GET'])
+@jwt_required()
+@require_admin_or_manager
+def list_orphaned_photos(inspection_id):
+    """
+    Admin/manager only — recovery tool.
+
+    Lists S3 objects under inspections/<id>/photos/ that are NOT referenced
+    anywhere in the inspection's CURRENT report_data. This surfaces photos
+    that genuinely uploaded successfully at some point but whose pointer was
+    later lost — e.g. a stale local copy on the clerk's device overwrote
+    report_data on a later, unrelated edit-and-resync (see syncService.ts),
+    reverting an already-resolved photo URL back to a local file:// path.
+    Nothing deletes S3 objects except an explicit "remove photo" action, so
+    if a photo was ever successfully uploaded, it should still be here.
+
+    Match orphaned entries to the missing photo by size/upload time, then
+    re-attach the right one using the Upload button on that item in the
+    report editor.
+    """
+    if not is_configured():
+        return jsonify({'error': 'Photo storage is not configured on this server'}), 503
+
+    import json
+    from models import db, Inspection
+    from utils.s3 import list_objects
+
+    insp = db.session.get(Inspection, inspection_id)
+    if not insp:
+        return jsonify({'error': 'Inspection not found'}), 404
+
+    rd = {}
+    if insp.report_data:
+        try:
+            rd = json.loads(insp.report_data) if isinstance(insp.report_data, str) else insp.report_data
+        except Exception:
+            rd = {}
+
+    # Collect every photo URL/URI referenced anywhere in report_data, however
+    # deeply nested (room items, _extra rows, _overview, fixed sections, subs).
+    referenced = set()
+
+    def walk(node):
+        if isinstance(node, dict):
+            photos = node.get('_photos')
+            if isinstance(photos, list):
+                for p in photos:
+                    if isinstance(p, str):
+                        referenced.add(p)
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+
+    walk(rd)
+
+    objects  = list_objects(f'inspections/{inspection_id}/photos')
+    orphaned = [o for o in objects if o['public_url'] not in referenced]
+
+    return jsonify({
+        'inspection_id':    inspection_id,
+        'total_in_s3':       len(objects),
+        'still_referenced':  len(objects) - len(orphaned),
+        'orphaned':          orphaned,
+    })

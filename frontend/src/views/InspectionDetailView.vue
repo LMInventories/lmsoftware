@@ -707,12 +707,21 @@ const orphanRooms = computed(() => {
     rooms.push({
       key,
       name: roomNames[key] || sec.name,
-      items: (sec.items || []).map(i => ({ id: String(i.id), name: i.name })),
+      // Room Overview is a valid attach target too (report_data[key]._overview._photos) —
+      // list it first so it's always reachable, not just individual items.
+      items: [
+        { id: '_overview', name: 'Room Overview' },
+        ...(sec.items || []).map(i => ({ id: String(i.id), name: i.name })),
+      ],
     })
   }
   for (const cr of (rd._customRooms || [])) {
     if (hiddenRooms.includes(cr.key)) continue
-    rooms.push({ key: cr.key, name: roomNames[cr.key] || cr.name || 'Room', items: [] })
+    rooms.push({
+      key: cr.key,
+      name: roomNames[cr.key] || cr.name || 'Room',
+      items: [{ id: '_overview', name: 'Room Overview' }],
+    })
   }
   return rooms
 })

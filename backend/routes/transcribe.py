@@ -1561,31 +1561,97 @@ def _subitem_retry_note(trigger_count: int, sub_count: int) -> str:
     )
 
 
+def _name_variants(name: str) -> set:
+    """Singular/plural variants of an item name, lowercased, for loose substring matching."""
+    n = (name or '').strip().lower()
+    if not n:
+        return set()
+    return {n, (n[:-1] if n.endswith('s') else n + 's')}
+
+
+def _find_missing_mentioned_items(transcript: str, items: list, filled: dict) -> list:
+    """
+    Finds template items whose exact name is clearly spoken somewhere in the transcript
+    (as a substring, singular or plural) but which never appear as a key in `filled` AT ALL —
+    not even a "_delete" entry. This is a strong signal the model heard the heading but
+    swallowed its content into whichever item was already open, instead of switching to a
+    new chapter — the failure mode behind a "Contents" (or similar) section going missing
+    entirely, with its items wrongly attached as sub-items of the previous item.
+    """
+    t = (transcript or '').lower()
+    if not t:
+        return []
+    filled_keys = {str(k) for k in (filled or {}).keys()}
+    missing = []
+    for item in items:
+        item_id = str(item.get('id'))
+        if item_id in filled_keys:
+            continue
+        name = item.get('name') or ''
+        if any(v and v in t for v in _name_variants(name)):
+            missing.append(item)
+    return missing
+
+
+def _missing_item_retry_note(missing_items: list) -> str:
+    """Prompt addendum used when a template item was clearly mentioned but never output at all."""
+    names = ', '.join(f'"{i.get("name")}"' for i in missing_items)
+    return (
+        f'\n══════════════════════════════════════════════════════\n'
+        f'RETRY — an item was mentioned but never appeared in your output\n'
+        f'══════════════════════════════════════════════════════\n'
+        f'The clerk\'s transcript clearly contains the name of the following item(s), but your\n'
+        f'previous pass produced NO entry for them at all — not even a "_delete": {names}.\n'
+        f'This almost always means the heading announcement was missed and its content got\n'
+        f'wrongly attached to whatever item was already open, instead of switching to a new\n'
+        f'chapter. Re-parse the transcript, find where each of these item names is announced,\n'
+        f'and give each one its own top-level entry in your JSON output with whatever content\n'
+        f'follows it — do not leave it merged into the item that came before it.\n'
+    )
+
+
 def _fill_room_with_subitem_retry(fill_fn, full_transcript, section_name, items, processed_item_ids, fn_name):
     """
-    Calls fill_fn (either _claude_fill_room or _claude_fill_room_damage), then checks whether
-    the number of _subs entries emitted is short of the number of explicit sub-item trigger
-    phrases in the transcript. Prompt reinforcement alone can't guarantee 100% compliance from
-    an LLM, so when a shortfall is detected this retries ONCE with a pointed correction —
-    a genuine second chance rather than just louder wording, bounded to a single extra call.
+    Calls fill_fn (either _claude_fill_room or _claude_fill_room_damage), then checks for two
+    known LLM compliance slips: (1) fewer _subs produced than explicit "add sub item" triggers
+    in the transcript, and (2) a template item whose name is clearly spoken but never appears
+    in the output at all (usually because its content got swallowed into the previous item's
+    sub-item chain — e.g. a "Contents" section vanishing entirely). Prompt reinforcement alone
+    can't guarantee either won't happen, so when either is detected this retries ONCE with a
+    pointed correction — a genuine second chance, bounded to a single extra call.
     """
     filled, fill_msg = fill_fn(full_transcript, section_name, items, processed_item_ids or None)
     filled = _enforce_processed_skip(filled, processed_item_ids)
 
     trigger_count = _count_subitem_triggers(full_transcript)
-    sub_count = _count_subs_emitted(filled)
-    if trigger_count and sub_count < trigger_count:
-        print(f'[{fn_name}] sub-item mismatch in "{section_name}": '
-              f'{trigger_count} trigger(s), {sub_count} sub(s) emitted — retrying once')
-        retry_note = _subitem_retry_note(trigger_count, sub_count)
+    sub_count     = _count_subs_emitted(filled)
+    sub_shortfall = bool(trigger_count and sub_count < trigger_count)
+    missing_items = _find_missing_mentioned_items(full_transcript, items, filled)
+
+    if sub_shortfall or missing_items:
+        notes = []
+        if sub_shortfall:
+            print(f'[{fn_name}] sub-item mismatch in "{section_name}": '
+                  f'{trigger_count} trigger(s), {sub_count} sub(s) emitted')
+            notes.append(_subitem_retry_note(trigger_count, sub_count))
+        if missing_items:
+            names = ', '.join(i.get('name', '?') for i in missing_items)
+            print(f'[{fn_name}] item(s) mentioned but never output in "{section_name}": {names}')
+            notes.append(_missing_item_retry_note(missing_items))
+
+        retry_note = ''.join(notes)
         retried, retry_msg = fill_fn(full_transcript, section_name, items, processed_item_ids or None, retry_note=retry_note)
         retried = _enforce_processed_skip(retried, processed_item_ids)
+
         retry_sub_count = _count_subs_emitted(retried)
-        if retry_sub_count > sub_count:
-            print(f'[{fn_name}] retry improved sub-item count: {sub_count} → {retry_sub_count}')
+        retry_missing   = _find_missing_mentioned_items(full_transcript, items, retried)
+        improved = retry_sub_count > sub_count or len(retry_missing) < len(missing_items)
+        if improved:
+            print(f'[{fn_name}] retry improved: subs {sub_count}→{retry_sub_count}, '
+                  f'missing {len(missing_items)}→{len(retry_missing)}')
             filled, fill_msg = retried, retry_msg
         else:
-            print(f'[{fn_name}] retry did not improve ({retry_sub_count} vs {sub_count}) — keeping original')
+            print(f'[{fn_name}] retry did not improve — keeping original')
     return filled, fill_msg
 
 
@@ -1705,6 +1771,12 @@ share the same root and differ ONLY by a trailing "s":
   ✓ "Curtain" → triggers "Curtains & Blinds" (same root word "curtain")
   ✗ "Floor" does NOT trigger "Flooring" — different word, not a singular/plural pair
   ✗ "Door" does NOT trigger "Door & Frame" — that is a partial-word case, covered by Tier 2 rules below, not this one
+
+KNOWN WHISPER MISHEARING also counts as Tier 1 — Whisper frequently mis-transcribes "ceiling"
+as the homophone "sealing" (identical pronunciation). Treat "sealing" spoken as a standalone
+heading exactly as if the clerk had said "Ceiling":
+  ✓ "Sealing" → triggers "Ceiling"
+  ✓ "Return to sealing, add to condition, ..." → triggers "Ceiling" via the amendment rules below
 
 TIER 2 — UNIQUE PARTIAL MATCH (fallback when no exact match):
 The spoken phrase is a distinctive word or phrase that appears in exactly ONE item name in
@@ -2492,6 +2564,7 @@ RULES:
    TIER 1 (exact): spoken phrase matches the full item name (case-insensitive; "&"/"and" interchangeable;
      singular/plural of the SAME root word counts as exact — "Content" matches "Contents", "Curtain"
      matches "Curtains" — but a genuinely different word like "Floor" does NOT match "Flooring").
+     Also treat Whisper's common mishearing "Sealing" as "Ceiling" — they are the same heading.
    TIER 2 (unique partial): spoken phrase is a distinctive word/phrase found in exactly ONE item name
      and no other — e.g. "Base units" → "Kitchen Base Units" if that is the only match.
      If the phrase could match more than one item, do NOT use Tier 2 — leave content with current item.

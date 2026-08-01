@@ -2431,17 +2431,25 @@ VERBATIM RULES — absolute, no exceptions:
     passage twice (overlapping recordings or the clerk repeating themselves). If the same or
     nearly the same wording appears more than once for an item, use it ONCE only — never
     output the same observation twice.
+11. "AS INVENTORY+" PREFIX — MANDATORY, no exceptions: every checkOutCondition you output MUST
+    start with the exact first line "As Inventory+", followed by the clerk's words on the next
+    line(s) — for both main items and sub-items. This applies even when the clerk's words are
+    brief or the condition is unchanged.
+    CORRECT:   "As Inventory+\nScuff to bottom panel"
+    INCORRECT: "Scuff to bottom panel"   (missing the required prefix line)
+    If the clerk already said "as inventory" or "as inventory plus" themselves, do not duplicate
+    it — output "As Inventory+" once, followed by anything else they said.
 
 Return ONLY valid JSON — no markdown, no extra text.
 Use "checkOutCondition" (not "condition") for all fields.
 Example output:
 {{
   "<itemId>": {{
-    "checkOutCondition": "clerk's exact words"
+    "checkOutCondition": "As Inventory+\\nclerk's exact words"
   }},
   "<itemIdWithSubs>": {{
     "_subs": [
-      {{ "_sid": "exact_sid_from_above", "checkOutCondition": "clerk's exact words" }}
+      {{ "_sid": "exact_sid_from_above", "checkOutCondition": "As Inventory+\\nclerk's exact words" }}
     ]
   }}
 }}"""

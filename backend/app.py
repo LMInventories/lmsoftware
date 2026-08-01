@@ -654,6 +654,9 @@ schedule_clerk_summaries(app)
 from routes.google import schedule_expiry_check  # noqa
 schedule_expiry_check(app)
 
+from learning.scheduler import schedule_learning_pipeline  # noqa
+schedule_learning_pipeline(app)
+
 
 if __name__ == '__main__':
     app.run(debug=False)

@@ -39,7 +39,11 @@ _ROOM_FILL_FN_BY_TYPE = {
 }
 _DEFAULT_FILL_FN = '_claude_fill_room'
 
-_META_KEYS = {'name', '_subs', '_delete', '_descAction', '_condAction'}
+# 'name' is added by the mobile app purely for admin-review display in the log
+# (see RoomInspectionScreen.tsx) — the AI fill functions never return it, so it
+# must never end up in a fixture's expected output. '_delete'/'_descAction'/
+# '_condAction' are edit-mode bookkeeping, not fill content.
+_META_KEYS = {'name', '_delete', '_descAction', '_condAction'}
 
 
 def _normalize(value) -> str:
@@ -48,17 +52,62 @@ def _normalize(value) -> str:
     return ' '.join(str(value).casefold().split())
 
 
-def _fields_match(ai_fields: dict, current_row: dict) -> bool:
-    """True if every non-meta field the AI produced is still present, unchanged,
-    in the item's current row in report_data."""
+def _strip_meta(fields: dict) -> dict:
+    return {k: v for k, v in fields.items() if k not in _META_KEYS}
+
+
+def _subs_match_by_sid(ai_subs: list, current_subs: list) -> bool:
+    """
+    Checkout mode only: unlike room/damage mode (where a new sub-item's _sid
+    is only assigned client-side after the AI call), checkout's AI-returned
+    _subs entries target an EXISTING sub-item and so already carry its real
+    _sid — so they can be matched reliably by that id, not just positionally.
+    """
+    if not ai_subs:
+        return True
+    current_by_sid = {s.get('_sid'): s for s in (current_subs or []) if isinstance(s, dict)}
+    for ai_sub in ai_subs:
+        current = current_by_sid.get(ai_sub.get('_sid'))
+        if not current:
+            return False
+        for key, val in ai_sub.items():
+            if key == '_sid':
+                continue
+            if _normalize(val) != _normalize(current.get(key)):
+                return False
+    return True
+
+
+def _fields_match(ai_fields: dict, current_row: dict, fill_fn_name: str) -> bool:
+    """
+    True if every non-meta field the AI produced is still present, unchanged,
+    in the item's current row in report_data.
+
+    For room/damage mode, _subs is skipped entirely — a new sub-item's _sid is
+    only assigned client-side after the AI call, so the AI's raw _subs output
+    can't be reliably compared against the stored _subs here (that needs the
+    fuzzier logic the real mining job, Phase 1, will implement). An entry with
+    _subs in room/damage mode is excluded from candidacy at the caller instead
+    of being silently treated as a match.
+    """
     if not current_row:
         return False
     for key, ai_value in ai_fields.items():
         if key in _META_KEYS:
             continue
+        if key == '_subs':
+            if fill_fn_name == '_claude_fill_room_checkout':
+                if not _subs_match_by_sid(ai_value, current_row.get('_subs')):
+                    return False
+                continue
+            return False
         if _normalize(ai_value) != _normalize(current_row.get(key)):
             return False
     return True
+
+
+def _has_subs(item_fields: dict) -> bool:
+    return bool(item_fields.get('_subs'))
 
 
 def _candidate_inspections(engine, pool_size: int):
@@ -127,9 +176,13 @@ def find_candidates(pool_size: int = 100):
             if not filled:
                 continue
 
+            item_fields_list = [f for f in filled.values() if isinstance(f, dict)]
+            if fill_fn_name != '_claude_fill_room_checkout' and any(_has_subs(f) for f in item_fields_list):
+                continue   # room/damage sub-item identity matching is too fuzzy for this bootstrap script
+
             section_data = report_data.get(section_id) or {}
             all_unchanged = all(
-                _fields_match(item_fields, section_data.get(item_id) or {})
+                _fields_match(item_fields, section_data.get(item_id) or {}, fill_fn_name)
                 for item_id, item_fields in filled.items()
                 if isinstance(item_fields, dict)
             )
@@ -139,6 +192,12 @@ def find_candidates(pool_size: int = 100):
             if section_id not in items_cache:
                 items_cache[section_id] = _items_for_section(engine, int(section_id))
 
+            expected_filled = {
+                item_id: _strip_meta(item_fields)
+                for item_id, item_fields in filled.items()
+                if isinstance(item_fields, dict)
+            }
+
             candidates.append({
                 'inspection_id':  insp.id,
                 'log_entry_index': idx,
@@ -147,7 +206,7 @@ def find_candidates(pool_size: int = 100):
                 'room_name':       entry.get('room'),
                 'transcript':      entry.get('transcript') or '',
                 'items_snapshot':  items_cache[section_id],
-                'expected_filled': filled,
+                'expected_filled': expected_filled,
             })
 
     return candidates

@@ -462,6 +462,45 @@ BATHROOM ACCESSORIES:
 """
 
 
+# ── Shared prompt rule fragments ──────────────────────────────────────────
+# Consolidated from what were previously near-duplicate rule blocks repeated
+# across every fill function below (UK spelling, multi-component line
+# splitting, appliance formatting). Each fill function keeps its own
+# numbering/bullet style around these — only the rule content is shared.
+# Canonical wording is the fullest variant that existed at any call site
+# (a superset, not a narrowing).
+
+_UK_SPELLING_RULE = (
+    'USE UK ENGLISH SPELLING THROUGHOUT — every word in the output must use UK spelling: '
+    '"discolouration" not "discoloration", "colour" not "color", "centre" not "center", '
+    '"neighbour" not "neighbor", "recognise" not "recognize", "labelled" not "labeled", '
+    '"mould" not "mold", "grey" not "gray", "practise" not "practice" (verb), '
+    '"limescale" not "lime scale".'
+)
+
+def _multi_component_rule(field_names: str) -> str:
+    """
+    Shared "use \\n not commas for multiple distinct components/observations" rule.
+    field_names: human-readable description of which field(s) this applies to,
+    e.g. "description or condition" or "a checkOutCondition".
+    """
+    return (
+        f'MULTI-COMPONENT LINES — CRITICAL: when {field_names} contains more than one distinct '
+        'component or observation, separate each with a newline character \\n — NEVER use commas '
+        'to join them. Commas are only acceptable within a single observation '
+        '(e.g. "Light scuff to base of door, left side").'
+    )
+
+_APPLIANCE_FORMATTING_RULE = (
+    'APPLIANCE FORMATTING — for any appliance (washing machine, dishwasher, fridge, oven, hob, dryer, microwave, etc.):\n'
+    '- Each attribute MUST be on its own line — NEVER merge them into a single line\n'
+    '- Order: appliance type, then colour and brand, then model number, then serial number\n'
+    '  CORRECT:   "Washing machine\\nWhite Indesit\\nModel number: WD1234\\nSerial number: AB5678"\n'
+    '  INCORRECT: "White Indesit washing machine, model number WD1234, serial number AB5678"\n'
+    '- Format spoken model/serial references as "Model number: X" and "Serial number: X"'
+)
+
+
 # ── Edit-mode detection ────────────────────────────────────────────────────
 # Clerks can prefix a recording with trigger phrases to amend existing fields
 # rather than filling only-if-empty.
@@ -615,16 +654,8 @@ VERBATIM RULES — absolute, no exceptions:
 - Convert spoken numbers to numerals: "two" → "2", "three" → "3"
 - Format quantities as "N x item": "two bulbs" → "2 x bulbs"
 - Capitalise the first word of each observation
-- USE UK ENGLISH SPELLING — this is a legal document for UK property: "discolouration" not "discoloration",
-  "colour" not "color", "centre" not "center", "neighbour" not "neighbor",
-  "recognise" not "recognize", "labelled" not "labeled", "mould" not "mold"
-- SEPARATE OBSERVATIONS ON DIFFERENT LINES: if the clerk mentions two or more distinct observations
-  about different parts or fittings of the same item, put each observation on its own line using \\n
-  NEVER join separate observations with a comma — use \\n instead
-  Example: "handles slightly loose, one screw missing to interior handle"
-    CORRECT:   "Handles slightly loose\\nOne screw missing to interior handle"
-    INCORRECT: "Handles slightly loose, one screw missing to interior handle"
-  A single observation about one thing may still use commas within that one line
+- {_UK_SPELLING_RULE}
+- {_multi_component_rule("the condition field")}
 
 Return ONLY valid JSON, no markdown:
 {{"condition": "..."}}"""
@@ -655,14 +686,8 @@ RULES — absolute, no exceptions:
 - Convert spoken numbers to numerals: "two" → "2", "three" → "3"
 - Format quantities as "N x item": "two marks" → "2 x marks"
 - Capitalise the first word of each line
-- USE UK ENGLISH SPELLING — this is a legal document for UK property: "discolouration" not "discoloration",
-  "colour" not "color", "centre" not "center", "mould" not "mold"
-- SEPARATE OBSERVATIONS ON DIFFERENT LINES: if the clerk mentions two or more distinct damage
-  observations, put each on its own line using \\n. NEVER join with commas.
-  Example: "scuff to bottom panel, chip to frame edge"
-    CORRECT:   "Scuff to bottom panel\\nChip to frame edge"
-    INCORRECT: "Scuff to bottom panel, chip to frame edge"
-  A single observation about one location may use commas within that line.
+- {_UK_SPELLING_RULE}
+- {_multi_component_rule("the condition field")}
 
 Return ONLY valid JSON, no markdown:
 {{"condition": "..."}}"""
@@ -743,10 +768,7 @@ Defect and state words are ALWAYS condition even when they appear without a prec
 
 If no condition is mentioned, default condition to "In good order".
 
-MULTI-COMPONENT FORMATTING — CRITICAL: use \\n not commas to separate components or observations:
-  CORRECT:   "White painted door\\nChrome handle"   condition: "In good order\\nLight scuffing to base"
-  INCORRECT: "White painted door, chrome handle"   condition: "In good order, light scuffing to base"
-  Commas are only acceptable within a single observation (e.g. "Scuff to base of door, left side").
+""" + _multi_component_rule("description or condition") + """
 
 """ + _CONDITION_WORDS + """
 Return ONLY valid JSON, no markdown:
@@ -781,29 +803,9 @@ DEFAULT CONDITION RULE — this is critical:
 - WRONG: clerk says "light surface scratching" → condition: "In good order"
 - RIGHT: clerk says "light surface scratching" → condition: "Light surface scratching"
 
-MULTI-COMPONENT FORMATTING — CRITICAL: use \\n not commas to separate items:
-- If description has multiple distinct physical components, put EACH on its own line using \\n
-- A "component" is a distinct element — different surface, fitting, or object
-- ALWAYS use \\n, NEVER commas to separate components or observations
-  Example: "part white ceramic tile, part grey fitted carpet with silver metal threshold"
-    CORRECT:   "Part white ceramic tile\\nPart grey fitted carpet\\nSilver metal threshold"
-    INCORRECT: "Part white ceramic tile, part grey fitted carpet with silver metal threshold"
-  Example: "dark wood curtain rail, two green fabric floor length curtains"
-    CORRECT:   "Dark wood curtain rail\\n2 x green fabric floor length curtains"
-    INCORRECT: "Dark wood curtain rail, two green fabric floor length curtains"
-- Same rule applies to condition — multiple observations MUST each get their own line:
-  Example: "in good order, light indentations to tiles, light wear to carpet"
-    CORRECT:   "In good order\\nLight indentations to tiles\\nLight wear to carpet"
-    INCORRECT: "In good order, light indentations to tiles, light wear to carpet"
-- THE RULE: if you would use a comma between two separate ideas or observations, use \\n instead.
-  Commas are only acceptable WITHIN a single observation (e.g. "Light scuff to base of door, left side")
+""" + _multi_component_rule("description or condition") + """
 
-APPLIANCE FORMATTING — for any appliance (washing machine, dishwasher, fridge, oven, hob, dryer, microwave, etc.):
-- Each attribute MUST be on its own line — NEVER merge them into a single line
-- Order: appliance type, then colour and brand, then model number, then serial number
-  CORRECT:   "Washing machine\\nWhite Indesit\\nModel number: WD1234\\nSerial number: AB5678"
-  INCORRECT: "White Indesit washing machine, model number WD1234, serial number AB5678"
-- Format spoken model/serial references as "Model number: X" and "Serial number: X"
+""" + _APPLIANCE_FORMATTING_RULE + """
 """ + _CONDITION_WORDS + """
 Return ONLY valid JSON, no markdown:
 {"description": "...", "condition": "..."}"""
@@ -827,10 +829,7 @@ CRITICAL LANGUAGE RULES:
 - DUPLICATE SPEECH: the recording may contain repeated or restarted phrases. If the clerk
   says the same thing twice, output it once. Never repeat an observation in your output,
   and never place the same phrase in both the description and the condition fields.
-- USE UK ENGLISH SPELLING THROUGHOUT — mandatory for every word in the output:
-  "discolouration" not "discoloration", "colour" not "color", "centre" not "center",
-  "neighbour" not "neighbor", "recognise" not "recognize", "labelled" not "labeled",
-  "mould" not "mold", "grey" not "gray", "practise" not "practice" (verb)
+- {_UK_SPELLING_RULE}
 {formatting_rules}
 
 {field_instructions}"""
@@ -879,12 +878,8 @@ Instructions:
 - DUPLICATE SPEECH: the recording may contain repeated or restarted phrases. If the clerk
   says the same thing twice, output it once. Never repeat an observation in your output,
   and never place the same phrase in both the description and the condition fields.
-- USE UK ENGLISH SPELLING THROUGHOUT — every word in your output: "discolouration" not "discoloration",
-  "colour" not "color", "mould" not "mold", "grey" not "gray", "centre" not "center"
-- MULTI-COMPONENT FORMATTING: when description or condition has multiple distinct components or observations,
-  separate each with \\n — NEVER use commas to join them.
-  CORRECT:   "White painted door\\nChrome handle"   condition: "In good order\\nLight scuffing to base"
-  INCORRECT: "White painted door, chrome handle"   condition: "In good order, light scuffing to base"
+- {_UK_SPELLING_RULE}
+- {_multi_component_rule("description or condition")}
 - Only fill items that are mentioned in the transcript
 - If an item is not mentioned, omit it from the output entirely
 
@@ -1876,9 +1871,7 @@ RULES:
    "not seen" deletion rule below. Do NOT create an item, sub-item, or any field content from the
    retracted material, and do NOT leave a sub-item with no description or condition.
 5. Only fill items that are mentioned. Omit unmentioned items entirely from the output.
-6. USE UK ENGLISH SPELLING THROUGHOUT — every word in the output must use UK spelling:
-   "discolouration" not "discoloration", "colour" not "color", "centre" not "center",
-   "mould" not "mold", "grey" not "gray", "neighbour" not "neighbor", "recognise" not "recognize".
+6. {_UK_SPELLING_RULE}
 7. If only one piece of information is given for an item, put it in description.
 8. REPEATED OR OVERLAPPING CONTENT — treat duplicates as ONE:
    The transcript is stitched together from several audio clips and may contain the same
@@ -1937,21 +1930,9 @@ DISTINGUISHING PATTERN — "to [noun] to [location]":
   ✗ "return to walls"             → command preposition
 - Capitalise the first word of each line
 - Do NOT use bullet points or dashes
-- MULTI-COMPONENT LINES — CRITICAL: when a description or condition contains more than one distinct
-  component or observation, separate each with a newline character \n — NEVER use commas to join them.
-  ✓ CORRECT:   "White painted door\nChrome lever handle\nChrome letter box"
-  ✗ INCORRECT: "White painted door, chrome lever handle, chrome letter box"
-  ✓ CORRECT:   "In good order\nLight scuffing to base\nLight wear to corners"
-  ✗ INCORRECT: "In good order, light scuffing to base, light wear to corners"
-  This applies to BOTH description AND condition fields without exception.
-  Commas are only acceptable within a single observation (e.g. "Light scuff to base of door, left side").
+- {_multi_component_rule("a description or condition")}
 
-APPLIANCE FORMATTING — for any appliance (washing machine, dishwasher, fridge, oven, hob, dryer, microwave, etc.):
-- Each attribute MUST be on its own line — NEVER merge them into a single line
-- Order: appliance type, then colour and brand, then model number, then serial number
-  ✓ CORRECT:   "Washing machine\nWhite Indesit\nModel number: WD1234\nSerial number: AB5678"
-  ✗ INCORRECT: "White Indesit washing machine, model number WD1234, serial number AB5678"
-- Format spoken model/serial references as "Model number: X" and "Serial number: X"
+{_APPLIANCE_FORMATTING_RULE}
 
 SPLITTING description vs condition:
 - A CONDITION SIGNAL is ANY of the following:
@@ -2444,16 +2425,8 @@ VERBATIM RULES — absolute, no exceptions:
    and include it under the parent item's "_subs" array, using the exact _sid shown above.
 6. Capitalise the first word of each observation.
 7. Only fill items/sub-items that are mentioned. Omit everything else.
-8. USE UK ENGLISH SPELLING — "discolouration" not "discoloration", "colour" not "color",
-   "mould" not "mold", "grey" not "gray", "centre" not "center".
-9. MULTI-COMPONENT LINES — CRITICAL: when a checkOutCondition contains more than one distinct
-   component or observation, separate each with a newline character \\n — NEVER use commas to
-   join them. This applies to every checkOutCondition without exception, main item or sub-item.
-   ✓ CORRECT:   "Handles slightly loose\\nOne screw missing to interior handle"
-   ✗ INCORRECT: "Handles slightly loose, one screw missing to interior handle"
-   ✓ CORRECT:   "2 x bulbs expired\\nLight scuffing to shade\\nSlight discolouration to base"
-   ✗ INCORRECT: "2 x bulbs expired, light scuffing to shade, slight discolouration to base"
-   Commas are only acceptable within a single observation (e.g. "Light scuff to base of door, left side").
+8. {_UK_SPELLING_RULE}
+9. {_multi_component_rule("a checkOutCondition")}
 10. REPEATED CONTENT: the transcript is stitched from several clips and may contain the same
     passage twice (overlapping recordings or the clerk repeating themselves). If the same or
     nearly the same wording appears more than once for an item, use it ONCE only — never
@@ -2575,17 +2548,12 @@ RULES:
    Never use a "description" field.
 3. VERBATIM: use the clerk's exact words. Only remove filler sounds (um, uh, er, errr, umm, erm)
    and clear false starts (e.g. "scuff — scuff to base" → "scuff to base").
-4. MULTIPLE OBSERVATIONS: when the clerk mentions two or more distinct damage observations,
-   separate each with a newline (\\n). NEVER use commas to join separate observations.
-   ✓ CORRECT:   "Scuff to bottom panel\\nChip to frame"
-   ✗ INCORRECT: "Scuff to bottom panel, chip to frame"
-   A single observation about one location may still use commas within that line.
+4. {_multi_component_rule("a damage condition")}
 5. Convert spoken numbers to numerals: "two" → "2". Format quantities as "N x item".
 6. Capitalise the first word of each line.
 7. Only fill items that are mentioned. Omit unmentioned items entirely.
 8. If a single component has multiple distinct damage observations, each goes on its own line.
-9. USE UK ENGLISH SPELLING — "discolouration" not "discoloration", "colour" not "color",
-   "mould" not "mold", "grey" not "gray", "centre" not "center".
+9. {_UK_SPELLING_RULE}
 10. REPEATED CONTENT: the transcript is stitched from several clips and may contain the same
     passage twice (overlapping recordings or the clerk repeating themselves). If the same or
     nearly the same wording appears more than once for an item, use it ONCE only — never
@@ -2809,8 +2777,7 @@ RULES:
    - "fair wear and tear" → "Fair wear and tear"
 4. ONLY remove filler sounds (um, uh, er, errr, umm, erm) and clear false starts where the clerk immediately restarts the same phrase. Do NOT remove, shorten, or paraphrase any actual content — reproduce the clerk's words in full.
 5. Only fill items that are mentioned. Omit unmentioned items entirely from the output.
-6. USE UK ENGLISH SPELLING THROUGHOUT — "discolouration" not "discoloration", "colour" not "color",
-   "mould" not "mold", "grey" not "gray", "centre" not "center", "limescale" not "lime scale".
+6. {_UK_SPELLING_RULE}
 7. Capitalise the first word of each line.
 
 LINE BREAKS — THIS IS CRITICAL:

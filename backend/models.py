@@ -423,6 +423,134 @@ class TranscriptionUsage(db.Model):
         }
 
 
+class TranscriptionFillDiff(db.Model):
+    """
+    One row per (log entry x field) comparison between what an AI fill call
+    originally produced (from _transcriptionLog, written by the mobile app)
+    and what the human left in the finished report_data. Mined daily by
+    backend/learning/mining.py. edit_type='unchanged' rows are the source
+    material for TranscriptionGoldenFixture promotion; 'edited' rows are the
+    source material for pattern mining in backend/learning/proposal.py.
+    """
+    __tablename__ = 'transcription_fill_diffs'
+
+    id                = db.Column(db.Integer, primary_key=True)
+    inspection_id     = db.Column(db.Integer, db.ForeignKey('inspections.id', ondelete='SET NULL'), nullable=True, index=True)
+    log_entry_index   = db.Column(db.Integer, nullable=False)
+    log_entry_hash    = db.Column(db.String(64), nullable=False, index=True)
+    log_entry_ts      = db.Column(db.DateTime, nullable=True)
+    mode              = db.Column(db.String(10), nullable=False)   # 'room' | 'instant'
+    fill_fn_name      = db.Column(db.String(50), nullable=True)
+    section_type      = db.Column(db.String(30), nullable=True)
+    room              = db.Column(db.String(255), nullable=True)
+    item_id           = db.Column(db.String(50), nullable=True)
+    item_name         = db.Column(db.String(255), nullable=True)
+    field             = db.Column(db.String(30), nullable=False)
+    transcript_excerpt = db.Column(db.Text, nullable=True)
+    ai_value          = db.Column(db.Text, nullable=True)
+    final_value       = db.Column(db.Text, nullable=True)
+    edit_type         = db.Column(db.String(20), nullable=False)   # unchanged | edited | deleted | unresolved
+    match_confidence  = db.Column(db.String(10), default='exact')  # exact | fuzzy
+    mined_at          = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (db.UniqueConstraint('inspection_id', 'log_entry_hash', name='uq_diff_entry'),)
+
+    def to_dict(self):
+        return {
+            'id':                 self.id,
+            'inspection_id':      self.inspection_id,
+            'log_entry_index':    self.log_entry_index,
+            'mode':               self.mode,
+            'fill_fn_name':       self.fill_fn_name,
+            'section_type':       self.section_type,
+            'room':               self.room,
+            'item_id':            self.item_id,
+            'item_name':          self.item_name,
+            'field':              self.field,
+            'transcript_excerpt': self.transcript_excerpt,
+            'ai_value':           self.ai_value,
+            'final_value':        self.final_value,
+            'edit_type':          self.edit_type,
+            'match_confidence':   self.match_confidence,
+            'mined_at':           self.mined_at.isoformat() if self.mined_at else None,
+        }
+
+
+class TranscriptionMinedInspection(db.Model):
+    """
+    High-water-mark ledger — one row per inspection ever mined, so the daily
+    mining job only re-reads inspections whose report_data changed since
+    last run instead of re-scanning everything every day.
+    """
+    __tablename__ = 'transcription_mined_inspections'
+
+    id                         = db.Column(db.Integer, primary_key=True)
+    inspection_id              = db.Column(db.Integer, db.ForeignKey('inspections.id', ondelete='CASCADE'), nullable=False, unique=True)
+    last_log_entry_count       = db.Column(db.Integer, default=0)
+    last_inspection_updated_at = db.Column(db.DateTime, nullable=True)
+    last_mined_at              = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class TranscriptionGoldenFixture(db.Model):
+    """
+    One row per historical fill_fn call where every field in that log entry
+    was left unchanged by the human — the eval harness's replay unit for
+    regression-testing prompt changes (backend/learning/eval_harness.py).
+    items_snapshot_json is frozen at promotion time so later template edits
+    don't retroactively change historical fixtures.
+    """
+    __tablename__ = 'transcription_golden_fixtures'
+
+    id                   = db.Column(db.Integer, primary_key=True)
+    source_inspection_id = db.Column(db.Integer, db.ForeignKey('inspections.id', ondelete='SET NULL'), nullable=True)
+    log_entry_index       = db.Column(db.Integer, nullable=False)
+    fill_fn_name          = db.Column(db.String(50), nullable=False)
+    section_type          = db.Column(db.String(30), nullable=True)
+    room_name             = db.Column(db.String(255), nullable=True)
+    transcript             = db.Column(db.Text, nullable=False)
+    items_snapshot_json    = db.Column(db.Text, nullable=False)
+    expected_filled_json   = db.Column(db.Text, nullable=False)
+    source_diff_ids_json   = db.Column(db.Text, nullable=True)
+    is_active              = db.Column(db.Boolean, default=True)
+    created_at             = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class TranscriptionPromptProposal(db.Model):
+    """
+    One row per daily prompt-learning pipeline run's outcome — audit trail
+    for opened PRs as well as regression-rejected/errored/no-pattern runs,
+    so nothing the pipeline decides is silently dropped.
+    """
+    __tablename__ = 'transcription_prompt_proposals'
+
+    id                     = db.Column(db.Integer, primary_key=True)
+    run_date               = db.Column(db.Date, nullable=False, index=True)
+    status                 = db.Column(db.String(20), nullable=False)  # opened_pr | rejected_regression | error | skipped_no_pattern
+    target_function        = db.Column(db.String(50), nullable=True)
+    pattern_summary        = db.Column(db.Text, nullable=True)
+    old_snippet            = db.Column(db.Text, nullable=True)
+    new_snippet            = db.Column(db.Text, nullable=True)
+    example_diff_ids_json  = db.Column(db.Text, nullable=True)
+    eval_before_json       = db.Column(db.Text, nullable=True)
+    eval_after_json        = db.Column(db.Text, nullable=True)
+    pr_url                 = db.Column(db.String(500), nullable=True)
+    branch_name            = db.Column(db.String(200), nullable=True)
+    error_message          = db.Column(db.Text, nullable=True)
+    created_at              = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    def to_dict(self):
+        return {
+            'id':               self.id,
+            'run_date':         self.run_date.isoformat() if self.run_date else None,
+            'status':           self.status,
+            'target_function':  self.target_function,
+            'pattern_summary':  self.pattern_summary,
+            'pr_url':           self.pr_url,
+            'error_message':    self.error_message,
+            'created_at':       self.created_at.isoformat() if self.created_at else None,
+        }
+
+
 class InspectionSignature(db.Model):
     """
     Stores clerk, tenant and (optionally) landlord/agent signatures for an inspection.

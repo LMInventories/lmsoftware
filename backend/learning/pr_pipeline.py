@@ -69,6 +69,38 @@ def _gh_headers():
     return {'Authorization': f'Bearer {token}', 'Accept': 'application/vnd.github+json'}
 
 
+def _open_pr_exists_for_symbol(target_symbol: str) -> bool:
+    """
+    True if a previous run already opened a PR targeting this same symbol
+    and it's still open (not merged/closed). Prevents piling up duplicate
+    proposals for the same pattern every day while a human hasn't reviewed
+    the existing one yet — transcription_fill_diffs is a permanent
+    historical log, so a dominant pattern keeps re-clustering as the top
+    candidate until either it's fixed AND enough new data dilutes the old
+    diffs, or this check skips it.
+    """
+    engine = get_engine()
+    with engine.connect() as conn:
+        row = conn.execute(text('''
+            SELECT pr_url FROM transcription_prompt_proposals
+            WHERE status = 'opened_pr' AND target_function = :symbol AND pr_url LIKE 'https://%'
+            ORDER BY id DESC LIMIT 1
+        '''), {'symbol': target_symbol}).fetchone()
+    if not row:
+        return False
+
+    pr_number = row.pr_url.rstrip('/').split('/')[-1]
+    try:
+        headers = _gh_headers()
+    except RuntimeError:
+        return False   # no GH_TOKEN configured (e.g. local/dry-run testing) — can't check, assume clear
+
+    resp = requests.get(f'{GH_API}/pulls/{pr_number}', headers=headers, timeout=30)
+    if resp.status_code != 200:
+        return False
+    return resp.json().get('state') == 'open'
+
+
 def _record_proposal(status, target_function=None, pattern_summary=None, old_snippet=None,
                       new_snippet=None, example_diff_ids=None, eval_before=None, eval_after=None,
                       pr_url=None, branch_name=None, error_message=None):
@@ -260,6 +292,13 @@ def run_daily_pipeline(skip_mining: bool = False, force_live: bool = False) -> d
     if draft is None or not draft.has_pattern:
         _record_proposal(status='skipped_no_pattern', pattern_summary=pattern_summary)
         return {'status': 'skipped_no_pattern'}
+
+    if _open_pr_exists_for_symbol(draft.target_symbol):
+        _record_proposal(
+            status='skipped_no_pattern', target_function=draft.target_symbol,
+            pattern_summary=pattern_summary + ' [skipped: an open PR already targets this symbol]',
+        )
+        return {'status': 'skipped_open_pr_exists', 'target_function': draft.target_symbol}
 
     validation_error = proposal.validate_draft(draft)
     if validation_error:

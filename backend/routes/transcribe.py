@@ -2963,27 +2963,76 @@ def _is_good_order(condition: str) -> bool:
     return all(l in good_phrases for l in lines)
 
 
+# ── Minor-wear filtering for condition summaries ───────────────────────────
+# The prompt already tells the model to EXCLUDE "light/slight/minor/superficial"
+# marks as normal cosmetic wear, but real production summaries show it isn't
+# reliably followed — some ran 150-200+ lines, a large fraction of it exactly
+# this class of line ("Light overpainted defects", "Light rub marks", "Slight
+# bubbling"...). Filter deterministically before the LLM ever sees them,
+# mirroring the existing _is_good_order() pattern, rather than trusting the
+# model to keep applying a rule it's already shown it doesn't apply reliably.
+#
+# Genuinely significant categories survive regardless of a "light"/"slight"
+# qualifier — a hairline crack or light water staining is still worth flagging
+# even when described as minor in degree; only pure cosmetic wear gets dropped.
+_MINOR_QUALIFIER_RE = _re.compile(
+    r'\b(?:light(?:ly)?|slight(?:ly)?|minor|superficial(?:ly)?|small|odd|occasional)\b',
+    _re.IGNORECASE,
+)
+_ALWAYS_SIGNIFICANT_RE = _re.compile(
+    r'\b(?:damp|mould|mold|water\s*(?:damage|ingress|staining)|tide\s*mark|leak(?:ing|s)?|'
+    r'crack(?:s|ing)?|structural|settlement|dropped\s+hinge|warp(?:ed|ing)?|'
+    r'no\s+power|not\s+work(?:ing)?|does\s+not\s+(?:work|open|close|operate|function)|'
+    r'seized|jammed|missing|hole(?:s)?|burn(?:s|t)?|gouge(?:s|d)?|broken|failed|defective)\b',
+    _re.IGNORECASE,
+)
+
+
+def _filter_minor_wear_lines(condition: str) -> str:
+    """
+    Drop lines that are purely minor cosmetic wear (light/slight/minor/
+    superficial, with no genuinely significant category present) — keep
+    everything else, including a "light"-qualified line that also touches
+    damp/mould/water, cracks, structural issues, non-functional items,
+    missing items, or physical damage.
+    """
+    if not condition:
+        return condition
+    kept = []
+    for line in condition.split('\n'):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if _ALWAYS_SIGNIFICANT_RE.search(stripped) or not _MINOR_QUALIFIER_RE.search(stripped):
+            kept.append(stripped)
+    return '\n'.join(kept)
+
+
 def _filter_issues_only(sections: list) -> list:
     """
-    Remove items where condition is blank or a good-state phrase (in good order, as new, etc.).
-    Items are kept if the main condition OR any sub's condition has an actual issue.
+    Remove items where condition is blank, a good-state phrase, or reduces to
+    nothing once minor-cosmetic-wear-only lines are filtered out. Items are
+    kept if the main condition OR any sub's condition has an actual issue.
     Returns a new sections list with only rooms/items that have real issues.
     """
     filtered = []
     for section in sections:
         kept_items = []
         for item in section.get('items', []):
-            cond = (item.get('condition') or '').strip()
+            cond = _filter_minor_wear_lines((item.get('condition') or '').strip())
             subs = item.get('subs', [])
 
             main_has_issue = bool(cond) and not _is_good_order(cond)
-            issue_subs = [s for s in subs if not _is_good_order((s.get('condition') or '').strip())]
+            issue_subs = []
+            for s in subs:
+                sub_cond = _filter_minor_wear_lines((s.get('condition') or '').strip())
+                if sub_cond and not _is_good_order(sub_cond):
+                    issue_subs.append({**s, 'condition': sub_cond})
 
             if main_has_issue or issue_subs:
                 kept = dict(item)
                 kept['subs'] = issue_subs
-                if not main_has_issue:
-                    kept['condition'] = ''  # sub(s) have the issue; don't echo good-order main cond
+                kept['condition'] = cond if main_has_issue else ''  # sub(s) have the issue; don't echo good-order main cond
                 kept_items.append(kept)
 
         if kept_items:
@@ -3062,10 +3111,11 @@ def generate_condition_summary():
 
         def _new_at_checkout(raw: str) -> str:
             stripped = _AS_INVENTORY_RE.sub('', (raw or '')).strip().strip(',').strip()
+            stripped = _filter_minor_wear_lines(stripped)
             return '' if _is_good_order(stripped) else stripped
 
         def _major_at_checkin(raw: str) -> str:
-            raw = (raw or '').strip()
+            raw = _filter_minor_wear_lines((raw or '').strip())
             return '' if _is_good_order(raw) else raw
 
         def _merge_subs(co_subs: list) -> list:

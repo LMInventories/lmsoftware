@@ -267,7 +267,13 @@ def _send_email(draft: proposal.ProposalDraft, pr_url: str, eval_summary: dict):
 
 def run_daily_pipeline(skip_mining: bool = False, force_live: bool = False) -> dict:
     if not skip_mining:
-        mining.run_daily_mining()
+        mining_stats = mining.run_daily_mining()
+        if mining_stats['entries_mined'] == 0:
+            # No newly-completed reports since the last run (e.g. a Sunday, a
+            # holiday, a quiet stretch) — nothing new to cluster or draft
+            # against, so stop here before making any Anthropic API call at all.
+            _record_proposal(status='skipped_no_pattern', pattern_summary='no new report activity since last run')
+            return {'status': 'skipped_no_new_data'}
 
     engine = get_engine()
     rows = proposal._load_edited_rows(engine, window_days=30)

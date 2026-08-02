@@ -2393,7 +2393,10 @@ def apply_pdf_import_status(inspection_id, job_id):
 #   Copy checkOutCondition (or inventoryCondition) → condition for the new CI.
 #   Fixed sections are passed through as-is.
 # ─────────────────────────────────────────────────────────────────────────────
-_AS_INVENTORY_RE = re.compile(r'^as\s+inventory\+?[,\s]*', re.IGNORECASE)
+_AS_INVENTORY_RE = re.compile(
+    r'^as\s+inventory(?:\s*(?:\+|,|&\s*check[\s-]?in|and\s+check[\s-]?in))?[,\s]*',
+    re.IGNORECASE,
+)
 _TRIVIAL_CI_RE   = re.compile(r'^(?:in\s+)?good\s+order[.,!\s]*$', re.IGNORECASE)
 
 

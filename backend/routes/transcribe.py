@@ -6,6 +6,7 @@ import anthropic
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from models import db, TranscriptionUsage
+from routes.inspections import _AS_INVENTORY_RE
 
 transcribe_bp = Blueprint('transcribe', __name__)
 
@@ -3042,13 +3043,38 @@ def generate_condition_summary():
         return jsonify({'error': 'ANTHROPIC_API_KEY not configured on server'}), 503
 
     # ── For Check Out: merge CI baseline into CO data ─────────────────────
-    # CO condition/description wins where recorded; CI fills items with no CO note.
+    # Each merged item carries TWO distinct fields instead of one blended
+    # "condition":
+    #   check_in_condition — the ORIGINAL check-in finding, kept only when it's
+    #     a real issue (good-order/blank is dropped, same filter as check-in mode)
+    #   check_out_new      — whatever the clerk recorded at check-out, with the
+    #     standard "As Inventory+" boilerplate prefix stripped off first, so an
+    #     item that's genuinely unchanged from check-in ends up empty here
+    #     rather than showing the boilerplate as if it were a new finding.
+    # An item is dropped entirely once both are empty and it has no sub-items
+    # with content — there is nothing left worth summarising.
     if is_check_out and check_in_sections:
         ci_lookup: dict = {}
         for ci_sec in check_in_sections:
             for ci_item in ci_sec.get('items', []):
                 key = (ci_sec.get('name', '').lower(), ci_item.get('name', '').lower())
                 ci_lookup[key] = ci_item
+
+        def _new_at_checkout(raw: str) -> str:
+            stripped = _AS_INVENTORY_RE.sub('', (raw or '')).strip().strip(',').strip()
+            return '' if _is_good_order(stripped) else stripped
+
+        def _major_at_checkin(raw: str) -> str:
+            raw = (raw or '').strip()
+            return '' if _is_good_order(raw) else raw
+
+        def _merge_subs(co_subs: list) -> list:
+            merged_subs = []
+            for sub in co_subs or []:
+                new_finding = _new_at_checkout(sub.get('checkOutCondition') or sub.get('condition') or '')
+                if new_finding or (sub.get('description') or '').strip():
+                    merged_subs.append({'description': sub.get('description', ''), 'condition': new_finding})
+            return merged_subs
 
         merged: list = []
         co_sec_names: set = set()
@@ -3061,31 +3087,54 @@ def generate_condition_summary():
                 key = (sec_name.lower(), item.get('name', '').lower())
                 covered.add(key)
                 ci = ci_lookup.get(key, {})
+                check_in_condition = _major_at_checkin(ci.get('condition', ''))
+                check_out_new = _new_at_checkout(item.get('checkOutCondition') or item.get('condition') or '')
+                merged_subs = _merge_subs(item.get('subs', []))
+                if not (check_in_condition or check_out_new or merged_subs):
+                    continue
                 merged_items.append({
-                    'name':        item.get('name', ''),
-                    'description': item.get('description') or ci.get('description', ''),
-                    'condition':   item.get('condition')   or ci.get('condition', ''),
-                    'subs':        item.get('subs', []),
+                    'name':               item.get('name', ''),
+                    'description':        item.get('description') or ci.get('description', ''),
+                    'check_in_condition': check_in_condition,
+                    'check_out_new':      check_out_new,
+                    'subs':               merged_subs,
                 })
-            # Add CI items for this room that have no CO entry
+            # Add CI items for this room that have no CO entry — only if the CI finding is major
             for ci_sec in check_in_sections:
                 if ci_sec.get('name', '').lower() == sec_name.lower():
                     for ci_item in ci_sec.get('items', []):
                         key = (sec_name.lower(), ci_item.get('name', '').lower())
-                        if key not in covered:
-                            covered.add(key)
-                            merged_items.append({
-                                'name':        ci_item.get('name', ''),
-                                'description': ci_item.get('description', ''),
-                                'condition':   ci_item.get('condition', ''),
-                                'subs':        [],
-                            })
+                        if key in covered:
+                            continue
+                        covered.add(key)
+                        check_in_condition = _major_at_checkin(ci_item.get('condition', ''))
+                        if not check_in_condition:
+                            continue
+                        merged_items.append({
+                            'name':               ci_item.get('name', ''),
+                            'description':        ci_item.get('description', ''),
+                            'check_in_condition': check_in_condition,
+                            'check_out_new':      '',
+                            'subs':               [],
+                        })
             if merged_items:
                 merged.append({'name': sec_name, 'items': merged_items})
-        # Rooms only in CI (not visited at CO)
+        # Rooms only in CI (not visited at CO) — same major-issues-only filter
         for ci_sec in check_in_sections:
             if ci_sec.get('name', '').lower() not in co_sec_names:
-                merged.append(ci_sec)
+                kept_items = []
+                for ci_item in ci_sec.get('items', []):
+                    check_in_condition = _major_at_checkin(ci_item.get('condition', ''))
+                    if check_in_condition:
+                        kept_items.append({
+                            'name':               ci_item.get('name', ''),
+                            'description':        ci_item.get('description', ''),
+                            'check_in_condition': check_in_condition,
+                            'check_out_new':      '',
+                            'subs':               [],
+                        })
+                if kept_items:
+                    merged.append({'name': ci_sec.get('name', ''), 'items': kept_items})
         sections = merged
 
     # ── For Check In: strip items that have no real issues ────────────────
@@ -3119,6 +3168,21 @@ def generate_condition_summary():
         property_description = 'Property details not provided.'
 
     # ── Format inspection findings as readable text ────────────────────────
+    def _format_subs(subs: list, co_label: bool) -> list:
+        out = []
+        for sub in subs:
+            sub_desc = (sub.get('description') or '').strip()
+            sub_cond = (sub.get('condition') or '').strip()
+            if not sub_desc and not sub_cond:
+                continue
+            sub_entry = '    ↳'
+            if sub_desc:
+                sub_entry += f' {sub_desc}'
+            if sub_cond:
+                sub_entry += f' | Check-out (new): {sub_cond}' if co_label else f' | {sub_cond}'
+            out.append(sub_entry)
+        return out
+
     lines = []
     for section in sections:
         sec_name  = section.get('name', 'Room')
@@ -3129,25 +3193,32 @@ def generate_condition_summary():
         for item in sec_items:
             item_name = item.get('name', 'Item')
             desc      = (item.get('description') or '').strip()
-            cond      = (item.get('condition') or '').strip()
-            if not desc and not cond:
-                continue
-            entry = f'  - {item_name}'
-            if desc:
-                entry += f': {desc}'
-            if cond:
-                entry += f' | {cond}'
-            sec_lines.append(entry)
-            for sub in item.get('subs', []):
-                sub_desc = (sub.get('description') or '').strip()
-                sub_cond = (sub.get('condition') or '').strip()
-                if sub_desc or sub_cond:
-                    sub_entry = '    ↳'
-                    if sub_desc:
-                        sub_entry += f' {sub_desc}'
-                    if sub_cond:
-                        sub_entry += f' | {sub_cond}'
-                    sec_lines.append(sub_entry)
+
+            if is_check_out:
+                ci_cond = (item.get('check_in_condition') or '').strip()
+                co_new  = (item.get('check_out_new') or '').strip()
+                if not desc and not ci_cond and not co_new:
+                    continue
+                entry = f'  - {item_name}'
+                if desc:
+                    entry += f': {desc}'
+                if ci_cond:
+                    entry += f' | Check-in: {ci_cond}'
+                if co_new:
+                    entry += f' | Check-out (new): {co_new}'
+                sec_lines.append(entry)
+                sec_lines.extend(_format_subs(item.get('subs', []), co_label=True))
+            else:
+                cond = (item.get('condition') or '').strip()
+                if not desc and not cond:
+                    continue
+                entry = f'  - {item_name}'
+                if desc:
+                    entry += f': {desc}'
+                if cond:
+                    entry += f' | {cond}'
+                sec_lines.append(entry)
+                sec_lines.extend(_format_subs(item.get('subs', []), co_label=False))
         if sec_lines:
             lines.append(f'\n=== {sec_name} ===')
             lines.extend(sec_lines)
@@ -3164,13 +3235,36 @@ def generate_condition_summary():
     if is_check_out:
         summary_type_label = 'Check Out Condition Summary'
         severity_rule = """\
-4. INCLUDE ALL CONDITIONS
-   This is a comprehensive overview — include every item that has recorded data,
-   whether the condition is good, fair, or defective.
-   Do NOT filter out minor wear or good condition items.
-   Do NOT write vague placeholders like "In good order" — describe the actual condition briefly.
-   Good condition examples: "Walls clean and unmarked", "Carpet in good condition throughout"
-   Defect examples: "Chip to plaster above window", "Carpet worn to threshold\""""
+4. TWO SOURCES PER ITEM — CHECK-IN CONTEXT vs CHECK-OUT NEW FINDING
+   Each item below may show a "Check-in:" value and/or a "Check-out (new):" value.
+   These mean DIFFERENT things — never blur them together:
+   - "Check-in:" = a significant issue that was ALREADY present at the start of the tenancy.
+     Trivial/good-order items have already been filtered out, so anything shown here is real.
+   - "Check-out (new):" = what the clerk recorded when checking the property back in, with the
+     standard "As Inventory+" boilerplate already stripped out. What remains is a genuinely NEW
+     observation made at check-out — it is NOT a restatement of the check-in condition.
+
+   Compose each item's line from whichever of the two is present:
+   - Only "Check-in:" present   → report the pre-existing issue, noting it was already there.
+     Example: "Chip to plaster above window (present at check-in)"
+   - Only "Check-out (new):" present → report it as a new finding.
+     Example: "Water staining to ceiling — new since check-in"
+   - BOTH present → report both, making clear which is which, do not merge them into one claim.
+     Example: "Crack to tile present at check-in; additional chip to sink surround noted at check-out"
+   - An item with neither value has already been excluded — this should not occur.
+
+   Do NOT invent a distinction that isn't in the data. Never describe something as "new" unless
+   it appears under "Check-out (new):". Never describe something as pre-existing unless it
+   appears under "Check-in:". Do NOT write vague placeholders like "In good order" — every item
+   shown to you already has a real finding on at least one side.
+
+4b. DISTIL — write a summary, not a transcript
+   Each finding should be ONE concise line per item — do not copy condition notes verbatim.
+   If either side lists several issues, write only the most significant one from that side.
+
+4c. CONSOLIDATE — do not repeat the same issue across many rooms
+   If the same minor "Check-out (new):" issue appears in most rooms, note it once under the
+   most relevant room only rather than listing it under every room."""
         overview_prefix = 'Check out: '
     else:
         summary_type_label = 'Check In Condition Summary'

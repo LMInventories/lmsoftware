@@ -177,7 +177,19 @@ def _open_pr(draft: proposal.ProposalDraft, cmp: dict) -> tuple:
     file_resp.raise_for_status()
     file_sha = file_resp.json()['sha']
 
-    new_content_b64 = base64.b64encode(cmp['candidate_source'].encode('utf-8')).decode('ascii')
+    # candidate_source came from a plain text-mode read (universal newlines —
+    # \r\n silently normalised to \n), but transcribe.py is tracked with CRLF
+    # line endings on disk. Pushing LF-only content against a CRLF-tracked
+    # file makes git (and GitHub's diff view) treat every line as changed,
+    # producing a ~7000-line diff for what should be a ~15-line change.
+    # Detect the real on-disk convention and re-apply it before pushing.
+    with open(eval_harness._TRANSCRIBE_PATH, 'rb') as f:
+        uses_crlf = b'\r\n' in f.read()
+    content_to_push = cmp['candidate_source']
+    if uses_crlf:
+        content_to_push = content_to_push.replace('\r\n', '\n').replace('\n', '\r\n')
+
+    new_content_b64 = base64.b64encode(content_to_push.encode('utf-8')).decode('ascii')
     commit_message = f'prompt-learning: {draft.target_symbol}'
     put_resp = requests.put(f'{GH_API}/contents/{GH_TARGET_FILE}', headers=headers, json={
         'message': commit_message, 'content': new_content_b64, 'sha': file_sha, 'branch': branch_name,

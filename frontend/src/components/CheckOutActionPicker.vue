@@ -30,12 +30,15 @@ const props = defineProps({
 })
 
 // ── Condition lines — split the checkOutCondition textarea by newline ─────
+// "As Inventory+" is boilerplate (means "matches check-in"), never a real
+// condition to attach a responsibility tag to — excluded here to match mobile.
 const conditionLines = computed(() => {
   if (!props.conditionText) return []
   return props.conditionText
     .split('\n')
     .map(l => l.trim())
     .filter(Boolean)
+    .filter(l => !/^as\s+inventory\+?$/i.test(l))
 })
 const emit = defineEmits(['update:actions'])
 

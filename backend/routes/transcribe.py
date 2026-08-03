@@ -492,6 +492,14 @@ def _multi_component_rule(field_names: str) -> str:
         '(e.g. "Light scuff to base of door, left side").'
     )
 
+_CHECK_OUT_CONDITION_RULE = (
+    'CHECK-OUT CONDITION PREFIX — CRITICAL: for every checkOutCondition field (section_type=room), '
+    'the value MUST begin with "As Inventory+\\n" followed by the condition text. '
+    'NEVER omit this prefix. '
+    'CORRECT: "As Inventory+\\nScuffed to base of door" '
+    'INCORRECT: "Scuffed to base of door"'
+)
+
 _APPLIANCE_FORMATTING_RULE = (
     'APPLIANCE FORMATTING — for any appliance (washing machine, dishwasher, fridge, oven, hob, dryer, microwave, etc.):\n'
     '- Each attribute MUST be on its own line — NEVER merge them into a single line\n'

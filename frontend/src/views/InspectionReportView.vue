@@ -1710,14 +1710,14 @@ function removeSubItem(roomId, itemId, sid) {
 }
 
 // ── Custom Items (Check Out — items added to the property during tenancy) ─────
-// Stored as reportData[roomId]._customItems = [{ _cid, name, checkOutCondition }]
+// Stored as reportData[roomId]._customItems = [{ _cid, name, description, checkOutCondition }]
 // Sub-items, photos, and actions reuse the standard helpers (cid as itemId).
 function getCustomItems(roomId) { return reportData.value[roomId]?._customItems ?? [] }
 function addCustomItem(roomId) {
   if (!reportData.value[roomId]) reportData.value[roomId] = {}
   if (!reportData.value[roomId]._customItems) reportData.value[roomId]._customItems = []
   const cid = `ci_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
-  reportData.value[roomId]._customItems.push({ _cid: cid, name: '', checkOutCondition: '' })
+  reportData.value[roomId]._customItems.push({ _cid: cid, name: '', description: '', checkOutCondition: '' })
   unsaved.value = true
 }
 function setCustomItemField(roomId, cid, field, value) {
@@ -3126,9 +3126,17 @@ async function moveToReview() {
                   </button>
                 </div>
 
-                <!-- Condition + actions row -->
+                <!-- Description + Condition + actions row -->
                 <div class="item-fields-row co-fields-row">
                   <div class="item-fields-main">
+                    <div class="room-field-desc">
+                      <label class="field-lbl">Description</label>
+                      <textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" rows="3"
+                        placeholder="Describe the item…"
+                        :value="ci.description || ''"
+                        @input="setCustomItemField(room.id, ci._cid, 'description', $event.target.value)">
+                      </textarea>
+                    </div>
                     <div class="room-field-cond">
                       <label class="field-lbl">Condition at Check Out</label>
                       <textarea v-auto-resize class="fld-textarea" :disabled="!canEdit" rows="3"

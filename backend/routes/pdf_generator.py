@@ -1519,8 +1519,9 @@ class _PDFBuilder:
                     tbl_data.append([Paragraph('Additional Items — added during tenancy', div_style),
                                      '', '', '', '', ''])
                     for ci_idx, ci in enumerate(custom_items):
-                        cid    = ci.get('_cid', '')
+                        cid     = ci.get('_cid', '')
                         ci_name = ci.get('name') or 'Additional Item'
+                        ci_desc = ci.get('description') or ''
                         ci_coc  = ci.get('checkOutCondition') or '—'
                         acts    = self._item_actions(room['id'], cid)
                         ref     = f'{room_num}.A{ci_idx + 1}'
@@ -1529,7 +1530,7 @@ class _PDFBuilder:
                         tbl_data.append([
                             Paragraph(ref, self.s_ref),
                             self._p(ci_name, self.s_bold),
-                            Paragraph('—', self.s_cell),
+                            self._p(ci_desc or '—'),
                             Paragraph('Added during tenancy', added_style),
                             self._p(ci_coc),
                             self._acts_cell(acts),

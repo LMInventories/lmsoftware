@@ -2,6 +2,7 @@
 import { ref, computed, watchEffect } from 'vue'
 import { useToast } from '../composables/useToast'
 import { usePdfImportJobs } from '../composables/usePdfImportJobs'
+import { usePdfHeaderReview } from '../composables/usePdfHeaderReview'
 import api from '../services/api'
 
 const props = defineProps({
@@ -27,6 +28,10 @@ const roomMapping = ref({})
 const keepLayout  = ref(false)
 const includePhotos = ref(true)
 const allCheckInTemplates = ref([])
+
+// Keep-Layout mode: lets the user confirm which PDF rooms are real headers vs.
+// continuation pages before saving — see usePdfHeaderReview.js
+const { isHeader, continuationHint, toggleHeader, mergedRooms } = usePdfHeaderReview(parsed)
 
 // Cloud-picker OAuth token
 let _gdriveToken = null
@@ -191,9 +196,16 @@ function _buildInitialRoomMapping() {
 }
 
 // ── Save ─────────────────────────────────────────────────────────────────────
+/**
+ * Build the rooms array to send: in Keep Layout mode, apply the user's header
+ * merge selections first (see usePdfHeaderReview.js); then strip photo fields
+ * if the user opted out.
+ */
 function _buildParsedPayload() {
-  if (includePhotos.value) return parsed.value
-  const rooms = (parsed.value.rooms || []).map(r => { const out = { ...r }; delete out._photos; delete out._photoRefs; return out })
+  const baseRooms = keepLayout.value ? mergedRooms.value : (parsed.value.rooms || [])
+  if (includePhotos.value) return { ...parsed.value, rooms: baseRooms }
+
+  const rooms = baseRooms.map(r => { const out = { ...r }; delete out._photos; delete out._photoRefs; return out })
   const out = { ...parsed.value, rooms }
   delete out._overviewPhotos; delete out._coverPhoto
   return out
@@ -384,10 +396,41 @@ async function save() {
             </div>
           </template>
 
-          <div v-else class="pi-layout-summary">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="9 12 11 14 15 10"/></svg>
-            {{ parsed.rooms?.length || 0 }} rooms will be imported exactly as extracted, with no AI redistribution.
-          </div>
+          <template v-else>
+            <div class="pi-layout-summary">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="9 12 11 14 15 10"/></svg>
+              {{ mergedRooms.length }} room{{ mergedRooms.length === 1 ? '' : 's' }} will be imported, with no AI redistribution.
+            </div>
+            <p class="pi-map-intro">
+              Confirm which of the rooms below are real room headers. Uncheck any that are actually a continuation of the room above (e.g. "Bedroom 1 (cont)") — its items will be folded into that room.
+            </p>
+            <div class="pi-room-list">
+              <div
+                v-for="(room, idx) in (parsed.rooms || [])"
+                :key="idx"
+                class="pi-room-row pi-header-row"
+                :class="{ 'pi-header-row-merged': !isHeader[idx] }"
+              >
+                <label class="pi-header-check" :class="{ 'pi-header-check-disabled': idx === 0 }">
+                  <input
+                    type="checkbox"
+                    :checked="isHeader[idx]"
+                    :disabled="idx === 0"
+                    @change="toggleHeader(idx)"
+                  />
+                </label>
+                <div class="pi-room-left" style="flex:1">
+                  <div class="pi-room-name">{{ room.name }}</div>
+                  <div class="pi-room-count">
+                    {{ room.items?.length || 0 }} item{{ room.items?.length === 1 ? '' : 's' }}
+                    <span v-if="continuationHint[idx]" class="pi-header-hint">
+                      · looks like a continuation of "{{ continuationHint[idx] }}"
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </template>
 
           <div class="pi-footer">
             <button type="button" @click="step = 1" class="pi-btn-secondary" :disabled="saving">← Re-upload</button>
@@ -535,6 +578,13 @@ async function save() {
   font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 20px;
   white-space: nowrap; cursor: help;
 }
+
+.pi-header-row        { cursor: default; }
+.pi-header-row-merged { background: #f1f5f9; border-style: dashed; }
+.pi-header-check      { flex-shrink: 0; display: flex; align-items: center; cursor: pointer; }
+.pi-header-check input { width: 16px; height: 16px; cursor: pointer; }
+.pi-header-check-disabled, .pi-header-check-disabled input { cursor: not-allowed; opacity: 0.5; }
+.pi-header-hint        { color: #b45309; font-style: italic; }
 
 .pi-layout-summary {
   display: flex; align-items: center; gap: 8px;

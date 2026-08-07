@@ -526,6 +526,11 @@ _EDIT_TRIGGERS = [
     ('not applicable',         'delete',    None),
     # Sub-item command — treat transcript content as a new sub-item
     ('add sub item',           'add_sub',   None),
+    # Additional Item command (Check Out only) — creates a brand-new custom
+    # item box in the current room, then fills its description/condition
+    # exactly like a normal item. Must come before the generic 'add' catch-all.
+    ('add additional item',    'create_additional_item', None),
+    ('additional item',        'create_additional_item', None),
     # Specific field amend/add
     ('amend description',      'overwrite', 'description'),
     ('amend the description',  'overwrite', 'description'),
@@ -546,7 +551,7 @@ def _detect_edit_mode(transcript: str):
     """
     Check if transcript starts with an edit-mode trigger phrase.
     Returns (mode, field, cleaned_transcript).
-      mode:    'overwrite' | 'append' | 'delete' | 'add_sub' | 'normal'
+      mode:    'overwrite' | 'append' | 'delete' | 'add_sub' | 'create_additional_item' | 'normal'
       field:   'description' | 'condition' | None
       cleaned: transcript with trigger phrase stripped
     """
@@ -606,6 +611,7 @@ def _whisper_transcribe(audio_bytes: bytes, mime_type: str) -> tuple[str, float]
                     'fair wear and tear, in good order, in fair order, in poor order. '
                     'Commands to preserve exactly: '
                     '"Delete item", "Not Applicable", "Not seen", "Add sub item", '
+                    '"Additional item", "Add additional item", '
                     '"Amend description", "Amend condition", '
                     '"Add to description", "Add to condition", "Amend", "Add". '
                     'Transcribe all words accurately, including technical property terms.'
@@ -988,16 +994,28 @@ def transcribe_item():
         # Detect edit-mode trigger phrases before passing to Claude
         edit_mode, edit_field, transcript = _detect_edit_mode(raw_transcript)
 
+        # "Additional Item" (Check Out only) — clerk wants a brand-new custom
+        # item box, not a fill of whichever item's mic they happened to tap.
+        # Always wants a real description + condition split, same as the
+        # forceNormalMode custom-item mic — so it must bypass the check-out
+        # verbatim/condition-only path below, same reasoning as forceNormalMode.
+        creating_additional_item = (edit_mode == 'create_additional_item')
+        if creating_additional_item:
+            edit_mode = 'normal'
+            edit_field = None
+            is_check_out = False
+            is_damage_report = False
+
         # Check Out inspections do not support delete or add-sub commands.
         # "Not seen" at check-out means the item was there at check-in but is now missing —
         # it is meaningful condition content, not a deletion trigger.
         # Items must never be deleted from a check-out report.
-        if is_check_out and edit_mode in ('delete', 'add_sub'):
+        elif is_check_out and edit_mode in ('delete', 'add_sub'):
             edit_mode = 'normal'
             edit_field = None
             transcript = raw_transcript
 
-        print(f'[transcribe/item] edit_mode={edit_mode!r} field={edit_field!r} transcript={transcript[:60]!r}')
+        print(f'[transcribe/item] edit_mode={edit_mode!r} field={edit_field!r} transcript={transcript[:60]!r} creating_additional_item={creating_additional_item}')
 
         # ── Delete: "Not Applicable" — no Claude call needed ──────────────
         if edit_mode == 'delete':
@@ -1042,6 +1060,7 @@ def transcribe_item():
             'sectionType':      section_type,
             'editMode':         edit_mode,    # 'normal' | 'overwrite' | 'append' | 'add_sub'
             'editField':        edit_field,   # 'description' | 'condition' | None
+            'createAdditionalItem': creating_additional_item,  # True → client should create a new custom item, not fill the tapped row
         })
 
     except Exception as e:

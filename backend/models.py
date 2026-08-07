@@ -194,6 +194,7 @@ class Inspection(db.Model):
     depositary_pushed_at    = db.Column(db.DateTime)
     calendar_event_id       = db.Column(db.String(255))      # Google Calendar event ID after push
     drive_file_id           = db.Column(db.String(128))      # Google Drive file ID after report upload
+    source_pdf_drive_file_id = db.Column(db.String(128))     # Google Drive file ID of the original PDF this inspection was imported from
     conduct_date            = db.Column(db.DateTime, index=True)
     conduct_time_preference = db.Column(db.String(50))
     scheduled_date          = db.Column(db.DateTime)

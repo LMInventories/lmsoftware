@@ -323,6 +323,51 @@ def get_property_history(property_id):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# GET /api/inspections/<id>/previous-report-pdfs
+# Returns the most recent OTHER inspection at the same property (by
+# conduct_date, before this inspection's own date) plus any Drive-hosted
+# PDFs for it — the original imported PDF and/or the generated report PDF.
+# Used by the mobile app's "Previous Inspection Date" row + PDF popup.
+# ─────────────────────────────────────────────────────────────────────────────
+@inspections_bp.route('/<int:inspection_id>/previous-report-pdfs', methods=['GET'])
+@jwt_required()
+def get_previous_report_pdfs(inspection_id):
+    inspection = Inspection.query.get_or_404(inspection_id)
+
+    q = Inspection.query.filter(
+        Inspection.property_id == inspection.property_id,
+        Inspection.id != inspection.id,
+    )
+    if inspection.conduct_date:
+        q = q.filter(Inspection.conduct_date < inspection.conduct_date)
+    prev = q.order_by(Inspection.conduct_date.desc()).first()
+
+    if not prev:
+        return jsonify({'previous_inspection': None, 'pdfs': []})
+
+    pdfs = []
+    if prev.source_pdf_drive_file_id:
+        pdfs.append({
+            'label': 'Original PDF',
+            'url':   f'https://drive.google.com/file/d/{prev.source_pdf_drive_file_id}/view',
+        })
+    if prev.drive_file_id:
+        pdfs.append({
+            'label': 'Imported PDF',
+            'url':   f'https://drive.google.com/file/d/{prev.drive_file_id}/view',
+        })
+
+    return jsonify({
+        'previous_inspection': {
+            'id':               prev.id,
+            'inspection_type':  prev.inspection_type,
+            'conduct_date':     prev.conduct_date.isoformat() if prev.conduct_date else None,
+        },
+        'pdfs': pdfs,
+    })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # POST /api/inspections  — create inspection
 # Accepts optional source_inspection_id; if provided, seeds report_data.
 # Works even when the source has no report_data yet — in that case the

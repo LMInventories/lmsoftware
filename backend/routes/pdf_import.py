@@ -1440,6 +1440,29 @@ def pdf_import():
             return jsonify({'error': 'No PDF data provided'}), 400
         raw_bytes = base64.b64decode(pdf_b64)
 
+    # ── Store the original PDF on Google Drive, alongside the eventual report ──
+    # Non-fatal: extraction must proceed even if Drive isn't connected or the
+    # upload fails. The inspection row already exists at this point (created
+    # before the file is sent here), so we can attach the file id immediately.
+    if inspection_id:
+        try:
+            from models import db, Inspection
+            from services.google_drive import upload_source_pdf, is_drive_connected
+            if is_drive_connected():
+                insp = Inspection.query.get(int(inspection_id))
+                if insp:
+                    drive_ok, drive_result = upload_source_pdf(insp, raw_bytes)
+                    if drive_ok:
+                        insp.source_pdf_drive_file_id = drive_result['file_id']
+                        db.session.commit()
+                        print(f'[pdf-import] original PDF uploaded to Drive — {drive_result["url"]}')
+                    else:
+                        print(f'[pdf-import] Drive upload of original PDF failed: {drive_result}')
+            else:
+                print('[pdf-import] Drive not connected — skipping original PDF upload')
+        except Exception as drive_err:
+            print(f'[pdf-import] Drive upload error (non-fatal): {drive_err}')
+
     # Text extraction (page-by-page so the thread can use it for photo mapping)
     page_texts     = _extract_pdf_text_by_page(raw_bytes)
     extracted_text = '\n'.join(page_texts[i] for i in sorted(page_texts))

@@ -1,19 +1,23 @@
 """
 services/google_drive.py
 ─────────────────────────
-Upload completed inspection PDF reports to Google Drive.
+Upload completed inspection PDF reports (and the original PDFs some
+inspections were imported from) to Google Drive.
 
 Folder structure created automatically:
   InspectPro Reports/
     {Client Name}/
       {Property Address}/
-        {inspection_type}_{date}_{inspection_id}.pdf
+        {inspection_type}_{date}_{inspection_id}.pdf            (generated report)
+        {inspection_type}_{date}_{inspection_id}_original.pdf   (source PDF, if imported)
 
-Called automatically from routes/inspections.py after a report is marked
-complete and the PDF is generated — only if Google Drive is connected.
+`upload_report` is called automatically from routes/inspections.py after a
+report is marked complete and the PDF is generated. `upload_source_pdf` is
+called from routes/pdf_import.py when a report is created from an imported
+PDF. Both are no-ops (return False) unless Google Drive is connected.
 
 Usage:
-    from services.google_drive import upload_report, is_drive_connected
+    from services.google_drive import upload_report, upload_source_pdf, is_drive_connected
     if is_drive_connected():
         ok, result = upload_report(inspection, pdf_bytes)
 """
@@ -136,11 +140,13 @@ def _multipart_upload(filename: str, pdf_bytes: bytes,
     )
 
 
-# ── Public upload function ────────────────────────────────────────────────────
+# ── Public upload functions ───────────────────────────────────────────────────
 
-def upload_report(inspection, pdf_bytes: bytes) -> tuple[bool, dict | str]:
+def _upload_pdf_for_inspection(inspection, pdf_bytes: bytes, suffix: str = '') -> tuple[bool, dict | str]:
     """
-    Upload a completed inspection PDF to the connected Google Drive account.
+    Shared upload logic for both the generated report PDF and the original
+    source PDF an inspection was imported from. `suffix` is inserted before
+    the .pdf extension so the two never collide in the same folder.
 
     Folder structure:
       InspectPro Reports / {Client Name} / {Property Address} / {filename}.pdf
@@ -170,7 +176,7 @@ def upload_report(inspection, pdf_bytes: bytes) -> tuple[bool, dict | str]:
             if inspection.conduct_date else 'undated'
         )
         insp_type = (inspection.inspection_type or 'inspection').replace(' ', '_')
-        filename  = f'{insp_type}_{date_str}_id{inspection.id}.pdf'
+        filename  = f'{insp_type}_{date_str}_id{inspection.id}{suffix}.pdf'
 
         # ── Ensure folder hierarchy exists ────────────────────────────────────
         root_id     = _find_or_create_folder('InspectPro Reports', None, access_token)
@@ -198,6 +204,19 @@ def upload_report(inspection, pdf_bytes: bytes) -> tuple[bool, dict | str]:
     except Exception as e:
         print(f'[google_drive] upload error: {e}')
         return False, str(e)
+
+
+def upload_report(inspection, pdf_bytes: bytes) -> tuple[bool, dict | str]:
+    """Upload a completed inspection's generated PDF report to Google Drive."""
+    return _upload_pdf_for_inspection(inspection, pdf_bytes, suffix='')
+
+
+def upload_source_pdf(inspection, pdf_bytes: bytes) -> tuple[bool, dict | str]:
+    """
+    Upload the original PDF an inspection was imported from (see
+    routes/pdf_import.py) to Google Drive, alongside the generated report.
+    """
+    return _upload_pdf_for_inspection(inspection, pdf_bytes, suffix='_original')
 
 
 # ── Public delete function ────────────────────────────────────────────────────

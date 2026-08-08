@@ -20,4 +20,4 @@ COPY . .
 
 EXPOSE 5000
 
-CMD ["gunicorn", "app:app", "--config", "gunicorn.conf.py"]
+CMD ["bash", "start.sh"]

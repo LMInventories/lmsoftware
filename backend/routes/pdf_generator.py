@@ -1510,12 +1510,16 @@ class _PDFBuilder:
                             ])
 
             # ── Additional Items (Check Out: items added during tenancy) ──────
+            ai_div_row = None
             if co:
                 custom_items = (self.rd.get(str(room['id'])) or {}).get('_customItems', []) or []
                 if custom_items:
-                    # Divider row spanning all columns
-                    div_style = ParagraphStyle('ai_div', fontName='Helvetica-Oblique', fontSize=7,
-                                               leading=9, textColor=colors.HexColor('#1e40af'))
+                    # Divider/sub-header row — spans all columns (set via SPAN below,
+                    # once the table exists) so it reads as one line, not a word
+                    # wrapped vertically down the narrow first column.
+                    ai_div_row = len(tbl_data)
+                    div_style = ParagraphStyle('ai_div', fontName='Helvetica-BoldOblique', fontSize=8,
+                                               leading=11, textColor=colors.HexColor('#1e40af'))
                     tbl_data.append([Paragraph('Additional Items — added during tenancy', div_style),
                                      '', '', '', '', ''])
                     for ci_idx, ci in enumerate(custom_items):
@@ -1549,7 +1553,14 @@ class _PDFBuilder:
                             ])
 
             room_tbl = Table(tbl_data, colWidths=widths, repeatRows=1)
-            room_tbl.setStyle(self._table_style())
+            ts = self._table_style()
+            if ai_div_row is not None:
+                ts.add('SPAN',          (0, ai_div_row), (-1, ai_div_row))
+                ts.add('BACKGROUND',    (0, ai_div_row), (-1, ai_div_row), colors.HexColor('#eff6ff'))
+                ts.add('LINEABOVE',     (0, ai_div_row), (-1, ai_div_row), 0.75, colors.HexColor('#93c5fd'))
+                ts.add('TOPPADDING',    (0, ai_div_row), (-1, ai_div_row), 6)
+                ts.add('BOTTOMPADDING', (0, ai_div_row), (-1, ai_div_row), 4)
+            room_tbl.setStyle(ts)
 
             parts = [_HeaderBar(room.get('name',''), self.brand, self.hdr_c, anchor=f'anchor_room_{room["id"]}'), Spacer(1,2*mm)]
             if ov_tbl        and self.ov_pos   == 'above': parts += [ov_tbl, Spacer(1,2*mm)]

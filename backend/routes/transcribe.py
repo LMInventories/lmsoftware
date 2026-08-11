@@ -611,7 +611,7 @@ def _whisper_transcribe(audio_bytes: bytes, mime_type: str) -> tuple[str, float]
                     'fair wear and tear, in good order, in fair order, in poor order. '
                     'Commands to preserve exactly: '
                     '"Delete item", "Not Applicable", "Not seen", "Add sub item", '
-                    '"Additional item", "Add additional item", '
+                    '"Additional item", "Add additional item", "Return to", '
                     '"Amend description", "Amend condition", '
                     '"Add to description", "Add to condition", "Amend", "Add". '
                     'Transcribe all words accurately, including technical property terms.'
@@ -911,6 +911,82 @@ Return ONLY valid JSON in this exact shape (no markdown):
     return json.loads(_sanitise_json(raw))
 
 
+# ── "Return to [item]" — per-item mic redirect (AI Instant) ────────────────
+# AI Room mode already supports "Return to [item name], amend/add/add sub item, ..."
+# because it parses one continuous whole-room transcript, and Claude resolves the
+# item name against the full room item list in a single call. AI Instant's per-item
+# mic is bound to one specific row up front (sectionId/rowId), so the same phrase
+# needs its own resolution step: given the room's item list, work out which item the
+# clerk means and parse the amendment the same way _claude_fill_item does.
+_RETURN_TO_RE = _re.compile(r'^\s*return to\b', _re.I)
+
+
+def _claude_resolve_return_to(transcript: str, all_items: list, room_name: str) -> dict:
+    """
+    Resolve a "Return to [item name], amend/add/add sub item, [content]" command spoken
+    on a per-item mic that isn't necessarily the target item's own mic.
+
+    Returns {"itemId": "...", "description": "...", "condition": "...",
+             "_descAction": "overwrite"|"append", "_condAction": "overwrite"|"append",
+             "_subs": [{"description": "...", "condition": "..."}]}
+    "itemId" is "" if no confident match was found — caller should ignore the redirect.
+    """
+    client = anthropic.Anthropic(api_key=os.environ.get('ANTHROPIC_API_KEY'))
+
+    items_list = '\n'.join(f'  {{"id": "{it.get("id", "")}", "name": "{it.get("name", "")}"}}' for it in all_items)
+
+    prompt = f"""You are processing a UK property inspection dictation, room: {room_name}.
+
+The clerk said: "{transcript}"
+
+This is a "Return to [item name], ..." command — the clerk wants to go back and amend or add
+to an item other than the one whose microphone they are currently using. First identify which
+item they mean by fuzzy-matching the spoken name against this list of items in the room
+(pick the single closest match; if genuinely no item is a plausible match, use itemId ""):
+[
+{items_list}
+]
+
+Then parse everything AFTER the item name using these command formats:
+  "Return to [item name], amend description, [new content]"  → overwrite description only
+  "Return to [item name], amend condition, [new content]"    → overwrite condition only
+  "Return to [item name], add to description, [new content]" → append to description only
+  "Return to [item name], add to condition, [new content]"   → append to condition only
+  "Return to [item name], amend, [new content]"               → overwrite both fields
+  "Return to [item name], add, [new content]"                 → append to both fields
+  "Return to [item name], add sub item, [description and condition]" (also "add sub-item")
+      → do NOT include _descAction/_condAction — output only "_subs" with one entry, splitting
+        description from condition using the same rules as a normal item (defect/state words
+        such as "loose", "broken", "missing", "stiff", "tight" etc. are always condition).
+
+If no field/command word is given after the item name (just "amend"/"add" with content), that
+still selects overwrite-both or append-both respectively, per the formats above.
+
+{_CONDITION_WORDS}
+{_DESCRIPTION_VOCABULARY}
+
+Return ONLY valid JSON, no markdown. Use the exact shape below, omitting keys that don't apply
+(e.g. a plain amend has no "_subs"; an "add sub item" command has no _descAction/_condAction):
+{{"itemId": "<id from the list above, or \\"\\" if no match>",
+  "description": "...", "condition": "...",
+  "_descAction": "overwrite", "_condAction": "append",
+  "_subs": [{{"description": "...", "condition": "..."}}]}}"""
+
+    message = client.messages.create(
+        model='claude-haiku-4-5',
+        max_tokens=500,
+        messages=[{'role': 'user', 'content': prompt}]
+    )
+
+    raw = message.content[0].text.strip()
+    raw = raw.replace('```json', '').replace('```', '').strip()
+    try:
+        return json.loads(_sanitise_json(raw)), message
+    except json.JSONDecodeError:
+        print(f'[_claude_resolve_return_to] JSON parse error: {raw[:200]}')
+        return {'itemId': ''}, message
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────
 
 @transcribe_bp.route('/classify-photo', methods=['OPTIONS'])
@@ -966,6 +1042,7 @@ def transcribe_item():
     section_type      = data.get('sectionType', 'room')  # room|condition_summary|cleaning_summary|keys|meter_readings|fire_door_safety|health_safety
     is_check_out      = bool(data.get('isCheckOut', False))
     is_damage_report  = bool(data.get('isDamageReport', False))
+    all_items         = data.get('allItems') or []  # [{id, name}, ...] — room's full item list, for "Return to [item]" resolution
 
     if not audio_b64:
         return jsonify({'error': 'No audio data'}), 400
@@ -990,6 +1067,42 @@ def transcribe_item():
 
         if not raw_transcript:
             return jsonify({'error': 'No speech detected in recording'}), 422
+
+        # ── "Return to [item]" — redirect to a different item, AI Instant ──────
+        # Matches AI Room mode's "Return to [item], amend/add/add sub item, ..."
+        # commands. Requires the room's item list so the target can be resolved
+        # by name; older clients that don't send it fall through to normal fill
+        # (the whole "Return to ..." phrase would just be treated as literal
+        # content for the tapped item, same as before this existed).
+        if _RETURN_TO_RE.match(raw_transcript) and all_items:
+            resolved, resolved_msg = _claude_resolve_return_to(raw_transcript, all_items, room_name)
+            try:
+                usage = TranscriptionUsage(
+                    call_type     = 'item',
+                    inspection_id = int(data.get('inspectionId')) if data.get('inspectionId') else None,
+                    user_id       = int(get_jwt_identity()),
+                    audio_seconds = audio_secs,
+                    input_tokens  = resolved_msg.usage.input_tokens  if resolved_msg and resolved_msg.usage else 0,
+                    output_tokens = resolved_msg.usage.output_tokens if resolved_msg and resolved_msg.usage else 0,
+                    section_type  = section_type,
+                )
+                db.session.add(usage)
+                db.session.commit()
+            except Exception:
+                pass
+            return jsonify({
+                'transcript':      raw_transcript,
+                'redirectItemId':  resolved.get('itemId') or '',
+                'description':     resolved.get('description', ''),
+                'condition':       resolved.get('condition', ''),
+                '_subs':           resolved.get('_subs', []),
+                '_descAction':     resolved.get('_descAction'),
+                '_condAction':     resolved.get('_condAction'),
+                'sectionId':       section_id,
+                'rowId':           row_id,
+                'sectionType':     section_type,
+                'editMode':        'return_to',
+            })
 
         # Detect edit-mode trigger phrases before passing to Claude
         edit_mode, edit_field, transcript = _detect_edit_mode(raw_transcript)
@@ -3395,8 +3508,16 @@ CATEGORY GUIDE — match by INSPECTION ITEM NAME (the label before the colon in 
   the ITEM NAME. Use the examples below as a guide for common item names:
 
   • Overview / Property Description  → no inspection items; use property details only
-  • Decorative Order                 → items named: Decorative Order, General Condition, Paintwork
-  • Doors / Frames / Fittings        → items named: Door, Door & Frame, Internal Door, Front Door, Skirting (if listed under doors)
+  • Decorative Order                 → items named: Decorative Order, General Condition, Paintwork —
+                                        EXCLUDING anything about a door, door frame, or door fitting
+                                        (handle, hinge, lock, closer). Those always belong to Doors /
+                                        Frames / Fittings below, never here — see the exception under
+                                        ITEM LOCK.
+  • Doors / Frames / Fittings        → items named: Door, Door & Frame, Internal Door, Front Door,
+                                        Door Fitting, Handle, Hinge, Skirting (if listed under doors).
+                                        Also claims any moderate-or-worse door/frame/fitting finding
+                                        even when it appears inside a generically-named item — see the
+                                        exception under ITEM LOCK.
   • Ceilings                         → items named: Ceiling, Coving
   • Lighting / Light Fittings        → items named: Lighting, Light Fitting, Light, Pendant, Spotlights
   • Walls                            → items named: Walls, Wall, Wall Surfaces
@@ -3416,6 +3537,15 @@ CATEGORY GUIDE — match by INSPECTION ITEM NAME (the label before the colon in 
   socket inside not working" → the whole entry goes to Contents/Furniture.
   Do NOT extract "flooring" to Woodwork/Flooring or "socket" to Electrics/Heating.
   The item name, not the content text, determines the section.
+
+  ONE NARROW EXCEPTION — DOORS:
+  If a generically-named item (e.g. "General Condition", "Decorative Order", "Paintwork") contains
+  a moderate-or-worse finding specifically about a door, door frame, or door fitting (handle, hinge,
+  lock, closer) — e.g. "door frame chipped", "handle loose", "door drags on frame" — that finding
+  goes to Doors / Frames / Fittings instead, never to Decorative Order. Move it, do not duplicate
+  it: any other, non-door findings from that same item stay in their original section as normal.
+  Minor/cosmetic door mentions (light marks, scuffs) are not "moderate-or-worse" — leave those
+  alone under the item's normal section rather than moving them.
 
 ════════════════════════════════════════════════════
 PHASE 2 — INSPECTION FINDINGS

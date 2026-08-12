@@ -17,6 +17,7 @@ python3 migrate_invoice_paid.py              || echo "migrate_invoice_paid: skip
 python3 migrate_drive_file_id.py              || echo "migrate_drive_file_id: skipped or already done"
 python3 migrate_source_pdf_drive_file_id.py  || echo "migrate_source_pdf_drive_file_id: skipped or already done"
 python3 migrate_learning_tables.py           || echo "migrate_learning_tables: skipped or already done"
+python3 migrate_floor_plan_scans.py          || echo "migrate_floor_plan_scans: skipped or already done"
 
 echo "==> Starting Gunicorn..."
 exec gunicorn app:app --config gunicorn.conf.py

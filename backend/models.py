@@ -424,6 +424,54 @@ class TranscriptionUsage(db.Model):
         }
 
 
+class FloorPlanScan(db.Model):
+    """
+    One row per scan session uploaded from the mobile app's floor-plan
+    scanner (see docs/floor-plan/ in inspectpro-mobile — Milestone 1/Phase 5).
+    scan_uuid matches the id FloorPlanScanRecorder.kt generates on-device and
+    names its local package directory after; s3_key is only set once the
+    zipped package has actually been uploaded (status transitions UPLOADING
+    → UPLOADED at that point). No FloorPlan aggregate table yet — that's
+    deferred until Milestone 7+ actually needs to represent an approved,
+    rendered plan; right now there's nothing to aggregate.
+
+    status values (free text, not a DB enum, so later states can be added
+    without a migration): UPLOADING | UPLOADED | FAILED. The fuller
+    QUEUED → RECONSTRUCTING → ... → READY_FOR_REVIEW pipeline from the plan
+    doesn't exist yet — there is no backend processing step to transition
+    through those states.
+    """
+    __tablename__ = 'floor_plan_scans'
+
+    id             = db.Column(db.Integer, primary_key=True)
+    inspection_id  = db.Column(db.Integer, db.ForeignKey('inspections.id', ondelete='CASCADE'), nullable=False, index=True)
+    scan_uuid      = db.Column(db.String(64), nullable=False, index=True)
+    status         = db.Column(db.String(30), default='UPLOADING', nullable=False)
+    s3_key         = db.Column(db.String(512))
+    frame_count    = db.Column(db.Integer)
+    error_message  = db.Column(db.Text)
+    created_at     = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at     = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc),
+                                onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+
+    inspection = db.relationship(
+        'Inspection',
+        backref=db.backref('floor_plan_scans', cascade='all, delete-orphan', order_by='FloorPlanScan.created_at.desc()')
+    )
+
+    def to_dict(self):
+        return {
+            'id':            self.id,
+            'inspection_id': self.inspection_id,
+            'scan_uuid':     self.scan_uuid,
+            'status':        self.status,
+            'frame_count':   self.frame_count,
+            'error_message': self.error_message,
+            'created_at':    self.created_at.isoformat() if self.created_at else None,
+            'updated_at':    self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
 class TranscriptionFillDiff(db.Model):
     """
     One row per (log entry x field) comparison between what an AI fill call

@@ -150,6 +150,7 @@ def create_app():
     from routes.gallery              import gallery_bp
     from routes.photos               import photos_bp
     from routes.signatures           import signatures_bp
+    from routes.floorplans           import floorplans_bp
 
     app.register_blueprint(auth_bp,            url_prefix='/api/auth')
     app.register_blueprint(auth_reset_bp,      url_prefix='/api/auth')
@@ -171,6 +172,7 @@ def create_app():
     app.register_blueprint(gallery_bp,         url_prefix='/api')
     app.register_blueprint(photos_bp,          url_prefix='/api/photos')
     app.register_blueprint(signatures_bp,      url_prefix='/api')
+    app.register_blueprint(floorplans_bp,      url_prefix='/api/floorplans')
 
     # Optional blueprints — register only if the file exists
     _optional = [

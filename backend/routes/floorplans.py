@@ -27,7 +27,9 @@ RECONSTRUCTING → ... → READY_FOR_REVIEW pipeline is unbuilt (Milestone 2+).
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required
 from models import db, Inspection, FloorPlanScan
-from utils.s3 import is_configured, new_key, presign_put
+from permissions import require_admin_or_manager
+from utils.s3 import is_configured, new_key, presign_put, download_bytes
+from services.floorplan_processing import parse_scan_package, summarize
 
 floorplans_bp = Blueprint('floorplans', __name__)
 
@@ -123,3 +125,35 @@ def list_scans(inspection_id):
         .all()
     )
     return jsonify([s.to_dict() for s in scans])
+
+
+@floorplans_bp.route('/scans/<int:scan_id>/inspect', methods=['GET'])
+@jwt_required()
+@require_admin_or_manager
+def inspect_scan(scan_id):
+    """
+    Diagnostic endpoint (Milestone 2 groundwork): downloads an UPLOADED scan's
+    zip package server-side, parses it, and returns aggregate stats (frame
+    count, pose bounding box, depth-value ranges, warnings). No reconstruction
+    happens here — this exists to sanity-check that a real device-captured
+    scan matches the format FloorPlanScanRecorder.kt is expected to produce,
+    before any geometry-reconstruction algorithm is built against it.
+
+    Never returns s3_key — see module docstring's privacy note.
+    """
+    scan = FloorPlanScan.query.get_or_404(scan_id)
+
+    if scan.status != 'UPLOADED' or not scan.s3_key:
+        return jsonify({'error': 'Scan has not been successfully uploaded yet'}), 409
+
+    try:
+        zip_bytes = download_bytes(scan.s3_key)
+    except Exception as e:
+        return jsonify({'error': f'Failed to download scan package: {e}'}), 502
+
+    try:
+        parsed = parse_scan_package(zip_bytes)
+    except ValueError as e:
+        return jsonify({'error': f'Failed to parse scan package: {e}'}), 422
+
+    return jsonify(summarize(parsed))

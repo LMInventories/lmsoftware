@@ -137,6 +137,18 @@ def upload_base64(data_uri: str, key: str) -> str:
     return upload_bytes(data, key, content_type)
 
 
+def download_bytes(key: str) -> bytes:
+    """
+    Download an object's raw bytes server-side (not a presigned client URL —
+    for backend processing, e.g. parsing an uploaded floor-plan scan package).
+    """
+    if not is_configured():
+        raise RuntimeError('S3 is not configured (missing env vars)')
+    client = _make_client()
+    resp = client.get_object(Bucket=get_bucket(), Key=key)
+    return resp['Body'].read()
+
+
 # ── Pre-signed URLs (for direct mobile → S3 upload) ──────────────────────────
 
 def presign_put(key: str, content_type: str = 'image/jpeg', expires: int = 900) -> str:

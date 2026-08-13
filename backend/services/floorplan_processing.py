@@ -33,12 +33,14 @@ class DepthFrameStats:
     width: int
     height: int
     row_stride: int
-    raw_min: int
-    raw_max: int
-    raw_mean: float
-    depth_mm_min: int
-    depth_mm_max: int
-    depth_mm_mean: float
+    raw_min: Optional[int]
+    raw_max: Optional[int]
+    raw_mean: Optional[float]
+    depth_mm_min: Optional[int]
+    depth_mm_max: Optional[int]
+    depth_mm_mean: Optional[float]
+    valid_pixel_count: int
+    total_pixel_count: int
 
 
 @dataclass
@@ -62,6 +64,13 @@ def parse_depth_bytes(raw: bytes, width: int, height: int, row_stride: int) -> D
     """
     Unpack a DEPTH16 buffer (little-endian uint16 per pixel, row_stride bytes
     per row, may include padding beyond width*2 bytes).
+
+    Per ARCore's documented DEPTH16 format, a masked depth value of 0 means
+    "no confident depth measurement" (sentinel), not "0mm away" — confirmed
+    against real captured data, where filtering these out was necessary to
+    stop physically-impossible near-zero values (2mm, 10mm) from polluting
+    min/mean stats. Those pixels are excluded from every stat below; only
+    valid_pixel_count/total_pixel_count reflect the raw pixel total.
     """
     raw_min = None
     raw_max = None
@@ -69,7 +78,8 @@ def parse_depth_bytes(raw: bytes, width: int, height: int, row_stride: int) -> D
     depth_min = None
     depth_max = None
     depth_sum = 0
-    count = 0
+    valid_count = 0
+    total_count = 0
 
     for y in range(height):
         row_offset = y * row_stride
@@ -77,8 +87,12 @@ def parse_depth_bytes(raw: bytes, width: int, height: int, row_stride: int) -> D
             offset = row_offset + x * 2
             if offset + 2 > len(raw):
                 continue
+            total_count += 1
             (value,) = struct.unpack_from('<H', raw, offset)
             depth_mm = value & 0x1FFF
+
+            if depth_mm == 0:
+                continue  # sentinel: no confident depth measurement
 
             if raw_min is None or value < raw_min:
                 raw_min = value
@@ -92,21 +106,23 @@ def parse_depth_bytes(raw: bytes, width: int, height: int, row_stride: int) -> D
                 depth_max = depth_mm
             depth_sum += depth_mm
 
-            count += 1
+            valid_count += 1
 
-    if count == 0:
+    if total_count == 0:
         raise ValueError('No depth pixels decoded (empty or truncated buffer)')
 
     return DepthFrameStats(
         width=width,
         height=height,
         row_stride=row_stride,
+        valid_pixel_count=valid_count,
+        total_pixel_count=total_count,
         raw_min=raw_min,
         raw_max=raw_max,
-        raw_mean=raw_sum / count,
+        raw_mean=(raw_sum / valid_count) if valid_count else None,
         depth_mm_min=depth_min,
         depth_mm_max=depth_max,
-        depth_mm_mean=depth_sum / count,
+        depth_mm_mean=(depth_sum / valid_count) if valid_count else None,
     )
 
 
@@ -183,6 +199,7 @@ def summarize(parsed: ParsedScan) -> dict:
     tx_vals, ty_vals, tz_vals = [], [], []
     depth_means, depth_mins, depth_maxs = [], [], []
     frames_with_depth = 0
+    frames_with_valid_depth = 0
 
     for f in parsed.frames:
         pose = f.pose or {}
@@ -196,9 +213,15 @@ def summarize(parsed: ParsedScan) -> dict:
             tz_vals.append(tz)
         if f.depth is not None:
             frames_with_depth += 1
-            depth_means.append(f.depth.depth_mm_mean)
-            depth_mins.append(f.depth.depth_mm_min)
-            depth_maxs.append(f.depth.depth_mm_max)
+            # depth_mm_mean is None when every pixel in the frame was the
+            # ARCore "no confident depth" sentinel (0) — e.g. sensor warm-up
+            # on the first frame or two. Excluded here so those don't drag
+            # the aggregate toward 0mm.
+            if f.depth.depth_mm_mean is not None:
+                frames_with_valid_depth += 1
+                depth_means.append(f.depth.depth_mm_mean)
+                depth_mins.append(f.depth.depth_mm_min)
+                depth_maxs.append(f.depth.depth_mm_max)
 
     pose_bounds = None
     if tx_vals:
@@ -220,6 +243,7 @@ def summarize(parsed: ParsedScan) -> dict:
         'scanId': parsed.scan_id,
         'frameCount': parsed.frame_count,
         'framesWithDepth': frames_with_depth,
+        'framesWithValidDepth': frames_with_valid_depth,
         'poseBounds': pose_bounds,
         'depth': depth_summary,
         'intrinsics': parsed.intrinsics,

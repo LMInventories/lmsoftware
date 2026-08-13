@@ -27,7 +27,7 @@ RECONSTRUCTING → ... → READY_FOR_REVIEW pipeline is unbuilt (Milestone 2+).
 from flask import Blueprint, request, jsonify, Response
 from flask_jwt_extended import jwt_required
 from models import db, Inspection, FloorPlanScan
-from permissions import require_admin_or_manager
+from permissions import require_admin_or_manager, get_current_user, is_admin_or_manager
 from utils.s3 import is_configured, new_key, presign_put, download_bytes
 from services.floorplan_processing import parse_scan_package, summarize
 from services.floorplan_geometry import (
@@ -68,6 +68,22 @@ def _compute_dense_geometry(zip_bytes, parsed):
     dense_walls = merge_collinear_walls(dense_raw_walls)
     corners = find_corners(dense_walls)
     return dense_cloud, dense_walls, corners
+
+
+def _can_view_scan_render(user, scan) -> bool:
+    """
+    Used by render_scan only — unlike inspect_scan (admin/manager-only, it
+    exposes raw diagnostic internals), the render is just a picture of a
+    scan the inspector themselves captured, so the clerk role (this
+    codebase's actual field-inspector role — see permissions.py's docstring)
+    can view it for inspections assigned to them, same ownership rule
+    filter_inspections_for_user already applies elsewhere. Without this, the
+    mobile app's scanning user — almost always a clerk, not admin/manager —
+    would get a 403 trying to view their own scan's render.
+    """
+    if is_admin_or_manager(user):
+        return True
+    return bool(user) and user.role == 'clerk' and scan.inspection.inspector_id == user.id
 
 
 @floorplans_bp.route('/<int:inspection_id>/scans', methods=['POST'])
@@ -227,7 +243,6 @@ def inspect_scan(scan_id):
 
 @floorplans_bp.route('/scans/<int:scan_id>/render', methods=['GET'])
 @jwt_required()
-@require_admin_or_manager
 def render_scan(scan_id):
     """
     Diagnostic SVG render of a scan's detected geometry (solid walls =
@@ -237,10 +252,19 @@ def render_scan(scan_id):
     pipeline's raw output made visible, useful for reviewing a scan before
     any such polished renderer exists.
 
+    Access: admin/manager, or the clerk (inspector) assigned to this scan's
+    inspection — see _can_view_scan_render. NOT admin/manager-only like
+    inspect_scan, since the mobile app's scanning user is almost always a
+    clerk viewing their own scan.
+
     Returns image/svg+xml directly (not wrapped in JSON) so it can be used
     directly as an <img src> or opened in a browser.
     """
     scan = FloorPlanScan.query.get_or_404(scan_id)
+
+    user = get_current_user()
+    if not _can_view_scan_render(user, scan):
+        return jsonify({'error': 'Forbidden'}), 403
 
     zip_bytes, parsed, error = _download_and_parse(scan)
     if error:

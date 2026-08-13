@@ -320,6 +320,15 @@ class WallLineSegment:
     x2: float
     z2: float
     inlier_count: int
+    # Distance (meters) to the closest "near miss" — another wall detection
+    # with a similar orientation that did NOT merge into this one because
+    # its position disagreed too much. None if no such wall exists. See
+    # merge_collinear_walls for why this matters (real ARCore pose drift
+    # can make a genuine wall appear at slightly different positions across
+    # a scan). Not set by fit_wall_lines itself — only merge_collinear_walls
+    # computes this, since it needs the full set of candidate walls to
+    # compare against.
+    nearby_conflict_m: Optional[float] = None
 
 
 def fit_wall_lines(points: list, distance_threshold: float = 0.15,
@@ -496,6 +505,7 @@ def merge_collinear_walls(walls: list, angle_threshold_deg: float = 15.0,
         ux, uz = math.cos(angle), math.sin(angle)
         ox, oz = primary.x1, primary.z1
 
+        cluster_ids = {id(w) for w in cluster}
         projections = []
         total_inliers = 0
         for cw in cluster:
@@ -504,10 +514,30 @@ def merge_collinear_walls(walls: list, angle_threshold_deg: float = 15.0,
             total_inliers += cw.inlier_count
         t_min, t_max = min(projections), max(projections)
 
+        # nearby_conflict_m: the closest "near miss" — another wall at a
+        # similar orientation that did NOT merge into this cluster because
+        # its position disagreed too much. Computed directly from the exact
+        # walls and threshold used to decide merging, not a separate looser
+        # pass, so it precisely answers "is there another detection nearby
+        # that might be this same real wall, just drifted?"
+        primary_offset = wall_offset(primary, angle)
+        nearby_conflict = None
+        for other in walls:
+            if id(other) in cluster_ids:
+                continue
+            diff = abs(math.degrees(angle - wall_angle(other))) % 180
+            diff = min(diff, 180 - diff)
+            if diff > angle_threshold_deg:
+                continue
+            conflict_dist = abs(wall_offset(other, angle) - primary_offset)
+            if nearby_conflict is None or conflict_dist < nearby_conflict:
+                nearby_conflict = conflict_dist
+
         merged.append(WallLineSegment(
             x1=ox + t_min * ux, z1=oz + t_min * uz,
             x2=ox + t_max * ux, z2=oz + t_max * uz,
             inlier_count=total_inliers,
+            nearby_conflict_m=nearby_conflict,
         ))
 
     return sorted(merged, key=lambda w: -w.inlier_count)
@@ -605,7 +635,10 @@ def summarize_footprint(estimate: FootprintEstimate) -> dict:
         'orientedRectTrimmed': estimate.oriented_rect_trimmed,
         'outlierFrameIndices': estimate.outlier_frame_indices,
         'wallLines': [
-            {'x1': w.x1, 'z1': w.z1, 'x2': w.x2, 'z2': w.z2, 'inlierCount': w.inlier_count}
+            {
+                'x1': w.x1, 'z1': w.z1, 'x2': w.x2, 'z2': w.z2,
+                'inlierCount': w.inlier_count, 'nearbyConflictM': w.nearby_conflict_m,
+            }
             for w in estimate.wall_lines
         ],
         'points': [

@@ -173,13 +173,25 @@ def inspect_scan(scan_id):
     result['footprint'] = summarize_footprint(estimate_room_footprint(parsed))
 
     dense_cloud = build_point_cloud(zip_bytes, parsed, subsample_step=6)
-    dense_walls = merge_collinear_walls(fit_wall_lines(
+    dense_raw_walls = fit_wall_lines(
         [(p.x, p.z) for p in dense_cloud],
         min_inliers=max(15, len(dense_cloud) // 200),
-    )) if dense_cloud else []
+    ) if dense_cloud else []
+    dense_walls = merge_collinear_walls(dense_raw_walls)
+
     result['densePointCount'] = len(dense_cloud)
+    # nearbyConflictM: distance to the closest other wall detection at a
+    # similar orientation that did NOT merge into this one because its
+    # position disagreed too much — a real signal of ARCore pose drift
+    # (a fixed wall seen at different positions across a scan's duration),
+    # not a bug. A wall with a small/absent conflict is confidently placed;
+    # one with a conflict under ~1m should not be trusted as precise until
+    # this pipeline gets drift correction (see merge_collinear_walls docstring).
     result['denseWallLines'] = [
-        {'x1': w.x1, 'z1': w.z1, 'x2': w.x2, 'z2': w.z2, 'inlierCount': w.inlier_count}
+        {
+            'x1': w.x1, 'z1': w.z1, 'x2': w.x2, 'z2': w.z2,
+            'inlierCount': w.inlier_count, 'nearbyConflictM': w.nearby_conflict_m,
+        }
         for w in dense_walls
     ]
 

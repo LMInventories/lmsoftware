@@ -412,12 +412,21 @@ def merge_collinear_walls(walls: list, angle_threshold_deg: float = 15.0,
     data: 6 of 8 dense-cloud walls from one real scan shared near-identical
     orientation (10-22 degrees) at slightly different positions.
 
-    Two walls are merged if their orientations differ by less than
-    angle_threshold_deg (mod 180 — undirected line comparison) AND their
-    perpendicular offset from a shared reference line differs by less than
-    offset_threshold_m. Merged walls keep the higher-inlier-count wall's
-    line direction, extend the endpoints to cover every merged segment's
-    projected extent, and sum inlier counts.
+    Uses transitive (union-find) clustering, not "compare everything to one
+    reference wall": two walls are linked if their orientations differ by
+    less than angle_threshold_deg (mod 180 — undirected line comparison) AND
+    their perpendicular offset (measured against each pair's own average
+    angle, so the comparison is symmetric) differs by less than
+    offset_threshold_m, and walls transitively connected through a chain of
+    such links end up in the same merged wall even if the two ends of the
+    chain aren't directly within threshold of each other — needed because a
+    single real wall with slight measurement drift across several RANSAC
+    passes can produce a CHAIN of walls where adjacent pairs are close but
+    the first and last are not, which single-reference clustering misses.
+
+    Each cluster keeps its highest-inlier-count member's line direction,
+    extends the endpoints to cover every merged segment's projected extent,
+    and sums inlier counts.
 
     angle_threshold_deg=15 comfortably covers the ~12 degree spread seen
     within one real merged-wall group while staying well clear of a
@@ -433,40 +442,60 @@ def merge_collinear_walls(walls: list, angle_threshold_deg: float = 15.0,
         return math.atan2(w.z2 - w.z1, w.x2 - w.x1) % math.pi
 
     def wall_offset(w, angle):
-        # perpendicular distance from origin to the infinite line through
-        # (w.x1, w.z1) in direction `angle`, using a normal derived from
-        # that SAME angle (not the compared wall's own angle) so two walls
-        # being compared are measured against one consistent reference.
         nx, nz = -math.sin(angle), math.cos(angle)
         return w.x1 * nx + w.z1 * nz
 
-    ordered = sorted(walls, key=lambda w: -w.inlier_count)
-    used = [False] * len(ordered)
+    def linked(w1, w2):
+        a1, a2 = wall_angle(w1), wall_angle(w2)
+        diff = abs(math.degrees(a1 - a2)) % 180
+        diff = min(diff, 180 - diff)
+        if diff > angle_threshold_deg:
+            return False
+        # Offset comparison uses each wall's OWN angle as the shared
+        # reference — NOT an averaged angle. An earlier version averaged the
+        # two angles for a "symmetric" comparison, but for long segments far
+        # from the origin, a small angle difference multiplied by that
+        # distance (lever-arm effect) made the averaged-angle offset check
+        # more sensitive to noise than intended, and it under-merged real
+        # near-duplicates confirmed on real scan data. Checking against
+        # EITHER wall's own angle (not requiring both to agree) is more
+        # forgiving and matches what was empirically validated: if the pair
+        # looks collinear from wall1's perspective OR wall2's, that's enough.
+        return (
+            abs(wall_offset(w2, a1) - wall_offset(w1, a1)) <= offset_threshold_m
+            or abs(wall_offset(w1, a2) - wall_offset(w2, a2)) <= offset_threshold_m
+        )
+
+    n = len(walls)
+    parent = list(range(n))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    def union(i, j):
+        ri, rj = find(i), find(j)
+        if ri != rj:
+            parent[ri] = rj
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            if linked(walls[i], walls[j]):
+                union(i, j)
+
+    clusters = {}
+    for idx in range(n):
+        clusters.setdefault(find(idx), []).append(walls[idx])
+
     merged = []
+    for cluster in clusters.values():
+        primary = max(cluster, key=lambda w: w.inlier_count)
+        angle = wall_angle(primary)
+        ux, uz = math.cos(angle), math.sin(angle)
+        ox, oz = primary.x1, primary.z1
 
-    for i, w in enumerate(ordered):
-        if used[i]:
-            continue
-        angle_i = wall_angle(w)
-        offset_i = wall_offset(w, angle_i)
-        cluster = [w]
-        used[i] = True
-
-        for j in range(i + 1, len(ordered)):
-            if used[j]:
-                continue
-            w2 = ordered[j]
-            angle_diff = abs(math.degrees(angle_i - wall_angle(w2))) % 180
-            angle_diff = min(angle_diff, 180 - angle_diff)
-            if angle_diff > angle_threshold_deg:
-                continue
-            if abs(wall_offset(w2, angle_i) - offset_i) > offset_threshold_m:
-                continue
-            cluster.append(w2)
-            used[j] = True
-
-        ux, uz = math.cos(angle_i), math.sin(angle_i)
-        ox, oz = w.x1, w.z1
         projections = []
         total_inliers = 0
         for cw in cluster:

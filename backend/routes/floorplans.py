@@ -32,6 +32,7 @@ from utils.s3 import is_configured, new_key, presign_put, download_bytes
 from services.floorplan_processing import parse_scan_package, summarize
 from services.floorplan_geometry import (
     estimate_room_footprint, summarize_footprint, build_point_cloud, fit_wall_lines,
+    merge_collinear_walls,
 )
 
 floorplans_bp = Blueprint('floorplans', __name__)
@@ -172,10 +173,10 @@ def inspect_scan(scan_id):
     result['footprint'] = summarize_footprint(estimate_room_footprint(parsed))
 
     dense_cloud = build_point_cloud(zip_bytes, parsed, subsample_step=6)
-    dense_walls = fit_wall_lines(
+    dense_walls = merge_collinear_walls(fit_wall_lines(
         [(p.x, p.z) for p in dense_cloud],
         min_inliers=max(15, len(dense_cloud) // 200),
-    ) if dense_cloud else []
+    )) if dense_cloud else []
     result['densePointCount'] = len(dense_cloud)
     result['denseWallLines'] = [
         {'x1': w.x1, 'z1': w.z1, 'x2': w.x2, 'z2': w.z2, 'inlierCount': w.inlier_count}

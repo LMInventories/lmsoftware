@@ -401,6 +401,89 @@ def fit_wall_lines(points: list, distance_threshold: float = 0.15,
     return walls
 
 
+def merge_collinear_walls(walls: list, angle_threshold_deg: float = 15.0,
+                           offset_threshold_m: float = 0.3) -> list:
+    """
+    Merge near-duplicate wall segments that sequential RANSAC found as
+    separate detections of the SAME physical wall — a well-known RANSAC
+    limitation: it removes only a found line's own inliers, so a
+    well-populated wall with any noise/curvature can get "rediscovered" as
+    2-3 slightly-offset segments instead of one. Confirmed happening on real
+    data: 6 of 8 dense-cloud walls from one real scan shared near-identical
+    orientation (10-22 degrees) at slightly different positions.
+
+    Two walls are merged if their orientations differ by less than
+    angle_threshold_deg (mod 180 — undirected line comparison) AND their
+    perpendicular offset from a shared reference line differs by less than
+    offset_threshold_m. Merged walls keep the higher-inlier-count wall's
+    line direction, extend the endpoints to cover every merged segment's
+    projected extent, and sum inlier counts.
+
+    angle_threshold_deg=15 comfortably covers the ~12 degree spread seen
+    within one real merged-wall group while staying well clear of a
+    rectangular room's 90-degree wall separation. offset_threshold_m=0.3 is
+    roughly 2x fit_wall_lines' own distance_threshold, since separate RANSAC
+    passes over noisy data can land a bit further apart than a single pass's
+    inlier band.
+    """
+    if not walls:
+        return []
+
+    def wall_angle(w):
+        return math.atan2(w.z2 - w.z1, w.x2 - w.x1) % math.pi
+
+    def wall_offset(w, angle):
+        # perpendicular distance from origin to the infinite line through
+        # (w.x1, w.z1) in direction `angle`, using a normal derived from
+        # that SAME angle (not the compared wall's own angle) so two walls
+        # being compared are measured against one consistent reference.
+        nx, nz = -math.sin(angle), math.cos(angle)
+        return w.x1 * nx + w.z1 * nz
+
+    ordered = sorted(walls, key=lambda w: -w.inlier_count)
+    used = [False] * len(ordered)
+    merged = []
+
+    for i, w in enumerate(ordered):
+        if used[i]:
+            continue
+        angle_i = wall_angle(w)
+        offset_i = wall_offset(w, angle_i)
+        cluster = [w]
+        used[i] = True
+
+        for j in range(i + 1, len(ordered)):
+            if used[j]:
+                continue
+            w2 = ordered[j]
+            angle_diff = abs(math.degrees(angle_i - wall_angle(w2))) % 180
+            angle_diff = min(angle_diff, 180 - angle_diff)
+            if angle_diff > angle_threshold_deg:
+                continue
+            if abs(wall_offset(w2, angle_i) - offset_i) > offset_threshold_m:
+                continue
+            cluster.append(w2)
+            used[j] = True
+
+        ux, uz = math.cos(angle_i), math.sin(angle_i)
+        ox, oz = w.x1, w.z1
+        projections = []
+        total_inliers = 0
+        for cw in cluster:
+            projections.append((cw.x1 - ox) * ux + (cw.z1 - oz) * uz)
+            projections.append((cw.x2 - ox) * ux + (cw.z2 - oz) * uz)
+            total_inliers += cw.inlier_count
+        t_min, t_max = min(projections), max(projections)
+
+        merged.append(WallLineSegment(
+            x1=ox + t_min * ux, z1=oz + t_min * uz,
+            x2=ox + t_max * ux, z2=oz + t_max * uz,
+            inlier_count=total_inliers,
+        ))
+
+    return sorted(merged, key=lambda w: -w.inlier_count)
+
+
 @dataclass
 class FootprintEstimate:
     points: list
@@ -477,7 +560,7 @@ def estimate_room_footprint(parsed: ParsedScan) -> FootprintEstimate:
         oriented_rect=min_area_rect([(p.x, p.z) for p in points]),
         outlier_frame_indices=[p.frame_index for p in excluded],
         oriented_rect_trimmed=min_area_rect([(p.x, p.z) for p in kept]) if excluded else None,
-        wall_lines=fit_wall_lines([(p.x, p.z) for p in kept]),
+        wall_lines=merge_collinear_walls(fit_wall_lines([(p.x, p.z) for p in kept])),
     )
 
 

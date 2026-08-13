@@ -24,7 +24,7 @@ UPLOADING → UPLOADED (or → FAILED). The full plan's QUEUED →
 RECONSTRUCTING → ... → READY_FOR_REVIEW pipeline is unbuilt (Milestone 2+).
 """
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, Response
 from flask_jwt_extended import jwt_required
 from models import db, Inspection, FloorPlanScan
 from permissions import require_admin_or_manager
@@ -34,8 +34,40 @@ from services.floorplan_geometry import (
     estimate_room_footprint, summarize_footprint, build_point_cloud, fit_wall_lines,
     merge_collinear_walls, find_corners,
 )
+from services.floorplan_render import render_floorplan_svg
 
 floorplans_bp = Blueprint('floorplans', __name__)
+
+
+def _download_and_parse(scan):
+    """Shared by inspect_scan/render_scan: download + parse a scan's zip.
+    Returns (zip_bytes, parsed, None) on success, or (None, None, error_response)."""
+    if scan.status != 'UPLOADED' or not scan.s3_key:
+        return None, None, (jsonify({'error': 'Scan has not been successfully uploaded yet'}), 409)
+
+    try:
+        zip_bytes = download_bytes(scan.s3_key)
+    except Exception as e:
+        return None, None, (jsonify({'error': f'Failed to download scan package: {e}'}), 502)
+
+    try:
+        parsed = parse_scan_package(zip_bytes)
+    except ValueError as e:
+        return None, None, (jsonify({'error': f'Failed to parse scan package: {e}'}), 422)
+
+    return zip_bytes, parsed, None
+
+
+def _compute_dense_geometry(zip_bytes, parsed):
+    """Shared by inspect_scan/render_scan: point cloud -> walls -> corners."""
+    dense_cloud = build_point_cloud(zip_bytes, parsed, subsample_step=6)
+    dense_raw_walls = fit_wall_lines(
+        [(p.x, p.z) for p in dense_cloud],
+        min_inliers=max(15, len(dense_cloud) // 200),
+    ) if dense_cloud else []
+    dense_walls = merge_collinear_walls(dense_raw_walls)
+    corners = find_corners(dense_walls)
+    return dense_cloud, dense_walls, corners
 
 
 @floorplans_bp.route('/<int:inspection_id>/scans', methods=['POST'])
@@ -156,28 +188,14 @@ def inspect_scan(scan_id):
     """
     scan = FloorPlanScan.query.get_or_404(scan_id)
 
-    if scan.status != 'UPLOADED' or not scan.s3_key:
-        return jsonify({'error': 'Scan has not been successfully uploaded yet'}), 409
-
-    try:
-        zip_bytes = download_bytes(scan.s3_key)
-    except Exception as e:
-        return jsonify({'error': f'Failed to download scan package: {e}'}), 502
-
-    try:
-        parsed = parse_scan_package(zip_bytes)
-    except ValueError as e:
-        return jsonify({'error': f'Failed to parse scan package: {e}'}), 422
+    zip_bytes, parsed, error = _download_and_parse(scan)
+    if error:
+        return error
 
     result = summarize(parsed)
     result['footprint'] = summarize_footprint(estimate_room_footprint(parsed))
 
-    dense_cloud = build_point_cloud(zip_bytes, parsed, subsample_step=6)
-    dense_raw_walls = fit_wall_lines(
-        [(p.x, p.z) for p in dense_cloud],
-        min_inliers=max(15, len(dense_cloud) // 200),
-    ) if dense_cloud else []
-    dense_walls = merge_collinear_walls(dense_raw_walls)
+    dense_cloud, dense_walls, dense_corners = _compute_dense_geometry(zip_bytes, parsed)
 
     result['densePointCount'] = len(dense_cloud)
     # nearbyConflictM: distance to the closest other wall detection at a
@@ -201,7 +219,37 @@ def inspect_scan(scan_id):
     # walls, this is honestly empty rather than a forced guess.
     result['denseCorners'] = [
         {'x': c.x, 'z': c.z, 'wallA': c.wall_a, 'wallB': c.wall_b, 'angleDeg': c.angle_deg}
-        for c in find_corners(dense_walls)
+        for c in dense_corners
     ]
 
     return jsonify(result)
+
+
+@floorplans_bp.route('/scans/<int:scan_id>/render', methods=['GET'])
+@jwt_required()
+@require_admin_or_manager
+def render_scan(scan_id):
+    """
+    Diagnostic SVG render of a scan's detected geometry (solid walls =
+    confident, dashed orange = position-uncertain, red dots = corners) —
+    see services/floorplan_render.py. This is NOT the polished "final 2D
+    floorplan image" the original feature request describes; it's the
+    pipeline's raw output made visible, useful for reviewing a scan before
+    any such polished renderer exists.
+
+    Returns image/svg+xml directly (not wrapped in JSON) so it can be used
+    directly as an <img src> or opened in a browser.
+    """
+    scan = FloorPlanScan.query.get_or_404(scan_id)
+
+    zip_bytes, parsed, error = _download_and_parse(scan)
+    if error:
+        return error
+
+    dense_cloud, dense_walls, corners = _compute_dense_geometry(zip_bytes, parsed)
+
+    svg = render_floorplan_svg(dense_walls, corners, points=dense_cloud)
+    if not svg:
+        return jsonify({'error': 'Not enough geometry to render'}), 422
+
+    return Response(svg, mimetype='image/svg+xml')

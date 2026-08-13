@@ -30,6 +30,7 @@ from models import db, Inspection, FloorPlanScan
 from permissions import require_admin_or_manager
 from utils.s3 import is_configured, new_key, presign_put, download_bytes
 from services.floorplan_processing import parse_scan_package, summarize
+from services.floorplan_geometry import estimate_room_footprint, summarize_footprint
 
 floorplans_bp = Blueprint('floorplans', __name__)
 
@@ -134,10 +135,12 @@ def inspect_scan(scan_id):
     """
     Diagnostic endpoint (Milestone 2 groundwork): downloads an UPLOADED scan's
     zip package server-side, parses it, and returns aggregate stats (frame
-    count, pose bounding box, depth-value ranges, warnings). No reconstruction
-    happens here — this exists to sanity-check that a real device-captured
-    scan matches the format FloorPlanScanRecorder.kt is expected to produce,
-    before any geometry-reconstruction algorithm is built against it.
+    count, pose bounding box, depth-value ranges, warnings) plus a rough
+    room-footprint estimate (single forward ray per frame, projected into an
+    oriented minimum-area rectangle — see services/floorplan_geometry.py).
+    This is NOT true wall detection — no line-fitting, no corner detection —
+    just enough geometry to sanity-check a scan against a room's real size
+    before any such algorithm is built.
 
     Never returns s3_key — see module docstring's privacy note.
     """
@@ -156,4 +159,6 @@ def inspect_scan(scan_id):
     except ValueError as e:
         return jsonify({'error': f'Failed to parse scan package: {e}'}), 422
 
-    return jsonify(summarize(parsed))
+    result = summarize(parsed)
+    result['footprint'] = summarize_footprint(estimate_room_footprint(parsed))
+    return jsonify(result)

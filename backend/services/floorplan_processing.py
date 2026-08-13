@@ -22,10 +22,15 @@ Checked against a real device-captured scan (S21 Ultra, 2026-08-12, 50 frames):
 
 import io
 import json
+import statistics
 import struct
 import zipfile
 from dataclasses import dataclass, field
 from typing import Optional
+
+# Fraction of image width/height (centered) used for the robust
+# "center depth" reading — see parse_depth_bytes.
+CENTER_PATCH_FRACTION = 0.1
 
 
 @dataclass
@@ -41,6 +46,7 @@ class DepthFrameStats:
     depth_mm_mean: Optional[float]
     valid_pixel_count: int
     total_pixel_count: int
+    center_depth_mm: Optional[float]
 
 
 @dataclass
@@ -71,6 +77,12 @@ def parse_depth_bytes(raw: bytes, width: int, height: int, row_stride: int) -> D
     stop physically-impossible near-zero values (2mm, 10mm) from polluting
     min/mean stats. Those pixels are excluded from every stat below; only
     valid_pixel_count/total_pixel_count reflect the raw pixel total.
+
+    Also computes center_depth_mm: the MEDIAN (not mean/min/max — deliberately
+    robust to the single-pixel depth-discontinuity artifacts confirmed against
+    real data, e.g. near an open doorway edge) of valid depth values within a
+    small square patch centered on the image. Intended as a "what's roughly
+    straight ahead" reading for forward-ray geometry estimation.
     """
     raw_min = None
     raw_max = None
@@ -80,9 +92,16 @@ def parse_depth_bytes(raw: bytes, width: int, height: int, row_stride: int) -> D
     depth_sum = 0
     valid_count = 0
     total_count = 0
+    center_values = []
+
+    cx0 = width * (0.5 - CENTER_PATCH_FRACTION / 2)
+    cx1 = width * (0.5 + CENTER_PATCH_FRACTION / 2)
+    cy0 = height * (0.5 - CENTER_PATCH_FRACTION / 2)
+    cy1 = height * (0.5 + CENTER_PATCH_FRACTION / 2)
 
     for y in range(height):
         row_offset = y * row_stride
+        in_center_row = cy0 <= y < cy1
         for x in range(width):
             offset = row_offset + x * 2
             if offset + 2 > len(raw):
@@ -108,6 +127,9 @@ def parse_depth_bytes(raw: bytes, width: int, height: int, row_stride: int) -> D
 
             valid_count += 1
 
+            if in_center_row and cx0 <= x < cx1:
+                center_values.append(depth_mm)
+
     if total_count == 0:
         raise ValueError('No depth pixels decoded (empty or truncated buffer)')
 
@@ -123,6 +145,7 @@ def parse_depth_bytes(raw: bytes, width: int, height: int, row_stride: int) -> D
         depth_mm_min=depth_min,
         depth_mm_max=depth_max,
         depth_mm_mean=(depth_sum / valid_count) if valid_count else None,
+        center_depth_mm=statistics.median(center_values) if center_values else None,
     )
 
 

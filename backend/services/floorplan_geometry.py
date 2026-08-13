@@ -24,6 +24,7 @@ alignment — not the quaternion math itself.
 """
 
 import math
+import random
 import statistics
 from dataclasses import dataclass, field
 from typing import Optional
@@ -185,6 +186,94 @@ def reject_ray_outliers(points: list, k: float = 3.5) -> tuple:
 
 
 @dataclass
+class WallLineSegment:
+    x1: float
+    z1: float
+    x2: float
+    z2: float
+    inlier_count: int
+
+
+def fit_wall_lines(points: list, distance_threshold: float = 0.15,
+                    min_inliers: int = 4, max_walls: int = 8,
+                    iterations: int = 300, seed: int = 42) -> list:
+    """
+    Sequential RANSAC line-fitting over (x, z) points: repeatedly finds the
+    line with the most points within distance_threshold (meters), removes
+    those inlier points, and repeats — the standard approach for extracting
+    multiple line segments (walls) from a noisy 2D point set.
+
+    Deliberately built on top of the SAME points already used/validated for
+    the footprint estimate (one forward-ray hit per frame) rather than a
+    denser per-pixel point cloud: per-pixel backprojection would need camera
+    intrinsics matched to the depth image's own resolution, and ARCore's
+    public API has no such accessor — Camera.getImageIntrinsics() is
+    documented for the CPU/color image only, and the depth image's own
+    size/aspect ratio is described by Google's docs as tied to the device's
+    *display* aspect ratio, not the color camera's. Guessing a scale factor
+    between the two would repeat exactly the kind of unverified-assumption
+    mistake this whole feature has been built around avoiding. So this
+    works with the sparser but trusted point set instead.
+
+    seed is fixed by default for reproducible results — this is a real
+    algorithm choice affecting output, not a test-only concern, and repeated
+    runs on the same scan should give the same walls.
+
+    Returns a list of WallLineSegment, most-supported line first. With only
+    ~30-56 points per real scan so far, this is a genuine experiment, not a
+    guaranteed-good result — expect it to work better on scans with more
+    frames actually facing a real wall (as opposed to furniture, the floor,
+    or an open doorway).
+    """
+    rng = random.Random(seed)
+    remaining = list(points)
+    walls = []
+
+    while len(remaining) >= min_inliers and len(walls) < max_walls:
+        best_inliers = []
+        best_dir = None
+        best_origin = None
+
+        for _ in range(iterations):
+            if len(remaining) < 2:
+                break
+            p1, p2 = rng.sample(remaining, 2)
+            dx, dz = p2[0] - p1[0], p2[1] - p1[1]
+            length = math.hypot(dx, dz)
+            if length < 1e-9:
+                continue
+            ux, uz = dx / length, dz / length
+            nx, nz = -uz, ux  # unit normal to the candidate line
+
+            inliers = [p for p in remaining
+                       if abs((p[0] - p1[0]) * nx + (p[1] - p1[1]) * nz) <= distance_threshold]
+
+            if len(inliers) > len(best_inliers):
+                best_inliers = inliers
+                best_dir = (ux, uz)
+                best_origin = p1
+
+        if best_dir is None or len(best_inliers) < min_inliers:
+            break
+
+        ux, uz = best_dir
+        ox, oz = best_origin
+        projections = sorted((p[0] - ox) * ux + (p[1] - oz) * uz for p in best_inliers)
+        t_min, t_max = projections[0], projections[-1]
+
+        walls.append(WallLineSegment(
+            x1=ox + t_min * ux, z1=oz + t_min * uz,
+            x2=ox + t_max * ux, z2=oz + t_max * uz,
+            inlier_count=len(best_inliers),
+        ))
+
+        inlier_set = set(best_inliers)
+        remaining = [p for p in remaining if p not in inlier_set]
+
+    return walls
+
+
+@dataclass
 class FootprintEstimate:
     points: list
     frames_used: int
@@ -196,6 +285,7 @@ class FootprintEstimate:
     oriented_rect: Optional[dict] = None
     outlier_frame_indices: list = field(default_factory=list)
     oriented_rect_trimmed: Optional[dict] = None
+    wall_lines: list = field(default_factory=list)
 
 
 def estimate_room_footprint(parsed: ParsedScan) -> FootprintEstimate:
@@ -259,6 +349,7 @@ def estimate_room_footprint(parsed: ParsedScan) -> FootprintEstimate:
         oriented_rect=min_area_rect([(p.x, p.z) for p in points]),
         outlier_frame_indices=[p.frame_index for p in excluded],
         oriented_rect_trimmed=min_area_rect([(p.x, p.z) for p in kept]) if excluded else None,
+        wall_lines=fit_wall_lines([(p.x, p.z) for p in kept]),
     )
 
 
@@ -273,6 +364,10 @@ def summarize_footprint(estimate: FootprintEstimate) -> dict:
         'orientedRect': estimate.oriented_rect,
         'orientedRectTrimmed': estimate.oriented_rect_trimmed,
         'outlierFrameIndices': estimate.outlier_frame_indices,
+        'wallLines': [
+            {'x1': w.x1, 'z1': w.z1, 'x2': w.x2, 'z2': w.z2, 'inlierCount': w.inlier_count}
+            for w in estimate.wall_lines
+        ],
         'points': [
             {'frameIndex': p.frame_index, 'x': p.x, 'y': p.y, 'z': p.z, 'centerDepthM': p.center_depth_m}
             for p in estimate.points

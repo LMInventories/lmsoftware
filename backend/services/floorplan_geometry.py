@@ -544,6 +544,92 @@ def merge_collinear_walls(walls: list, angle_threshold_deg: float = 15.0,
 
 
 @dataclass
+class Corner:
+    x: float
+    z: float
+    wall_a: int  # index into the walls list passed to find_corners
+    wall_b: int
+    angle_deg: float  # interior angle between the two walls at this corner
+
+
+def _line_intersection(w1: WallLineSegment, w2: WallLineSegment) -> Optional[tuple]:
+    """Intersection point of the two INFINITE lines through w1 and w2 (not
+    the segments themselves — a real corner's intersection point often
+    lands just past where a segment's own noisy endpoint happened to fall).
+    Returns None if the lines are (near-)parallel."""
+    x1, z1, x2, z2 = w1.x1, w1.z1, w1.x2, w1.z2
+    x3, z3, x4, z4 = w2.x1, w2.z1, w2.x2, w2.z2
+    denom = (x1 - x2) * (z3 - z4) - (z1 - z2) * (x3 - x4)
+    if abs(denom) < 1e-9:
+        return None
+    px = ((x1 * z2 - z1 * x2) * (x3 - x4) - (x1 - x2) * (x3 * z4 - z3 * x4)) / denom
+    pz = ((x1 * z2 - z1 * x2) * (z3 - z4) - (z1 - z2) * (x3 * z4 - z3 * x4)) / denom
+    return (px, pz)
+
+
+def find_corners(walls: list, angle_tolerance_deg: float = 20.0,
+                  max_extension_m: float = 1.5,
+                  max_conflict_m: float = 0.4) -> list:
+    """
+    Find real physical corners among a set of merged wall segments: for
+    each pair whose orientations are close to perpendicular (90 +-
+    angle_tolerance_deg), intersect their infinite lines and keep the
+    intersection only if it lands near BOTH walls' actual endpoints (within
+    max_extension_m) — an intersection far from where either wall actually
+    was measured is two unrelated lines crossing somewhere, not a corner.
+
+    Walls with nearby_conflict_m below max_conflict_m are excluded — see
+    merge_collinear_walls' docstring: a wall flagged as position-uncertain
+    (likely ARCore pose drift) shouldn't be used to derive corner geometry,
+    since that would silently propagate the uncertainty into a
+    false-precision corner coordinate. Walls with nearby_conflict_m of None
+    or a large value (nothing similar-but-different nearby) are trusted.
+
+    On a partial scan where only one or two walls are confidently placed
+    and no perpendicular pair exists yet, this correctly returns an empty
+    list rather than fabricating a corner — a floor plan with 1 known wall
+    and 0 corners is an honest partial result, not a failure.
+    """
+    confident = [w for w in walls if w.nearby_conflict_m is None or w.nearby_conflict_m >= max_conflict_m]
+    index_of = {id(w): idx for idx, w in enumerate(walls)}
+
+    def wall_angle(w):
+        return math.atan2(w.z2 - w.z1, w.x2 - w.x1) % math.pi
+
+    def dist(p1, p2):
+        return math.hypot(p1[0] - p2[0], p1[1] - p2[1])
+
+    corners = []
+    n = len(confident)
+    for i in range(n):
+        for j in range(i + 1, n):
+            w1, w2 = confident[i], confident[j]
+            a1, a2 = wall_angle(w1), wall_angle(w2)
+            diff = abs(math.degrees(a1 - a2)) % 180
+            diff = min(diff, 180 - diff)
+            perp_deviation = abs(diff - 90)
+            if perp_deviation > angle_tolerance_deg:
+                continue
+
+            pt = _line_intersection(w1, w2)
+            if pt is None:
+                continue
+
+            d1 = min(dist(pt, (w1.x1, w1.z1)), dist(pt, (w1.x2, w1.z2)))
+            d2 = min(dist(pt, (w2.x1, w2.z1)), dist(pt, (w2.x2, w2.z2)))
+            if d1 > max_extension_m or d2 > max_extension_m:
+                continue
+
+            corners.append(Corner(
+                x=pt[0], z=pt[1],
+                wall_a=index_of[id(w1)], wall_b=index_of[id(w2)],
+                angle_deg=90 - perp_deviation,
+            ))
+
+    return corners
+
+
+@dataclass
 class FootprintEstimate:
     points: list
     frames_used: int

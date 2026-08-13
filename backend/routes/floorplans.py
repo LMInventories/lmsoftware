@@ -32,7 +32,7 @@ from utils.s3 import is_configured, new_key, presign_put, download_bytes
 from services.floorplan_processing import parse_scan_package, summarize
 from services.floorplan_geometry import (
     estimate_room_footprint, summarize_footprint, build_point_cloud, fit_wall_lines,
-    merge_collinear_walls,
+    merge_collinear_walls, find_corners,
 )
 
 floorplans_bp = Blueprint('floorplans', __name__)
@@ -193,6 +193,15 @@ def inspect_scan(scan_id):
             'inlierCount': w.inlier_count, 'nearbyConflictM': w.nearby_conflict_m,
         }
         for w in dense_walls
+    ]
+
+    # Only confidently-placed walls (nearby_conflict_m None or large) are
+    # used — a corner built from a drift-uncertain wall would fabricate
+    # false precision. On a scan with too few confident, perpendicular
+    # walls, this is honestly empty rather than a forced guess.
+    result['denseCorners'] = [
+        {'x': c.x, 'z': c.z, 'wallA': c.wall_a, 'wallB': c.wall_b, 'angleDeg': c.angle_deg}
+        for c in find_corners(dense_walls)
     ]
 
     return jsonify(result)

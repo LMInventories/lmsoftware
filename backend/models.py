@@ -472,51 +472,112 @@ class FloorPlanScan(db.Model):
         }
 
 
-class FloorPlan(db.Model):
+class FloorPlanLevel(db.Model):
     """
-    A manually-measured floor plan: the inspector walks the property's
-    perimeter, measures each wall (laser measure or tape), and the mobile
-    app computes a closed 2D polygon from the wall lengths + turn angles.
-    One row per inspection (inspection_id is unique) — matches the
-    Create/View Floorplan button's binary state on PropertyOverviewScreen.
+    One floor/storey of a manually-measured floor plan (e.g. "Ground Floor",
+    "1st Floor"). A property can have several; each contains its own
+    independent set of rooms. Superseded the original single-room-per-
+    inspection FloorPlan model (that table, floor_plans, is left in place
+    but unused rather than dropped — no real data existed in it worth
+    migrating, and leaving an empty table costs nothing).
 
-    This replaces relying on the ARCore depth-scanning pipeline
-    (FloorPlanScan/services/floorplan_geometry.py's point-cloud/RANSAC/
-    corner-detection code) as the primary path: real device testing showed
+    The inspector walks each room's perimeter, measures each wall (laser
+    measure or tape) and optionally a diagonal for non-square corners (see
+    the mobile app's angleFromDiagonal), and the app computes a closed 2D
+    polygon per room. Rooms are independent polygons the inspector arranges
+    by dragging into place on a shared canvas — there's no automatic wall-
+    sharing/snapping between adjacent rooms, deliberately, to keep the
+    geometry model simple (each room stores its own absolute coordinates).
+
+    This is still the non-ARCore path: FloorPlanScan/services/
+    floorplan_geometry.py's point-cloud/RANSAC pipeline is untouched and
+    still functions, just not the default — real device testing showed
     ARCore's own pose-tracking drift means it can find individual walls but
-    not reliably close a room polygon. A physical measurement has no drift,
-    which is why this is simpler and more accurate for the same goal. The
-    ARCore code is untouched and still functions — just not the default
-    path anymore.
-
-    corners is a JSON-encoded list of [x, z] pairs in meters, forming a
-    closed polygon (last point connects back to the first). Rendered on
-    demand via services/floorplan_geometry.polygon_to_walls() +
-    services/floorplan_render.render_floorplan_svg() — nothing here stores
-    a rendered image.
+    not reliably close a room polygon, while a physical measurement has no
+    drift.
     """
-    __tablename__ = 'floor_plans'
+    __tablename__ = 'floor_plan_levels'
 
     id            = db.Column(db.Integer, primary_key=True)
     inspection_id = db.Column(db.Integer, db.ForeignKey('inspections.id', ondelete='CASCADE'),
-                               nullable=False, unique=True, index=True)
-    corners       = db.Column(db.Text, nullable=False)  # JSON: [[x,z], [x,z], ...]
+                               nullable=False, index=True)
+    name          = db.Column(db.String(100), nullable=False)
+    order_index   = db.Column(db.Integer, nullable=False, default=0)
     created_at    = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at    = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc),
                                onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 
     inspection = db.relationship(
         'Inspection',
-        backref=db.backref('floor_plan', uselist=False, cascade='all, delete-orphan')
+        backref=db.backref('floor_plan_levels', cascade='all, delete-orphan',
+                            order_by='FloorPlanLevel.order_index')
+    )
+
+    def to_dict(self, include_rooms=True):
+        result = {
+            'id':           self.id,
+            'inspectionId': self.inspection_id,
+            'name':         self.name,
+            'orderIndex':   self.order_index,
+            'createdAt':    self.created_at.isoformat() if self.created_at else None,
+            'updatedAt':    self.updated_at.isoformat() if self.updated_at else None,
+        }
+        if include_rooms:
+            result['rooms'] = [r.to_dict() for r in self.rooms]
+        return result
+
+
+class FloorPlanRoom(db.Model):
+    """
+    One room within a FloorPlanLevel. `data` bundles the room's polygon and
+    any door/window/stairs symbols into one JSON blob (not separate columns
+    or tables) — symbols are small, low-cardinality, and always edited
+    alongside their room, with no independent-querying need that would
+    justify a dedicated table (contrast with e.g. TranscriptionFillDiff,
+    which was broken out because it DID need independent querying).
+
+    data shape: {"corners": [[x,z], ...], "symbols": [...]}
+      - corners: closed polygon in level-local meters (absolute — a room's
+        position on the shared canvas IS its corner coordinates; dragging a
+        room just translates every corner by the drag delta).
+      - symbols: [{"type": "door"|"window", "wallIndex": int,
+                    "positionFraction": float 0-1, "widthM": float}, ...]
+                 or {"type": "stairs", "x": float, "z": float,
+                     "rotationDeg": float, "lengthM": float, "widthM": float,
+                     "direction": "up"|"down"}
+        Doors/windows are wall-attached (an opening in a specific wall
+        edge); stairs are a free-floor feature positioned by (x, z), not
+        tied to a wall — matches standard architectural convention (stairs
+        aren't a wall opening the way a door or window is).
+    """
+    __tablename__ = 'floor_plan_rooms'
+
+    id          = db.Column(db.Integer, primary_key=True)
+    level_id    = db.Column(db.Integer, db.ForeignKey('floor_plan_levels.id', ondelete='CASCADE'),
+                             nullable=False, index=True)
+    name        = db.Column(db.String(100), nullable=False)
+    data        = db.Column(db.Text, nullable=False)  # JSON: {"corners": [...], "symbols": [...]}
+    order_index = db.Column(db.Integer, nullable=False, default=0)
+    created_at  = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at  = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc),
+                             onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+
+    level = db.relationship(
+        'FloorPlanLevel',
+        backref=db.backref('rooms', cascade='all, delete-orphan', order_by='FloorPlanRoom.order_index')
     )
 
     def to_dict(self):
+        parsed = json.loads(self.data)
         return {
-            'id':            self.id,
-            'inspectionId':  self.inspection_id,
-            'corners':       json.loads(self.corners),
-            'createdAt':     self.created_at.isoformat() if self.created_at else None,
-            'updatedAt':     self.updated_at.isoformat() if self.updated_at else None,
+            'id':               self.id,
+            'levelId':          self.level_id,
+            'name':             self.name,
+            'corners':          parsed.get('corners', []),
+            'symbols':          parsed.get('symbols', []),
+            'orderIndex':       self.order_index,
+            'createdAt':        self.created_at.isoformat() if self.created_at else None,
+            'updatedAt':        self.updated_at.isoformat() if self.updated_at else None,
         }
 
 

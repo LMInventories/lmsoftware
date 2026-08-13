@@ -66,10 +66,29 @@ class ParsedScan:
     warnings: list = field(default_factory=list)
 
 
+def iter_depth_pixels(raw: bytes, width: int, height: int, row_stride: int):
+    """
+    Yield (x, y, depth_mm, raw_value) for every pixel in a DEPTH16 buffer
+    (little-endian uint16 per pixel, row_stride bytes per row, may include
+    padding beyond width*2 bytes) — including sentinel (depth_mm == 0)
+    pixels; callers filter those out themselves. Shared by parse_depth_bytes
+    (stats) and floorplan_geometry's point-cloud builder (backprojection) so
+    the masking logic (low 13 bits = depth in mm, top 3 = confidence) only
+    exists in one place.
+    """
+    for y in range(height):
+        row_offset = y * row_stride
+        for x in range(width):
+            offset = row_offset + x * 2
+            if offset + 2 > len(raw):
+                continue
+            (value,) = struct.unpack_from('<H', raw, offset)
+            yield x, y, value & 0x1FFF, value
+
+
 def parse_depth_bytes(raw: bytes, width: int, height: int, row_stride: int) -> DepthFrameStats:
     """
-    Unpack a DEPTH16 buffer (little-endian uint16 per pixel, row_stride bytes
-    per row, may include padding beyond width*2 bytes).
+    Unpack a DEPTH16 buffer into aggregate stats.
 
     Per ARCore's documented DEPTH16 format, a masked depth value of 0 means
     "no confident depth measurement" (sentinel), not "0mm away" — confirmed
@@ -99,36 +118,28 @@ def parse_depth_bytes(raw: bytes, width: int, height: int, row_stride: int) -> D
     cy0 = height * (0.5 - CENTER_PATCH_FRACTION / 2)
     cy1 = height * (0.5 + CENTER_PATCH_FRACTION / 2)
 
-    for y in range(height):
-        row_offset = y * row_stride
-        in_center_row = cy0 <= y < cy1
-        for x in range(width):
-            offset = row_offset + x * 2
-            if offset + 2 > len(raw):
-                continue
-            total_count += 1
-            (value,) = struct.unpack_from('<H', raw, offset)
-            depth_mm = value & 0x1FFF
+    for x, y, depth_mm, value in iter_depth_pixels(raw, width, height, row_stride):
+        total_count += 1
 
-            if depth_mm == 0:
-                continue  # sentinel: no confident depth measurement
+        if depth_mm == 0:
+            continue  # sentinel: no confident depth measurement
 
-            if raw_min is None or value < raw_min:
-                raw_min = value
-            if raw_max is None or value > raw_max:
-                raw_max = value
-            raw_sum += value
+        if raw_min is None or value < raw_min:
+            raw_min = value
+        if raw_max is None or value > raw_max:
+            raw_max = value
+        raw_sum += value
 
-            if depth_min is None or depth_mm < depth_min:
-                depth_min = depth_mm
-            if depth_max is None or depth_mm > depth_max:
-                depth_max = depth_mm
-            depth_sum += depth_mm
+        if depth_min is None or depth_mm < depth_min:
+            depth_min = depth_mm
+        if depth_max is None or depth_mm > depth_max:
+            depth_max = depth_mm
+        depth_sum += depth_mm
 
-            valid_count += 1
+        valid_count += 1
 
-            if in_center_row and cx0 <= x < cx1:
-                center_values.append(depth_mm)
+        if cy0 <= y < cy1 and cx0 <= x < cx1:
+            center_values.append(depth_mm)
 
     if total_count == 0:
         raise ValueError('No depth pixels decoded (empty or truncated buffer)')

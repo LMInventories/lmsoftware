@@ -30,7 +30,9 @@ from models import db, Inspection, FloorPlanScan
 from permissions import require_admin_or_manager
 from utils.s3 import is_configured, new_key, presign_put, download_bytes
 from services.floorplan_processing import parse_scan_package, summarize
-from services.floorplan_geometry import estimate_room_footprint, summarize_footprint
+from services.floorplan_geometry import (
+    estimate_room_footprint, summarize_footprint, build_point_cloud, fit_wall_lines,
+)
 
 floorplans_bp = Blueprint('floorplans', __name__)
 
@@ -135,12 +137,19 @@ def inspect_scan(scan_id):
     """
     Diagnostic endpoint (Milestone 2 groundwork): downloads an UPLOADED scan's
     zip package server-side, parses it, and returns aggregate stats (frame
-    count, pose bounding box, depth-value ranges, warnings) plus a rough
+    count, pose bounding box, depth-value ranges, warnings), a rough
     room-footprint estimate (single forward ray per frame, projected into an
-    oriented minimum-area rectangle — see services/floorplan_geometry.py).
-    This is NOT true wall detection — no line-fitting, no corner detection —
-    just enough geometry to sanity-check a scan against a room's real size
-    before any such algorithm is built.
+    oriented minimum-area rectangle), and — if the scan's intrinsics look
+    usable — a denser per-pixel point cloud fed through the same RANSAC wall
+    fitter (see services/floorplan_geometry.py for the full reasoning on
+    both).
+
+    denseWallLines needs intrinsics captured via camera.textureIntrinsics
+    (fixed in FloorPlanScanRecorder.kt); scans captured before that fix used
+    imageIntrinsics, which is the wrong source for this — confirmed against
+    real data to produce nonsense (5-14m "walls" in a ~6x4m room) once
+    per-pixel density amplifies the error. Still computed for older scans
+    (not blocked), but don't trust denseWallLines results predating that fix.
 
     Never returns s3_key — see module docstring's privacy note.
     """
@@ -161,4 +170,16 @@ def inspect_scan(scan_id):
 
     result = summarize(parsed)
     result['footprint'] = summarize_footprint(estimate_room_footprint(parsed))
+
+    dense_cloud = build_point_cloud(zip_bytes, parsed, subsample_step=6)
+    dense_walls = fit_wall_lines(
+        [(p.x, p.z) for p in dense_cloud],
+        min_inliers=max(15, len(dense_cloud) // 200),
+    ) if dense_cloud else []
+    result['densePointCount'] = len(dense_cloud)
+    result['denseWallLines'] = [
+        {'x1': w.x1, 'z1': w.z1, 'x2': w.x2, 'z2': w.z2, 'inlierCount': w.inlier_count}
+        for w in dense_walls
+    ]
+
     return jsonify(result)

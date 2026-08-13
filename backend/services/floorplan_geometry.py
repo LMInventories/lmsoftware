@@ -23,13 +23,15 @@ represents camera-to-world or needs inverting, (c) intrinsics/depth image
 alignment — not the quaternion math itself.
 """
 
+import io
 import math
 import random
 import statistics
+import zipfile
 from dataclasses import dataclass, field
 from typing import Optional
 
-from services.floorplan_processing import ParsedScan
+from services.floorplan_processing import ParsedScan, iter_depth_pixels
 
 
 def quaternion_rotate_vector(qx: float, qy: float, qz: float, qw: float,
@@ -63,6 +65,132 @@ def forward_vector_world(pose: dict) -> Optional[tuple]:
     if None in (qx, qy, qz, qw):
         return None
     return quaternion_rotate_vector(qx, qy, qz, qw, 0.0, 0.0, -1.0)
+
+
+def scaled_depth_intrinsics(intrinsics: dict, depth_width: int, depth_height: int) -> Optional[dict]:
+    """
+    Scale captured intrinsics (for the GPU texture image — see
+    FloorPlanScanRecorder.kt's recordIntrinsicsAsync, which captures
+    frame.camera.textureIntrinsics, NOT imageIntrinsics) to the depth
+    image's own resolution.
+
+    Formula confirmed against Google's own official ARCore raw-depth sample
+    (PointCloudHelper.convertRawDepthImagesTo3dPointBuffer, arcore-android-sdk
+    repo) rather than guessed: each axis is scaled independently by that
+    axis's own resolution ratio (fx * depthWidth/textureWidth, etc.) — this
+    is correct even when the depth image's aspect ratio differs from the
+    texture image's (confirmed true on the real device this was captured on:
+    depth 160x90 vs a differently-shaped texture image), because it's an
+    anisotropic per-axis scale, not an assumption that the two share a
+    field of view.
+
+    Returns None if the captured intrinsics are missing required fields —
+    scans captured before this fix used imageIntrinsics instead of
+    textureIntrinsics, which is the wrong source; per-pixel backprojection
+    should not be trusted against those even if this doesn't error.
+    """
+    try:
+        fx = intrinsics['focalLengthX']
+        fy = intrinsics['focalLengthY']
+        cx = intrinsics['principalPointX']
+        cy = intrinsics['principalPointY']
+        src_w = intrinsics['imageWidth']
+        src_h = intrinsics['imageHeight']
+    except (KeyError, TypeError):
+        return None
+    if not src_w or not src_h:
+        return None
+
+    return {
+        'fx': fx * depth_width / src_w,
+        'fy': fy * depth_height / src_h,
+        'cx': cx * depth_width / src_w,
+        'cy': cy * depth_height / src_h,
+    }
+
+
+def backproject_pixel(u: int, v: int, depth_mm: float, scaled_intrinsics: dict) -> tuple:
+    """
+    Convert a depth-image pixel + depth reading into a camera-local 3D point
+    (meters), per the exact formula in Google's official raw-depth sample:
+    x = depth*(u-cx)/fx, y = depth*(cy-v)/fy [note the flip: image v
+    increases downward, camera Y increases upward], z = -depth [camera
+    looks down its local -Z axis]. At u=cx, v=cy this reduces exactly to
+    (0, 0, -depth), consistent with forward_vector_world's center-ray case.
+    """
+    depth_m = depth_mm / 1000.0
+    x = depth_m * (u - scaled_intrinsics['cx']) / scaled_intrinsics['fx']
+    y = depth_m * (scaled_intrinsics['cy'] - v) / scaled_intrinsics['fy']
+    z = -depth_m
+    return (x, y, z)
+
+
+@dataclass
+class WorldPoint:
+    frame_index: int
+    x: float
+    y: float
+    z: float
+
+
+def build_point_cloud(zip_bytes: bytes, parsed: ParsedScan, subsample_step: int = 4) -> list:
+    """
+    Full per-pixel point cloud (not just one ray per frame): for each frame
+    with valid pose + depth + intrinsics, backprojects a subsampled grid of
+    valid depth pixels into world space.
+
+    Needs zip_bytes again (not just the already-parsed ParsedScan) because
+    per-frame depth grids aren't retained after parse_scan_package computes
+    their aggregate stats — re-reads each depth file from the zip.
+
+    subsample_step=4 keeps this fast and the output size reasonable (a
+    160x90 frame has 14400 pixels; step=4 keeps ~900 candidates per frame
+    before sentinel-filtering) — same idea as Google's sample's own
+    uniform-subsampling approach, just a fixed step here rather than
+    computed from a target point budget.
+    """
+    if not parsed.intrinsics:
+        return []
+
+    points = []
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        names = set(zf.namelist())
+        for f in parsed.frames:
+            if f.depth is None:
+                continue
+            pose = f.pose or {}
+            tx, ty, tz = pose.get('tx'), pose.get('ty'), pose.get('tz')
+            if tx is None:
+                continue
+            fwd_rot_args = (pose.get('qx'), pose.get('qy'), pose.get('qz'), pose.get('qw'))
+            if None in fwd_rot_args:
+                continue
+
+            depth_width, depth_height = f.depth.width, f.depth.height
+            scaled = scaled_depth_intrinsics(parsed.intrinsics, depth_width, depth_height)
+            if scaled is None:
+                continue
+
+            # depthFile name follows the manifest's own convention
+            # (depth/{index}.raw) — re-derive it the same way the manifest did.
+            depth_file = f"depth/{f.index}.raw"
+            if depth_file not in names:
+                continue
+            raw = zf.read(depth_file)
+
+            for x, y, depth_mm, _raw_value in iter_depth_pixels(raw, depth_width, depth_height, f.depth.row_stride):
+                if depth_mm == 0:
+                    continue
+                if x % subsample_step != 0 or y % subsample_step != 0:
+                    continue
+
+                cx_cam, cy_cam, cz_cam = backproject_pixel(x, y, depth_mm, scaled)
+                wx, wy, wz = quaternion_rotate_vector(*fwd_rot_args, cx_cam, cy_cam, cz_cam)
+                points.append(WorldPoint(
+                    frame_index=f.index, x=tx + wx, y=ty + wy, z=tz + wz,
+                ))
+
+    return points
 
 
 @dataclass

@@ -732,3 +732,48 @@ def summarize_footprint(estimate: FootprintEstimate) -> dict:
             for p in estimate.points
         ],
     }
+
+
+def polygon_to_walls(corners: list) -> tuple:
+    """
+    Convert a closed polygon (list of (x, z) tuples, NOT repeating the
+    first point at the end) into (WallLineSegment list, Corner list), for
+    reuse with render_floorplan_svg — used by the manual floor-plan tool
+    (models.FloorPlan), where the inspector measures each wall directly
+    (laser measure or tape) rather than it being detected from noisy depth
+    data.
+
+    Unlike find_corners' output — which infers corners from statistically
+    detected wall segments and can legitimately return zero corners when
+    the data doesn't support one — every vertex here IS a real corner by
+    construction: these come from the user's own measurements, not
+    inference. All walls get nearby_conflict_m=None (renders solid/trusted
+    in render_floorplan_svg) since a physical measurement has no
+    drift-uncertainty to flag, unlike ARCore-derived walls.
+
+    Requires at least 3 distinct points to form a polygon; returns ([], [])
+    otherwise.
+    """
+    n = len(corners)
+    if n < 3:
+        return [], []
+
+    walls = []
+    for i in range(n):
+        x1, z1 = corners[i]
+        x2, z2 = corners[(i + 1) % n]
+        walls.append(WallLineSegment(x1=x1, z1=z1, x2=x2, z2=z2, inlier_count=1, nearby_conflict_m=None))
+
+    corner_objs = []
+    for i in range(n):
+        px, pz = corners[i]
+        prev_x, prev_z = corners[(i - 1) % n]
+        next_x, next_z = corners[(i + 1) % n]
+        v1x, v1z = prev_x - px, prev_z - pz
+        v2x, v2z = next_x - px, next_z - pz
+        cross = v1x * v2z - v1z * v2x
+        dot = v1x * v2x + v1z * v2z
+        angle_deg = math.degrees(math.atan2(abs(cross), dot))
+        corner_objs.append(Corner(x=px, z=pz, wall_a=(i - 1) % n, wall_b=i, angle_deg=angle_deg))
+
+    return walls, corner_objs

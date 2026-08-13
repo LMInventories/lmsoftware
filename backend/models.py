@@ -472,6 +472,54 @@ class FloorPlanScan(db.Model):
         }
 
 
+class FloorPlan(db.Model):
+    """
+    A manually-measured floor plan: the inspector walks the property's
+    perimeter, measures each wall (laser measure or tape), and the mobile
+    app computes a closed 2D polygon from the wall lengths + turn angles.
+    One row per inspection (inspection_id is unique) — matches the
+    Create/View Floorplan button's binary state on PropertyOverviewScreen.
+
+    This replaces relying on the ARCore depth-scanning pipeline
+    (FloorPlanScan/services/floorplan_geometry.py's point-cloud/RANSAC/
+    corner-detection code) as the primary path: real device testing showed
+    ARCore's own pose-tracking drift means it can find individual walls but
+    not reliably close a room polygon. A physical measurement has no drift,
+    which is why this is simpler and more accurate for the same goal. The
+    ARCore code is untouched and still functions — just not the default
+    path anymore.
+
+    corners is a JSON-encoded list of [x, z] pairs in meters, forming a
+    closed polygon (last point connects back to the first). Rendered on
+    demand via services/floorplan_geometry.polygon_to_walls() +
+    services/floorplan_render.render_floorplan_svg() — nothing here stores
+    a rendered image.
+    """
+    __tablename__ = 'floor_plans'
+
+    id            = db.Column(db.Integer, primary_key=True)
+    inspection_id = db.Column(db.Integer, db.ForeignKey('inspections.id', ondelete='CASCADE'),
+                               nullable=False, unique=True, index=True)
+    corners       = db.Column(db.Text, nullable=False)  # JSON: [[x,z], [x,z], ...]
+    created_at    = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at    = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc),
+                               onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+
+    inspection = db.relationship(
+        'Inspection',
+        backref=db.backref('floor_plan', uselist=False, cascade='all, delete-orphan')
+    )
+
+    def to_dict(self):
+        return {
+            'id':            self.id,
+            'inspectionId':  self.inspection_id,
+            'corners':       json.loads(self.corners),
+            'createdAt':     self.created_at.isoformat() if self.created_at else None,
+            'updatedAt':     self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
 class TranscriptionFillDiff(db.Model):
     """
     One row per (log entry x field) comparison between what an AI fill call

@@ -830,6 +830,8 @@ class _PDFBuilder:
             return story
         story += self._contents(page_map=page_map)
         story += self._disclaimer()
+        if not self.is_midterm:
+            story += self._floorplan_section()
         if self.is_check_out and self.act_pos == 'top':
             story += self._action_summary()
         story += self._fixed_sections()
@@ -1236,6 +1238,8 @@ class _PDFBuilder:
         add('Contents',    'anchor_contents')
         if self.sys_settings.get('report_disclaimer') or self.cl.get('report_disclaimer'):
             add('Disclaimers', 'anchor_disclaimers')
+        if not self.is_midterm and ((self.rd.get('_floorplan') or {}).get('images')):
+            add('Floor Plan', 'anchor_floorplan')
         if self.is_check_out and self.act_pos == 'top' and self.actions_summary:
             add('Action Summary', 'anchor_action_summary')
         for s in self.fixed_sections:
@@ -1273,6 +1277,61 @@ class _PDFBuilder:
             return []
         text = disc.replace('&','&amp;').replace('<','&lt;').replace('>','&gt;').replace('\n','<br/>')
         return [_HeaderBar('Disclaimers', self.brand, self.hdr_c, anchor='anchor_disclaimers'), Spacer(1,4*mm), Paragraph(text, self.s_body), PageBreak()]
+
+    # ── Floor plan ────────────────────────────────────────────────────────────
+    # Large, one-per-page floor plan images uploaded on mobile from a 3rd-party
+    # drawing app (see PropertyOverviewScreen.tsx's Floorplan button). Entirely
+    # omitted when the clerk hasn't uploaded any — this single emptiness check
+    # is what makes inclusion conditional on a completed upload, per-inspection,
+    # rather than an admin-wide toggle like the other fixed sections use.
+
+    def _floorplan_unavailable_placeholder(self, w_mm, h_mm):
+        """Full-size version of _photo_unavailable_cell — same visual language,
+        sized to fill the image box instead of a thumbnail cell."""
+        p = Paragraph(
+            '⚠ Image unavailable',
+            ParagraphStyle('fpErr', fontName='Helvetica-Bold', fontSize=11,
+                            leading=14, textColor=_RED_TXT, alignment=1),
+        )
+        t = Table([[p]], colWidths=[w_mm * mm], rowHeights=[h_mm * mm])
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0,0),(0,0), _RED_BG),
+            ('BOX',        (0,0),(0,0), 0.5, _RED_TXT),
+            ('VALIGN',     (0,0),(0,0), 'MIDDLE'),
+            ('ALIGN',      (0,0),(0,0), 'CENTER'),
+        ]))
+        return t
+
+    def _floorplan_section(self):
+        images = ((self.rd.get('_floorplan') or {}).get('images')) or []
+        if not images:
+            return []
+        images_sorted = sorted(images, key=lambda im: im.get('order', 0))
+
+        label_style = ParagraphStyle(
+            'floorplan_label', fontName='Helvetica-Bold', fontSize=12,
+            leading=16, textColor=self.body_c, alignment=TA_CENTER,
+        )
+
+        header_h   = 11 * 1.8 + 8  # matches _HeaderBar's own height formula
+        label_h_mm = (label_style.leading + 6 * mm) / mm
+        avail_w_mm = self._uw() / mm
+        avail_h_mm = (self.ph - 2 * self.margin - header_h) / mm - label_h_mm
+
+        story = [_Anchor('anchor_floorplan'),
+                 _HeaderBar('Floor Plan', self.brand, self.hdr_c, anchor='anchor_floorplan')]
+
+        for i, im in enumerate(images_sorted):
+            label = (im.get('label') or '').strip() or f'Floor {i + 1}'
+            url   = im.get('uri') or im.get('url') or ''
+            img   = self._fetch_image(url, avail_w_mm, avail_h_mm) if url else None
+            if img is None:
+                img = self._floorplan_unavailable_placeholder(avail_w_mm, avail_h_mm)
+            else:
+                img.hAlign = 'CENTER'
+            story += [Spacer(1, 4*mm), Paragraph(label, label_style), Spacer(1, 3*mm), img, PageBreak()]
+
+        return story
 
     # ── Fixed sections ────────────────────────────────────────────────────────
 

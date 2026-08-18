@@ -831,7 +831,7 @@ function fixedItemLabel(sec, rowId, rowName) {
 
 // ── Photo viewer (per item, all inspection types) ────────────────────
 const photoViewer = ref({
-  show: false, photos: [], index: 0, ref: '', label: '',
+  show: false, photos: [], index: 0, ref: '', label: '', labels: null,
   sectionId: null, rowId: null, // source location for move/delete
 })
 // Client photo settings — loaded from report_photo_settings JSON on the client record
@@ -925,6 +925,35 @@ function openItemPhotos(ref, label, photos, startIndex = 0) {
   photoViewer.value = { show: true, photos, index: startIndex, ref, label, sectionId: null, rowId: null }
   lbSelected.value  = new Set()
   lbMoving.value    = false
+}
+
+// ── Floor plan (read-only images uploaded from mobile; see FloorPlanImagesScreen.tsx) ──
+const floorplanImages = computed(() => {
+  const imgs = reportData.value._floorplan?.images || []
+  return [...imgs].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+})
+
+function openFloorplanLightbox(startIndex) {
+  const imgs = floorplanImages.value
+  if (!imgs.length) return
+  const labels = imgs.map((im, i) => im.label || `Floor ${i + 1}`)
+  photoViewer.value = {
+    show: true, photos: imgs.map(im => im.uri), labels,
+    index: startIndex, ref: '', label: labels[startIndex] || '',
+    sectionId: null, rowId: null,
+  }
+  lbSelected.value = new Set()
+  lbMoving.value   = false
+}
+
+function deleteFloorplanImage(id) {
+  const imgs = reportData.value._floorplan?.images
+  if (!Array.isArray(imgs)) return
+  const idx = imgs.findIndex(im => im.id === id)
+  if (idx === -1) return
+  imgs.splice(idx, 1)
+  imgs.forEach((im, i) => { im.order = i })
+  unsaved.value = true
 }
 function openLightbox(sectionId, rowId, index) {
   const photos = getPhotos(sectionId, rowId)
@@ -2714,6 +2743,25 @@ async function moveToReview() {
             <div v-else class="unknown-type">Unknown section type: {{ sec.type }}</div>
           </div>
 
+          <!-- ═══ FLOOR PLAN ════════════════════════════════════════ -->
+          <!-- Read-only: images are managed exclusively on mobile (see
+               FloorPlanImagesScreen.tsx). Admins/managers can delete a
+               mis-uploaded image here without sending the clerk back out;
+               no upload/reorder/relabel controls in the webapp. -->
+          <div v-if="floorplanImages.length" id="sec-floorplan" class="card">
+            <div class="card-hd">
+              <h2 class="card-title">Floor Plan</h2>
+              <span class="card-hint">{{ floorplanImages.length }} image{{ floorplanImages.length !== 1 ? 's' : '' }}</span>
+            </div>
+            <div class="floorplan-grid">
+              <div v-for="(img, idx) in floorplanImages" :key="img.id" class="floorplan-thumb" @click="openFloorplanLightbox(idx)">
+                <img :src="img.uri" class="floorplan-thumb-img" />
+                <span class="floorplan-thumb-label">{{ img.label || `Floor ${idx + 1}` }}</span>
+                <button v-if="canDelete" class="ph-del" @click.stop="deleteFloorplanImage(img.id)" title="Delete image">×</button>
+              </div>
+            </div>
+          </div>
+
           <!-- ═══ ROOMS ═════════════════════════════════════════════ -->
           <div v-for="(room, roomIdx) in rooms" :key="room.id" :id="`sec-${room.id}`" class="card card-room">
             <div class="card-hd card-hd-room">
@@ -3387,10 +3435,10 @@ async function moveToReview() {
         <div class="ci-lightbox-hd">
           <span class="ci-lightbox-title">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-            <template v-if="photoViewer.ref || photoViewer.label">
+            <template v-if="photoViewer.ref || photoViewer.label || photoViewer.labels">
               <span v-if="photoViewer.ref" class="lb-ref">Ref {{ photoViewer.ref }}</span>
-              <span v-if="photoViewer.label" class="lb-sep">·</span>
-              {{ photoViewer.label }}
+              <span v-if="photoViewer.label || photoViewer.labels" class="lb-sep">·</span>
+              {{ photoViewer.labels ? photoViewer.labels[photoViewer.index] : photoViewer.label }}
             </template>
             <template v-else>Photo Viewer</template>
           </span>
@@ -3415,7 +3463,7 @@ async function moveToReview() {
           </div>
 
           <div class="lb-toolbar-group">
-            <button class="lb-pill lb-pill-ghost" @click="lbRotateCurrent" title="Rotate 90°">
+            <button v-if="photoViewer.sectionId" class="lb-pill lb-pill-ghost" @click="lbRotateCurrent" title="Rotate 90°">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>
               Rotate
             </button>
@@ -4226,6 +4274,12 @@ async function moveToReview() {
 .ph-thumb img{width:100%;height:100%;object-fit:cover;display:block}
 .ph-thumb-lg{width:90px;height:90px}
 .ph-del{position:absolute;top:2px;right:2px;width:18px;height:18px;border-radius:50%;background:rgba(0,0,0,0.6);border:none;color:#fff;font-size:11px;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1}
+/* Floor plan section — read-only thumbnail grid */
+.floorplan-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;padding:16px 20px}
+.floorplan-thumb{position:relative;cursor:pointer;border-radius:8px;overflow:hidden;border:1px solid #e2e8f0;background:#f8fafc;transition:border-color 0.15s}
+.floorplan-thumb:hover{border-color:#6366f1}
+.floorplan-thumb-img{width:100%;aspect-ratio:4/3;object-fit:cover;display:block}
+.floorplan-thumb-label{display:block;padding:6px 8px;font-size:12px;font-weight:600;color:#475569;background:#fff;border-top:1px solid #e2e8f0}
 /* Upload button */
 .ph-upload-btn{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;background:#fff;border:1.5px dashed #94a3b8;border-radius:6px;font-size:12px;color:#475569;cursor:pointer;transition:all 0.15s;white-space:nowrap}
 .ph-upload-btn:hover{border-color:#6366f1;color:#6366f1;background:#f5f3ff}

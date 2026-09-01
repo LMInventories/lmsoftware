@@ -182,6 +182,7 @@ const api = {
   applyPdfImportStatus(id, jobId)   { return http.get(`/api/inspections/${id}/apply-pdf-import-status/${jobId}`) },
   sharePdf(id, emails, notes = '')   { return http.post(`/api/inspections/${id}/share-pdf`, { emails, notes }) },
   saveAsTemplate(id, data)           { return http.post(`/api/inspections/${id}/save_as_template`, data) },
+  getInspectionActivity(id)          { return http.get(`/api/inspections/${id}/activity`) },
 
   // ── Templates ─────────────────────────────────────────────────────────────
   getTemplates()            { return http.get('/api/templates') },

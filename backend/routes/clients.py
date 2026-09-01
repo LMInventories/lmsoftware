@@ -3,6 +3,7 @@ import string
 import types
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required
+from sqlalchemy.orm import defer
 from models import db, Client, User
 
 clients_bp = Blueprint('clients', __name__)
@@ -89,8 +90,12 @@ def _sync_client_users(client, plain_password=None):
 @clients_bp.route('', methods=['GET'])
 @jwt_required()
 def get_clients():
-    clients = Client.query.all()
-    return jsonify([c.to_dict() for c in clients])
+    # `logo` IS rendered as a small avatar thumbnail on the client list (ClientsView.vue),
+    # so it must stay. `logo_inverted` (the PDF-footer variant) is only ever read on the
+    # single-client GeneralSettings view — defer it here so listing clients doesn't pull
+    # a second full base64 blob per client that the list never uses.
+    clients = Client.query.options(defer(Client.logo_inverted)).all()
+    return jsonify([c.to_dict(include_logo_inverted=False) for c in clients])
 
 @clients_bp.route('/<int:client_id>', methods=['GET'])
 @jwt_required()

@@ -75,7 +75,7 @@ class Client(db.Model):
 
     properties = db.relationship('Property', backref='client', lazy=True, cascade='all, delete-orphan')
 
-    def to_dict(self):
+    def to_dict(self, include_logo_inverted=True):
         return {
             'id':                    self.id,
             'name':                  self.name,
@@ -84,7 +84,7 @@ class Client(db.Model):
             'company':               self.company,
             'address':               self.address,
             'logo':                  self.logo,
-            'logo_inverted':         self.logo_inverted,
+            'logo_inverted':         self.logo_inverted if include_logo_inverted else None,
             'primary_color':         self.primary_color,
             'report_disclaimer':     self.report_disclaimer,
             'report_color_override':  self.report_color_override,
@@ -264,6 +264,37 @@ class Inspection(db.Model):
             'client_booked':           self.client_booked,
             'created_at':              self.created_at.isoformat() if self.created_at else None,
             'updated_at':              self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class InspectionActivity(db.Model):
+    """
+    Lifecycle timeline for an inspection — created, details edited, fetched to a
+    clerk's phone for offline work, started on-site, synced back from the phone,
+    completed. Shown on InspectionDetailView.vue as the Activity Log card.
+    One row per event; see services/activity_log.py for how rows get created
+    (including throttling for the noisier event types).
+    """
+    __tablename__ = 'inspection_activity'
+
+    id            = db.Column(db.Integer, primary_key=True)
+    inspection_id = db.Column(db.Integer, db.ForeignKey('inspections.id', ondelete='CASCADE'), nullable=False, index=True)
+    event_type    = db.Column(db.String(30), nullable=False)  # created|details_added|fetched|started|synced|completed
+    user_id       = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
+    detail        = db.Column(db.String(255))  # optional short human-readable context
+    created_at    = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    inspection = db.relationship('Inspection', foreign_keys=[inspection_id])
+    user       = db.relationship('User', foreign_keys=[user_id])
+
+    def to_dict(self):
+        return {
+            'id':         self.id,
+            'event_type': self.event_type,
+            'user_id':    self.user_id,
+            'user_name':  self.user.name if self.user else None,
+            'detail':     self.detail,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
         }
 
 

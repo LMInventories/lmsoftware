@@ -2,7 +2,11 @@
 import { ref, onMounted, computed } from 'vue'
 import api from '../services/api'
 import { useAuthStore } from '../stores/auth'
+import { useToast } from '../composables/useToast'
+import { useConfirm } from '../composables/useConfirm'
 const authStore = useAuthStore()
+const toast = useToast()
+const confirmDialog = useConfirm()
 
 const clients = ref([])
 const loading = ref(true)
@@ -50,7 +54,7 @@ function handleLogoUpload(event) {
   if (!file) return
 
   if (file.size > 2 * 1024 * 1024) {
-    alert('Logo must be under 2MB')
+    toast.error('Logo must be under 2MB')
     event.target.value = ''
     return
   }
@@ -85,6 +89,7 @@ async function fetchClients() {
     clients.value = response.data
   } catch (error) {
     console.error('Failed to fetch clients:', error)
+    toast.error('Failed to load clients — check your connection and try again')
   } finally {
     loading.value = false
   }
@@ -142,20 +147,26 @@ async function handleSubmit() {
     showEditModal.value = false
     // Re-fetch in the background to ensure full consistency
     fetchClients()
+    toast.success('Client saved')
   } catch (error) {
     console.error('Failed to save client:', error)
-    alert('Failed to save client')
+    toast.error('Failed to save client')
   }
 }
 
 async function deleteClient(id) {
-  if (!confirm('Delete this client? This will also remove all their properties and inspections.')) return
+  const ok = await confirmDialog.ask(
+    'Delete this client? This will also remove all their properties and inspections.',
+    { title: 'Delete client', confirmText: 'Delete', danger: true }
+  )
+  if (!ok) return
   try {
     await api.deleteClient(id)
     fetchClients()
+    toast.success('Client deleted')
   } catch (error) {
     console.error('Failed to delete client:', error)
-    alert('Failed to delete client')
+    toast.error('Failed to delete client')
   }
 }
 
@@ -163,7 +174,11 @@ const pushingCredentials = ref(false)
 const pushCredentialsMessage = ref('')
 
 async function pushAccountDetails(client) {
-  if (!confirm(`This will reset the password for ${client.name} and email their new login details to ${client.email}. Continue?`)) return
+  const ok = await confirmDialog.ask(
+    `This will reset the password for ${client.name} and email their new login details to ${client.email}. Continue?`,
+    { title: 'Reset client password', confirmText: 'Send new login details', danger: true }
+  )
+  if (!ok) return
   pushingCredentials.value = true
   pushCredentialsMessage.value = ''
   try {
@@ -242,7 +257,7 @@ onMounted(() => {
         <div class="card-body">
           <div class="client-identity">
             <div class="client-avatar" :style="{ background: client.primary_color || '#1E3A8A' }">
-              <img v-if="client.logo" :src="client.logo" :alt="client.name" class="avatar-logo" />
+              <img v-if="client.logo" :src="client.logo" :alt="client.name" class="avatar-logo" loading="lazy" />
               <span v-else class="avatar-initials">{{ getInitials(client) }}</span>
             </div>
             <div class="client-name-block">

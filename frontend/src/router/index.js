@@ -1,10 +1,4 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import LoginView from '../views/LoginView.vue'
-import MainLayout from '../layouts/MainLayout.vue'
-import MobileHome from '../views-mobile/MobileHome.vue'
-import MobileLogin from '../views-mobile/MobileLogin.vue'
-import MobilePropertyView from '../views-mobile/MobilePropertyView.vue'
-import MobileReportEditor from '../views-mobile/MobileReportEditor.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -16,7 +10,7 @@ const router = createRouter({
     {
       path: '/login',
       name: 'Login',
-      component: LoginView
+      component: () => import('../views/LoginView.vue')
     },
     {
       path: '/reset-password',
@@ -27,7 +21,7 @@ const router = createRouter({
     // All desktop routes wrapped in MainLayout sidebar
     {
       path: '/',
-      component: MainLayout,
+      component: () => import('../layouts/MainLayout.vue'),
       meta: { requiresAuth: true },
       children: [
         {
@@ -98,28 +92,29 @@ const router = createRouter({
       ]
     },
 
-    // Mobile routes — no layout wrapper
+    // Mobile routes — no layout wrapper. Lazy-loaded like everything else so the
+    // desktop clerk's initial bundle never ships mobile-only code it never touches.
     {
       path: '/mobile/login',
       name: 'MobileLogin',
-      component: MobileLogin,
+      component: () => import('../views-mobile/MobileLogin.vue'),
     },
     {
       path: '/mobile',
       name: 'MobileHome',
-      component: MobileHome,
+      component: () => import('../views-mobile/MobileHome.vue'),
       meta: { requiresMobileAuth: true },
     },
     {
       path: '/mobile/inspection/:id',
       name: 'MobilePropertyView',
-      component: MobilePropertyView,
+      component: () => import('../views-mobile/MobilePropertyView.vue'),
       meta: { requiresMobileAuth: true },
     },
     {
       path: '/mobile/inspection/:id/report',
       name: 'MobileReportEditor',
-      component: MobileReportEditor,
+      component: () => import('../views-mobile/MobileReportEditor.vue'),
       meta: { requiresMobileAuth: true },
     },
   ]

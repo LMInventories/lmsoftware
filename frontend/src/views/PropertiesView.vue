@@ -3,8 +3,10 @@ import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../services/api'
 import { useToast } from '../composables/useToast'
+import { useConfirm } from '../composables/useConfirm'
 import { useAuthStore } from '../stores/auth'
 const toast = useToast()
+const confirmDialog = useConfirm()
 const router = useRouter()
 const authStore = useAuthStore()
 
@@ -280,7 +282,8 @@ async function handleSubmitAndAddInspection() {
 }
 
 async function deleteProperty(id) {
-  if (!confirm('Delete this property?')) return
+  const ok = await confirmDialog.ask('Delete this property?', { title: 'Delete property', confirmText: 'Delete', danger: true })
+  if (!ok) return
   try { await api.deleteProperty(id); toast.success('Property deleted'); fetchProperties() }
   catch (e) { toast.error('Failed to delete property') }
 }
@@ -357,7 +360,7 @@ onMounted(() => { fetchProperties(); fetchClients() })
     <div v-else-if="activeTab === 'grid'" class="properties-grid">
       <div v-for="property in filteredProperties" :key="property.id" class="property-card">
         <div class="card-photo">
-          <img v-if="property.overview_photo" :src="property.overview_photo" alt="" class="prop-img" />
+          <img v-if="property.overview_photo" :src="property.overview_photo" alt="" class="prop-img" loading="lazy" />
           <div v-else class="photo-placeholder"><span class="photo-placeholder-txt">No Photo</span></div>
         </div>
         <div class="card-body">

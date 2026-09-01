@@ -2,9 +2,11 @@
 import { ref, onMounted, computed } from 'vue'
 import api from '../services/api'
 import { useToast } from '../composables/useToast'
+import { useConfirm } from '../composables/useConfirm'
 import { useAuthStore } from '../stores/auth'
 const authStore = useAuthStore()
 const toast = useToast()
+const confirmDialog = useConfirm()
 
 const users = ref([])
 const loading = ref(true)
@@ -116,8 +118,9 @@ async function handleSubmit() {
 }
 
 async function deleteUser(id) {
-  if (!confirm('Delete this user?')) return
-  
+  const ok = await confirmDialog.ask('Delete this user?', { title: 'Delete user', confirmText: 'Delete', danger: true })
+  if (!ok) return
+
   try {
     await api.deleteUser(id)
     toast.success('User deleted')

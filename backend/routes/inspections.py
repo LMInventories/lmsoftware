@@ -1,7 +1,8 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from models import db, Inspection, Property, Client, User, Template, Section, Item
+from models import db, Inspection, Property, Client, User, Template, Section, Item, InspectionActivity
 from permissions import get_current_user, require_admin_or_manager, filter_inspections_for_user, is_admin_or_manager, is_client
+from services.activity_log import log_activity
 from sqlalchemy.orm import joinedload, selectinload, defer
 from datetime import datetime
 import json
@@ -470,6 +471,7 @@ def create_inspection():
     db.session.add(inspection)
     db.session.commit()
     _bust_dashboard()
+    log_activity(inspection.id, 'created', user_id=user.id)
 
     # ── Auto-assign reference number if none was provided ─────────────────
     # The ID is only known after the first commit, so we persist it now so
@@ -608,6 +610,16 @@ def update_inspection(inspection_id):
         data['status'] == 'complete' and
         inspection.status != 'complete'
     )
+    going_active = (
+        'status' in data and
+        data['status'] == 'active' and
+        inspection.status != 'active'
+    )
+    # The mobile app's syncInspection() call (services/syncService.ts) is the only
+    # caller that sends client_updated_at — a simple status flip like "start" or
+    # "move to review" doesn't. Used below to log a 'synced' activity event only
+    # for genuine offline-data syncs, not every status change.
+    is_mobile_sync = bool(client_updated_at_str)
 
     if 'status' in data:
         old_status = inspection.status
@@ -764,6 +776,23 @@ def update_inspection(inspection_id):
     # or rolls back the status update.
     db.session.commit()
     _bust_dashboard()
+
+    # ── Activity log — one event per PUT, priority order below ──────────────
+    # A single request only ever gets one headline event: a full mobile sync
+    # (even if it also flips status) is always 'synced'; otherwise a status
+    # move to active/complete is logged as such; any other web-originated edit
+    # (assigning a clerk, scheduling fields, notes, etc.) is 'details_added'
+    # (throttled — see services/activity_log.py — so rapid edits collapse into
+    # one timeline entry rather than one per autosave).
+    _non_status_keys = set(data.keys()) - {'status', 'client_updated_at'}
+    if is_mobile_sync:
+        log_activity(inspection.id, 'synced', user_id=user.id)
+    elif going_complete:
+        log_activity(inspection.id, 'completed', user_id=user.id)
+    elif going_active:
+        log_activity(inspection.id, 'started', user_id=user.id)
+    elif _non_status_keys:
+        log_activity(inspection.id, 'details_added', user_id=user.id)
 
     # ── Sync Google Sheets + Calendar when scheduling fields change ─────────
     _SYNC_FIELDS = {'conduct_date', 'inspector_id', 'inspection_type',
@@ -950,6 +979,36 @@ def update_inspection(inspection_id):
 # ─────────────────────────────────────────────────────────────────────────────
 # DELETE /api/inspections/<id>
 # ─────────────────────────────────────────────────────────────────────────────
+@inspections_bp.route('/<int:inspection_id>/activity', methods=['GET'])
+@jwt_required()
+def get_inspection_activity(inspection_id):
+    """Chronological lifecycle timeline for the Activity Log card (admin/manager only,
+    matching the Transcription Log card it sits under on InspectionDetailView.vue)."""
+    user = get_current_user()
+    if not is_admin_or_manager(user):
+        return jsonify({'error': 'Forbidden'}), 403
+    Inspection.query.get_or_404(inspection_id)  # 404 if the inspection doesn't exist
+    events = (InspectionActivity.query
+              .filter_by(inspection_id=inspection_id)
+              .order_by(InspectionActivity.created_at.asc())
+              .all())
+    return jsonify([e.to_dict() for e in events])
+
+
+@inspections_bp.route('/<int:inspection_id>/mark-fetched', methods=['POST'])
+@jwt_required()
+def mark_inspection_fetched(inspection_id):
+    """Called by the mobile app right after it downloads an inspection for offline
+    work (FetchInspectionsScreen.tsx) — logs the 'fetched' activity event. Not a
+    GET side-effect: fetching detail for a live web view must never log this."""
+    user = get_current_user()
+    inspection = Inspection.query.get_or_404(inspection_id)
+    if user.role == 'clerk' and inspection.inspector_id != user.id:
+        return jsonify({'error': 'Forbidden'}), 403
+    log_activity(inspection.id, 'fetched', user_id=user.id)
+    return jsonify({'ok': True})
+
+
 @inspections_bp.route('/<int:inspection_id>', methods=['DELETE'])
 @jwt_required()
 def delete_inspection(inspection_id):

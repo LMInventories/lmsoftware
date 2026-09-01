@@ -3,6 +3,7 @@ import { ref, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { useToast } from '../composables/useToast'
+import { useConfirm } from '../composables/useConfirm'
 import api from '../services/api'
 import TemplatePreviewModal from '../components/settings/TemplatePreviewModal.vue'
 import PdfCheckInUploadModal from '../components/PdfCheckInUploadModal.vue'
@@ -11,6 +12,7 @@ const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 const toast = useToast()
+const confirmDialog = useConfirm()
 
 const inspection = ref(null)
 const templates = ref([])
@@ -279,6 +281,7 @@ async function fetchInspection() {
     editForms.value.client_email_override = inspection.value.client_email_override || inspection.value.client?.email || ''
     localPhoto.value = inspection.value.property?.overview_photo || null
     fetchSignatures()
+    if (authStore.isAdmin) fetchActivityLog()
   } catch (error) {
     console.error('Failed to fetch inspection:', error)
     toast.error('Failed to load inspection')
@@ -429,7 +432,9 @@ async function saveConductDateTime() {
 }
 
 async function changeStatus(newStatus) {
-  if (!confirm(`Move inspection to "${statusSteps.value.find(s => s.key === newStatus)?.label}"?`)) return
+  const label = statusSteps.value.find(s => s.key === newStatus)?.label
+  const ok = await confirmDialog.ask(`Move inspection to "${label}"?`, { title: 'Change status', confirmText: 'Move' })
+  if (!ok) return
   try {
     await api.updateInspection(inspection.value.id, { status: newStatus })
     inspection.value.status = newStatus
@@ -453,6 +458,46 @@ async function revertStatus() {
 function formatDate(dateString) {
   if (!dateString) return 'Not set'
   return convertDateToUKFormat(dateString)
+}
+
+// ── Activity Log ────────────────────────────────────────────────────
+// Lifecycle timeline: created → details added (office) → fetched to phone →
+// started (on-site) → synced (phone → server) → completed. See
+// backend/services/activity_log.py for how each event actually gets logged.
+const activityLog = ref([])
+const activityLoading = ref(false)
+
+async function fetchActivityLog() {
+  if (!inspection.value?.id) return
+  activityLoading.value = true
+  try {
+    const response = await api.getInspectionActivity(inspection.value.id)
+    activityLog.value = response.data
+  } catch (error) {
+    console.error('Failed to fetch activity log:', error)
+  } finally {
+    activityLoading.value = false
+  }
+}
+
+const ACTIVITY_META = {
+  created:       { label: 'Created',       icon: '✦' },
+  details_added: { label: 'Details added', icon: '✎' },
+  fetched:       { label: 'Fetched to app', icon: '↓' },
+  started:       { label: 'Started',       icon: '▶' },
+  synced:        { label: 'Synced',        icon: '↻' },
+  completed:     { label: 'Completed',     icon: '✓' },
+}
+
+function activityMeta(eventType) {
+  return ACTIVITY_META[eventType] || { label: eventType, icon: '•' }
+}
+
+function formatActivityTime(dateString) {
+  if (!dateString) return ''
+  return new Date(dateString).toLocaleString('en-GB', {
+    day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
+  })
 }
 
 // ── Transcription export ────────────────────────────────────────────
@@ -1204,6 +1249,25 @@ onMounted(() => {
             </div>
           </div>
 
+          <!-- ACTIVITY LOG — admin only -->
+          <div class="info-card" v-if="authStore.isAdmin">
+            <div class="card-header">
+              <h3>Activity Log</h3>
+            </div>
+            <div class="card-content">
+              <p v-if="activityLoading" class="notes-text">Loading…</p>
+              <p v-else-if="!activityLog.length" class="notes-text">No activity recorded yet.</p>
+              <ul v-else class="activity-list">
+                <li v-for="event in activityLog" :key="event.id" class="activity-row">
+                  <span class="activity-icon" :class="`activity-icon--${event.event_type}`">{{ activityMeta(event.event_type).icon }}</span>
+                  <span class="activity-label">{{ activityMeta(event.event_type).label }}</span>
+                  <span v-if="event.user_name" class="activity-user">— {{ event.user_name }}</span>
+                  <span class="activity-time">{{ formatActivityTime(event.created_at) }}</span>
+                </li>
+              </ul>
+            </div>
+          </div>
+
         </div><!-- /left-col -->
 
         <!-- ── Right column ── -->
@@ -1850,7 +1914,7 @@ onMounted(() => {
                 />
                 <a :href="o.public_url" target="_blank" rel="noopener" class="orphan-view-link" @click.stop title="View full size">↗</a>
                 <span class="orphan-order">#{{ idx + 1 }}</span>
-                <img :src="o.public_url" class="orphan-thumb" />
+                <img :src="o.public_url" class="orphan-thumb" loading="lazy" />
                 <div class="orphan-meta">
                   <span>{{ (o.size / 1024).toFixed(0) }} KB</span>
                   <span>{{ new Date(o.last_modified).toLocaleString('en-GB') }}</span>
@@ -2848,6 +2912,21 @@ onMounted(() => {
 
 /* Notes */
 .notes-text { font-size: 13.5px; line-height: 1.7; color: #475569; white-space: pre-wrap; }
+
+/* Activity Log */
+.activity-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.activity-row { display: flex; align-items: baseline; gap: 8px; font-size: 13px; }
+.activity-icon {
+  flex-shrink: 0; width: 20px; height: 20px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 11px; background: #eef2ff; color: #4f46e5;
+}
+.activity-icon--completed { background: #f0fdf4; color: #16a34a; }
+.activity-icon--started   { background: #eff6ff; color: #2563eb; }
+.activity-icon--synced    { background: #fdf4ff; color: #a21caf; }
+.activity-label { font-weight: 600; color: #1e293b; }
+.activity-user  { color: #64748b; }
+.activity-time  { margin-left: auto; color: #94a3b8; font-size: 12px; white-space: nowrap; }
 
 /* Modals */
 .modal-overlay {

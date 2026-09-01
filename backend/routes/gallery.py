@@ -68,11 +68,18 @@ GALLERY_BASE_URL = os.environ.get(
 # model) but each worker still benefits from repeated requests to the same page.
 _RD_CACHE: dict = {}     # {inspection_id: (expires_at, rd, label)}
 _RD_TTL   = 120          # seconds
+_RD_CACHE_MAX = 100      # hard cap — see _PHOTO_CACHE_MAX for why this must
+                          # be enforced unconditionally, not just on staleness
 
 # Compressed JPEG cache — avoids re-running Pillow on every photo request.
 # Key: (inspection_id, sid, rid, n)  Value: (expires_at, jpeg_bytes)
 _PHOTO_CACHE: dict = {}
-_PHOTO_TTL  = 3600       # 1 hour
+_PHOTO_TTL      = 3600   # 1 hour
+_PHOTO_CACHE_MAX = 2000  # hard cap — entries can each be a few hundred KB of
+                          # JPEG bytes, and this cache is per gunicorn worker
+                          # (independent dict per fork), so leaving it
+                          # unbounded showed up as steadily climbing Railway
+                          # memory billing under sustained gallery traffic.
 
 gallery_bp = Blueprint('gallery', __name__)
 
@@ -126,14 +133,20 @@ def _load_report_data(inspection_id, use_cache=True):
     if not label:
         label = f'Inspection #{inspection_id}'
 
-    # Populate cache; evict stale entries if the cache grows large
+    # Populate cache, then enforce the hard cap (stale entries first, then
+    # oldest — see _PHOTO_CACHE_MAX for why staleness alone isn't enough)
     if use_cache:
         _RD_CACHE[inspection_id] = (time.time() + _RD_TTL, rd, label)
-        if len(_RD_CACHE) > 100:
+        if len(_RD_CACHE) > _RD_CACHE_MAX:
             now = time.time()
             stale = [k for k, v in _RD_CACHE.items() if v[0] < now]
             for k in stale:
                 del _RD_CACHE[k]
+            overflow = len(_RD_CACHE) - _RD_CACHE_MAX
+            if overflow > 0:
+                oldest = sorted(_RD_CACHE.items(), key=lambda kv: kv[1][0])[:overflow]
+                for k, _ in oldest:
+                    del _RD_CACHE[k]
 
     return rd, label, parse_error
 
@@ -500,12 +513,20 @@ def gallery_photo_flat(inspection_id, n):
         print(traceback.format_exc())
         abort(500)
 
-    # Store in cache; evict stale entries if it grows large
+    # Store in cache, then enforce the hard cap: first drop anything already
+    # TTL-stale, and if sustained traffic within the TTL window means that
+    # still isn't enough, drop the oldest entries too — the cache must never
+    # grow past _PHOTO_CACHE_MAX regardless of traffic pattern.
     _PHOTO_CACHE[cache_key] = (now + _PHOTO_TTL, data)
-    if len(_PHOTO_CACHE) > 2000:
+    if len(_PHOTO_CACHE) > _PHOTO_CACHE_MAX:
         stale = [k for k, v in _PHOTO_CACHE.items() if v[0] < now]
         for k in stale:
             del _PHOTO_CACHE[k]
+        overflow = len(_PHOTO_CACHE) - _PHOTO_CACHE_MAX
+        if overflow > 0:
+            oldest = sorted(_PHOTO_CACHE.items(), key=lambda kv: kv[1][0])[:overflow]
+            for k, _ in oldest:
+                del _PHOTO_CACHE[k]
 
     return make_response(data, 200, {
         'Content-Type':  'image/jpeg',

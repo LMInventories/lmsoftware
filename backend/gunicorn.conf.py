@@ -17,6 +17,12 @@ Key decisions:
 - preload_app=True: loads the Flask app once in the master process before
   forking workers, so all 4 workers share the same code memory, DB migrations
   have already run, and the APScheduler only starts once (not once per worker).
+- max_requests=1000 (jitter 100): restarts each worker after ~900-1100
+  requests. Workers otherwise live for the whole deploy cycle, so any
+  in-memory cache (see routes/gallery.py's photo/report_data caches) or
+  leak has unlimited time to grow — this bounds the damage even if a cache's
+  own cap logic has a bug, which is what drove Railway memory billing up
+  after the Aug 2026 gallery/PDF-carousel work despite cutting worker count.
 """
 import os
 
@@ -27,6 +33,8 @@ timeout          = 210
 graceful_timeout = 30   # finish in-flight requests after SIGTERM before hard kill
 keepalive        = 5    # keep TCP connection alive for 5s between requests
 preload_app      = True # load app once, share across workers; scheduler runs once
+max_requests        = 1000  # recycle workers periodically to bound memory growth
+max_requests_jitter = 100   # stagger restarts so workers don't all recycle at once
 
 # Logging
 accesslog    = '-'      # stdout

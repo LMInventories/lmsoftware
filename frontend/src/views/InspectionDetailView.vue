@@ -495,7 +495,7 @@ function exportTranscription() {
     // Human-readable label for instant-mode command codes
     function fmtCommand(cmd, field) {
       const f = field === 'description' ? ' (description)' : field === 'condition' ? ' (condition)' : ''
-      if (cmd === 'delete')    return 'DELETE / NOT SEEN'
+      if (cmd === 'delete')    return 'PLEASE DELETE'
       if (cmd === 'add_sub')   return 'ADD SUB-ITEM'
       if (cmd === 'overwrite') return `AMEND${f}`
       if (cmd === 'append')    return `ADD TO${f}`
@@ -504,7 +504,7 @@ function exportTranscription() {
     // Human-readable label for room-mode per-item action flags
     function fmtRoomActions(f) {
       const parts = []
-      if (f._delete)                        parts.push('DELETE / NOT SEEN')
+      if (f._delete)                        parts.push('PLEASE DELETE')
       if (f._descAction === 'overwrite')    parts.push('AMEND DESCRIPTION')
       if (f._descAction === 'append')       parts.push('ADD TO DESCRIPTION')
       if (f._condAction === 'overwrite')    parts.push('AMEND CONDITION')

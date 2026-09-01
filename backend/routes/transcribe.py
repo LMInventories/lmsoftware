@@ -99,8 +99,9 @@ _TRANSCRIPT_CORRECTIONS = [
     (_re.compile(r'\bEPEZ\b', _re.I),              'UPVC'),
     (_re.compile(r'\bupez\b', _re.I),              'UPVC'),
     (_re.compile(r'\bU\s*P\s*V\s*C\b', _re.I),    'UPVC'),
-    # Normalise "delete item" variants (hyphen / spacing)
-    (_re.compile(r'\bdelete-item\b', _re.I),      'delete item'),
+    # Normalise "please delete" variants (hyphen / spacing) — the only phrase
+    # that deletes an item; see _EDIT_TRIGGERS.
+    (_re.compile(r'\bplease-delete\b', _re.I),    'please delete'),
 ]
 
 def _correct_transcript(text: str) -> str:
@@ -479,6 +480,25 @@ _UK_SPELLING_RULE = (
     '"limescale" not "lime scale".'
 )
 
+# NEVER-FABRICATE RULE — this is a legal inventory document. The AI must reproduce
+# only what the clerk actually said, never what is typical, expected, or likely for
+# an item of that kind. This was added after the model was observed adding "chrome
+# handle" to Door & Frame items whenever the clerk said "white painted door, white
+# painted frame" — nothing about a handle was ever spoken, but door handles are
+# common enough in the vocabulary/example lists below that the model kept
+# completing the pattern anyway. That is always wrong and must never happen again.
+_NO_FABRICATION_RULE = (
+    'NEVER ADD CONTENT THE CLERK DID NOT SAY — this overrides any pattern you might expect from '
+    'typical items of this kind. Even if a component, material, colour, or fitting is completely '
+    'standard for this item type (e.g. a handle on a door, hinges on a frame, a knob on a '
+    'cupboard), do NOT mention it unless the clerk explicitly said it in this transcript. '
+    'The vocabulary lists and worked examples elsewhere in this prompt exist ONLY to help you '
+    'recognise and correctly spell/route words the clerk actually spoke — they are never a menu '
+    'of things to add. If the clerk said "white painted door, white painted frame" and nothing '
+    'else, the output must describe ONLY the door and the frame — no handle, hinges, lock, or '
+    'any other fitting may appear anywhere in the output unless spoken aloud in THIS transcript.'
+)
+
 def _multi_component_rule(field_names: str) -> str:
     """
     Shared "use \\n not commas for multiple distinct components/observations" rule.
@@ -507,7 +527,9 @@ _APPLIANCE_FORMATTING_RULE = (
 # rather than filling only-if-empty.
 #
 # Supported commands (per-item / Instant mode):
-#   "Not Applicable"         → mark item for deletion
+#   "Please Delete"          → mark item for deletion (the ONLY phrase that deletes —
+#                              deliberately narrow so ordinary dictation is never
+#                              misread as a delete command)
 #   "Add sub item ..."       → add a sub-item beneath the current item
 #   "Amend description ..."  → overwrite description field only
 #   "Amend condition ..."    → overwrite condition field only
@@ -519,11 +541,12 @@ _APPLIANCE_FORMATTING_RULE = (
 # NOTE: longer/more specific phrases must come before short ones so they match first.
 
 _EDIT_TRIGGERS = [
-    # Delete commands — item is not in the property or not applicable
-    ('not seen',               'delete',    None),
-    ('not scene',              'delete',    None),   # common Whisper mishearing of "not seen"
-    ('delete item',            'delete',    None),
-    ('not applicable',         'delete',    None),
+    # Delete command — item should be removed from the report entirely.
+    # This is the ONLY phrase that deletes an item. Older phrases ("not seen",
+    # "not applicable", "delete item") were removed because they collided with
+    # ordinary descriptive content ("serial number not seen") and fired too
+    # easily by accident — "please delete" doesn't occur in normal dictation.
+    ('please delete',          'delete',    None),
     # Sub-item command — treat transcript content as a new sub-item
     ('add sub item',           'add_sub',   None),
     # Additional Item command (Check Out only) — creates a brand-new custom
@@ -610,7 +633,7 @@ def _whisper_transcribe(audio_bytes: bytes, mime_type: str) -> tuple[str, float]
                     'induction hob, extractor fan, UPVC, double glazed, thermostatic, TRV, '
                     'fair wear and tear, in good order, in fair order, in poor order. '
                     'Commands to preserve exactly: '
-                    '"Delete item", "Not Applicable", "Not seen", "Add sub item", '
+                    '"Please Delete", "Add sub item", '
                     '"Additional item", "Add additional item", "Return to", '
                     '"Amend description", "Amend condition", '
                     '"Add to description", "Add to condition", "Amend", "Add". '
@@ -663,6 +686,7 @@ VERBATIM RULES — absolute, no exceptions:
 - Capitalise the first word of each observation
 - {_UK_SPELLING_RULE}
 - {_multi_component_rule("the condition field")}
+- {_NO_FABRICATION_RULE}
 
 Return ONLY valid JSON, no markdown:
 {{"condition": "..."}}"""
@@ -695,6 +719,7 @@ RULES — absolute, no exceptions:
 - Capitalise the first word of each line
 - {_UK_SPELLING_RULE}
 - {_multi_component_rule("the condition field")}
+- {_NO_FABRICATION_RULE}
 
 Return ONLY valid JSON, no markdown:
 {{"condition": "..."}}"""
@@ -777,6 +802,8 @@ If no condition is mentioned, default condition to "In good order".
 
 """ + _multi_component_rule("description or condition") + """
 
+""" + _NO_FABRICATION_RULE + """
+
 """ + _CONDITION_WORDS + """
 Return ONLY valid JSON, no markdown:
 {"_subs": [{"description": "...", "condition": "..."}]}"""
@@ -812,6 +839,8 @@ DEFAULT CONDITION RULE — this is critical:
 
 """ + _multi_component_rule("description or condition") + """
 
+""" + _NO_FABRICATION_RULE + """
+
 """ + _APPLIANCE_FORMATTING_RULE + """
 """ + _CONDITION_WORDS + """
 Return ONLY valid JSON, no markdown:
@@ -837,6 +866,7 @@ CRITICAL LANGUAGE RULES:
   says the same thing twice, output it once. Never repeat an observation in your output,
   and never place the same phrase in both the description and the condition fields.
 - {_UK_SPELLING_RULE}
+- {_NO_FABRICATION_RULE}
 {formatting_rules}
 
 {field_instructions}"""
@@ -887,6 +917,7 @@ Instructions:
   and never place the same phrase in both the description and the condition fields.
 - {_UK_SPELLING_RULE}
 - {_multi_component_rule("description or condition")}
+- {_NO_FABRICATION_RULE}
 - Only fill items that are mentioned in the transcript
 - If an item is not mentioned, omit it from the output entirely
 
@@ -1120,9 +1151,9 @@ def transcribe_item():
             is_damage_report = False
 
         # Check Out inspections do not support delete or add-sub commands.
-        # "Not seen" at check-out means the item was there at check-in but is now missing —
-        # it is meaningful condition content, not a deletion trigger.
-        # Items must never be deleted from a check-out report.
+        # Items must never be deleted from a check-out report — a check-out is a record
+        # of what was found at the END of the tenancy, so "please delete" spoken there is
+        # ambiguous/likely misuse and is treated as ordinary dictated content instead.
         elif is_check_out and edit_mode in ('delete', 'add_sub'):
             edit_mode = 'normal'
             edit_field = None
@@ -1130,7 +1161,7 @@ def transcribe_item():
 
         print(f'[transcribe/item] edit_mode={edit_mode!r} field={edit_field!r} transcript={transcript[:60]!r} creating_additional_item={creating_additional_item}')
 
-        # ── Delete: "Not Applicable" — no Claude call needed ──────────────
+        # ── Delete: "Please Delete" — no Claude call needed ──────────────
         if edit_mode == 'delete':
             return jsonify({
                 'transcript': raw_transcript,
@@ -1846,9 +1877,8 @@ Include an already-transcribed item ONLY when the clerk uses one of these patter
     "Return to [item name], add sub item, [description and condition]"
 
   DELETE — output only _delete: true:
-    "[item name]. Delete item."
-    "[item name]. Not Applicable."
-    "[item name]. Not seen."  (only when immediately after item name, not within a description)
+    "[item name]. Please delete."  (only when immediately after item name, not within a description —
+    this is the ONLY phrase that deletes an item; nothing else does)
 
 CHAPTER-HEADING AMENDMENT PATTERN — critical rule:
 When the clerk names an already-transcribed item as a CHAPTER HEADING and then IMMEDIATELY
@@ -1998,23 +2028,23 @@ RULES:
    just the single word or phrase immediately before it. Discard that retracted content entirely and
    continue from what follows the correction word.
    e.g. "in good order, and sorry, and one chrome rail, tarnished" → discard "in good order"; output "1 x chrome rail" (description) + "Tarnished" (condition).
-   e.g. "Built-in storage, mirrored medicine cabinet, correction, none seen" → the correction retracts
-   "mirrored medicine cabinet" entirely, leaving nothing said for Built-in Storage except "none seen".
-   Treat this exactly as if the clerk had said "Built-in storage, none seen" from the start — apply the
-   "not seen" deletion rule below. Do NOT create an item, sub-item, or any field content from the
-   retracted material, and do NOT leave a sub-item with no description or condition.
+   e.g. "Built-in storage, mirrored medicine cabinet, correction, please delete" → the correction retracts
+   "mirrored medicine cabinet" entirely, leaving nothing said for Built-in Storage except "please delete".
+   Treat this exactly as if the clerk had said "Built-in storage, please delete" from the start — apply
+   the "Please Delete" deletion rule below. Do NOT create an item, sub-item, or any field content from
+   the retracted material, and do NOT leave a sub-item with no description or condition.
 5. Only fill items that are mentioned. Omit unmentioned items entirely from the output.
-6. {_UK_SPELLING_RULE}
-7. If only one piece of information is given for an item, put it in description.
-8. REPEATED OR OVERLAPPING CONTENT — treat duplicates as ONE:
+6. {_NO_FABRICATION_RULE}
+7. {_UK_SPELLING_RULE}
+8. If only one piece of information is given for an item, put it in description.
+9. REPEATED OR OVERLAPPING CONTENT — treat duplicates as ONE:
    The transcript is stitched together from several audio clips and may contain the same
    passage twice — overlapping recordings, restarted sentences, or the clerk repeating
    themselves. If the same or nearly the same wording appears more than once for an item,
    use it ONCE only. Never output the same observation twice in any field, and never
    create a duplicate sub-item from repeated speech.
    A repeated plain mention of an already-covered item is NEVER an amendment or an append —
-   only the explicit command words ("Amend", "Add to", "Sub-item", "Delete item",
-   "Not Applicable") make it one.
+   only the explicit command words ("Amend", "Add to", "Sub-item", "Please Delete") make it one.
    EXCEPTION — this dedup rule NEVER suppresses an explicit sub-item trigger. If the clerk
    says "sub-item" / "add sub item" and the content that follows happens to reuse the exact
    same condition wording as the main item or an earlier sub-item (e.g. two elements both
@@ -2191,47 +2221,49 @@ sentence → it is content, never a heading.
 ══════════════════════════════════════════════════════
 DELETE ITEM — remove command
 ══════════════════════════════════════════════════════
-The clerk may say "[item name] Delete Item", "[item name] Not Applicable", or
-"[item name] Not seen" to mark an item as not present in the property.
-When you detect any of these commands:
+"Please Delete" is the ONLY phrase that removes an item. No other wording deletes an item —
+not "not seen", not "not applicable", not "delete item", not any synonym or paraphrase.
+If the clerk says anything else that merely sounds like they don't want an item recorded,
+do NOT delete it — dictate normally instead. This is deliberate: it must be impossible for
+ordinary descriptive content to accidentally delete an item.
+When the clerk says "[item name]. Please delete.":
   - Set "_delete": true on that item's output
   - Do NOT fill description or condition — omit them
 
 PARTIAL NAME MATCHING FOR DELETION ONLY:
-For deletion commands (not seen / not applicable / delete item), if the clerk speaks a word
-that is a unique and distinctive part of an item name — and no other item in the list contains
-that word — treat it as a match for that item.
-  e.g. "storage, not seen" → matches "Built-in Storage" (the word "storage" is unique to it)
-  e.g. "heating, not seen" → matches "Heating" (exact match)
-  e.g. "curtains, none seen" → matches "Curtains & Blinds"
+For a "please delete" command, if the clerk speaks a word that is a unique and distinctive
+part of an item name — and no other item in the list contains that word — treat it as a
+match for that item.
+  e.g. "storage, please delete" → matches "Built-in Storage" (the word "storage" is unique to it)
+  e.g. "heating, please delete" → matches "Heating" (exact match)
+  e.g. "curtains, please delete" → matches "Curtains & Blinds"
 This relaxed matching applies ONLY to deletion. Chapter heading switches for content still
 require an exact match.
 
-CRITICAL CONTEXT RULE FOR "not seen":
-"Not seen" is a delete command ONLY when it appears IMMEDIATELY after an item title with
-no intervening description. If it appears inside a longer passage about the item, it is
-descriptive content (e.g. referring to a serial number that could not be read) and must
-NOT trigger deletion.
+CRITICAL CONTEXT RULE FOR "please delete":
+"Please delete" is a delete command ONLY when it appears IMMEDIATELY after an item title with
+no intervening description. If it appears inside a longer passage about the item, it is highly
+unusual — but still must NOT trigger deletion; dictate it as ordinary content instead.
 
 EXCEPTION — self-correction retracts the intervening description: if a "sorry"/"correction"
 self-correction (see the SELF-CORRECTION rule above) wipes out everything said for the item
-since its heading, "not seen" immediately after that correction counts as immediately after
-the item title too — delete the item.
-  ✓ DELETE: "Built-in storage, mirrored medicine cabinet, correction, none seen."
-      → the correction retracts "mirrored medicine cabinet", leaving "none seen" as if it were
-        the only thing said → {{"<storageId>": {{"_delete": true}}}}
+since its heading, "please delete" immediately after that correction counts as immediately
+after the item title too — delete the item.
+  ✓ DELETE: "Built-in storage, mirrored medicine cabinet, correction, please delete."
+      → the correction retracts "mirrored medicine cabinet", leaving "please delete" as if it
+        were the only thing said → {{"<storageId>": {{"_delete": true}}}}
 
-  ✓ DELETE: "Windows & Frames. Not seen."
+  ✓ DELETE: "Windows & Frames. Please delete."
       → {{"<windowsId>": {{"_delete": true}}}}
-  ✗ NOT DELETE: "BOSCH black glass hob, model and serial number not seen."
-      → dictate normally; "not seen" refers to the serial number, not the item
+  ✗ NOT DELETE: "Windows and Frames. White UPVC, in good order." — no "please delete" spoken,
+      so dictate normally regardless of what the description says
 
 Examples:
-  "Built-in Storage. Delete Item."
+  "Built-in Storage. Please delete."
   → {{"<builtInStorageId>": {{"_delete": true}}}}
-  "Fireplace. Not Applicable."
+  "Fireplace. Please delete."
   → {{"<fireplaceId>": {{"_delete": true}}}}
-  "Windows & Frames. Not seen."
+  "Windows & Frames. Please delete."
   → {{"<windowsId>": {{"_delete": true}}}}
 
 ══════════════════════════════════════════════════════
@@ -2348,10 +2380,15 @@ a DIFFERENT surface or component with its own descriptive words.
 
 MULTI-COMPONENT (no sub-item): When the clerk lists several parts of the SAME thing and
   gives ONE condition phrase at the end covering everything:
-  "White painted door, white painted frame, chrome lever handle … in good order"
-  → description: "White painted door\nWhite painted frame\nChrome lever handle"
+  "White painted door, white painted frame … in good order"
+  → description: "White painted door\nWhite painted frame"
     condition:   "In good order"
   This is NOT a sub-item — everything shares one condition phrase.
+  NOTE — the clerk did NOT mention a handle, hinges, or any other fitting here, so none may
+  appear in the output. Do not add "chrome handle" or any hardware to a door/frame description
+  unless the clerk actually said it — see the NEVER ADD CONTENT rule above. If the clerk HAD
+  also said "chrome lever handle", it would be a third description line, same as any other
+  spoken component — but nothing may be added that was not spoken.
 
 WORKED EXAMPLES:
 
@@ -2464,7 +2501,7 @@ If no amendment phrase — omit the action flags entirely (default behaviour = f
 Return ONLY valid JSON — no markdown, no extra text.
 Items without sub-items use the flat shape. Items WITH sub-items include the "_subs" array.
 Amendment flags are optional — only include when the clerk explicitly amends/adds.
-The "_delete" flag is only included when the clerk says "Delete Item" or "Not Applicable" for that item.
+The "_delete" flag is only included when the clerk says "Please Delete" for that item.
 {{
   "<itemId>": {{
     "description": "...",
@@ -2560,11 +2597,12 @@ VERBATIM RULES — absolute, no exceptions:
 7. Only fill items/sub-items that are mentioned. Omit everything else.
 8. {_UK_SPELLING_RULE}
 9. {_multi_component_rule("a checkOutCondition")}
-10. REPEATED CONTENT: the transcript is stitched from several clips and may contain the same
+10. {_NO_FABRICATION_RULE}
+11. REPEATED CONTENT: the transcript is stitched from several clips and may contain the same
     passage twice (overlapping recordings or the clerk repeating themselves). If the same or
     nearly the same wording appears more than once for an item, use it ONCE only — never
     output the same observation twice.
-11. "AS INVENTORY+" PREFIX — MANDATORY, no exceptions: every checkOutCondition you output MUST
+12. "AS INVENTORY+" PREFIX — MANDATORY, no exceptions: every checkOutCondition you output MUST
     start with the exact first line "As Inventory+", followed by the clerk's words on the next
     line(s) — for both main items and sub-items. This applies even when the clerk's words are
     brief or the condition is unchanged.
@@ -2650,8 +2688,8 @@ or deletes them. Accepted patterns:
     "[item name]. Sub-item. [damage]" | "Return to [item name], add sub-item, [damage]"
 
   DELETE (_delete: true):
-    "[item name]. Delete item." | "[item name]. Not Applicable." | "[item name]. Not seen."
-    ("Not seen" only deletes when IMMEDIATELY after the item name — not when inside a description)
+    "[item name]. Please delete." — the ONLY phrase that deletes an item; nothing else does.
+    (Only deletes when IMMEDIATELY after the item name — not when inside a description)
 
 CHAPTER-HEADING PATTERN: If the clerk names an already-transcribed item as a chapter heading
 and IMMEDIATELY follows with a command word ("Amend", "Add", "Sub-item"), treat it as explicit.
@@ -2695,7 +2733,8 @@ RULES:
 7. Only fill items that are mentioned. Omit unmentioned items entirely.
 8. If a single component has multiple distinct damage observations, each goes on its own line.
 9. {_UK_SPELLING_RULE}
-10. REPEATED CONTENT: the transcript is stitched from several clips and may contain the same
+10. {_NO_FABRICATION_RULE}
+11. REPEATED CONTENT: the transcript is stitched from several clips and may contain the same
     passage twice (overlapping recordings or the clerk repeating themselves). If the same or
     nearly the same wording appears more than once for an item, use it ONCE only — never
     output the same observation twice. A repeated plain mention of an already-covered item
@@ -2704,16 +2743,17 @@ RULES:
 ══════════════════════════════════════════════════════
 DELETE ITEM
 ══════════════════════════════════════════════════════
-The clerk may say "[item name] Delete Item", "[item name] Not Applicable", or
-"[item name] Not seen" to mark an item as not present.
+"Please Delete" is the ONLY phrase that removes an item — no other wording deletes an item,
+not "not seen", not "not applicable", not any synonym. The clerk may say
+"[item name]. Please delete." to mark an item as not present.
   → Set "_delete": true on that item. Do NOT fill condition.
 
-CRITICAL CONTEXT RULE FOR "not seen":
-"Not seen" is a delete command ONLY when it appears IMMEDIATELY after an item title with
-no intervening description. If it appears inside a longer passage about the item, it is
-descriptive content and must NOT trigger deletion.
-  ✓ DELETE: "Windows & Frames. Not seen."  → _delete: true
-  ✗ NOT DELETE: "model and serial number not seen" (within a description) → dictate normally
+CRITICAL CONTEXT RULE FOR "please delete":
+"Please delete" is a delete command ONLY when it appears IMMEDIATELY after an item title with
+no intervening description. If it appears inside a longer passage about the item, it must NOT
+trigger deletion — dictate it as ordinary content instead.
+  ✓ DELETE: "Windows & Frames. Please delete."  → _delete: true
+  ✗ NOT DELETE: "Windows and Frames. White UPVC, chip to base." — no "please delete" spoken
 
 ══════════════════════════════════════════════════════
 SUB-ITEMS
@@ -2918,8 +2958,9 @@ RULES:
    - "fair wear and tear" → "Fair wear and tear"
 4. ONLY remove filler sounds (um, uh, er, errr, umm, erm) and clear false starts where the clerk immediately restarts the same phrase. Do NOT remove, shorten, or paraphrase any actual content — reproduce the clerk's words in full.
 5. Only fill items that are mentioned. Omit unmentioned items entirely from the output.
-6. {_UK_SPELLING_RULE}
-7. Capitalise the first word of each line.
+6. {_NO_FABRICATION_RULE}
+7. {_UK_SPELLING_RULE}
+8. Capitalise the first word of each line.
 
 LINE BREAKS — THIS IS CRITICAL:
 Use the JSON escape sequence \\n (backslash + n) inside string values whenever a new line is needed.

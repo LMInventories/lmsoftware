@@ -481,12 +481,14 @@ async function fetchActivityLog() {
 }
 
 const ACTIVITY_META = {
-  created:       { label: 'Created',       icon: '✦' },
-  details_added: { label: 'Details added', icon: '✎' },
-  fetched:       { label: 'Fetched to app', icon: '↓' },
-  started:       { label: 'Started',       icon: '▶' },
-  synced:        { label: 'Synced',        icon: '↻' },
-  completed:     { label: 'Completed',     icon: '✓' },
+  created:       { label: 'Created',            icon: '✦' },
+  details_added: { label: 'Details added',      icon: '✎' },
+  fetched:       { label: 'Fetched to app',     icon: '↓' },
+  started:       { label: 'Started',            icon: '▶' },
+  synced:        { label: 'Synced',             icon: '↻' },
+  completed:     { label: 'Completed',          icon: '✓' },
+  email_sent:    { label: 'Report emailed',     icon: '✉' },
+  email_failed:  { label: 'Report email failed', icon: '⚠' },
 }
 
 function activityMeta(eventType) {
@@ -1258,11 +1260,14 @@ onMounted(() => {
               <p v-if="activityLoading" class="notes-text">Loading…</p>
               <p v-else-if="!activityLog.length" class="notes-text">No activity recorded yet.</p>
               <ul v-else class="activity-list">
-                <li v-for="event in activityLog" :key="event.id" class="activity-row">
-                  <span class="activity-icon" :class="`activity-icon--${event.event_type}`">{{ activityMeta(event.event_type).icon }}</span>
-                  <span class="activity-label">{{ activityMeta(event.event_type).label }}</span>
-                  <span v-if="event.user_name" class="activity-user">— {{ event.user_name }}</span>
-                  <span class="activity-time">{{ formatActivityTime(event.created_at) }}</span>
+                <li v-for="event in activityLog" :key="event.id" class="activity-item">
+                  <div class="activity-row">
+                    <span class="activity-icon" :class="`activity-icon--${event.event_type}`">{{ activityMeta(event.event_type).icon }}</span>
+                    <span class="activity-label">{{ activityMeta(event.event_type).label }}</span>
+                    <span v-if="event.user_name" class="activity-user">— {{ event.user_name }}</span>
+                    <span class="activity-time">{{ formatActivityTime(event.created_at) }}</span>
+                  </div>
+                  <div v-if="event.detail" class="activity-detail" :class="{ 'activity-detail--failed': event.event_type === 'email_failed' }">{{ event.detail }}</div>
                 </li>
               </ul>
             </div>
@@ -2915,18 +2920,23 @@ onMounted(() => {
 
 /* Activity Log */
 .activity-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.activity-item { display: flex; flex-direction: column; gap: 3px; }
 .activity-row { display: flex; align-items: baseline; gap: 8px; font-size: 13px; }
 .activity-icon {
   flex-shrink: 0; width: 20px; height: 20px; border-radius: 50%;
   display: inline-flex; align-items: center; justify-content: center;
   font-size: 11px; background: #eef2ff; color: #4f46e5;
 }
-.activity-icon--completed { background: #f0fdf4; color: #16a34a; }
-.activity-icon--started   { background: #eff6ff; color: #2563eb; }
-.activity-icon--synced    { background: #fdf4ff; color: #a21caf; }
+.activity-icon--completed    { background: #f0fdf4; color: #16a34a; }
+.activity-icon--started      { background: #eff6ff; color: #2563eb; }
+.activity-icon--synced       { background: #fdf4ff; color: #a21caf; }
+.activity-icon--email_sent   { background: #f0fdf4; color: #16a34a; }
+.activity-icon--email_failed { background: #fef2f2; color: #dc2626; }
 .activity-label { font-weight: 600; color: #1e293b; }
 .activity-user  { color: #64748b; }
 .activity-time  { margin-left: auto; color: #94a3b8; font-size: 12px; white-space: nowrap; }
+.activity-detail { margin-left: 28px; font-size: 12.5px; color: #64748b; }
+.activity-detail--failed { color: #dc2626; }
 
 /* Modals */
 .modal-overlay {

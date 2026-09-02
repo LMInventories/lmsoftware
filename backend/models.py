@@ -271,15 +271,15 @@ class InspectionActivity(db.Model):
     """
     Lifecycle timeline for an inspection — created, details edited, fetched to a
     clerk's phone for offline work, started on-site, synced back from the phone,
-    completed. Shown on InspectionDetailView.vue as the Activity Log card.
-    One row per event; see services/activity_log.py for how rows get created
-    (including throttling for the noisier event types).
+    completed, and report emails sent/failed. Shown on InspectionDetailView.vue as
+    the Activity Log card. One row per event; see services/activity_log.py for how
+    rows get created (including throttling for the noisier event types).
     """
     __tablename__ = 'inspection_activity'
 
     id            = db.Column(db.Integer, primary_key=True)
     inspection_id = db.Column(db.Integer, db.ForeignKey('inspections.id', ondelete='CASCADE'), nullable=False, index=True)
-    event_type    = db.Column(db.String(30), nullable=False)  # created|details_added|fetched|started|synced|completed
+    event_type    = db.Column(db.String(30), nullable=False)  # created|details_added|fetched|started|synced|completed|email_sent|email_failed
     user_id       = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
     detail        = db.Column(db.String(255))  # optional short human-readable context
     created_at    = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)

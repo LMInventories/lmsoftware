@@ -828,9 +828,11 @@ def update_inspection(inspection_id):
         _prop_addr  = inspection.property.address if inspection.property else 'unknown'
         _cli_email  = inspection.client_email_override
         _ten_email  = inspection.tenant_email
+        _user_id    = user.id
 
         def _generate_and_send():
             with _app.app_context():
+                _email_result_logged = False
                 try:
                     from models import db as _db, Inspection as _Inspection
                     insp   = _db.session.get(_Inspection, _insp_id)
@@ -866,6 +868,9 @@ def update_inspection(inspection_id):
                     else:
                         if not recipients:
                             print(f'[pdf] WARNING: no recipients resolved — set client email, email override, or tenant email on the inspection.')
+                            log_activity(_insp_id, 'email_failed', user_id=_user_id,
+                                         detail='Failed to send: no recipients resolved (set client email, email override, or tenant email)')
+                            _email_result_logged = True
                         else:
                             # Send — use client object if available; fall back to a stub so the
                             # email body still renders when client relationship can't be loaded.
@@ -918,10 +923,15 @@ def update_inspection(inspection_id):
                                 # Mark so re-completions don't trigger another auto email
                                 insp.completion_email_sent = True
                                 db.session.commit()
+                                log_activity(_insp_id, 'email_sent', user_id=_user_id,
+                                             detail=f"Report email sent to: {', '.join(recipients)}"[:255])
                             else:
                                 print(f'[pdf] email FAILED: {err}')
                                 if 'credentials not configured' in str(err):
                                     print(f'[pdf] ACTION REQUIRED: set SMTP_USER and SMTP_PASSWORD in Railway environment variables')
+                                log_activity(_insp_id, 'email_failed', user_id=_user_id,
+                                             detail=f"Failed to send to {', '.join(recipients)}: {err}"[:255])
+                            _email_result_logged = True
 
                     # ── Push to The Depositary (check_out inspections only) ────
                     if insp.inspection_type == 'check_out':
@@ -960,6 +970,9 @@ def update_inspection(inspection_id):
                     import traceback
                     print(f'[pdf] EXCEPTION in background PDF thread:')
                     print(traceback.format_exc())
+                    if not _email_result_logged:
+                        log_activity(_insp_id, 'email_failed', user_id=_user_id,
+                                     detail='Failed to send: report generation error (see server logs)')
 
         # daemon=False — thread must finish before worker exits, so the SMTP send completes.
         # The 30-second timeout in _send() prevents it from hanging forever.
@@ -1170,9 +1183,11 @@ def share_pdf(inspection_id):
     _insp_id = inspection_id
     _emails  = list(emails)
     _notes   = notes
+    _user_id = user.id
 
     def _send_shared():
         with _app.app_context():
+            _email_result_logged = False
             try:
                 from routes.pdf_generator import generate_inspection_pdf as _gen_pdf
                 from models import db as _db2, Inspection as _Insp
@@ -1226,12 +1241,20 @@ def share_pdf(inspection_id):
                 )
                 if ok:
                     print(f'[share-pdf] sent OK → {_emails}')
+                    log_activity(_insp_id, 'email_sent', user_id=_user_id,
+                                 detail=f"Report email sent to: {', '.join(_emails)}"[:255])
                 else:
                     print(f'[share-pdf] FAILED: {err}')
+                    log_activity(_insp_id, 'email_failed', user_id=_user_id,
+                                 detail=f"Failed to send to {', '.join(_emails)}: {err}"[:255])
+                _email_result_logged = True
             except Exception:
                 import traceback
                 print('[share-pdf] EXCEPTION:')
                 print(traceback.format_exc())
+                if not _email_result_logged:
+                    log_activity(_insp_id, 'email_failed', user_id=_user_id,
+                                 detail='Failed to send: report generation error (see server logs)')
 
     threading.Thread(target=_send_shared, daemon=False).start()
 

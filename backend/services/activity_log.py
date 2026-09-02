@@ -10,6 +10,9 @@ Event types:
   started       — clerk moved the inspection to 'active' (on-site work begun)
   synced        — clerk's phone pushed report data back to the server
   completed     — inspection moved to 'complete'
+  email_sent    — the report PDF was successfully emailed (auto-completion or Share PDF)
+  email_failed  — a report PDF send attempt failed; see routes/email_notifications.py's
+                  daily failure-alert job, which queries this event type
 """
 from datetime import datetime, timezone, timedelta
 from models import db, InspectionActivity

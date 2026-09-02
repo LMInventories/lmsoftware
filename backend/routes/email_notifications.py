@@ -15,9 +15,10 @@ Requires: APScheduler  →  pip install apscheduler
 """
 
 import json
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
+from zoneinfo import ZoneInfo
 from flask import Blueprint, jsonify, request
-from models import db, User, Client, Inspection, Property
+from models import db, User, Client, Inspection, Property, InspectionActivity
 
 email_bp = Blueprint('email', __name__)
 
@@ -301,6 +302,68 @@ def _send_all_pending_confirmations(settings=None):
     return sent, errors
 
 
+# ── Report email failure alert ───────────────────────────────────────────────
+
+def _check_and_alert_email_failures():
+    """
+    Check for any 'email_failed' activity events logged today (Europe/London
+    calendar day) and, if there are any, send one summary alert to the office.
+    Does nothing if there were no failures — this must never send a "0
+    failures" email. Called by the 17:00 Europe/London scheduled job.
+    """
+    from routes.email_service import send_email_failure_alert
+
+    london = ZoneInfo('Europe/London')
+    now_london = datetime.now(london)
+    day_start_london = now_london.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_start_utc = day_start_london.astimezone(timezone.utc).replace(tzinfo=None)
+    day_end_utc   = (day_start_london + timedelta(days=1)).astimezone(timezone.utc).replace(tzinfo=None)
+
+    rows = (
+        InspectionActivity.query
+        .filter(
+            InspectionActivity.event_type == 'email_failed',
+            InspectionActivity.created_at >= day_start_utc,
+            InspectionActivity.created_at <  day_end_utc,
+        )
+        .order_by(InspectionActivity.created_at.asc())
+        .all()
+    )
+    if not rows:
+        return 0, None
+
+    failures = []
+    for row in rows:
+        insp = row.inspection
+        prop = insp.property if insp else None
+        # detail is formatted as "Failed to send to <recipients>: <error>" for
+        # a real send failure, or "Failed to send: <reason>" for a pre-send
+        # failure (no recipients resolved, PDF generation crashed) — the
+        # "to <recipients>" segment is only present in the first form, so only
+        # strip/split when that exact prefix matches; otherwise show the whole
+        # message as the error and leave recipients blank.
+        detail = row.detail or ''
+        _prefix = 'Failed to send to '
+        if detail.startswith(_prefix):
+            recipients, _, error = detail[len(_prefix):].partition(': ')
+        else:
+            recipients, error = '', detail
+        if not error:
+            error = detail or 'Unknown error'
+        failures.append({
+            'inspection_id':    row.inspection_id,
+            'property_address': (prop.address if prop else None) or f'Inspection #{row.inspection_id}',
+            'recipients':       recipients,
+            'error':            error,
+            'time':             row.created_at.replace(tzinfo=timezone.utc).astimezone(london).strftime('%H:%M') if row.created_at else '—',
+        })
+
+    ok, err = send_email_failure_alert(failures)
+    if not ok:
+        print(f'[email] failure-alert send itself failed (non-fatal): {err}')
+    return len(failures), err if not ok else None
+
+
 # ── Clerk daily summary logic ────────────────────────────────────────────────
 
 def _send_all_clerk_summaries():
@@ -434,6 +497,16 @@ def schedule_clerk_summaries(app):
 
         scheduler.add_job(confirmation_job, CronTrigger(hour=8, minute=0, timezone='Europe/London'))
 
+        # Report email failure alert fires at 5pm daily — only sends if there
+        # were any 'email_failed' activity events logged that day.
+        def email_failure_alert_job():
+            with app.app_context():
+                count, err = _check_and_alert_email_failures()
+                if count:
+                    print(f'[email] failure alert: {count} failure(s) today, alert sent (err={err})')
+
+        scheduler.add_job(email_failure_alert_job, CronTrigger(hour=17, minute=0, timezone='Europe/London'))
+
         # ── Keep-alive ping ───────────────────────────────────────────────────
         # Railway (and similar PaaS platforms) will sleep the container after
         # ~15 minutes of inactivity on lower-tier plans. The first request after
@@ -472,6 +545,7 @@ def schedule_clerk_summaries(app):
         scheduler.start()
         print(f'[email] clerk summary scheduler started — fires at {hour:02d}:{minute:02d} Europe/London')
         print(f'[email] confirmation email scheduler started — fires at 08:00 Europe/London')
+        print('[email] report email failure alert scheduled — fires at 17:00 Europe/London')
         print('[email] keep-alive ping scheduled every 8 minutes')
         print('[cleanup] transient template purge scheduled — fires at 03:00 Europe/London')
         return scheduler

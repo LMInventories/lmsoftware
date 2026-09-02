@@ -24,9 +24,6 @@ SMTP_FROM          = os.environ.get('SMTP_FROM',          'no-reply@lminventorie
 SMTP_FROM_REPORTS  = os.environ.get('SMTP_FROM_REPORTS',  'no-reply@lminventories.co.uk')
 SMTP_FROM_NAME     = os.environ.get('SMTP_FROM_NAME',     'L&M Inventories')
 SMTP_REPLY_TO      = os.environ.get('SMTP_REPLY_TO',      'info@lminventories.co.uk')
-# BCC every outbound report email to this address for our own records.
-# Override via REPORT_BCC env var; set to empty string to disable.
-REPORT_BCC         = os.environ.get('REPORT_BCC',         'info@lminventories.co.uk')
 APP_BASE_URL       = os.environ.get('APP_BASE_URL', 'https://app.lminventories.co.uk/')
 
 resend.api_key = RESEND_API_KEY
@@ -72,8 +69,6 @@ def _send(from_addr, to_addrs, subject, html_body, attachments=None):
         'html':     html_body,
         'reply_to': SMTP_REPLY_TO,
     }
-    if REPORT_BCC:
-        params['bcc'] = [REPORT_BCC]
 
     if attachments:
         params['attachments'] = [
@@ -348,6 +343,41 @@ def send_client_booking_to_admin(inspection, client, property_obj):
         + _info_row('Date', insp_date or 'Not specified', last=True)
         + _info_table_close()
         + f'''<p style="margin:12px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#475569;">Log in to the portal to assign a clerk and confirm the booking.</p>'''
+    )
+    return _send(SMTP_FROM, ADMIN_NOTIFY_EMAIL, subject, _wrap(body, subject))
+
+
+# ── 1b. Daily report-email failure alert ────────────────────────────────────
+
+def send_email_failure_alert(failures):
+    """
+    Notify info@lminventories.co.uk once a day if any report emails (automatic
+    completion or manual Share PDF) failed to send. Called by the 17:00
+    Europe/London scheduled job in routes/email_notifications.py, only when at
+    least one failure was logged that day — see that module for the query.
+
+    failures: list of dicts — {inspection_id, property_address, recipients,
+              error, time} — time is a pre-formatted display string.
+    """
+    count = len(failures)
+    subject = f'{count} Report Email Failure{"s" if count != 1 else ""} Today'
+
+    rows_html = ''
+    for f in failures:
+        link = f"{APP_BASE_URL}/inspections/{f['inspection_id']}"
+        rows_html += (
+            _info_table_open()
+            + _info_row('Property', f"<a href=\"{link}\" style=\"color:#1e40af;\">{f['property_address']}</a>")
+            + _info_row('Recipients', f['recipients'] or '—')
+            + _info_row('Time', f['time'])
+            + _info_row('Error', f['error'] or 'Unknown error', last=True)
+            + _info_table_close()
+        )
+
+    body = (
+        f'''<p style="margin:0 0 16px;font-family:Arial,Helvetica,sans-serif;font-size:17px;font-weight:bold;color:#dc2626;">{count} Report Email Failure{'s' if count != 1 else ''} Today</p>'''
+        f'''<p style="margin:0 0 16px;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#475569;">The following report email{'s' if count != 1 else ''} failed to send today. The client{'s' if count != 1 else ''} may not have received their report — please check and resend via Share PDF if needed.</p>'''
+        + rows_html
     )
     return _send(SMTP_FROM, ADMIN_NOTIFY_EMAIL, subject, _wrap(body, subject))
 

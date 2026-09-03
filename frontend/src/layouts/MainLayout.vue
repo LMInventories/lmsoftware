@@ -639,13 +639,19 @@ const pdfImportJobs = usePdfImportJobs()
   .user-popup { display: none; }
   .layout { flex-direction: column; }
 
+  /* !important needed here: .sidebar-is-collapsed .main-content (two classes,
+     desktop-only sidebar-collapse state persisted in localStorage regardless of
+     device) has higher specificity than a plain .main-content rule and was winning
+     even on mobile — where the sidebar is hidden entirely — leaving a stray 62px
+     left margin any time a user had ever collapsed the sidebar on this browser. */
   .main-content {
-    margin-left: 0;
+    margin-left: 0 !important;
     padding: 14px 14px 80px;
     padding-top: calc(52px + 14px);
     min-height: 100vh;
   }
   .main-content.main-fullscreen {
+    margin-left: 0 !important;
     padding: 0; padding-top: 52px;
     overflow: hidden; height: calc(100vh - 52px); min-height: unset;
   }

@@ -766,7 +766,7 @@ onMounted(async () => {
           </div>
         </div>
         <div class="filter-group">
-          <label>Postcode</label>
+          <label>Postcode / Address</label>
           <input v-model="filters.postcode" type="text" placeholder="Search postcode..." class="filter-input" />
         </div>
         <div class="filter-group">

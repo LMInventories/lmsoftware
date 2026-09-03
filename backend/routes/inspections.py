@@ -240,6 +240,8 @@ def get_inspections():
         'id': i.id,
         'property_id': i.property_id,
         'property_address': i.property.address if i.property else None,
+        'bedrooms': i.property.bedrooms if i.property else None,
+        'bathrooms': i.property.bathrooms if i.property else None,
         'client_id': i.property.client_id if i.property else None,
         'client_name': i.property.client.name if i.property and i.property.client else None,
         'inspector_id': i.inspector_id,

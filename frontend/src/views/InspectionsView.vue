@@ -20,6 +20,7 @@ const activeTab = ref(localStorage.getItem('inspections_view') || 'list')
 const calendarView = ref('dayGridMonth')
 watch(activeTab, val => {
   localStorage.setItem('inspections_view', val)
+  hideEventPopup()
   if (val === 'calendar') {
     // Give FullCalendar time to mount before reading title
     setTimeout(() => {
@@ -261,6 +262,7 @@ const calendarOptions = computed(() => ({
   headerToolbar: false,
   events: calendarEvents.value,
   eventClick: handleEventClick,
+  eventDidMount: handleEventMount,
   height: 'auto',
   slotMinTime: '09:00:00',
   slotMaxTime: '18:00:00',
@@ -325,7 +327,11 @@ const calendarEvents = computed(() => {
           clerkName: inspection.inspector_name,
           clientName: inspection.client_name,
           status: inspection.status,
-          fullAddress: inspection.property_address
+          fullAddress: inspection.property_address,
+          bedrooms: inspection.bedrooms,
+          bathrooms: inspection.bathrooms,
+          referenceNumber: inspection.reference_number,
+          timeLabel: eventTime ? eventTime.slice(0, 5) : 'All day',
         }
       }
     })
@@ -453,7 +459,98 @@ function clearCalendarFilters() {
 }
 
 function handleEventClick(info) {
+  // A long-press on mobile shows the preview popup instead of navigating — see
+  // handleEventMount below. The flag is the reliable suppression mechanism since
+  // it's checked inside FullCalendar's own eventClick callback, independent of
+  // whatever internal touch/click handling FullCalendar itself does.
+  if (suppressNextClick) { suppressNextClick = false; return }
   router.push(`/inspections/${info.event.id}`)
+}
+
+// ── Calendar event hover (desktop) / long-press (mobile) preview popup ─────
+// Read-only summary card, positioned near the hovered/pressed calendar event.
+// Does not replace tap-to-navigate — a normal short tap still opens the
+// inspection as before; only a genuine long-press shows the preview instead.
+const eventPopup = ref({ visible: false, x: 0, y: 0, data: null })
+let hoverTimer = null
+let longPressTimer = null
+let touchStartPos = null
+let suppressNextClick = false
+
+const HOVER_DELAY_MS = 300
+const LONG_PRESS_MS  = 450
+const TOUCH_MOVE_CANCEL_PX = 10
+
+function positionPopup(rect) {
+  const popupWidth  = 260
+  const popupHeight = 210 // rough estimate — only used to decide whether to flip above
+  const margin = 8
+  let x = rect.left + rect.width / 2 - popupWidth / 2
+  x = Math.max(margin, Math.min(x, window.innerWidth - popupWidth - margin))
+  let y = rect.bottom + 8
+  if (y + popupHeight > window.innerHeight) y = Math.max(margin, rect.top - 8 - popupHeight)
+  return { x, y }
+}
+
+function showEventPopupAt(el, props) {
+  const { x, y } = positionPopup(el.getBoundingClientRect())
+  eventPopup.value = {
+    visible: true, x, y,
+    data: {
+      inspectionType:  props.inspectionType,
+      clerkName:       props.clerkName,
+      clientName:      props.clientName,
+      status:          props.status,
+      fullAddress:     props.fullAddress,
+      bedrooms:        props.bedrooms,
+      bathrooms:       props.bathrooms,
+      referenceNumber: props.referenceNumber,
+      timeLabel:       props.timeLabel,
+    },
+  }
+}
+
+function hideEventPopup() {
+  eventPopup.value.visible = false
+}
+
+// eventDidMount — FullCalendar hook, called once per rendered event element.
+// Old elements (and their listeners) are discarded by FullCalendar itself on
+// re-render/navigation, so no manual listener cleanup is needed here.
+function handleEventMount(info) {
+  const el = info.el
+  const props = info.event.extendedProps
+
+  el.addEventListener('mouseenter', () => {
+    clearTimeout(hoverTimer)
+    hoverTimer = setTimeout(() => showEventPopupAt(el, props), HOVER_DELAY_MS)
+  })
+  el.addEventListener('mouseleave', () => {
+    clearTimeout(hoverTimer)
+    hideEventPopup()
+  })
+
+  el.addEventListener('touchstart', (e) => {
+    touchStartPos = { x: e.touches[0].clientX, y: e.touches[0].clientY }
+    clearTimeout(longPressTimer)
+    longPressTimer = setTimeout(() => {
+      showEventPopupAt(el, props)
+      suppressNextClick = true
+    }, LONG_PRESS_MS)
+  }, { passive: true })
+
+  el.addEventListener('touchmove', (e) => {
+    if (!touchStartPos) return
+    const dx = Math.abs(e.touches[0].clientX - touchStartPos.x)
+    const dy = Math.abs(e.touches[0].clientY - touchStartPos.y)
+    if (dx > TOUCH_MOVE_CANCEL_PX || dy > TOUCH_MOVE_CANCEL_PX) clearTimeout(longPressTimer)
+  }, { passive: true })
+
+  el.addEventListener('touchend', (e) => {
+    clearTimeout(longPressTimer)
+    if (suppressNextClick) e.preventDefault() // best-effort; the flag check in handleEventClick is the real guard
+    touchStartPos = null
+  }, { passive: false })
 }
 
 function openDatePicker() {
@@ -511,6 +608,7 @@ function switchCalView(view) {
     calendarRef.value.getApi().changeView(view)
     calendarTitle.value = calendarRef.value.getApi().view.title
   }
+  hideEventPopup()
 }
 
 function calNav(action) {
@@ -520,6 +618,7 @@ function calNav(action) {
   if (action === 'next')  api.next()
   if (action === 'today') api.today()
   calendarTitle.value = api.view.title
+  hideEventPopup()
 }
 
 // Update title after calendar mounts
@@ -878,9 +977,15 @@ onMounted(async () => {
                   <span class="assign-name">{{ inspection.typist_name }}</span>
                 </div>
               </div>
-              <div v-if="inspection.reference_number" class="assign-row assign-ref">
-                <span class="assign-role">Ref</span>
-                <span class="assign-name">{{ inspection.reference_number }}</span>
+              <div class="assign-right">
+                <div v-if="inspection.bedrooms || inspection.bathrooms" class="assign-row assign-specs">
+                  <span v-if="inspection.bedrooms" class="spec-emoji-item">🛏️ {{ inspection.bedrooms }}</span>
+                  <span v-if="inspection.bathrooms" class="spec-emoji-item">🚽 {{ inspection.bathrooms }}</span>
+                </div>
+                <div v-if="inspection.reference_number" class="assign-row assign-ref">
+                  <span class="assign-role">Ref</span>
+                  <span class="assign-name">{{ inspection.reference_number }}</span>
+                </div>
               </div>
             </div>
           </div>
@@ -986,6 +1091,37 @@ onMounted(async () => {
         </div>
         <FullCalendar ref="calendarRef" :options="calendarOptions" />
       </div>
+
+      <!-- Hover (desktop) / long-press (mobile) preview for a calendar event —
+           teleported to body so it's never clipped by the calendar's own overflow. -->
+      <Teleport to="body">
+        <div
+          v-if="eventPopup.visible && eventPopup.data"
+          class="event-popup"
+          :style="{ left: eventPopup.x + 'px', top: eventPopup.y + 'px' }"
+          v-click-outside="hideEventPopup"
+        >
+          <div class="ep-top">
+            <span class="card-type-badge">{{ typeLabel(eventPopup.data.inspectionType) }}</span>
+            <span class="status-badge" :style="{ backgroundColor: statusColors[eventPopup.data.status] }">{{ eventPopup.data.status }}</span>
+          </div>
+          <div class="ep-address">{{ eventPopup.data.fullAddress }}</div>
+          <div v-if="eventPopup.data.clientName" class="ep-client">{{ eventPopup.data.clientName }}</div>
+          <div v-if="eventPopup.data.clerkName" class="ep-row">
+            <span class="assign-role">Clerk</span>
+            <span class="assign-name">{{ eventPopup.data.clerkName }}</span>
+          </div>
+          <div v-if="eventPopup.data.bedrooms || eventPopup.data.bathrooms" class="ep-row ep-specs">
+            <span v-if="eventPopup.data.bedrooms" class="spec-emoji-item">🛏️ {{ eventPopup.data.bedrooms }}</span>
+            <span v-if="eventPopup.data.bathrooms" class="spec-emoji-item">🚽 {{ eventPopup.data.bathrooms }}</span>
+          </div>
+          <div v-if="eventPopup.data.referenceNumber" class="ep-row">
+            <span class="assign-role">Ref</span>
+            <span class="assign-name">{{ eventPopup.data.referenceNumber }}</span>
+          </div>
+          <div class="ep-time">{{ eventPopup.data.timeLabel }}</div>
+        </div>
+      </Teleport>
 
       <div class="calendar-legend">
         <h4>Clerk Legend:</h4>
@@ -1640,6 +1776,23 @@ onMounted(async () => {
   color: #475569;
 }
 
+.assign-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: clamp(1px, 0.8cqw, 3px);
+}
+
+.assign-specs {
+  gap: clamp(5px, 2.2cqw, 9px);
+}
+
+.spec-emoji-item {
+  font-size: clamp(9px, 3cqw, 12px);
+  color: #475569;
+  white-space: nowrap;
+}
+
 .card-footer {
   display: flex;
   align-items: center;
@@ -2267,6 +2420,25 @@ onMounted(async () => {
 .calendar-container :deep(.fc-event *) { cursor: pointer !important; }
 .calendar-container :deep(.fc-daygrid-event) { cursor: pointer !important; }
 .calendar-container :deep(.fc-timegrid-event) { cursor: pointer !important; }
+
+/* ── Calendar event preview popup (hover on desktop, long-press on mobile) ─── */
+.event-popup {
+  position: fixed;
+  width: 260px;
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.18);
+  padding: 12px 14px;
+  z-index: 2000;
+  pointer-events: auto;
+}
+.ep-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.ep-address { font-size: 13px; font-weight: 700; color: #1e293b; line-height: 1.35; margin-bottom: 3px; }
+.ep-client { font-size: 11px; color: #6366f1; font-weight: 600; margin-bottom: 6px; }
+.ep-row { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.ep-specs { gap: 9px; }
+.ep-time { margin-top: 8px; padding-top: 8px; border-top: 1px solid #f1f5f9; font-size: 11px; color: #94a3b8; font-weight: 600; }
 
 
 /* Date input with calendar icon */

@@ -1,28 +1,49 @@
 """
 routes/google.py
 ────────────────
-Google OAuth 2.0 integration — Drive + Calendar.
+Google integration — Drive + Calendar + Sheets. Two auth methods:
+
+  1. Service account (preferred — see GOOGLE_SERVICE_ACCOUNT_JSON below). No
+     consent screen, no verification, no token expiry. Requires the target
+     Drive folder / Sheet / Calendar to be explicitly shared with the service
+     account's email as an Editor.
+  2. OAuth 2.0 user consent (legacy, still supported as a fallback when no
+     service account is configured). The connected account here is a personal
+     Gmail, so the OAuth app is stuck in Google's "Testing" publishing status
+     — External Testing mode caps refresh tokens at 7 days, hence the repeated
+     "please reconnect Google" problem this integration used to have.
 
 Endpoints:
-  GET    /api/google/auth         → redirect to Google consent screen
+  GET    /api/google/auth         → redirect to Google consent screen (OAuth path only)
   GET    /api/google/callback     → exchange code → store tokens → redirect to frontend
-  GET    /api/google/status       → { connected, email, has_drive, has_calendar }
-  DELETE /api/google/disconnect   → revoke token + clear stored credentials
+  GET    /api/google/status       → { connected, auth_method, email, has_drive, has_calendar, has_sheets }
+  DELETE /api/google/disconnect   → revoke token + clear stored credentials (OAuth path only)
 
-Tokens are stored as SystemSetting rows (internal — never exposed via /api/system-settings):
+OAuth tokens are stored as SystemSetting rows (internal — never exposed via /api/system-settings):
   google_access_token   — short-lived (1 h)
   google_refresh_token  — long-lived; used to refresh access token automatically
   google_token_expiry   — ISO datetime of access token expiry
   google_scopes         — space-separated list of granted scopes
   google_email          — the connected Google account email (shown in UI)
 
-Environment variables required (set in Railway dashboard):
-  GOOGLE_CLIENT_ID      — OAuth 2.0 client ID
-  GOOGLE_CLIENT_SECRET  — OAuth 2.0 client secret
+Environment variables (set in Railway dashboard):
+  GOOGLE_SERVICE_ACCOUNT_JSON  — full contents of a downloaded service-account JSON
+                                 key file. When set, this takes priority over the
+                                 OAuth flow everywhere in this module and in
+                                 services/google_drive.py, google_sheets.py,
+                                 google_calendar.py.
+  GOOGLE_CALENDAR_ID           — the real booking calendar's ID (its owner email, or
+                                 a shared calendar's group ID) — required alongside
+                                 GOOGLE_SERVICE_ACCOUNT_JSON, since "primary" (the
+                                 OAuth-path default) would otherwise resolve to the
+                                 service account's own unused calendar. Must be
+                                 shared with the service account's email too.
+  GOOGLE_CLIENT_ID      — OAuth 2.0 client ID (OAuth path only)
+  GOOGLE_CLIENT_SECRET  — OAuth 2.0 client secret (OAuth path only)
   BACKEND_URL           — public URL of this Flask service (e.g. https://api.lminventories.co.uk)
-                          used to build the redirect_uri sent to Google
+                          used to build the redirect_uri sent to Google (OAuth path only)
   FRONTEND_URL          — public URL of the Vue frontend (e.g. https://app.lminventories.co.uk)
-                          used to redirect the browser after OAuth completes
+                          used to redirect the browser after OAuth completes (OAuth path only)
 """
 
 from __future__ import annotations
@@ -58,6 +79,63 @@ _AUTH_URL     = 'https://accounts.google.com/o/oauth2/v2/auth'
 _TOKEN_URL    = 'https://oauth2.googleapis.com/token'
 _REVOKE_URL   = 'https://oauth2.googleapis.com/revoke'
 _USERINFO_URL = 'https://www.googleapis.com/oauth2/v3/userinfo'
+
+# ── Service account (preferred over the OAuth flow above when configured) ─────
+# The OAuth app above is stuck in Google's "Testing" publishing status (the
+# connected account is a personal Gmail, not Workspace, so "Internal" mode
+# isn't available, and External Testing mode caps refresh tokens at 7 days —
+# hence the repeated "please reconnect Google" problem). A service account
+# sidesteps this entirely: no consent screen, no verification, no expiry.
+# It only sees files/calendars explicitly shared with its email — share the
+# Drive reports folder, the master Sheet, and the booking Calendar with the
+# service account's email (Console → IAM & Admin → Service Accounts) as Editor.
+# Set GOOGLE_SERVICE_ACCOUNT_JSON to the full contents of the downloaded JSON
+# key file. When unset, everything falls back to the OAuth flow unchanged.
+_SERVICE_ACCOUNT_JSON = os.environ.get('GOOGLE_SERVICE_ACCOUNT_JSON', '')
+_SA_SCOPES = [
+    'https://www.googleapis.com/auth/drive',
+    'https://www.googleapis.com/auth/calendar',
+    'https://www.googleapis.com/auth/spreadsheets',
+]
+_sa_credentials = None  # lazily built + cached; google-auth handles refresh internally
+
+
+def _service_account_configured() -> bool:
+    return bool(_SERVICE_ACCOUNT_JSON.strip())
+
+
+def _service_account_email() -> Optional[str]:
+    """The service account's own email, for display in the Integrations status UI —
+    lets you confirm you shared the folder/sheet/calendar with the right identity."""
+    if not _service_account_configured():
+        return None
+    try:
+        return json.loads(_SERVICE_ACCOUNT_JSON).get('client_email')
+    except Exception:
+        return None
+
+
+def _get_service_account_token() -> Optional[str]:
+    """Mint (or reuse/refresh) an access token from the service account.
+    Returns None on any failure — callers fall back to the OAuth path."""
+    global _sa_credentials
+    if not _service_account_configured():
+        return None
+    try:
+        from google.oauth2 import service_account
+        from google.auth.transport.requests import Request as _GARequest
+
+        if _sa_credentials is None:
+            info = json.loads(_SERVICE_ACCOUNT_JSON)
+            _sa_credentials = service_account.Credentials.from_service_account_info(
+                info, scopes=_SA_SCOPES
+            )
+        if not _sa_credentials.valid:
+            _sa_credentials.refresh(_GARequest())
+        return _sa_credentials.token
+    except Exception as e:
+        print(f'[google] service account token error: {e}')
+        return None
 
 # SystemSetting keys used internally by this module
 _TOKEN_KEYS = (
@@ -192,8 +270,16 @@ def _refresh_access_token(refresh_token: str) -> Optional[str]:
 def get_valid_access_token() -> Optional[str]:
     """
     Return a valid Google access token, transparently refreshing if expired.
-    Returns None if Google is not connected or refresh fails.
+    Prefers the service account when GOOGLE_SERVICE_ACCOUNT_JSON is set (falling
+    through to the OAuth path only if the service account is configured but
+    fails, so a misconfigured key doesn't silently break everything with no
+    fallback). Returns None if neither is connected or working.
     """
+    if _service_account_configured():
+        token = _get_service_account_token()
+        if token:
+            return token
+
     tokens = _load_tokens()
     if not tokens.get('google_access_token'):
         return None
@@ -215,7 +301,10 @@ def get_valid_access_token() -> Optional[str]:
 
 
 def is_connected() -> bool:
-    """Quick check — True if both access and refresh tokens exist."""
+    """Quick check — True if a service account is configured, or both OAuth
+    access and refresh tokens exist."""
+    if _service_account_configured():
+        return True
     tokens = _load_tokens()
     return bool(tokens.get('google_access_token') and tokens.get('google_refresh_token'))
 
@@ -496,6 +585,17 @@ def google_status():
     Return the current Google connection state.
     Called by IntegrationsSettings.vue on mount and after OAuth redirect.
     """
+    if _service_account_configured():
+        token = get_valid_access_token()
+        return jsonify({
+            'connected':    token is not None,
+            'auth_method':  'service_account',
+            'email':        _service_account_email() or 'Service Account',
+            'has_drive':    True,
+            'has_calendar': True,
+            'has_sheets':   True,
+        })
+
     # Validate the token (auto-refreshes if expired; auto-clears if invalid_grant)
     valid_token = get_valid_access_token()
     # Re-load after potential refresh/clear so email/scopes reflect current state
@@ -503,6 +603,7 @@ def google_status():
     scopes = tokens.get('google_scopes', '')
     return jsonify({
         'connected':     valid_token is not None,
+        'auth_method':   'oauth',
         'email':         tokens.get('google_email', ''),
         'has_drive':     'drive' in scopes,
         'has_calendar':  'calendar' in scopes,
@@ -517,6 +618,17 @@ def google_disconnect():
     Revoke the OAuth token at Google and delete all stored credentials.
     After this the user will need to go through the consent flow again.
     """
+    if _service_account_configured():
+        # There's no stored OAuth token to revoke, and get_valid_access_token()
+        # prefers the service account regardless — clearing tokens here would
+        # silently do nothing, then the next status check would immediately
+        # flip back to "connected", which reads as broken rather than as
+        # correct behaviour. Tell the caller what's actually true instead.
+        return jsonify({
+            'error': 'Google is connected via a service account (GOOGLE_SERVICE_ACCOUNT_JSON). '
+                     'Remove that environment variable in Railway to disconnect.'
+        }), 400
+
     tokens = _load_tokens()
     # Prefer revoking the refresh_token (revokes all related access tokens too)
     token_to_revoke = tokens.get('google_refresh_token') or tokens.get('google_access_token')

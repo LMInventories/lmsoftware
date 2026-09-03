@@ -181,37 +181,6 @@ const integrations = [
     badge: 'Free',
   },
 
-  // ─ Property Management ────────────────────────────────────────────────────
-  {
-    id: 'arthur_online',
-    category: 'Property Management',
-    name: 'Arthur Online',
-    logoText: 'AO',
-    description: 'Import properties and tenancies from Arthur Online. Automatically create inspections when check-in / check-out events are triggered.',
-    color: '#1A56DB',
-    status: 'coming_soon',
-    badge: 'Popular UK',
-  },
-  {
-    id: 'fixflo',
-    category: 'Property Management',
-    name: 'Fixflo',
-    logoText: 'Ff',
-    description: 'Link inspection findings directly to Fixflo repair requests. Flag items as defects and raise jobs without leaving InspectPro.',
-    color: '#F97316',
-    status: 'coming_soon',
-    badge: 'Popular UK',
-  },
-  {
-    id: 'goodlord',
-    category: 'Property Management',
-    name: 'Goodlord',
-    logoText: 'GL',
-    description: 'Pull tenancy data and trigger check-in / check-out inspections at the right point in the tenancy lifecycle.',
-    color: '#7C3AED',
-    status: 'coming_soon',
-  },
-
   // ─ Communication ─────────────────────────────────────────────────────────
   {
     id: 'slack',
@@ -232,15 +201,6 @@ const integrations = [
     color: '#6264A7',
     status: 'coming_soon',
     badge: 'Free tier',
-  },
-  {
-    id: 'whatsapp',
-    category: 'Communication',
-    name: 'WhatsApp Business',
-    logo: 'https://cdn.simpleicons.org/whatsapp',
-    description: 'Send automated appointment reminders and report-ready notifications to clients and tenants via WhatsApp.',
-    color: '#25D366',
-    status: 'coming_soon',
   },
 
   // ─ Finance ───────────────────────────────────────────────────────────────
@@ -319,27 +279,6 @@ const integrations = [
     description: 'Store reports in Microsoft OneDrive or SharePoint — ideal for corporate agencies on Microsoft 365.',
     color: '#0078D4',
     status: 'coming_soon',
-  },
-
-  // ─ e-Signatures ───────────────────────────────────────────────────────────
-  {
-    id: 'docusign',
-    category: 'e-Signatures',
-    name: 'DocuSign',
-    logo: 'https://cdn.simpleicons.org/docusign',
-    description: 'Send completed reports for electronic signature by tenants, landlords or clerks. Legally binding and fully audited.',
-    color: '#FFB300',
-    status: 'coming_soon',
-  },
-  {
-    id: 'dropbox_sign',
-    category: 'e-Signatures',
-    name: 'Dropbox Sign (HelloSign)',
-    logo: 'https://cdn.simpleicons.org/dropbox',
-    description: 'Lightweight e-signature tool with a generous free tier. Great for smaller agencies who need digital sign-off on reports.',
-    color: '#0061FF',
-    status: 'coming_soon',
-    badge: 'Free tier',
   },
 
   // ─ Automation ────────────────────────────────────────────────────────────

@@ -28,6 +28,15 @@ watch(activeTab, val => {
   }
 })
 const calendarRef = ref(null)
+
+// Grid density picker — a target column count at the current width, not a hard lock;
+// the grid still reflows responsively via auto-fill as the window resizes (see
+// .inspections-list.grid-cols-N rules). Same ad-hoc localStorage pattern as activeTab above.
+const gridCols = ref(Number(localStorage.getItem('inspections_grid_cols')) || 4)
+function setGridCols(n) {
+  gridCols.value = n
+  localStorage.setItem('inspections_grid_cols', n)
+}
 const selectedDate        = ref('')
 const selectedDateDisplay = ref('')  // DD/MM/YYYY for display
 const conductDateDisplay  = ref('')  // DD/MM/YYYY for Add Inspection form
@@ -798,6 +807,13 @@ onMounted(async () => {
           <input v-model="filters.month" type="month" class="filter-input" style="min-width:140px" />
         </div>
         <button @click="clearFilters" class="btn-clear-filters">Clear Filters</button>
+        <div class="tab-toggle grid-cols-picker" title="Cards per row (target — still adapts to window width)">
+          <button
+            v-for="n in [4,5,6,7,8]" :key="n"
+            :class="['toggle-btn', { active: gridCols === n }]"
+            @click="setGridCols(n)"
+          >{{ n }}</button>
+        </div>
       </div>
 
 
@@ -816,7 +832,7 @@ onMounted(async () => {
     >+</button>
 
     <!-- Skeleton loader -->
-    <div v-if="loading" class="inspections-list">
+    <div v-if="loading" :class="['inspections-list', 'grid-cols-' + gridCols]">
       <div v-for="n in 6" :key="n" class="skeleton-card">
         <div class="sk-banner"></div>
         <div class="sk-body">
@@ -828,7 +844,7 @@ onMounted(async () => {
       </div>
     </div>
 
-      <div v-else class="inspections-list">
+      <div v-else :class="['inspections-list', 'grid-cols-' + gridCols]">
         <div v-for="inspection in filteredInspections" :key="inspection.id" class="inspection-card" @click="viewInspection(inspection.id)">
           <!-- Date banner -->
           <div class="card-date-banner" v-if="inspection.conduct_date">
@@ -1484,12 +1500,24 @@ onMounted(async () => {
 }
 .btn-clear-filters:hover, .btn-date-picker:hover { background: #e2e8f0; }
 
+.tab-toggle { display: flex; border: 1px solid #e2e8f0; border-radius: 7px; overflow: hidden; margin-left: auto; align-self: flex-end; }
+.toggle-btn { padding: 6px 12px; font-size: 11px; font-weight: 600; background: white; border: none; color: #64748b; cursor: pointer; }
+.toggle-btn.active { background: #6366f1; color: white; }
+
 /* Inspections list */
 .inspections-list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: 12px;
 }
+/* Grid density picker — sets the auto-fill floor (a target at the current width, not a
+   hard lock); the grid still reflows responsively as the window resizes. Floors are a
+   little larger than PropertiesView's since inspection cards carry more text. */
+.inspections-list.grid-cols-4 { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+.inspections-list.grid-cols-5 { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.inspections-list.grid-cols-6 { grid-template-columns: repeat(auto-fill, minmax(215px, 1fr)); }
+.inspections-list.grid-cols-7 { grid-template-columns: repeat(auto-fill, minmax(185px, 1fr)); }
+.inspections-list.grid-cols-8 { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
 
 .inspection-card {
   background: white;
@@ -1500,18 +1528,21 @@ onMounted(async () => {
   cursor: pointer;
   display: flex;
   flex-direction: column;
+  container-type: inline-size;
 }
 .inspection-card:hover {
   box-shadow: 0 4px 14px rgba(0,0,0,0.08);
   transform: translateY(-1px);
 }
 
-/* Date banner */
+/* Date banner — card content scales continuously with the card's own rendered width
+   (container query units), not in discrete size tiers, whether the card got narrower
+   from a denser picker choice or from the window itself narrowing. */
 .card-date-banner {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 14px;
+  gap: clamp(5px, 3cqw, 10px);
+  padding: clamp(5px, 2.5cqw, 10px) clamp(7px, 3.5cqw, 14px);
   background: linear-gradient(135deg, #1e3a5f 0%, #1e293b 100%);
   color: white;
 }
@@ -1520,40 +1551,40 @@ onMounted(async () => {
 .card-date-unset .card-date-month { color: #94a3b8; }
 
 .card-date-day {
-  font-size: 26px;
+  font-size: clamp(15px, 7cqw, 26px);
   font-weight: 800;
   line-height: 1;
   color: white;
-  min-width: 32px;
+  min-width: clamp(18px, 8cqw, 32px);
 }
 .card-date-rest { display: flex; flex-direction: column; gap: 1px; }
-.card-date-month { font-size: 11px; font-weight: 600; color: rgba(255,255,255,0.75); text-transform: uppercase; letter-spacing: 0.4px; }
-.card-date-weekday { margin-left: auto; font-size: 11px; font-weight: 600; color: rgba(255,255,255,0.75); text-transform: uppercase; letter-spacing: 0.4px; }
+.card-date-month { font-size: clamp(8px, 2.8cqw, 11px); font-weight: 600; color: rgba(255,255,255,0.75); text-transform: uppercase; letter-spacing: 0.4px; }
+.card-date-weekday { margin-left: auto; font-size: clamp(8px, 2.8cqw, 11px); font-weight: 600; color: rgba(255,255,255,0.75); text-transform: uppercase; letter-spacing: 0.4px; }
 
-.card-body { padding: 12px 14px 8px; flex: 1; }
+.card-body { padding: clamp(6px, 3cqw, 12px) clamp(7px, 3.5cqw, 14px) clamp(4px, 2cqw, 8px); flex: 1; }
 
 .card-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 7px;
+  gap: clamp(4px, 2cqw, 8px);
+  margin-bottom: clamp(3px, 1.8cqw, 7px);
 }
 
 .card-type-badge {
-  font-size: 10px;
+  font-size: clamp(7px, 2.5cqw, 10px);
   font-weight: 700;
   background: #eef2ff;
   color: #6366f1;
-  padding: 2px 8px;
+  padding: clamp(1px, 0.5cqw, 2px) clamp(4px, 2cqw, 8px);
   border-radius: 5px;
   letter-spacing: 0.3px;
 }
 
 .status-badge {
-  padding: 2px 9px;
+  padding: clamp(1px, 0.5cqw, 2px) clamp(4px, 2.2cqw, 9px);
   border-radius: 20px;
-  font-size: 10px;
+  font-size: clamp(7px, 2.5cqw, 10px);
   font-weight: 700;
   color: white;
   white-space: nowrap;
@@ -1561,18 +1592,18 @@ onMounted(async () => {
 }
 
 .card-address {
-  font-size: 13px;
+  font-size: clamp(10px, 4.5cqw, 13px);
   font-weight: 700;
   color: #1e293b;
   line-height: 1.35;
-  margin-bottom: 3px;
+  margin-bottom: clamp(1px, 0.8cqw, 3px);
 }
 
 .card-client {
-  font-size: 11px;
+  font-size: clamp(9px, 3.5cqw, 11px);
   color: #6366f1;
   font-weight: 600;
-  margin-bottom: 8px;
+  margin-bottom: clamp(3px, 2cqw, 8px);
 }
 
 .card-assignments {
@@ -1580,32 +1611,32 @@ onMounted(async () => {
   flex-direction: row;
   justify-content: space-between;
   align-items: center;
-  gap: 6px;
+  gap: clamp(3px, 1.5cqw, 6px);
 }
 
 .assign-left {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: clamp(1px, 0.8cqw, 3px);
 }
 
 .assign-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: clamp(3px, 1.5cqw, 6px);
 }
 
 .assign-role {
-  font-size: 10px;
+  font-size: clamp(7px, 2.5cqw, 10px);
   font-weight: 700;
   color: #94a3b8;
   text-transform: uppercase;
   letter-spacing: 0.4px;
-  min-width: 38px;
+  min-width: clamp(26px, 10cqw, 38px);
 }
 
 .assign-name {
-  font-size: 12px;
+  font-size: clamp(9px, 3cqw, 12px);
   color: #475569;
 }
 
@@ -1613,18 +1644,18 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 14px;
+  padding: clamp(4px, 2cqw, 8px) clamp(7px, 3.5cqw, 14px);
   border-top: 1px solid #f1f5f9;
   background: #fafbfc;
 }
 
-.card-created { font-size: 10px; color: #cbd5e1; }
+.card-created { font-size: clamp(8px, 2.5cqw, 10px); color: #cbd5e1; }
 
 .btn-delete-sm {
   background: none;
   border: none;
   color: #fca5a5;
-  font-size: 12px;
+  font-size: clamp(9px, 3cqw, 12px);
   cursor: pointer;
   padding: 2px 6px;
   border-radius: 4px;
@@ -2017,11 +2048,11 @@ onMounted(async () => {
     min-width: 100%;
   }
 
-  /* Single-column card grid */
-  .inspections-grid {
-    grid-template-columns: 1fr;
-    gap: 8px;
-  }
+  /* Card grid: gap only here — column count is fixed by orientation below, not the
+     picker (previously targeted a nonexistent .inspections-grid class — the real
+     container is .inspections-list, so this rule never actually applied). */
+  .inspections-list { gap: 8px; }
+  .grid-cols-picker { display: none; }
 
   /* Tab bar: horizontal scroll, no wrap */
   .view-tabs {
@@ -2074,6 +2105,19 @@ onMounted(async () => {
     font-size: 11px;
     padding: 9px 6px;
   }
+}
+
+/* Mobile grid density is fixed, not picker-driven: 2 columns portrait, 4 landscape.
+   Landscape uses a wider bound (900px) than portrait (768px) since a phone turned
+   sideways is physically wider — this still excludes real tablets/small laptops from
+   being force-locked to 4 columns. Card-internal sizing needs no separate rule here —
+   the clamp()/cqw scaling above is driven by each card's own rendered width regardless
+   of why that width is what it is. */
+@media (max-width: 768px) and (orientation: portrait) {
+  .inspections-list { grid-template-columns: repeat(2, 1fr) !important; }
+}
+@media (max-width: 900px) and (orientation: landscape) {
+  .inspections-list { grid-template-columns: repeat(4, 1fr) !important; }
 }
 
 

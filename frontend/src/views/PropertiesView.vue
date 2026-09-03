@@ -17,6 +17,16 @@ const showModal = ref(false)
 const editingProperty = ref(null)
 const activeTab = ref('grid')
 
+// Grid density picker — a target column count at the current width, not a hard lock;
+// the grid still reflows responsively via auto-fill as the window resizes (see
+// .properties-grid.grid-cols-N rules). Persisted the same ad-hoc way as other UI
+// choices in this app (e.g. inspections_view in InspectionsView.vue).
+const gridCols = ref(Number(localStorage.getItem('properties_grid_cols')) || 5)
+function setGridCols(n) {
+  gridCols.value = n
+  localStorage.setItem('properties_grid_cols', n)
+}
+
 // ── Address Lookup ────────────────────────────────────────────────────────────
 // Mode A — postcode entered  → fetch full address list, show picker
 // Mode B — street/number     → autocomplete suggestions, select → fetch postcode list
@@ -345,6 +355,13 @@ onMounted(() => { fetchProperties(); fetchClients() })
         <button :class="['toggle-btn', { active: activeTab==='grid' }]" @click="activeTab='grid'">Grid</button>
         <button :class="['toggle-btn', { active: activeTab==='map' }]" @click="activeTab='map'">Map</button>
       </div>
+      <div v-if="activeTab === 'grid'" class="tab-toggle grid-cols-picker" title="Cards per row (target — still adapts to window width)">
+        <button
+          v-for="n in [4,5,6,7,8]" :key="n"
+          :class="['toggle-btn', { active: gridCols === n }]"
+          @click="setGridCols(n)"
+        >{{ n }}</button>
+      </div>
     </div>
 
     
@@ -357,7 +374,7 @@ onMounted(() => { fetchProperties(); fetchClients() })
     <div v-if="loading" class="loading">Loading properties...</div>
 
     <!-- Grid view -->
-    <div v-else-if="activeTab === 'grid'" class="properties-grid">
+    <div v-else-if="activeTab === 'grid'" :class="['properties-grid', 'grid-cols-' + gridCols]">
       <div v-for="property in filteredProperties" :key="property.id" class="property-card">
         <div class="card-photo">
           <img v-if="property.overview_photo" :src="property.overview_photo" alt="" class="prop-img" loading="lazy" />
@@ -673,26 +690,38 @@ h1 { font-size: 21px; font-weight: 700; color: #0f172a; margin: 0 0 2px; }
 .loading { text-align: center; padding: 60px; color: #94a3b8; }
 
 .properties-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
-.property-card { background: white; border: 1px solid #e8ecf1; border-radius: 12px; overflow: hidden; transition: box-shadow 0.15s, transform 0.12s; display: flex; flex-direction: column; }
+/* Grid density picker — sets the auto-fill floor (a target at the current width, not a
+   hard lock); the grid still reflows responsively as the window resizes. Floors tuned so
+   N is the typical column count at the page's ~1360px usable grid width. */
+.properties-grid.grid-cols-4 { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+.properties-grid.grid-cols-5 { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+.properties-grid.grid-cols-6 { grid-template-columns: repeat(auto-fill, minmax(195px, 1fr)); }
+.properties-grid.grid-cols-7 { grid-template-columns: repeat(auto-fill, minmax(165px, 1fr)); }
+.properties-grid.grid-cols-8 { grid-template-columns: repeat(auto-fill, minmax(145px, 1fr)); }
+
+/* Card content scales continuously with the card's own rendered width (container query
+   units), not in discrete size tiers — responds correctly whether the card got narrower
+   from a denser picker choice or from the window itself narrowing. */
+.property-card { background: white; border: 1px solid #e8ecf1; border-radius: 12px; overflow: hidden; transition: box-shadow 0.15s, transform 0.12s; display: flex; flex-direction: column; container-type: inline-size; }
 .property-card:hover { box-shadow: 0 4px 14px rgba(0,0,0,0.08); transform: translateY(-1px); }
-.card-photo { position: relative; height: 120px; background: linear-gradient(135deg, #e0e7ff 0%, #ede9fe 100%); overflow: hidden; }
+.card-photo { position: relative; height: clamp(60px, 28cqw, 120px); background: linear-gradient(135deg, #e0e7ff 0%, #ede9fe 100%); overflow: hidden; }
 .prop-img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.photo-placeholder { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 36px; opacity: 0.4; }
-.card-body { padding: 11px 13px 7px; flex: 1; }
-.card-postcode { font-size: 10px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
-.card-address { font-size: 13px; font-weight: 700; color: #1e293b; line-height: 1.3; margin-bottom: 3px; }
-.card-client { font-size: 11px; color: #6366f1; font-weight: 600; margin-bottom: 6px; }
-.card-specs { display: flex; gap: 5px; flex-wrap: wrap; }
-.spec-chip { font-size: 10px; font-weight: 600; padding: 2px 6px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; color: #64748b; text-transform: capitalize; }
+.photo-placeholder { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; font-size: clamp(20px, 10cqw, 36px); opacity: 0.4; }
+.card-body { padding: clamp(6px, 3cqw, 11px) clamp(8px, 3.5cqw, 13px) clamp(4px, 2cqw, 7px); flex: 1; }
+.card-postcode { font-size: clamp(8px, 3cqw, 10px); font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
+.card-address { font-size: clamp(10px, 4.5cqw, 13px); font-weight: 700; color: #1e293b; line-height: 1.3; margin-bottom: clamp(1px, 0.8cqw, 3px); }
+.card-client { font-size: clamp(9px, 3.5cqw, 11px); color: #6366f1; font-weight: 600; margin-bottom: clamp(3px, 1.6cqw, 6px); }
+.card-specs { display: flex; gap: clamp(3px, 1.3cqw, 5px); flex-wrap: wrap; }
+.spec-chip { font-size: clamp(8px, 2.6cqw, 10px); font-weight: 600; padding: clamp(1px, 0.5cqw, 2px) clamp(3px, 1.5cqw, 6px); background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; color: #64748b; text-transform: capitalize; }
 .spec-icon { padding: 2px 4px; }
-.card-footer { display: flex; align-items: center; gap: 5px; padding: 7px 10px; border-top: 1px solid #f1f5f9; background: #fafbfc; }
-.btn-map { padding: 4px 8px; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 5px; font-size: 11px; cursor: pointer; }
+.card-footer { display: flex; align-items: center; gap: clamp(3px, 1.3cqw, 5px); padding: clamp(4px, 1.8cqw, 7px) clamp(6px, 2.6cqw, 10px); border-top: 1px solid #f1f5f9; background: #fafbfc; }
+.btn-map { padding: clamp(2px, 1cqw, 4px) clamp(4px, 2cqw, 8px); background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 5px; font-size: clamp(9px, 2.9cqw, 11px); cursor: pointer; }
 .btn-map:hover { background: #dbeafe; }
-.btn-view { flex: 1; padding: 5px 8px; background: #f0fdf4; color: #16a34a; border: 1px solid #bbf7d0; border-radius: 5px; font-size: 11px; font-weight: 600; cursor: pointer; }
+.btn-view { flex: 1; padding: clamp(3px, 1.3cqw, 5px) clamp(4px, 2cqw, 8px); background: #f0fdf4; color: #16a34a; border: 1px solid #bbf7d0; border-radius: 5px; font-size: clamp(9px, 2.9cqw, 11px); font-weight: 600; cursor: pointer; }
 .btn-view:hover { background: #dcfce7; }
-.btn-edit { flex: 1; padding: 5px 8px; background: #eef2ff; color: #4338ca; border: none; border-radius: 5px; font-size: 11px; font-weight: 600; cursor: pointer; }
+.btn-edit { flex: 1; padding: clamp(3px, 1.3cqw, 5px) clamp(4px, 2cqw, 8px); background: #eef2ff; color: #4338ca; border: none; border-radius: 5px; font-size: clamp(9px, 2.9cqw, 11px); font-weight: 600; cursor: pointer; }
 .btn-edit:hover { background: #c7d2fe; }
-.btn-delete { flex: 1; padding: 5px 8px; background: #fee2e2; color: #991b1b; border: none; border-radius: 5px; font-size: 11px; font-weight: 600; cursor: pointer; }
+.btn-delete { flex: 1; padding: clamp(3px, 1.3cqw, 5px) clamp(4px, 2cqw, 8px); background: #fee2e2; color: #991b1b; border: none; border-radius: 5px; font-size: clamp(9px, 2.9cqw, 11px); font-weight: 600; cursor: pointer; }
 .btn-delete:hover { background: #fecaca; }
 .empty-state { grid-column: 1/-1; text-align: center; padding: 60px 20px; color: #94a3b8; }
 
@@ -807,10 +836,8 @@ h1 { font-size: 21px; font-weight: 700; color: #0f172a; margin: 0 0 2px; }
   }
   .filter-group { min-width: 100%; }
 
-  .properties-grid {
-    grid-template-columns: 1fr;
-    gap: 8px;
-  }
+  .properties-grid { gap: 8px; }
+  .grid-cols-picker { display: none; }
 
   /* Property cards: overview photo full-width on mobile */
   .property-overview-photo {
@@ -846,6 +873,17 @@ h1 { font-size: 21px; font-weight: 700; color: #0f172a; margin: 0 0 2px; }
   .feature-toggles {
     grid-template-columns: repeat(2, 1fr);
   }
+}
+
+/* Mobile grid density is fixed, not picker-driven: 2 columns portrait, 4 landscape.
+   Landscape uses a wider bound (900px) than portrait (768px) since a phone turned
+   sideways is physically wider — this still excludes real tablets/small laptops from
+   being force-locked to 4 columns. */
+@media (max-width: 768px) and (orientation: portrait) {
+  .properties-grid { grid-template-columns: repeat(2, 1fr) !important; }
+}
+@media (max-width: 900px) and (orientation: landscape) {
+  .properties-grid { grid-template-columns: repeat(4, 1fr) !important; }
 }
 
 

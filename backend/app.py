@@ -181,6 +181,10 @@ def create_app():
         ('routes.system_settings', 'system_settings_bp', '/api/system-settings'),
         ('routes.actions',         'actions_bp',          '/api/actions'),
         ('routes.google',          'google_bp',           '/api/google'),
+        ('routes.microsoft',       'microsoft_bp',        '/api/microsoft'),
+        ('routes.dropbox_integration', 'dropbox_bp',      '/api/dropbox'),
+        ('routes.slack_integration',   'slack_bp',        '/api/slack'),
+        ('routes.zapier',          'zapier_bp',           '/api/zapier'),
     ]
     import importlib
     for module_name, bp_name, prefix in _optional:

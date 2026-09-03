@@ -29,6 +29,8 @@ ALLOWED_KEYS = {
     'report_disclaimer',
     # Google Sheets master job-records spreadsheet
     'google_master_sheet_id',
+    # Slack — destination channel for inspection notifications
+    'slack_channel_id',
 }
 
 

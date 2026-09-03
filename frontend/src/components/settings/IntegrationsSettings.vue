@@ -119,6 +119,230 @@ async function disconnectGoogle() {
   }
 }
 
+// ── Microsoft OAuth ────────────────────────────────────────────────────────
+// Status shared by Outlook Calendar, Teams, and OneDrive/SharePoint cards
+const microsoftStatus = ref({
+  connected: false, email: '', has_calendar: false, has_teams: false, has_onedrive: false,
+})
+const microsoftDisconnecting = ref(false)
+
+async function loadMicrosoftStatus() {
+  try {
+    const res = await api.http.get('/api/microsoft/status')
+    microsoftStatus.value = res.data
+  } catch (e) {
+    // Not connected yet — keep defaults
+  }
+}
+
+function connectMicrosoft() {
+  const base = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
+  window.location.href = `${base}/api/microsoft/auth`
+}
+
+async function disconnectMicrosoft() {
+  if (!confirm('Disconnect Microsoft? Outlook, Teams and OneDrive syncing will stop.')) return
+  microsoftDisconnecting.value = true
+  try {
+    await api.http.delete('/api/microsoft/disconnect')
+    microsoftStatus.value = { connected: false, email: '', has_calendar: false, has_teams: false, has_onedrive: false }
+  } catch (e) {
+    alert('Failed to disconnect — please try again.')
+  } finally {
+    microsoftDisconnecting.value = false
+  }
+}
+
+// ── Dropbox OAuth ─────────────────────────────────────────────────────────
+const dropboxStatus = ref({ connected: false, email: '' })
+const dropboxDisconnecting = ref(false)
+
+async function loadDropboxStatus() {
+  try {
+    const res = await api.http.get('/api/dropbox/status')
+    dropboxStatus.value = res.data
+  } catch (e) {
+    // Not connected yet — keep defaults
+  }
+}
+
+function connectDropbox() {
+  const base = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
+  window.location.href = `${base}/api/dropbox/auth`
+}
+
+async function disconnectDropbox() {
+  if (!confirm('Disconnect Dropbox? Reports will no longer be pushed to Dropbox.')) return
+  dropboxDisconnecting.value = true
+  try {
+    await api.http.delete('/api/dropbox/disconnect')
+    dropboxStatus.value = { connected: false, email: '' }
+  } catch (e) {
+    alert('Failed to disconnect — please try again.')
+  } finally {
+    dropboxDisconnecting.value = false
+  }
+}
+
+// ── Slack OAuth ───────────────────────────────────────────────────────────
+const slackStatus = ref({ connected: false, team_name: '' })
+const slackDisconnecting = ref(false)
+
+async function loadSlackStatus() {
+  try {
+    const res = await api.http.get('/api/slack/status')
+    slackStatus.value = res.data
+  } catch (e) {
+    // Not connected yet — keep defaults
+  }
+}
+
+function connectSlack() {
+  const base = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
+  window.location.href = `${base}/api/slack/auth`
+}
+
+async function disconnectSlack() {
+  if (!confirm('Disconnect Slack? Notifications will stop posting to your workspace.')) return
+  slackDisconnecting.value = true
+  try {
+    await api.http.delete('/api/slack/disconnect')
+    slackStatus.value = { connected: false, team_name: '' }
+  } catch (e) {
+    alert('Failed to disconnect — please try again.')
+  } finally {
+    slackDisconnecting.value = false
+  }
+}
+
+// ── Slack — destination channel config panel ─────────────────────────────
+const showSlackPanel = ref(false)
+const slackChannelId = ref('')
+const slackSaving     = ref(false)
+const slackSaved      = ref(false)
+
+async function loadSlackChannelSettings() {
+  try {
+    const res = await api.getSystemSettings()
+    slackChannelId.value = (res.data || {}).slack_channel_id || ''
+  } catch (e) {
+    console.error('Failed to load Slack settings:', e)
+  }
+}
+
+async function saveSlackChannel() {
+  slackSaving.value = true
+  try {
+    await api.updateSystemSettings({ slack_channel_id: slackChannelId.value.trim() })
+    slackSaved.value = true
+    setTimeout(() => slackSaved.value = false, 2500)
+  } catch (e) {
+    alert('Failed to save — please try again.')
+  } finally {
+    slackSaving.value = false
+  }
+}
+
+// ── Zapier — API key groundwork ───────────────────────────────────────────
+// Zapier doesn't have a "connect account" login screen — a real integration
+// means InspectPro gets listed on Zapier's platform and Zapier's own users
+// connect TO InspectPro using this key. This panel just generates/reveals it.
+const showZapierPanel = ref(false)
+const zapierStatus     = ref({ configured: false, last4: '', generated_at: '' })
+const zapierGenerating = ref(false)
+const zapierRevoking   = ref(false)
+const zapierNewKey     = ref('')   // full plaintext key — only ever held here, shown once
+const zapierCopied     = ref(false)
+
+async function loadZapierStatus() {
+  try {
+    const res = await api.http.get('/api/zapier/status')
+    zapierStatus.value = res.data
+  } catch (e) {
+    // Not configured yet — keep defaults
+  }
+}
+
+async function generateZapierKey() {
+  if (zapierStatus.value.configured && !confirm('Generate a new key? The existing key will stop working immediately.')) return
+  zapierGenerating.value = true
+  try {
+    const res = await api.http.post('/api/zapier/generate-key')
+    zapierNewKey.value = res.data.api_key
+    await loadZapierStatus()
+  } catch (e) {
+    alert('Failed to generate a key — please try again.')
+  } finally {
+    zapierGenerating.value = false
+  }
+}
+
+async function revokeZapierKey() {
+  if (!confirm('Revoke the Zapier API key? Any connected Zap will stop working.')) return
+  zapierRevoking.value = true
+  try {
+    await api.http.delete('/api/zapier/revoke-key')
+    zapierNewKey.value = ''
+    await loadZapierStatus()
+  } catch (e) {
+    alert('Failed to revoke — please try again.')
+  } finally {
+    zapierRevoking.value = false
+  }
+}
+
+async function copyZapierKey() {
+  try {
+    await navigator.clipboard.writeText(zapierNewKey.value)
+    zapierCopied.value = true
+    setTimeout(() => zapierCopied.value = false, 2000)
+  } catch (e) {
+    // Clipboard API unavailable — the key is still visible to copy manually
+  }
+}
+
+// ── Generalised OAuth helpers (Google / Microsoft / Dropbox / Slack) ──────
+function isAnyOAuth(integration) {
+  return !!(integration.googleOAuth || integration.microsoftOAuth || integration.dropboxOAuth || integration.slackOAuth)
+}
+function oauthProviderConnected(integration) {
+  if (integration.googleOAuth)    return googleStatus.value.connected
+  if (integration.microsoftOAuth) return microsoftStatus.value.connected
+  if (integration.dropboxOAuth)   return dropboxStatus.value.connected
+  if (integration.slackOAuth)     return slackStatus.value.connected
+  return false
+}
+function isOAuthConnected(integration) {
+  if (!oauthProviderConnected(integration)) return false
+  if (!integration.scopeKey) return true
+  const status =
+    integration.googleOAuth    ? googleStatus.value :
+    integration.microsoftOAuth ? microsoftStatus.value : null
+  return !!(status && status[integration.scopeKey])
+}
+function oauthLabel(integration) {
+  if (integration.slackOAuth) return slackStatus.value.team_name
+  if (integration.googleOAuth) return googleStatus.value.email
+  if (integration.microsoftOAuth) return microsoftStatus.value.email
+  if (integration.dropboxOAuth) return dropboxStatus.value.email
+  return ''
+}
+function connectOAuth(integration) {
+  if (integration.googleOAuth)    return connectGoogle()
+  if (integration.microsoftOAuth) return connectMicrosoft()
+  if (integration.dropboxOAuth)   return connectDropbox()
+  if (integration.slackOAuth)     return connectSlack()
+}
+function disconnectOAuth(integration) {
+  if (integration.googleOAuth)    return disconnectGoogle()
+  if (integration.microsoftOAuth) return disconnectMicrosoft()
+  if (integration.dropboxOAuth)   return disconnectDropbox()
+  if (integration.slackOAuth)     return disconnectSlack()
+}
+function anyDisconnecting() {
+  return googleDisconnecting.value || microsoftDisconnecting.value || dropboxDisconnecting.value || slackDisconnecting.value
+}
+
 onMounted(async () => {
   // Default force-sync date to 30 days ago
   const d = new Date()
@@ -126,21 +350,32 @@ onMounted(async () => {
   driveSyncDate.value  = d.toISOString().slice(0, 10)
   sheetsSyncDate.value = d.toISOString().slice(0, 10)
 
-  await loadGoogleStatus()
-  await loadSheetsSettings()
+  await Promise.all([
+    loadGoogleStatus(),
+    loadSheetsSettings(),
+    loadMicrosoftStatus(),
+    loadDropboxStatus(),
+    loadSlackStatus(),
+    loadSlackChannelSettings(),
+    loadZapierStatus(),
+  ])
 
-  // Handle redirect-back from Google OAuth
+  // Handle redirect-back from an OAuth provider
   const params = new URLSearchParams(window.location.search)
-  const googleResult = params.get('google')
-  if (googleResult === 'connected') {
-    await loadGoogleStatus()
-    // Clean up the URL
-    const clean = window.location.pathname + '?tab=integrations'
-    window.history.replaceState({}, '', clean)
-  } else if (googleResult === 'error') {
-    alert('Google authorisation failed — please try again.')
-    const clean = window.location.pathname + '?tab=integrations'
-    window.history.replaceState({}, '', clean)
+  const results = {
+    google:    { result: params.get('google'),    reload: loadGoogleStatus,    label: 'Google' },
+    microsoft: { result: params.get('microsoft'), reload: loadMicrosoftStatus, label: 'Microsoft' },
+    dropbox:   { result: params.get('dropbox'),   reload: loadDropboxStatus,   label: 'Dropbox' },
+    slack:     { result: params.get('slack'),     reload: loadSlackStatus,     label: 'Slack' },
+  }
+  for (const { result, reload, label } of Object.values(results)) {
+    if (result === 'connected') {
+      await reload()
+      window.history.replaceState({}, '', window.location.pathname + '?tab=integrations')
+    } else if (result === 'error') {
+      alert(`${label} authorisation failed — please try again.`)
+      window.history.replaceState({}, '', window.location.pathname + '?tab=integrations')
+    }
   }
 })
 
@@ -167,8 +402,10 @@ const integrations = [
     logo: 'https://cdn.simpleicons.org/microsoftoutlook',
     description: 'Sync with Outlook calendars and Microsoft Teams. Ideal for agencies already on the Microsoft ecosystem.',
     color: '#0078D4',
-    status: 'coming_soon',
+    status: 'available',
     badge: 'Free',
+    microsoftOAuth: true,
+    scopeKey: 'has_calendar',
   },
   {
     id: 'apple_calendar',
@@ -189,18 +426,21 @@ const integrations = [
     logo: 'https://cdn.simpleicons.org/slack',
     description: 'Post notifications to Slack channels when inspections are completed, reports are ready, or urgent defects are flagged.',
     color: '#4A154B',
-    status: 'coming_soon',
+    status: 'available',
     badge: 'Free tier',
+    slackOAuth: true,
   },
   {
     id: 'ms_teams',
     category: 'Communication',
     name: 'Microsoft Teams',
     logo: 'https://cdn.simpleicons.org/microsoftteams',
-    description: 'Send inspection status updates to Teams channels. Ideal for letting agencies already using Microsoft 365.',
+    description: 'Send inspection status updates to Teams channels. Ideal for letting agencies already using Microsoft 365. Posting to a channel may require your Microsoft 365 admin to grant consent the first time.',
     color: '#6264A7',
-    status: 'coming_soon',
+    status: 'available',
     badge: 'Free tier',
+    microsoftOAuth: true,
+    scopeKey: 'has_teams',
   },
 
   // ─ Finance ───────────────────────────────────────────────────────────────
@@ -268,8 +508,9 @@ const integrations = [
     logo: 'https://cdn.simpleicons.org/dropbox',
     description: 'Push reports to Dropbox folders shared with clients or landlords for easy access without logging in.',
     color: '#0061FF',
-    status: 'coming_soon',
+    status: 'available',
     badge: 'Free tier',
+    dropboxOAuth: true,
   },
   {
     id: 'onedrive',
@@ -278,7 +519,9 @@ const integrations = [
     logo: 'https://cdn.simpleicons.org/onedrive',
     description: 'Store reports in Microsoft OneDrive or SharePoint — ideal for corporate agencies on Microsoft 365.',
     color: '#0078D4',
-    status: 'coming_soon',
+    status: 'available',
+    microsoftOAuth: true,
+    scopeKey: 'has_onedrive',
   },
 
   // ─ Automation ────────────────────────────────────────────────────────────
@@ -289,8 +532,9 @@ const integrations = [
     logo: 'https://cdn.simpleicons.org/zapier',
     description: 'Connect InspectPro to 5,000+ apps via Zapier Zaps — without any code. Trigger workflows when inspections are created, completed, or moved to review.',
     color: '#FF4A00',
-    status: 'coming_soon',
-    badge: 'Free tier',
+    status: 'available',
+    badge: 'API key',
+    configurable: true,
   },
   {
     id: 'make',
@@ -328,15 +572,16 @@ function handleConnect(integration) {
   }
   if (integration.configurable) {
     if (integration.id === 'google_sheets') { showSheetsPanel.value = true }
+    if (integration.id === 'zapier') { showZapierPanel.value = true }
     return
   }
-  if (integration.googleOAuth) {
-    // Both Drive and Calendar share the same Google OAuth connection
-    if (googleStatus.value.connected) {
+  if (isAnyOAuth(integration)) {
+    // Cards sharing one provider connection (e.g. all 3 Microsoft cards) share this state
+    if (oauthProviderConnected(integration)) {
       // Already connected — clicking again opens disconnect confirmation
-      disconnectGoogle()
+      disconnectOAuth(integration)
     } else {
-      connectGoogle()
+      connectOAuth(integration)
     }
     return
   }
@@ -385,13 +630,13 @@ function handleConnect(integration) {
             <span>💡</span> {{ integration.benefit }}
           </div>
 
-          <!-- Google connected badge (shown under description for connected Google cards) -->
+          <!-- Connected badge (shown under description for connected OAuth cards) -->
           <div
-            v-if="integration.googleOAuth && googleStatus.connected && googleStatus[integration.scopeKey]"
+            v-if="isAnyOAuth(integration) && isOAuthConnected(integration)"
             class="int-connected-row"
           >
-            <span class="int-connected-badge">✓ Connected as {{ googleStatus.email }}</span>
-            <button class="int-reauth-btn" @click.stop="connectGoogle" title="Re-run the Google sign-in if the connection is broken">
+            <span class="int-connected-badge">✓ Connected — {{ oauthLabel(integration) }}</span>
+            <button class="int-reauth-btn" @click.stop="connectOAuth(integration)" title="Re-run sign-in if the connection is broken">
               Reconnect →
             </button>
             <button
@@ -410,6 +655,14 @@ function handleConnect(integration) {
             >
               Force Sync →
             </button>
+            <button
+              v-if="integration.id === 'slack'"
+              class="int-reauth-btn int-reauth-btn--sync"
+              @click.stop="showSlackPanel = true"
+              title="Choose which channel notifications post to"
+            >
+              Configure Channel →
+            </button>
           </div>
 
           <!-- CTA -->
@@ -417,15 +670,17 @@ function handleConnect(integration) {
             class="int-btn"
             :class="[
               integration.status !== 'available' ? 'int-btn--soon' :
-              (integration.googleOAuth && googleStatus.connected) ? 'int-btn--configured' :
+              (isAnyOAuth(integration) && oauthProviderConnected(integration)) ? 'int-btn--configured' :
+              (integration.id === 'zapier' && zapierStatus.configured) ? 'int-btn--configured' :
               'int-btn--connect'
             ]"
             @click="handleConnect(integration)"
-            :disabled="connectingId === integration.id || googleDisconnecting"
+            :disabled="connectingId === integration.id || anyDisconnecting()"
           >
             <span v-if="connectingId === integration.id">Connecting…</span>
-            <span v-else-if="integration.googleOAuth && googleStatus.connected && googleStatus[integration.scopeKey]">✓ Connected — Disconnect</span>
-            <span v-else-if="integration.googleOAuth && googleStatus.connected && !googleStatus[integration.scopeKey]">Re-authorise →</span>
+            <span v-else-if="isAnyOAuth(integration) && isOAuthConnected(integration)">✓ Connected — Disconnect</span>
+            <span v-else-if="isAnyOAuth(integration) && oauthProviderConnected(integration) && !isOAuthConnected(integration)">Re-authorise →</span>
+            <span v-else-if="integration.id === 'zapier' && zapierStatus.configured">✓ Configured — Manage</span>
             <span v-else-if="integration.status === 'available'">Connect →</span>
             <span v-else>Notify Me</span>
           </button>
@@ -599,6 +854,105 @@ function handleConnect(integration) {
           <button class="btn-secondary" @click="showDrivePanel = false">Close</button>
           <button class="btn-primary" :disabled="driveSyncing" @click="forceSyncDrive">
             {{ driveSyncing ? 'Syncing…' : 'Sync Now' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Slack — destination channel config panel -->
+    <div v-if="showSlackPanel" class="modal-overlay" @click.self="showSlackPanel = false">
+      <div class="modal modal--wide">
+        <div class="modal-icon" style="font-size:28px;">💬</div>
+        <h3>Slack — Notification Channel</h3>
+        <p class="modal-sub">
+          Choose the channel InspectPro posts to when inspections are completed, reports are
+          ready, or urgent defects are flagged.
+        </p>
+
+        <div v-if="!slackStatus.connected" class="config-notice config-notice--warn">
+          ⚠ <strong>Slack not connected.</strong> Connect Slack first (Settings → Integrations →
+          Slack) then re-open this panel.
+        </div>
+        <div v-else class="config-notice">
+          ✅ Connected to <strong>{{ slackStatus.team_name }}</strong>.
+        </div>
+
+        <div class="config-fields" style="margin-top:16px;">
+          <div class="config-field">
+            <label>Channel ID</label>
+            <input
+              v-model="slackChannelId"
+              type="text"
+              class="config-input"
+              placeholder="e.g. C0123ABCDEF"
+            />
+            <p class="field-hint">
+              Right-click the channel in Slack → View channel details → copy the Channel ID at
+              the bottom. The InspectPro bot must be invited to the channel first.
+            </p>
+          </div>
+        </div>
+
+        <div class="config-status" v-if="slackChannelId && slackStatus.connected">
+          ✅ Ready — notifications will post to this channel.
+        </div>
+        <div class="config-status config-status--warn" v-else-if="!slackChannelId">
+          ⚠ Enter a Channel ID above to enable.
+        </div>
+
+        <div class="modal-actions">
+          <button class="btn-secondary" @click="showSlackPanel = false">Close</button>
+          <transition name="fade">
+            <span v-if="slackSaved" class="saved-badge">✓ Saved</span>
+          </transition>
+          <button class="btn-primary" :disabled="slackSaving || !slackStatus.connected" @click="saveSlackChannel">
+            {{ slackSaving ? 'Saving…' : 'Save' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Zapier — API key panel -->
+    <div v-if="showZapierPanel" class="modal-overlay" @click.self="showZapierPanel = false; zapierNewKey = ''">
+      <div class="modal modal--wide">
+        <div class="modal-icon" style="font-size:28px;">⚡</div>
+        <h3>Zapier — API Key</h3>
+        <p class="modal-sub">
+          Zapier doesn't have a "log in" screen the way Google or Microsoft do — instead,
+          Zapier's own users connect <em>to</em> InspectPro using an API key. Generate one below
+          to authenticate requests from a Zapier integration. (Publishing InspectPro as a Zapier
+          app with real triggers/actions is separate follow-up work — this key is the InspectPro
+          side of the groundwork for that.)
+        </p>
+
+        <div v-if="zapierNewKey" class="config-notice">
+          <strong>Copy this key now — it won't be shown again.</strong>
+          <div style="display:flex; gap:8px; align-items:center; margin-top:8px;">
+            <code style="flex:1; background:#f1f5f9; padding:6px 8px; border-radius:6px; font-size:12px; word-break:break-all;">{{ zapierNewKey }}</code>
+            <button class="btn-secondary" style="white-space:nowrap;" @click="copyZapierKey">
+              {{ zapierCopied ? 'Copied ✓' : 'Copy' }}
+            </button>
+          </div>
+        </div>
+        <div v-else-if="zapierStatus.configured" class="config-status">
+          ✅ Key configured — ends in <strong>{{ zapierStatus.last4 }}</strong>
+        </div>
+        <div v-else class="config-status config-status--warn">
+          No API key generated yet.
+        </div>
+
+        <div class="modal-actions">
+          <button class="btn-secondary" @click="showZapierPanel = false; zapierNewKey = ''">Close</button>
+          <button
+            v-if="zapierStatus.configured"
+            class="btn-secondary"
+            :disabled="zapierRevoking"
+            @click="revokeZapierKey"
+          >
+            {{ zapierRevoking ? 'Revoking…' : 'Revoke' }}
+          </button>
+          <button class="btn-primary" :disabled="zapierGenerating" @click="generateZapierKey">
+            {{ zapierGenerating ? 'Generating…' : (zapierStatus.configured ? 'Regenerate Key' : 'Generate Key') }}
           </button>
         </div>
       </div>

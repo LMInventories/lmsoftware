@@ -324,13 +324,11 @@ def _setup_database():
         db.session.rollback()
         print(f'[migration] reference_number backfill non-fatal: {_bf_exc}')
 
-    # ── Deposit / Depositary fields ─────────────────────────────────────────────
+    # ── Deposit scheme fields ─────────────────────────────────────────────────
     for _col, _ddl in [
         ('deposit_amount',        'NUMERIC(10,2)'),
         ('deposit_scheme',        'VARCHAR(50)'),
         ('deposit_ref',           'VARCHAR(255)'),
-        ('depositary_tenancy_id', 'VARCHAR(255)'),
-        ('depositary_pushed_at',  'TIMESTAMP'),
     ]:
         if not column_exists('inspections', _col):
             _alter_column(f"inspections.{_col}",

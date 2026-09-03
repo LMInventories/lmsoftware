@@ -6,42 +6,6 @@ const connectingId = ref(null)
 const comingSoonModal = ref(false)
 const comingSoonName  = ref('')
 
-// ── The Depositary config panel ───────────────────────────────────────────────
-const showDepositaryPanel = ref(false)
-const depositary = ref({ api_url: '', api_key: '' })
-const depositorySaving = ref(false)
-const depositorySaved  = ref(false)
-const depositaryStatus = ref(null)  // null | 'configured' | 'not_configured'
-
-async function loadDepositarySettings() {
-  try {
-    const res = await api.getSystemSettings()
-    const s   = res.data || {}
-    depositary.value.api_url = s.depositary_api_url || ''
-    depositary.value.api_key = s.depositary_api_key || ''
-    depositaryStatus.value   = (s.depositary_api_url && s.depositary_api_key) ? 'configured' : 'not_configured'
-  } catch (e) {
-    console.error('Failed to load Depositary settings:', e)
-  }
-}
-
-async function saveDepositarySettings() {
-  depositorySaving.value = true
-  try {
-    await api.updateSystemSettings({
-      depositary_api_url: depositary.value.api_url,
-      depositary_api_key: depositary.value.api_key,
-    })
-    depositaryStatus.value = (depositary.value.api_url && depositary.value.api_key) ? 'configured' : 'not_configured'
-    depositorySaved.value  = true
-    setTimeout(() => depositorySaved.value = false, 2500)
-  } catch (e) {
-    alert('Failed to save — please try again.')
-  } finally {
-    depositorySaving.value = false
-  }
-}
-
 // ── Google OAuth ──────────────────────────────────────────────────────────────
 // Status shared by Drive, Calendar, and Sheets cards
 const googleStatus = ref({
@@ -162,7 +126,6 @@ onMounted(async () => {
   driveSyncDate.value  = d.toISOString().slice(0, 10)
   sheetsSyncDate.value = d.toISOString().slice(0, 10)
 
-  await loadDepositarySettings()
   await loadGoogleStatus()
   await loadSheetsSettings()
 
@@ -184,20 +147,6 @@ onMounted(async () => {
 // ── Integration catalogue ─────────────────────────────────────────────────────
 // status: 'available' | 'configured' | 'coming_soon'
 const integrations = [
-  // ─ Deposit Management ─────────────────────────────────────────────────────
-  {
-    id: 'depositary',
-    category: 'Deposit Management',
-    name: 'The Depositary',
-    logoText: 'TD',
-    description: 'Automatically push completed Check Out reports to The Depositary. Tenant details, dilapidations, and the PDF report are sent the moment the inspection is marked complete — no manual data entry.',
-    color: '#0f766e',
-    status: 'available',
-    badge: 'UK Deposit Platform',
-    benefit: 'Saves ~3–4 hours per checkout',
-    configurable: true,
-  },
-
   // ─ Calendars ──────────────────────────────────────────────────────────────
   {
     id: 'google_calendar',
@@ -208,7 +157,6 @@ const integrations = [
     color: '#4285F4',
     status: 'available',
     badge: 'Free',
-    benefit: 'Saves ~15 min/day per clerk',
     googleOAuth: true,
     scopeKey: 'has_calendar',
   },
@@ -336,7 +284,6 @@ const integrations = [
     color: '#34A853',
     status: 'available',
     badge: 'Free',
-    benefit: 'Replaces your Zapier → intake sheet workflow',
     googleOAuth: true,
     scopeKey: 'has_sheets',
     configurable: true,
@@ -441,7 +388,6 @@ function handleConnect(integration) {
     return
   }
   if (integration.configurable) {
-    if (integration.id === 'depositary')    { showDepositaryPanel.value = true }
     if (integration.id === 'google_sheets') { showSheetsPanel.value = true }
     return
   }
@@ -532,7 +478,6 @@ function handleConnect(integration) {
             class="int-btn"
             :class="[
               integration.status !== 'available' ? 'int-btn--soon' :
-              (integration.id === 'depositary' && depositaryStatus === 'configured') ? 'int-btn--configured' :
               (integration.googleOAuth && googleStatus.connected) ? 'int-btn--configured' :
               'int-btn--connect'
             ]"
@@ -540,7 +485,6 @@ function handleConnect(integration) {
             :disabled="connectingId === integration.id || googleDisconnecting"
           >
             <span v-if="connectingId === integration.id">Connecting…</span>
-            <span v-else-if="integration.id === 'depositary' && depositaryStatus === 'configured'">⚙ Configured →</span>
             <span v-else-if="integration.googleOAuth && googleStatus.connected && googleStatus[integration.scopeKey]">✓ Connected — Disconnect</span>
             <span v-else-if="integration.googleOAuth && googleStatus.connected && !googleStatus[integration.scopeKey]">Re-authorise →</span>
             <span v-else-if="integration.status === 'available'">Connect →</span>
@@ -728,63 +672,6 @@ function handleConnect(integration) {
         <h3>{{ comingSoonName }}</h3>
         <p>This integration is on the roadmap. We'll notify admins as soon as it's available.</p>
         <button class="btn-primary" @click="comingSoonModal = false">OK</button>
-      </div>
-    </div>
-
-    <!-- The Depositary config panel -->
-    <div v-if="showDepositaryPanel" class="modal-overlay" @click.self="showDepositaryPanel = false">
-      <div class="modal modal--wide">
-        <div class="modal-icon">🏦</div>
-        <h3>The Depositary</h3>
-        <p class="modal-sub">
-          Once configured, completed Check Out inspections will be automatically pushed to The Depositary —
-          including tenant details, dilapidations and the PDF report.
-        </p>
-
-        <div class="config-notice">
-          <strong>API credentials required.</strong>
-          Contact <a href="https://www.thedepositary.com/integrations" target="_blank" rel="noopener">thedepositary.com/integrations</a>
-          to request API access. They will supply the URL and key below.
-        </div>
-
-        <div class="config-fields">
-          <div class="config-field">
-            <label>API Base URL</label>
-            <!-- TODO: replace placeholder once confirmed by The Depositary -->
-            <input
-              v-model="depositary.api_url"
-              type="url"
-              class="config-input"
-              placeholder="https://api.thedepositary.com  (supplied by The Depositary)"
-            />
-          </div>
-          <div class="config-field">
-            <label>API Key</label>
-            <input
-              v-model="depositary.api_key"
-              type="password"
-              class="config-input"
-              placeholder="Your API key (supplied by The Depositary)"
-            />
-          </div>
-        </div>
-
-        <div class="config-status" v-if="depositaryStatus === 'configured'">
-          ✅ Configured — Check Out completions will push automatically.
-        </div>
-        <div class="config-status config-status--warn" v-else-if="depositaryStatus === 'not_configured'">
-          ⚠ Not configured — enter both fields above to enable.
-        </div>
-
-        <div class="modal-actions">
-          <button class="btn-secondary" @click="showDepositaryPanel = false">Close</button>
-          <transition name="fade">
-            <span v-if="depositorySaved" class="saved-badge">✓ Saved</span>
-          </transition>
-          <button class="btn-primary" :disabled="depositorySaving" @click="saveDepositarySettings">
-            {{ depositorySaving ? 'Saving…' : 'Save Credentials' }}
-          </button>
-        </div>
       </div>
     </div>
   </div>

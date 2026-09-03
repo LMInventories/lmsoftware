@@ -1464,14 +1464,6 @@ onMounted(() => {
                   {{ inspection.deposit_ref || 'Not set' }}
                 </span>
               </div>
-              <div class="contact-row" v-if="inspection.depositary_tenancy_id">
-                <strong>Depositary ID:</strong>
-                <span style="font-size:12px;color:#0369a1;font-family:monospace">{{ inspection.depositary_tenancy_id }}</span>
-              </div>
-              <div class="contact-row" v-if="inspection.depositary_pushed_at">
-                <strong>Pushed:</strong>
-                <span style="font-size:12px;color:#64748b">{{ new Date(inspection.depositary_pushed_at).toLocaleString('en-GB') }}</span>
-              </div>
             </div>
           </div>
 

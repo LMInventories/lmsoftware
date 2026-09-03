@@ -122,8 +122,6 @@ def inspection_detail(inspection):
         'deposit_amount': float(inspection.deposit_amount) if inspection.deposit_amount is not None else None,
         'deposit_scheme': inspection.deposit_scheme,
         'deposit_ref': inspection.deposit_ref,
-        'depositary_tenancy_id': inspection.depositary_tenancy_id,
-        'depositary_pushed_at': inspection.depositary_pushed_at.isoformat() if inspection.depositary_pushed_at else None,
         'invoice_paid': inspection.invoice_paid,
         'confirmed': inspection.confirmed,
         'confirmed_at': inspection.confirmed_at.isoformat() if inspection.confirmed_at else None,
@@ -856,7 +854,7 @@ def update_inspection(inspection_id):
                     recipients = _get_report_recipients(insp)
                     print(f'[pdf]   recipients     : {recipients}')
 
-                    # Generate PDF (always — Drive upload + Depositary also need it)
+                    # Generate PDF (always — Drive upload also needs it)
                     pdf_bytes = generate_inspection_pdf(_insp_id)
                     print(f'[pdf] PDF generated OK — {len(pdf_bytes)} bytes')
 
@@ -934,22 +932,6 @@ def update_inspection(inspection_id):
                                 log_activity(_insp_id, 'email_failed', user_id=_user_id,
                                              detail=f"Failed to send to {', '.join(recipients)}: {err}"[:255])
                             _email_result_logged = True
-
-                    # ── Push to The Depositary (check_out inspections only) ────
-                    if insp.inspection_type == 'check_out':
-                        try:
-                            from services.depositary import push_checkout, is_configured
-                            if is_configured():
-                                print(f'[depositary] pushing checkout for inspection {_insp_id}...')
-                                dep_ok, dep_result = push_checkout(insp, pdf_bytes)
-                                if dep_ok:
-                                    print(f'[depositary] push OK — tenancy_id={dep_result}')
-                                else:
-                                    print(f'[depositary] push FAILED: {dep_result}')
-                            else:
-                                print(f'[depositary] not configured — skipping push (set depositary_api_url + depositary_api_key in Settings → Integrations to enable)')
-                        except Exception as dep_err:
-                            print(f'[depositary] push error (non-fatal): {dep_err}')
 
                     # ── Upload PDF to Google Drive (all inspection types) ─────
                     try:

@@ -21,8 +21,6 @@ ALLOWED_KEYS = {
     'aiic_logo',
     # Inverted / light-coloured company logo for use on dark/coloured PDF footers
     'logo_inverted',
-    # The Depositary integration
-    'depositary_api_url', 'depositary_api_key',
     # Report style (global)
     'report_header_text_color',
     'report_body_text_color',

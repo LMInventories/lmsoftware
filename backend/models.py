@@ -186,12 +186,10 @@ class Inspection(db.Model):
     landlord_email          = db.Column(db.String(255))
     client_email_override   = db.Column(db.String(255))
 
-    # ── Deposit / Depositary fields ───────────────────────────────────────────
+    # ── Deposit scheme fields ───────────────────────────────────────────────────
     deposit_amount          = db.Column(db.Numeric(10, 2))   # GBP, e.g. 1250.00
     deposit_scheme          = db.Column(db.String(50))       # 'TDS' | 'mydeposits' | 'DPS'
     deposit_ref             = db.Column(db.String(255))      # scheme certificate / registration number
-    depositary_tenancy_id   = db.Column(db.String(255))      # ID returned by The Depositary API after push
-    depositary_pushed_at    = db.Column(db.DateTime)
     calendar_event_id       = db.Column(db.String(255))      # Google Calendar event ID after push
     drive_file_id           = db.Column(db.String(128))      # Google Drive file ID after report upload
     source_pdf_drive_file_id = db.Column(db.String(128))     # Google Drive file ID of the original PDF this inspection was imported from
@@ -247,8 +245,6 @@ class Inspection(db.Model):
             'deposit_amount':          float(self.deposit_amount) if self.deposit_amount is not None else None,
             'deposit_scheme':          self.deposit_scheme,
             'deposit_ref':             self.deposit_ref,
-            'depositary_tenancy_id':   self.depositary_tenancy_id,
-            'depositary_pushed_at':    self.depositary_pushed_at.isoformat() if self.depositary_pushed_at else None,
             'client_email_override':   self.client_email_override,
             'conduct_date':            self.conduct_date.isoformat() if self.conduct_date else None,
             'conduct_time_preference': self.conduct_time_preference,

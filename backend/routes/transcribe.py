@@ -3213,6 +3213,110 @@ def _filter_issues_only(sections: list) -> list:
     return filtered
 
 
+def _strip_seeded_baseline(sections: list, inspection_id) -> list:
+    """
+    For a Check In continuing from a previous inspection (Check Out, or an
+    earlier Check In with no Check Out yet — see the "work from previous
+    Check Out" lifecycle flow in routes/inspections.py), the report_data this
+    Check In started with already contains that previous inspection's
+    conditions, carried forward for the clerk to confirm or edit. Left alone,
+    the AI Condition Summary can't tell that carried-over text apart from
+    what the clerk actually observed and typed on THIS visit, and ends up
+    restating the old inspection's findings as if they were new.
+
+    Reconstructs that starting baseline (via the same transform used to seed
+    it at creation) and drops any item/sub whose current text is unchanged
+    from it, leaving only genuinely new information for Claude to see. If
+    there's no source inspection (a standalone Check In) there's no baseline
+    to strip, so `sections` is returned unchanged.
+    """
+    if not inspection_id:
+        return sections
+    try:
+        from models import Inspection, Section
+        from routes.inspections import _transform_report_data
+
+        inspection = db.session.get(Inspection, inspection_id)
+        if not inspection or not inspection.source_inspection_id:
+            return sections
+        source = db.session.get(Inspection, inspection.source_inspection_id)
+        if not source or not source.report_data:
+            return sections
+
+        baseline_raw = _transform_report_data(
+            source.inspection_type, inspection.inspection_type,
+            source.report_data, target_template_id=inspection.template_id,
+        )
+        if not baseline_raw:
+            return sections
+
+        # Map the baseline's section_id/row_id keys to (room name, item name)
+        # via this inspection's own template, so it can be matched against
+        # the name-keyed `sections` sent up from the app.
+        template_sections = Section.query.filter_by(template_id=inspection.template_id).all()
+        item_names = {}
+        for sec in template_sections:
+            for item in sec.items:
+                item_names[(str(sec.id), str(item.id))] = (sec.name or '', item.name or '')
+
+        baseline_lookup = {}      # (room, item) lower -> condition text
+        baseline_sub_lookup = {}  # (room, item) lower -> {sub description lower: condition}
+        for section_id, section_data in baseline_raw.items():
+            if not isinstance(section_data, dict):
+                continue
+            for row_id, row_data in section_data.items():
+                if row_id.startswith('_') or not isinstance(row_data, dict):
+                    continue
+                names = item_names.get((str(section_id), str(row_id)))
+                if not names:
+                    continue
+                key = (names[0].strip().lower(), names[1].strip().lower())
+                baseline_lookup[key] = (row_data.get('condition') or '').strip()
+                subs_map = {
+                    (sub.get('description') or '').strip().lower(): (sub.get('condition') or '').strip()
+                    for sub in (row_data.get('_subs') or [])
+                    if (sub.get('description') or '').strip()
+                }
+                if subs_map:
+                    baseline_sub_lookup[key] = subs_map
+
+        if not baseline_lookup and not baseline_sub_lookup:
+            return sections
+
+        result = []
+        for sec in sections:
+            room_key = (sec.get('name', '') or '').strip().lower()
+            new_items = []
+            for item in sec.get('items', []):
+                key = (room_key, (item.get('name', '') or '').strip().lower())
+                cond = (item.get('condition') or '').strip()
+                unchanged = bool(cond) and cond == baseline_lookup.get(key, '')
+                new_cond = '' if unchanged else cond
+
+                sub_baseline = baseline_sub_lookup.get(key, {})
+                new_subs = []
+                for sub in item.get('subs', []):
+                    sub_desc = (sub.get('description') or '').strip().lower()
+                    sub_cond = (sub.get('condition') or '').strip()
+                    if sub_cond and sub_cond == sub_baseline.get(sub_desc, ''):
+                        continue  # unchanged from the seed — not new
+                    new_subs.append(sub)
+
+                if not new_cond and not new_subs:
+                    continue  # nothing new on this item — drop it entirely
+
+                kept = dict(item)
+                kept['condition'] = new_cond
+                kept['subs'] = new_subs
+                new_items.append(kept)
+            if new_items:
+                result.append({'name': sec.get('name', ''), 'items': new_items})
+        return result
+    except Exception as e:
+        print(f'[condition-summary] baseline diff failed (non-fatal): {e}')
+        return sections
+
+
 @transcribe_bp.route('/condition-summary', methods=['POST'])
 @jwt_required()
 def generate_condition_summary():
@@ -3360,10 +3464,14 @@ def generate_condition_summary():
                     merged.append({'name': ci_sec.get('name', ''), 'items': kept_items})
         sections = merged
 
-    # ── For Check In: strip items that have no real issues ────────────────
-    # Pre-filtering means Claude never sees "in good order" items, so it cannot
-    # accidentally include them or route them to the wrong summary section.
+    # ── For Check In: only genuinely new information from THIS inspection ──
+    # First strip anything unchanged from the baseline this Check In was
+    # seeded with (see _strip_seeded_baseline), then drop items with no real
+    # issues. Pre-filtering means Claude never sees carried-over or
+    # "in good order" items, so it cannot accidentally include them or route
+    # them to the wrong summary section.
     if not is_check_out:
+        sections = _strip_seeded_baseline(sections, inspection_id)
         sections = _filter_issues_only(sections)
 
     # ── Build property description sentence ───────────────────────────────

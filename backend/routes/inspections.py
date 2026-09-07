@@ -438,6 +438,7 @@ def create_inspection():
                 target_type=inspection_type,
                 raw=source.report_data,
                 include_photos=include_photos,
+                target_template_id=template_id,
             )
             seeded_report_data = json.dumps(transformed) if transformed else None
 
@@ -1059,7 +1060,8 @@ def seed_preview(inspection_id):
     target_type = request.args.get('target_type', 'check_out')
     if not source.report_data:
         return jsonify({'seeded': {}, 'source_type': source.inspection_type})
-    seeded = _transform_report_data(source.inspection_type, target_type, source.report_data)
+    seeded = _transform_report_data(source.inspection_type, target_type, source.report_data,
+                                     target_template_id=source.template_id)
     return jsonify({'seeded': seeded, 'source_type': source.inspection_type, 'source_template_id': source.template_id})
 
 
@@ -2549,13 +2551,45 @@ def _combine_conditions(inv_cond, co_cond, fallback=''):
     return result[0].upper() + result[1:] if result else result
 
 
-def _transform_report_data(source_type, target_type, raw, include_photos=False):
+# Additional Items are only ever added at Check Out (see the "Additional
+# Items" section in InspectionReportView.vue, gated on isCheckOut). They're
+# stored per-room as reportData[roomId]._customItems, which is a separate
+# structure from the room's template rows — so unlike a template row, an
+# Additional Item has no counterpart row in a Check In/Inventory template to
+# carry its data forward into. Folding each one into the room's "Contents"
+# item as a new sub-item is how it becomes a normal, visible part of the new
+# Check In, per the same name synonyms PDF import uses for this item.
+_CONTENTS_ITEM_NAMES = {'contents', 'furnishings', 'furniture', 'fixtures and fittings', 'f&f'}
+
+
+def _contents_item_by_section(template_id):
+    """Map {section_id (str): contents_item_id (str)} for the given template,
+    used to fold Check Out Additional Items into the right room's Contents
+    item when transforming report_data forward. Returns {} if no template."""
+    if not template_id:
+        return {}
+    sections = Section.query.filter_by(template_id=template_id).all()
+    if not sections:
+        return {}
+    section_ids = [s.id for s in sections]
+    items = Item.query.filter(Item.section_id.in_(section_ids)).all()
+    result = {}
+    for item in items:
+        if (item.name or '').strip().lower() in _CONTENTS_ITEM_NAMES:
+            result.setdefault(str(item.section_id), str(item.id))
+    return result
+
+
+def _transform_report_data(source_type, target_type, raw, include_photos=False, target_template_id=None):
     try:
         src = json.loads(raw) if isinstance(raw, str) else raw
     except Exception:
         return {}
 
     dst = {}
+
+    fold_custom_items = source_type == 'check_out' and target_type in ('check_in', 'inventory')
+    contents_by_section = _contents_item_by_section(target_template_id) if fold_custom_items else {}
 
     for section_id, section_data in src.items():
         if not isinstance(section_data, dict):
@@ -2689,6 +2723,61 @@ def _transform_report_data(source_type, target_type, raw, include_photos=False):
                     ]
 
             new_section[row_id] = new_row
+
+        # Fold this room's Check Out "Additional Items" into its Contents
+        # item as new sub-items — a Check In/Inventory template has no
+        # Additional Items section of its own, so this is the only place
+        # they can seamlessly carry forward instead of being silently lost.
+        #
+        # Each new sub-item keeps its source _cid/_sid as its own _sid rather
+        # than minting a new one: an item's (and each nested sub's) own id is
+        # also a flat top-level key in section_data holding its _photos, and
+        # the generic row loop above already carried that entry forward
+        # unchanged (same id) — reusing the id here is what keeps photos
+        # attached to the right sub-item after the move, with no extra work.
+        custom_items = section_data.get('_customItems') or []
+        if fold_custom_items and custom_items:
+            contents_id = contents_by_section.get(str(section_id))
+            if not contents_id:
+                print(f'[transform] no Contents item found for section {section_id} — '
+                      f'{len(custom_items)} Additional Item(s) dropped')
+            else:
+                contents_row = new_section.setdefault(contents_id, {})
+                subs = contents_row.setdefault('_subs', [])
+                for ci in custom_items:
+                    cid  = ci.get('_cid', '')
+                    name = (ci.get('name') or '').strip()
+                    desc = (ci.get('description') or '').strip()
+                    combined_desc = f'{name} — {desc}' if name and desc else (name or desc)
+                    subs.append({
+                        '_sid':        cid,
+                        'description': combined_desc,
+                        'condition':   _combine_conditions(None, ci.get('checkOutCondition'), fallback=''),
+                    })
+
+                    # Sub-items added directly under the Additional Item itself
+                    # flatten alongside it rather than being dropped — this
+                    # report has no third nesting level to put them in.
+                    nested_subs = (section_data.get(cid) or {}).get('_subs') or []
+                    for sub in nested_subs:
+                        sid      = sub.get('_sid', '')
+                        sub_desc = (sub.get('description') or '').strip()
+                        label = f'{name} — {sub_desc}' if name and sub_desc else (sub_desc or name)
+                        subs.append({
+                            '_sid':        sid,
+                            'description': label,
+                            'condition':   _combine_conditions(
+                                None, sub.get('checkOutCondition') or sub.get('condition'), fallback=''
+                            ),
+                        })
+
+                    # That row's _subs are now stale (flattened above into the
+                    # Contents item's own _subs) — drop them, but keep the row
+                    # itself since it may still hold that item's own _photos.
+                    if cid in new_section:
+                        new_section[cid].pop('_subs', None)
+                print(f'[transform] folded {len(custom_items)} Additional Item(s) from section '
+                      f'{section_id} into Contents item {contents_id}')
 
         dst[section_id] = new_section
 

@@ -216,18 +216,49 @@ const displayClientEmail = computed(() => {
   return inspection.value?.client?.email || 'Not set'
 })
 
+// Check In / Inventory: the specific time booked is the check-in time, and
+// the clerk must arrive earlier based on job size (1hr for 1-2 beds, 2hr for
+// 3+ beds). Check Out (and everything else): the specific time booked is the
+// clerk's arrival time itself. Mirrors the calendar block logic in
+// InspectionsView.vue.
 const displayTimePreference = computed(() => {
-  if (!inspection.value?.conduct_time_preference) return 'Anytime'
-  const pref = inspection.value.conduct_time_preference
+  const insp = inspection.value
+  if (!insp?.conduct_time_preference) return 'Anytime'
+  const pref = insp.conduct_time_preference
   if (pref === 'anytime') return 'Anytime'
   if (pref === 'am') return 'AM (Morning)'
   if (pref === 'pm') return 'PM (Afternoon)'
   if (pref.startsWith('specific:')) {
     const [, time] = pref.split(':')
-    const [hour, minute] = time.split('_')
-    return `${hour}:${minute}`
+    const [hourStr, minuteStr] = time.split('_')
+    const specificMins = Number(hourStr) * 60 + Number(minuteStr)
+    const durationMins = Number(insp.property?.bedrooms) >= 3 ? 120 : 60
+    const toHHMM = m => {
+      const wrapped = ((m % 1440) + 1440) % 1440
+      return `${String(Math.floor(wrapped / 60)).padStart(2, '0')}:${String(wrapped % 60).padStart(2, '0')}`
+    }
+    if (['check_in', 'inventory'].includes(insp.inspection_type)) {
+      return `Arrive ${toHHMM(specificMins - durationMins)} — Check-In ${toHHMM(specificMins)}`
+    }
+    return `Arrive ${toHHMM(specificMins)}`
   }
   return 'Anytime'
+})
+
+// Same preview shown in the Edit Conduct Date & Time modal while the admin
+// is actively choosing a specific time, before saving.
+const editSchedulePreview = computed(() => {
+  if (editForms.value.time_preference !== 'specific') return ''
+  const specificMins = Number(editForms.value.time_hour) * 60 + Number(editForms.value.time_minute)
+  const durationMins = Number(inspection.value?.property?.bedrooms) >= 3 ? 120 : 60
+  const toHHMM = m => {
+    const wrapped = ((m % 1440) + 1440) % 1440
+    return `${String(Math.floor(wrapped / 60)).padStart(2, '0')}:${String(wrapped % 60).padStart(2, '0')}`
+  }
+  if (['check_in', 'inventory'].includes(inspection.value?.inspection_type)) {
+    return `Clerk arrives ${toHHMM(specificMins - durationMins)} — check-in at ${toHHMM(specificMins)}`
+  }
+  return `Clerk arrives ${toHHMM(specificMins)} — job runs until ${toHHMM(specificMins + durationMins)}`
 })
 
 function convertDateToUKFormat(isoDate) {
@@ -1588,6 +1619,7 @@ onMounted(() => {
                   </div>
                 </div>
               </div>
+              <p v-if="editSchedulePreview" class="helper-text">{{ editSchedulePreview }}</p>
             </div>
           </div>
           <div class="modal-footer">

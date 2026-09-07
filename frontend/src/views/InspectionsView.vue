@@ -222,6 +222,23 @@ const timePreferenceOptions = [
 const hourOptions = ['09', '10', '11', '12', '13', '14', '15', '16', '17']
 const minuteOptions = ['00', '15', '30', '45']
 
+// Live preview of the arrival/check-in split shown next to the Specific Time
+// picker in the Add/Edit Inspection form, using the same rules as the
+// calendar block (see getScheduleWindow below).
+const schedulePreview = computed(() => {
+  if (form.value.time_preference !== 'specific') return ''
+  const prop = properties.value.find(p => p.id === form.value.property_id)
+  const schedule = getScheduleWindow({
+    conduct_time_preference: `specific:${form.value.time_hour}_${form.value.time_minute}`,
+    inspection_type: form.value.inspection_type,
+    bedrooms: prop?.bedrooms,
+  })
+  if (!schedule) return ''
+  return schedule.checkin
+    ? `Clerk arrives ${schedule.arrival} — check-in at ${schedule.checkin}`
+    : `Clerk arrives ${schedule.arrival} — job runs until ${schedule.end}`
+})
+
 const statusColors = {
   created: '#64748b',
   assigned: '#3b82f6',
@@ -268,6 +285,12 @@ const calendarOptions = computed(() => ({
   slotMaxTime: '18:00:00',
   allDaySlot: true,
   nowIndicator: true,
+  // Always render a solid colour block aligned to the clerk's legend colour —
+  // FullCalendar's default 'auto' display shows timed (non-all-day) events as
+  // a small dot + time in month view, which broke the "one glance = one clerk"
+  // reading of the calendar. 'block' keeps every event (timed or all-day) the
+  // same bar style in every view.
+  eventDisplay: 'block',
   eventTimeFormat: {
     hour: '2-digit',
     minute: '2-digit',
@@ -275,6 +298,48 @@ const calendarOptions = computed(() => ({
     hour12: false
   }
 }))
+
+// Check In / Inventory jobs: the specific time booked is the check-in time —
+// the clerk must arrive earlier, so the calendar block runs from arrival to
+// check-in. Check Out (and everything else): the specific time booked is the
+// arrival time itself, so the block runs from arrival forward.
+const ARRIVE_BEFORE_TYPES = ['check_in', 'inventory']
+
+// 1-2 bedrooms → 1 hour block; 3+ bedrooms → 2 hour block.
+function scheduleDurationMins(bedrooms) {
+  return Number(bedrooms) >= 3 ? 120 : 60
+}
+
+function minsToHHMM(mins) {
+  const wrapped = ((mins % 1440) + 1440) % 1440
+  const h = Math.floor(wrapped / 60)
+  const m = wrapped % 60
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+}
+
+// Returns null when no specific time was booked (Anytime/AM/PM) — those have
+// no arrival time to compute a block from.
+function getScheduleWindow(inspection) {
+  const pref = inspection.conduct_time_preference
+  if (!pref || !pref.startsWith('specific:')) return null
+  const [, time] = pref.split(':')
+  const [hourStr, minuteStr] = time.split('_')
+  const specificMins = Number(hourStr) * 60 + Number(minuteStr)
+  const durationMins = scheduleDurationMins(inspection.bedrooms)
+
+  if (ARRIVE_BEFORE_TYPES.includes(inspection.inspection_type)) {
+    return {
+      arrival: minsToHHMM(specificMins - durationMins),
+      end: minsToHHMM(specificMins),
+      checkin: minsToHHMM(specificMins),
+    }
+  }
+  return {
+    arrival: minsToHHMM(specificMins),
+    end: minsToHHMM(specificMins + durationMins),
+    checkin: null,
+  }
+}
 
 const calendarEvents = computed(() => {
   let filtered = [...inspections.value]
@@ -289,15 +354,7 @@ const calendarEvents = computed(() => {
   return filtered
     .filter(i => i.conduct_date)
     .map(inspection => {
-      let eventTime = null
-      if (inspection.conduct_time_preference) {
-        const pref = inspection.conduct_time_preference
-        if (pref.startsWith('specific:')) {
-          const [, time] = pref.split(':')
-          const [hour, minute] = time.split('_')
-          eventTime = `${hour}:${minute}:00`
-        }
-      }
+      const schedule = getScheduleWindow(inspection)
       const eventDate = inspection.conduct_date.split('T')[0]
       let postcode = ''
       if (inspection.property_address) {
@@ -315,11 +372,15 @@ const calendarEvents = computed(() => {
       const title = `${typeShort} - ${postcode}`
       const assignedClerk = users.value.find(u => u.id === inspection.inspector_id)
       const clerkColor = assignedClerk?.color || '#6366f1'
+      const timeLabel = schedule
+        ? (schedule.checkin ? `${schedule.arrival} - ${schedule.end}` : schedule.arrival)
+        : 'All day'
       return {
         id: inspection.id,
         title,
-        start: eventTime ? `${eventDate}T${eventTime}` : eventDate,
-        allDay: !eventTime,
+        start: schedule ? `${eventDate}T${schedule.arrival}:00` : eventDate,
+        end: schedule ? `${eventDate}T${schedule.end}:00` : undefined,
+        allDay: !schedule,
         backgroundColor: clerkColor,
         borderColor: clerkColor,
         extendedProps: {
@@ -331,7 +392,7 @@ const calendarEvents = computed(() => {
           bedrooms: inspection.bedrooms,
           bathrooms: inspection.bathrooms,
           referenceNumber: inspection.reference_number,
-          timeLabel: eventTime ? eventTime.slice(0, 5) : 'All day',
+          timeLabel,
         }
       }
     })
@@ -1242,6 +1303,7 @@ onMounted(async () => {
                     <option v-for="m in minuteOptions" :key="m" :value="m">{{ m }}</option>
                   </select>
                 </div>
+                <p v-if="schedulePreview" class="helper-text">{{ schedulePreview }}</p>
               </div>
             </div>
 

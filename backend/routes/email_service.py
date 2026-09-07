@@ -223,6 +223,59 @@ def _sort_key(t):
     return (4, 0)  # anytime last
 
 
+# Job size → on-site duration. 1-2 bedrooms is a 1 hour job, 3+ bedrooms is 2 hours.
+def _schedule_duration_mins(bedrooms):
+    return 120 if (bedrooms is not None and bedrooms >= 3) else 60
+
+# Check In / Inventory: the booked "specific" time is the check-in time itself
+# — the clerk must be on-site earlier, for however long the job takes based on
+# bedroom count. Check Out (and everything else): the booked time is the
+# clerk's arrival time, and the job runs forward from there.
+_ARRIVE_BEFORE_TYPES = ('check_in', 'inventory')
+
+def _schedule_window(inspection, bedrooms):
+    """
+    Compute the clerk's schedule window for a booking made with a specific
+    (exact) time. Returns (arrival_str, checkin_str) where checkin_str is
+    None unless the job is Check In / Inventory (arrive-before jobs) — or
+    None (not a tuple) if no specific time was booked (Anytime/AM/PM), since
+    there is nothing to compute a window from.
+    """
+    t = getattr(inspection, 'conduct_time_preference', None)
+    if not t or not str(t).strip().lower().startswith('specific:'):
+        return None
+    try:
+        _, time_part = str(t).strip().lower().split(':', 1)
+        hour, minute = time_part.split('_')
+        specific_mins = int(hour) * 60 + int(minute)
+    except Exception:
+        return None
+
+    duration_mins = _schedule_duration_mins(bedrooms)
+
+    def fmt(mins):
+        mins %= 1440
+        return f'{mins // 60:02d}:{mins % 60:02d}'
+
+    insp_type = (getattr(inspection, 'inspection_type', '') or '').lower()
+    if insp_type in _ARRIVE_BEFORE_TYPES:
+        return fmt(specific_mins - duration_mins), fmt(specific_mins)
+    return fmt(specific_mins), None
+
+
+def _schedule_sort_key(inspection, bedrooms):
+    """Sort clerk schedules by arrival time (not the booked time), so an
+    arrive-before job that starts earlier than its check-in time sorts
+    correctly against the rest of the day."""
+    window = _schedule_window(inspection, bedrooms)
+    if window:
+        arrival, _ = window
+        hour, minute = arrival.split(':')
+        total = int(hour) * 60 + int(minute)
+        return (0, total) if int(hour) < 12 else (2, total)
+    return _sort_key(getattr(inspection, 'conduct_time_preference', None))
+
+
 # ── Outlook-safe inline HTML helpers ────────────────────────────────────────
 
 def _pill(text, color='#1e40af', bg='#dbeafe'):
@@ -430,7 +483,7 @@ def send_clerk_daily_summary(clerk, inspections_tomorrow):
     date_str = '—'
     inspections_tomorrow = sorted(
         inspections_tomorrow,
-        key=lambda x: _sort_key(getattr(x[0], 'conduct_time_preference', None))
+        key=lambda x: _schedule_sort_key(x[0], getattr(x[1], 'bedrooms', None) if x[1] else None)
     )
     if inspections_tomorrow:
         d = getattr(inspections_tomorrow[0][0], 'conduct_date', None) or \
@@ -441,12 +494,19 @@ def send_clerk_daily_summary(clerk, inspections_tomorrow):
     rows_html = ''
 
     for inspection, prop, client in inspections_tomorrow:
-        insp_time  = _fmt_time(getattr(inspection, 'conduct_time_preference', None))
         prop_addr  = getattr(prop, 'address', '—') if prop else '—'
         beds       = getattr(prop, 'bedrooms', None)
         baths      = getattr(prop, 'bathrooms', None)
         prop_detail = ', '.join(filter(None, [f"{beds} bed" if beds else '', f"{baths} bath" if baths else '']))
         insp_type  = _type_label(getattr(inspection, 'inspection_type', ''))
+
+        window = _schedule_window(inspection, beds)
+        checkin_time = None
+        if window:
+            arrival_time, checkin_time = window
+            insp_time = f'{arrival_time} - {checkin_time}' if checkin_time else arrival_time
+        else:
+            insp_time = _fmt_time(getattr(inspection, 'conduct_time_preference', None))
         client_name = getattr(client, 'name', '—') if client else '—'
         client_addr = getattr(client, 'address', '') if client else ''
         key_loc    = getattr(inspection, 'key_location', '') or '—'
@@ -469,8 +529,11 @@ def send_clerk_daily_summary(clerk, inspections_tomorrow):
         card_rows = [
             ('Property',        prop_addr),
             ('Bedrooms / Baths', prop_detail if prop_detail else '—'),
-            ('Client',          client_name),
         ]
+        if checkin_time:
+            card_rows.append(('Arrival Time',  arrival_time))
+            card_rows.append(('Check-In Time', checkin_time))
+        card_rows.append(('Client', client_name))
         if client_addr:
             card_rows.append(('Client Address', client_addr))
         card_rows.append(('Key Collect', key_loc))

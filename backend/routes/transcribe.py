@@ -1691,32 +1691,112 @@ def _count_subitem_triggers(transcript: str) -> int:
     return len(_SUBITEM_TRIGGER_RE.findall(transcript or ''))
 
 
-def _count_subs_emitted(filled: dict) -> int:
-    """Counts total _subs entries across every item in a room-fill result."""
-    if not isinstance(filled, dict):
-        return 0
-    return sum(
-        len(fields['_subs'])
-        for fields in filled.values()
-        if isinstance(fields, dict) and isinstance(fields.get('_subs'), list)
+def _split_transcript_by_chapter(transcript: str, items: list) -> dict:
+    """
+    Best-effort segmentation of a room transcript into per-item chunks, using the same
+    chapter-heading convention the room-fill prompt teaches the model: an item's exact name
+    (singular/plural, "&"/"and" interchangeable) spoken as a heading. This is a cheap
+    approximation for the QA heuristics below — not a replacement for the real parse — so a
+    heading name that happens to appear mid-sentence in another item's content can occasionally
+    be mis-segmented; that's an acceptable false-positive rate for a retry trigger.
+
+    Returns: { item_id: [transcript substrings attributed to that item] }
+    """
+    t = transcript or ''
+    if not t:
+        return {}
+
+    candidates = []
+    for item in items:
+        item_id = str(item.get('id'))
+        name = (item.get('name') or '').strip()
+        if not name:
+            continue
+        variants = set()
+        for base in (name, name.replace('&', 'and'), name.replace(' and ', ' & ')):
+            variants |= _name_variants(base)
+        for variant in variants:
+            if not variant:
+                continue
+            for m in _re.finditer(r'\b' + _re.escape(variant) + r'\b', t, _re.IGNORECASE):
+                candidates.append((m.start(), m.end(), item_id))
+
+    if not candidates:
+        return {}
+
+    # Longest match wins at a given start position; drop anything that overlaps a match
+    # already claimed, so one heading occurrence isn't double-counted under two item ids.
+    candidates.sort(key=lambda c: (c[0], -(c[1] - c[0])))
+    headings = []
+    last_end = -1
+    for start, end, item_id in candidates:
+        if start < last_end:
+            continue
+        headings.append((start, item_id))
+        last_end = end
+
+    segments = {}
+    for i, (start, item_id) in enumerate(headings):
+        end = headings[i + 1][0] if i + 1 < len(headings) else len(t)
+        segments.setdefault(item_id, []).append(t[start:end])
+    return segments
+
+
+def _find_subitem_shortfall_items(transcript: str, items: list, filled: dict) -> list:
+    """
+    Per-item sub-item shortfall check: compares the trigger count found within each item's own
+    chapter-heading segment against the _subs actually emitted for that item. This catches what
+    a room-wide total comparison can hide — a dropped trigger on one item exactly offset by a
+    surplus (auto-inferred, un-triggered) sub-item somewhere else in the same room, which nets
+    out to matching totals even though both are wrong.
+
+    Returns a list of {'item': item, 'trigger_count': int, 'sub_count': int} for every item
+    where fewer _subs were emitted than trigger phrases were spoken in its segment.
+    """
+    segments = _split_transcript_by_chapter(transcript, items)
+    if not segments:
+        return []
+    shortfall = []
+    for item in items:
+        item_id = str(item.get('id'))
+        chunks = segments.get(item_id)
+        if not chunks:
+            continue
+        trigger_count = sum(_count_subitem_triggers(chunk) for chunk in chunks)
+        if not trigger_count:
+            continue
+        emitted = filled.get(item_id) if isinstance(filled, dict) else None
+        sub_count = len(emitted.get('_subs') or []) if isinstance(emitted, dict) else 0
+        if sub_count < trigger_count:
+            shortfall.append({'item': item, 'trigger_count': trigger_count, 'sub_count': sub_count})
+    return shortfall
+
+
+def _subitem_retry_note(shortfall_items: list) -> str:
+    """
+    Prompt addendum used when a first pass under-produced sub-items on specific items, relative
+    to the number of explicit trigger phrases spoken within each item's own chapter (see
+    EXPLICIT SUB-ITEM TRIGGER rule). Per-item, not a room-wide total, so a shortfall on one item
+    can't be masked by an unrelated surplus elsewhere in the same room.
+    """
+    lines = '\n'.join(
+        f'  - "{s["item"].get("name", "?")}": {s["trigger_count"]} trigger(s) spoken in its passage, '
+        f'only {s["sub_count"]} sub-item(s) emitted for it'
+        for s in shortfall_items
     )
-
-
-def _subitem_retry_note(trigger_count: int, sub_count: int) -> str:
-    """
-    Prompt addendum used when a first pass under-produced sub-items relative to the number
-    of explicit trigger phrases in the transcript (see EXPLICIT SUB-ITEM TRIGGER rule).
-    """
     return (
         f'\n══════════════════════════════════════════════════════\n'
         f'RETRY — you missed a sub-item last time\n'
         f'══════════════════════════════════════════════════════\n'
-        f'Your previous pass over this exact transcript produced only {sub_count} sub-item(s), but the\n'
-        f'transcript contains {trigger_count} explicit sub-item trigger phrase(s) ("add sub item",\n'
-        f'"sub-item", etc). That means at least one trigger was dropped or merged back into a main\n'
-        f'item instead of becoming its own _subs entry. Re-parse the transcript from scratch, find\n'
-        f'every occurrence of a trigger phrase, and confirm each one produces its own _subs entry —\n'
-        f'do not let a long run of prior content, or a repeated condition phrase, cause you to skip one.\n'
+        f'Your previous pass under-produced sub-items on these specific item(s):\n{lines}\n'
+        f'That means at least one "add sub item" / "sub-item" trigger was dropped or merged back\n'
+        f'into that item\'s main description/condition instead of becoming its own _subs entry.\n'
+        f'Re-parse the transcript from scratch, find every trigger phrase within each of these\n'
+        f'items\' own passage, and confirm each one produces its own _subs entry ON THAT ITEM —\n'
+        f'do not let a long run of prior content, a repeated condition phrase, or a sub-item\n'
+        f'already correctly created on a different item cause you to skip one here. Also remember:\n'
+        f'no other item should gain a sub-item that was not explicitly triggered on it — a fix here\n'
+        f'must not introduce a new, untriggered sub-item elsewhere.\n'
     )
 
 
@@ -1773,26 +1853,26 @@ def _fill_room_with_subitem_retry(fill_fn, full_transcript, section_name, items,
     """
     Calls fill_fn (either _claude_fill_room or _claude_fill_room_damage), then checks for two
     known LLM compliance slips: (1) fewer _subs produced than explicit "add sub item" triggers
-    in the transcript, and (2) a template item whose name is clearly spoken but never appears
-    in the output at all (usually because its content got swallowed into the previous item's
-    sub-item chain — e.g. a "Contents" section vanishing entirely). Prompt reinforcement alone
-    can't guarantee either won't happen, so when either is detected this retries ONCE with a
-    pointed correction — a genuine second chance, bounded to a single extra call.
+    for a specific item (checked per-item — see _find_subitem_shortfall_items — so a shortfall
+    on one item can't be hidden by an unrelated surplus elsewhere in the same room's totals),
+    and (2) a template item whose name is clearly spoken but never appears in the output at all
+    (usually because its content got swallowed into the previous item's sub-item chain — e.g. a
+    "Contents" section vanishing entirely). Prompt reinforcement alone can't guarantee either
+    won't happen, so when either is detected this retries ONCE with a pointed correction — a
+    genuine second chance, bounded to a single extra call.
     """
     filled, fill_msg = fill_fn(full_transcript, section_name, items, processed_item_ids or None)
     filled = _enforce_processed_skip(filled, processed_item_ids)
 
-    trigger_count = _count_subitem_triggers(full_transcript)
-    sub_count     = _count_subs_emitted(filled)
-    sub_shortfall = bool(trigger_count and sub_count < trigger_count)
-    missing_items = _find_missing_mentioned_items(full_transcript, items, filled)
+    shortfall_items = _find_subitem_shortfall_items(full_transcript, items, filled)
+    missing_items   = _find_missing_mentioned_items(full_transcript, items, filled)
 
-    if sub_shortfall or missing_items:
+    if shortfall_items or missing_items:
         notes = []
-        if sub_shortfall:
-            print(f'[{fn_name}] sub-item mismatch in "{section_name}": '
-                  f'{trigger_count} trigger(s), {sub_count} sub(s) emitted')
-            notes.append(_subitem_retry_note(trigger_count, sub_count))
+        if shortfall_items:
+            names = ', '.join(s['item'].get('name', '?') for s in shortfall_items)
+            print(f'[{fn_name}] sub-item mismatch in "{section_name}" on: {names}')
+            notes.append(_subitem_retry_note(shortfall_items))
         if missing_items:
             names = ', '.join(i.get('name', '?') for i in missing_items)
             print(f'[{fn_name}] item(s) mentioned but never output in "{section_name}": {names}')
@@ -1802,11 +1882,11 @@ def _fill_room_with_subitem_retry(fill_fn, full_transcript, section_name, items,
         retried, retry_msg = fill_fn(full_transcript, section_name, items, processed_item_ids or None, retry_note=retry_note)
         retried = _enforce_processed_skip(retried, processed_item_ids)
 
-        retry_sub_count = _count_subs_emitted(retried)
+        retry_shortfall = _find_subitem_shortfall_items(full_transcript, items, retried)
         retry_missing   = _find_missing_mentioned_items(full_transcript, items, retried)
-        improved = retry_sub_count > sub_count or len(retry_missing) < len(missing_items)
+        improved = len(retry_shortfall) < len(shortfall_items) or len(retry_missing) < len(missing_items)
         if improved:
-            print(f'[{fn_name}] retry improved: subs {sub_count}→{retry_sub_count}, '
+            print(f'[{fn_name}] retry improved: sub-item shortfalls {len(shortfall_items)}→{len(retry_shortfall)}, '
                   f'missing {len(missing_items)}→{len(retry_missing)}')
             filled, fill_msg = retried, retry_msg
         else:
@@ -2138,10 +2218,16 @@ STEP 3: When you hit a CONDITION SIGNAL PHRASE, it IMMEDIATELY and PERMANENTLY c
          under any circumstances (unless the clerk explicitly uses an amendment command).
          The condition signal PLUS any location qualifiers that follow ("to [place]", "at [place]",
          "near [place]", "throughout", "on [place]") = the CONDITION for the current element.
-         Keep collecting into the condition until you reach a new DESCRIPTIVE TERM or the next chapter heading.
-STEP 4: After a condition closes, if the next word is a DESCRIPTIVE TERM (material, colour, surface, quantity),
-         it starts a NEW ELEMENT → a "_subs" entry with its own description and condition.
-         → Go back to STEP 2 for the new element.
+         Keep collecting into the condition — including any further materials, colours, surfaces,
+         or components the clerk mentions next — until you reach an EXPLICIT SUB-ITEM TRIGGER
+         phrase (see below) or the next chapter heading.
+STEP 4: A new element ("_subs" entry) is created ONLY when the clerk speaks an explicit sub-item
+         trigger phrase ("sub-item", "add sub item", etc — see EXPLICIT SUB-ITEM TRIGGER below).
+         NEVER infer a new element just because a new material, colour, surface, component, or
+         quantity is mentioned — that content stays in the CURRENT element's condition. There is
+         no automatic/implicit sub-item detection: no trigger phrase means no new element, full stop.
+         → When a trigger phrase IS spoken, close the current element and go back to STEP 2 for
+           the new element.
 STEP 5: Repeat for as many elements as the clerk describes.
 
 The first element = the main item fields ("description" + "condition").
@@ -2175,8 +2261,10 @@ They tell you WHERE the defect is. They are NEVER the start of a new element.
   ✓ CORRECT: "marked to left hand wall"
       → condition: "Marked to left hand wall"
 
-A new element ONLY starts when a NEW DESCRIPTIVE TERM appears (material, colour, surface,
-quantity) AFTER the condition has fully closed.
+A new element NEVER starts just because a new descriptive term (material, colour, surface,
+quantity) appears after the condition has closed — that content stays in the current element's
+condition. A new element starts ONLY when an explicit sub-item trigger phrase is spoken (see
+EXPLICIT SUB-ITEM TRIGGER below).
 
 ══════════════════════════════════════════════════════
 STRICT CHAPTER HEADING RULE — prevents content bleeding between items
@@ -2363,20 +2451,23 @@ Example — three elements with two triggers:
   → sub[0]: description="White emulsion"  condition="Light scuffing to base"
   → sub[1]: description="White emulsion"  condition="Fair wear and tear"
 
-When no explicit trigger is used, fall back to the automatic detection rules below.
+When no explicit trigger is spoken, do NOT create a new element under any circumstances.
 
 ══════════════════════════════════════════════════════
-THE GOLDEN RULE — what triggers a new sub-item (automatic detection)
+NO AUTOMATIC DETECTION — a trigger phrase is the ONLY way to open a new element
 ══════════════════════════════════════════════════════
-A new sub-item is created ONLY when, after a condition closes, the clerk begins describing
-a DIFFERENT surface or component with its own descriptive words.
+There is no implicit/automatic sub-item detection. A new sub-item is created EXCLUSIVELY by an
+explicit trigger phrase ("sub-item", "add sub item", etc). A new colour, material, surface, or
+component appearing after a condition has closed is NEVER by itself a reason to start a new
+element — it is simply more content for the CURRENT element's condition.
 
-  ✓ Creates sub-item: "Green painted [condition closes] … White painted …"
-      (new colour = new element)
-  ✓ Creates sub-item: "White UPVC door, in good order … White painted frame, light scuffing"
-      (new component = new element)
+  ✗ Does NOT create sub-item: "Green painted [condition closes] … White painted …"
+      (new colour alone is not a trigger — stays in the current element's condition)
+  ✗ Does NOT create sub-item: "White UPVC door, in good order … White painted frame, light scuffing"
+      (new component alone is not a trigger — stays in the current element's condition)
   ✗ Does NOT create sub-item: "light scuffing to right hand side wall"
       ("right hand side wall" is a location qualifier, not a new component)
+  ✓ Creates sub-item ONLY when a trigger phrase is spoken: "… in good order. Sub-item. White painted …"
 
 MULTI-COMPONENT (no sub-item): When the clerk lists several parts of the SAME thing and
   gives ONE condition phrase at the end covering everything:
@@ -2392,39 +2483,45 @@ MULTI-COMPONENT (no sub-item): When the clerk lists several parts of the SAME th
 
 WORKED EXAMPLES:
 
-EXAMPLE 1 — Two walls, each with its own condition → main + 1 sub-item:
+EXAMPLE 1 — Two walls described back-to-back, NO trigger spoken → ONE element, no sub-item:
   Transcript: "Walls. Green painted, in good order. White painted, light scuffing to right hand side wall."
   Parsing:
-    "green painted" → description of element 1
-    "in good order" → condition signal → closes element 1 description → condition: "In good order"
-    "white painted" → new descriptive term → starts element 2 (sub-item)
-    "light scuffing to right hand side wall" → condition of element 2
-       ("right hand side wall" = location of scuffing, stays in condition)
+    "green painted" → description
+    "in good order" → condition signal → description is now LOCKED
+    "white painted" → NOT a trigger phrase → stays in the condition list, does not reopen description
+    "light scuffing to right hand side wall" → more condition
+  → description="Green painted"
+    condition="In good order\nWhite painted\nLight scuffing to right hand side wall"
+  ✗ WRONG would be: creating a sub-item for "White painted" — no trigger was spoken.
+  (For this to split into two elements, the clerk must say "Sub-item" or "Add sub item" before
+   "White painted" — see EXAMPLE 1B.)
+
+EXAMPLE 1B — Same walls, WITH an explicit trigger → main + 1 sub-item:
+  Transcript: "Walls. Green painted, in good order. Sub-item. White painted, light scuffing to right hand side wall."
   → main:   description="Green painted"   condition="In good order"
   → sub[0]: description="White painted"   condition="Light scuffing to right hand side wall"
-  ✗ WRONG would be: merging "green painted" + "white painted" into one description
-  ✗ WRONG would be: making "right hand side wall" a sub-item description
 
-EXAMPLE 2 — Door and frame with different conditions → main + 1 sub-item:
+EXAMPLE 2 — Door and frame, NO trigger spoken → ONE element, everything after the first
+  condition signal (including the second door/frame passage) stays in that element's condition:
   "Door and frame. White UPVC door, chrome lever handle … in good order.
+   White painted timber frame, chrome hinges … light scuffing to base."
+  → description="White UPVC door\nChrome lever handle"
+    condition="In good order\nWhite painted timber frame\nChrome hinges\nLight scuffing to base"
+  (Naming new components like "frame" and "hinges" does NOT reopen the description or start a
+   new element — only an explicit trigger does that.)
+
+EXAMPLE 2B — Same content, WITH an explicit trigger → main + 1 sub-item:
+  "Door and frame. White UPVC door, chrome lever handle … in good order. Add sub item.
    White painted timber frame, chrome hinges … light scuffing to base."
   → main:   description="White UPVC door\nChrome lever handle"           condition="In good order"
   → sub[0]: description="White painted timber frame\nChrome hinges"      condition="Light scuffing to base"
 
-EXAMPLE 3 — Three elements → main + 2 sub-items:
-  "Window and frame. White UPVC frame, chrome handle … in good order.
-   White net curtain … in good order.
-   White roller blind … one slat cracked."
-  → main:   description="White UPVC frame\nChrome handle"  condition="In good order"
-  → sub[0]: description="White net curtain"                condition="In good order"
-  → sub[1]: description="White roller blind"               condition="One slat cracked"
-
-EXAMPLE 4 — Multiple components, ONE shared condition → NOT a sub-item:
+EXAMPLE 3 — Multiple components, ONE shared condition → NOT a sub-item:
   "Ceiling. White emulsion, coving to perimeter … in good order."
   → description="White emulsion\nCoving to perimeter"  condition="In good order"
   (No text after the condition → no sub-item needed.)
 
-EXAMPLE 5 — Defect with location qualifier → ONE element, no sub-item:
+EXAMPLE 4 — Defect with location qualifier → ONE element, no sub-item:
   "Walls. White emulsion. Light scuffing to base of wall throughout."
   → description="White emulsion"   condition="Light scuffing to base of wall throughout"
   ("to base of wall throughout" qualifies the location → all stays in condition)

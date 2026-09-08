@@ -2829,7 +2829,7 @@ Return ONLY valid JSON — no markdown, no extra text.
         raise ValueError('AI returned an invalid response — please try again')
 
 
-def _claude_fill_fixed_section(transcript: str, section_name: str, section_type: str, items: list) -> dict:
+def _claude_fill_fixed_section(transcript: str, section_name: str, section_type: str, items: list, is_check_out: bool = False) -> dict:
     """
     Fill a fixed section's items from a continuous dictation transcript.
     Like _claude_fill_room but returns section-type-specific field names.
@@ -2844,6 +2844,10 @@ def _claude_fill_fixed_section(transcript: str, section_name: str, section_type:
         smoke_alarms           → { "notes": "...", "answer": "Yes"|"No"|"" }
       keys                     → { "description": "..." }
       meter_readings            → { "locationSerial": "...", "reading": "..." }
+
+    is_check_out: when True, "Please Delete" is NOT offered — matches the same rule
+    enforced for room items and the per-item endpoint (transcribe_item's is_check_out
+    guard): a check-out record must never lose an item via voice command.
     """
     client = anthropic.Anthropic(api_key=os.environ.get('ANTHROPIC_API_KEY'))
 
@@ -2936,6 +2940,40 @@ def _claude_fill_fixed_section(transcript: str, section_name: str, section_type:
         field_instructions = 'Extract all observations into "notes". Use the EXACT words the clerk spoke.'
         field_example = '{\n  "<itemId>": {"notes": "Observation text here"}\n}'
 
+    # "Please Delete" is never offered during check-out — a check-out record must never
+    # lose an item via voice command (same rule enforced for room items and the
+    # per-item endpoint's is_check_out guard).
+    if is_check_out:
+        delete_block = ''
+        delete_example = ''
+    else:
+        delete_block = """
+══════════════════════════════════════════════════════
+DELETE ITEM — remove command
+══════════════════════════════════════════════════════
+"Please Delete" is the ONLY phrase that removes an item — no other wording deletes an item,
+not "not seen", not "not applicable", not any synonym or paraphrase. The clerk may say
+"[item name]. Please delete." to mark a row as not present/not applicable.
+  → Output ONLY {"_delete": true} for that item's ID — do NOT fill any other field for it.
+
+"Please delete" is a delete command ONLY when it appears IMMEDIATELY after an item name with
+no intervening content. If it appears inside a longer passage, it must NOT trigger deletion —
+dictate it as ordinary content instead.
+  ✓ DELETE: "Water meter. Please delete."  → {"<meterId>": {"_delete": true}}
+  ✗ NOT DELETE: "Water meter. Located to hallway cupboard, reading 1045." — no "please delete" spoken
+
+RELAXED NAME MATCHING FOR DELETION ONLY: if the clerk speaks a word that is a unique and
+distinctive part of an item name — and no other item in the list contains that word — treat it
+as a match for that item, even though ordinary chapter-heading matching for content is stricter.
+  e.g. "gas, please delete" → matches "Gas Meter" (unique word)
+"""
+        delete_example = """
+
+A deleted item looks like this instead, with no other fields:
+{
+  "<deletedItemId>": {"_delete": true}
+}"""
+
     prompt = f"""You are processing a UK property inventory inspection dictation for a fixed section.
 
 The clerk spoke each item name aloud followed by their observations.
@@ -2961,14 +2999,14 @@ RULES:
 6. {_NO_FABRICATION_RULE}
 7. {_UK_SPELLING_RULE}
 8. Capitalise the first word of each line.
-
+{delete_block}
 LINE BREAKS — THIS IS CRITICAL:
 Use the JSON escape sequence \\n (backslash + n) inside string values whenever a new line is needed.
 NEVER collapse multiple pieces of information into a single run-on sentence.
 Follow the example output format EXACTLY.
 
 Example output format for this section type:
-{field_example}
+{field_example}{delete_example}
 
 Return ONLY valid JSON matching that shape — no markdown, no extra text, real item IDs only."""
 
@@ -3090,7 +3128,7 @@ def transcribe_room():
             # item/sub-item was open before a "Return to X, add to ..." command fired.
             filled = _dedupe_redirect_leaks(filled)
         else:
-            filled, fill_msg = _claude_fill_fixed_section(full_transcript, section_name, section_type, items)
+            filled, fill_msg = _claude_fill_fixed_section(full_transcript, section_name, section_type, items, is_check_out)
     except Exception as e:
         print(f'[transcribe/room] claude error: {e}')
         return jsonify({'error': f'AI fill error: {str(e)}'}), 500

@@ -749,7 +749,10 @@ FORMATTING RULES — apply to all output fields:
 - locationSerial: where the meter is located and its serial number, formatted across lines:
     "Located to [location]\nSerial Number: [number]"
   If only location mentioned, just the location. If only serial, just the serial.
-- reading: the meter reading value only (e.g. "12345")
+- reading: the meter reading value(s). Usually a single number (e.g. "12345"), but some meters
+  have multiple registers or rates (e.g. day/night, multiple dials) — if the clerk dictates more
+  than one reading, put each on its own line, labelled if spoken (e.g. "Day: 12345\nNight: 6789").
+  Never drop a reading because more than one was given.
 Return ONLY valid JSON, no markdown:
 {"locationSerial": "...", "reading": ""}"""
 
@@ -3022,7 +3025,11 @@ def _claude_fill_fixed_section(transcript: str, section_name: str, section_type:
             '"locationSerial" — the location on the FIRST line and serial number on the SECOND line, '
             'separated by the \\n escape sequence, formatted EXACTLY as: '
             '"Located to [location]\\nSerial Number: [number]" (omit whichever part is not mentioned); '
-            '"reading" — the numeric reading value only, no units. '
+            '"reading" — the meter reading value(s), no units. Usually a single number, but some '
+            'meters have multiple registers or rates (e.g. day/night, multiple dials) — if the clerk '
+            'gives more than one reading for a meter, put each on its own line using the \\n escape '
+            'sequence, labelled if spoken (e.g. "Day: 12345\\nNight: 6789"). Never drop a reading '
+            'because more than one was given. '
             'CRITICAL: locationSerial MUST use \\n between the Located line and the Serial Number line — '
             'never put them on a single line separated by a space or comma. '
             'Use the EXACT words the clerk spoke for location and serial number descriptions.'
@@ -3030,7 +3037,7 @@ def _claude_fill_fixed_section(transcript: str, section_name: str, section_type:
         field_example = (
             '{\n'
             '  "81": {"locationSerial": "Located to entrance hallway storage cupboard\\nSerial Number: AB123456", "reading": "8234.5"},\n'
-            '  "82": {"locationSerial": "Located to kitchen utility area\\nSerial Number: GX987654", "reading": "1045"}\n'
+            '  "82": {"locationSerial": "Located to kitchen utility area\\nSerial Number: GX987654", "reading": "Day: 12345\\nNight: 6789"}\n'
             '}'
         )
     else:
@@ -3880,8 +3887,11 @@ ASSIGNMENT AND FORMATTING RULES
 
 8. EMPTY SECTIONS
    If no qualifying findings exist for a section, return an empty string "".
-   Exception — Lighting and Appliances: return "All tested for power" (no additional text).
+   Exception — Lighting and Appliances ONLY: return "All tested for power" (no additional text).
    Exception — Overview: return the one-sentence property summary only.
+   Every other section, including Electrics / Heating, returns a plain empty string "" when there
+   are no qualifying findings — never "All tested for power". That phrase belongs to Lighting and
+   Appliances only and must never appear under any other section, however power-related its items are.
    NEVER write "In good order", "In fair order", "None noted", "No issues found", or "No defects noted".
 
 9. NO ROOM OR ITEM SUFFIXES
@@ -3942,6 +3952,22 @@ CRITICAL JSON FORMATTING:
     except json.JSONDecodeError:
         print(f'[condition-summary] JSON parse error (stop_reason={stop_reason}): {raw[:400]}')
         return jsonify({'error': 'AI returned an invalid response — please try again'}), 500
+
+    # Safety net: "All tested for power" is reserved for Lighting/Appliances only
+    # (see rule 6-8 in the prompt above). Strip it out if the model still applies
+    # it to any other section, e.g. Electrics / Heating.
+    _POWER_TESTED_SECTIONS = {'lighting', 'light fittings', 'appliances'}
+    _item_name_by_id = {itm.get('id'): (itm.get('name') or '') for itm in summary_items}
+    for item_id, result in (filled or {}).items():
+        name = _item_name_by_id.get(item_id, '')
+        if name.lower() in _POWER_TESTED_SECTIONS:
+            continue
+        condition = (result or {}).get('condition', '') if isinstance(result, dict) else ''
+        if not condition:
+            continue
+        lines = [l for l in condition.split('\n') if l.strip().lower() != 'all tested for power']
+        if len(lines) != len(condition.split('\n')):
+            result['condition'] = '\n'.join(lines)
 
     # Log usage
     try:

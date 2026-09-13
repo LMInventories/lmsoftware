@@ -68,18 +68,44 @@ GALLERY_BASE_URL = os.environ.get(
 # model) but each worker still benefits from repeated requests to the same page.
 _RD_CACHE: dict = {}     # {inspection_id: (expires_at, rd, label)}
 _RD_TTL   = 120          # seconds
-_RD_CACHE_MAX = 100      # hard cap — see _PHOTO_CACHE_MAX for why this must
-                          # be enforced unconditionally, not just on staleness
+_RD_CACHE_MAX = 100      # hard cap — see _PHOTO_CACHE_MAX_BYTES below for why an
+                          # unconditional cap matters, not just staleness-based eviction
 
 # Compressed JPEG cache — avoids re-running Pillow on every photo request.
 # Key: (inspection_id, sid, rid, n)  Value: (expires_at, jpeg_bytes)
 _PHOTO_CACHE: dict = {}
-_PHOTO_TTL      = 3600   # 1 hour
-_PHOTO_CACHE_MAX = 2000  # hard cap — entries can each be a few hundred KB of
-                          # JPEG bytes, and this cache is per gunicorn worker
-                          # (independent dict per fork), so leaving it
-                          # unbounded showed up as steadily climbing Railway
-                          # memory billing under sustained gallery traffic.
+_PHOTO_TTL             = 3600                # 1 hour
+_PHOTO_CACHE_MAX_BYTES = 100 * 1024 * 1024   # ~100MB hard cap, see note below
+_photo_cache_bytes     = 0                   # running total, kept in sync by _photo_cache_put
+#
+# History: this used to be capped by ENTRY COUNT (2000), not size. Full-size compressed JPEGs
+# (1600px/q82) run ~150-400KB each, so 2000 entries could reach ~600MB in a SINGLE gunicorn
+# worker — and because this cache is a plain module-level dict, each worker's copy diverges
+# independently after fork, multiplying that by worker count. This is what drove Railway
+# memory billing up under sustained gallery traffic despite the count cap technically "working"
+# (it stopped unbounded growth, but the bound itself was far too generous). Capping by actual
+# bytes instead makes the ceiling predictable regardless of whether cached entries happen to be
+# mostly filmstrip thumbnails (~15-30KB) or mostly full-size images (~150-400KB) — a pure count
+# cap can't tell those apart and was sized for a worst case that made the common case wasteful.
+
+
+def _photo_cache_put(key, data: bytes, now: float) -> None:
+    """Insert into _PHOTO_CACHE and evict oldest entries until back under the byte budget."""
+    global _photo_cache_bytes
+    _PHOTO_CACHE[key] = (now + _PHOTO_TTL, data)
+    _photo_cache_bytes += len(data)
+
+    if _photo_cache_bytes <= _PHOTO_CACHE_MAX_BYTES:
+        return
+
+    # Evict soonest-to-expire first (== oldest-inserted, since TTL is constant) until
+    # back under budget — same eviction order the old count-based cap used.
+    for k, v in sorted(_PHOTO_CACHE.items(), key=lambda kv: kv[1][0]):
+        if _photo_cache_bytes <= _PHOTO_CACHE_MAX_BYTES:
+            break
+        _photo_cache_bytes -= len(v[1])
+        del _PHOTO_CACHE[k]
+
 
 gallery_bp = Blueprint('gallery', __name__)
 
@@ -134,7 +160,7 @@ def _load_report_data(inspection_id, use_cache=True):
         label = f'Inspection #{inspection_id}'
 
     # Populate cache, then enforce the hard cap (stale entries first, then
-    # oldest — see _PHOTO_CACHE_MAX for why staleness alone isn't enough)
+    # oldest — see _PHOTO_CACHE_MAX_BYTES above for why staleness alone isn't enough)
     if use_cache:
         _RD_CACHE[inspection_id] = (time.time() + _RD_TTL, rd, label)
         if len(_RD_CACHE) > _RD_CACHE_MAX:
@@ -513,20 +539,9 @@ def gallery_photo_flat(inspection_id, n):
         print(traceback.format_exc())
         abort(500)
 
-    # Store in cache, then enforce the hard cap: first drop anything already
-    # TTL-stale, and if sustained traffic within the TTL window means that
-    # still isn't enough, drop the oldest entries too — the cache must never
-    # grow past _PHOTO_CACHE_MAX regardless of traffic pattern.
-    _PHOTO_CACHE[cache_key] = (now + _PHOTO_TTL, data)
-    if len(_PHOTO_CACHE) > _PHOTO_CACHE_MAX:
-        stale = [k for k, v in _PHOTO_CACHE.items() if v[0] < now]
-        for k in stale:
-            del _PHOTO_CACHE[k]
-        overflow = len(_PHOTO_CACHE) - _PHOTO_CACHE_MAX
-        if overflow > 0:
-            oldest = sorted(_PHOTO_CACHE.items(), key=lambda kv: kv[1][0])[:overflow]
-            for k, _ in oldest:
-                del _PHOTO_CACHE[k]
+    # Store in cache, evicting oldest entries if needed to stay under the byte budget
+    # regardless of traffic pattern — see _PHOTO_CACHE_MAX_BYTES above.
+    _photo_cache_put(cache_key, data, now)
 
     return make_response(data, 200, {
         'Content-Type':  'image/jpeg',

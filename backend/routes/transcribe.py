@@ -698,9 +698,12 @@ Return ONLY valid JSON, no markdown:
         message = client.messages.create(
             model='claude-haiku-4-5',
             max_tokens=200,
-            messages=[{'role': 'user', 'content': co_prompt}]
+            messages=[
+                {'role': 'user',      'content': co_prompt},
+                {'role': 'assistant', 'content': '{'},   # prefill forces JSON-only output, no preamble
+            ]
         )
-        raw = message.content[0].text.strip()
+        raw = ('{' + message.content[0].text).strip()
         raw = raw.replace('```json', '').replace('```', '').strip()
         return json.loads(_sanitise_json(raw)), message
 
@@ -731,9 +734,12 @@ Return ONLY valid JSON, no markdown:
         message = client.messages.create(
             model='claude-haiku-4-5',
             max_tokens=200,
-            messages=[{'role': 'user', 'content': dmg_prompt}]
+            messages=[
+                {'role': 'user',      'content': dmg_prompt},
+                {'role': 'assistant', 'content': '{'},   # prefill forces JSON-only output, no preamble
+            ]
         )
-        raw = message.content[0].text.strip()
+        raw = ('{' + message.content[0].text).strip()
         raw = raw.replace('```json', '').replace('```', '').strip()
         return json.loads(_sanitise_json(raw)), message
 
@@ -882,10 +888,13 @@ CRITICAL LANGUAGE RULES:
     message = client.messages.create(
         model='claude-haiku-4-5',
         max_tokens=300,
-        messages=[{'role': 'user', 'content': prompt}]
+        messages=[
+            {'role': 'user',      'content': prompt},
+            {'role': 'assistant', 'content': '{'},   # prefill forces JSON-only output, no preamble
+        ]
     )
 
-    raw = message.content[0].text.strip()
+    raw = ('{' + message.content[0].text).strip()
     raw = raw.replace('```json', '').replace('```', '').strip()
     return json.loads(_sanitise_json(raw)), message
 
@@ -942,10 +951,13 @@ Return ONLY valid JSON in this exact shape (no markdown):
     message = client.messages.create(
         model='claude-haiku-4-5',
         max_tokens=4000,
-        messages=[{'role': 'user', 'content': prompt}]
+        messages=[
+            {'role': 'user',      'content': prompt},
+            {'role': 'assistant', 'content': '{'},   # prefill forces JSON-only output, no preamble
+        ]
     )
 
-    raw = message.content[0].text.strip()
+    raw = ('{' + message.content[0].text).strip()
     raw = raw.replace('```json', '').replace('```', '').strip()
     return json.loads(_sanitise_json(raw))
 
@@ -1014,10 +1026,13 @@ Return ONLY valid JSON, no markdown. Use the exact shape below, omitting keys th
     message = client.messages.create(
         model='claude-haiku-4-5',
         max_tokens=500,
-        messages=[{'role': 'user', 'content': prompt}]
+        messages=[
+            {'role': 'user',      'content': prompt},
+            {'role': 'assistant', 'content': '{'},   # prefill forces JSON-only output, no preamble
+        ]
     )
 
-    raw = message.content[0].text.strip()
+    raw = ('{' + message.content[0].text).strip()
     raw = raw.replace('```json', '').replace('```', '').strip()
     try:
         return json.loads(_sanitise_json(raw)), message
@@ -2798,10 +2813,13 @@ The "_delete" flag is only included when the clerk says "Please Delete" for that
     message = client.messages.create(
         model='claude-haiku-4-5',
         max_tokens=8000,
-        messages=[{'role': 'user', 'content': prompt}]
+        messages=[
+            {'role': 'user',      'content': prompt},
+            {'role': 'assistant', 'content': '{'},   # prefill forces JSON-only output, no preamble
+        ]
     )
 
-    raw = message.content[0].text.strip()
+    raw = ('{' + message.content[0].text).strip()
     raw = raw.replace('```json', '').replace('```', '').strip()
 
     stop_reason = getattr(message, 'stop_reason', None)
@@ -2897,10 +2915,13 @@ Example output:
     message = client.messages.create(
         model='claude-haiku-4-5',
         max_tokens=8000,
-        messages=[{'role': 'user', 'content': prompt}]
+        messages=[
+            {'role': 'user',      'content': prompt},
+            {'role': 'assistant', 'content': '{'},   # prefill forces JSON-only output, no preamble
+        ]
     )
 
-    raw = message.content[0].text.strip()
+    raw = ('{' + message.content[0].text).strip()
     raw = raw.replace('```json', '').replace('```', '').strip()
 
     stop_reason = getattr(message, 'stop_reason', None)
@@ -3087,10 +3108,13 @@ Return ONLY valid JSON — no markdown, no extra text.
     message = client.messages.create(
         model='claude-haiku-4-5',
         max_tokens=8000,
-        messages=[{'role': 'user', 'content': prompt}]
+        messages=[
+            {'role': 'user',      'content': prompt},
+            {'role': 'assistant', 'content': '{'},   # prefill forces JSON-only output, no preamble
+        ]
     )
 
-    raw = message.content[0].text.strip()
+    raw = ('{' + message.content[0].text).strip()
     raw = raw.replace('```json', '').replace('```', '').strip()
 
     stop_reason = getattr(message, 'stop_reason', None)
@@ -3297,10 +3321,13 @@ Return ONLY valid JSON matching that shape — no markdown, no extra text, real 
     message = client.messages.create(
         model='claude-haiku-4-5',
         max_tokens=3000,
-        messages=[{'role': 'user', 'content': prompt}]
+        messages=[
+            {'role': 'user',      'content': prompt},
+            {'role': 'assistant', 'content': '{'},   # prefill forces JSON-only output, no preamble
+        ]
     )
 
-    raw = message.content[0].text.strip()
+    raw = ('{' + message.content[0].text).strip()
     raw = raw.replace('```json', '').replace('```', '').strip()
     try:
         return json.loads(_sanitise_json(raw)), message

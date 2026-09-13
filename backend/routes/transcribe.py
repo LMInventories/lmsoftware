@@ -1720,128 +1720,6 @@ def _item_name_pattern(name: str) -> _re.Pattern:
     return _re.compile(r'\b' + r'\s+'.join(parts) + r'\b', _re.IGNORECASE)
 
 
-_DELETE_ONLY_CLAUSE_RE = _re.compile(r'^please\s+delete$', _re.IGNORECASE)
-
-
-def _locate_confident_headings(transcript: str, items: list) -> list:
-    """
-    Deterministically locates chapter-heading switches the code can be CERTAIN about, so the LLM
-    doesn't have to re-derive them by re-reading a long transcript in one pass — the single
-    biggest source of cross-item content bleed on long, multi-heading rooms (see the room-fill
-    prompt's own CURRENT-ITEM LOCK rule, which this complements rather than replaces).
-
-    A clause (text between . , ; ! ?) counts as a confident heading ONLY when the ENTIRE clause
-    reduces, via _item_name_pattern, to exactly one item's full name — not a substring, the WHOLE
-    clause. This is deliberately conservative: ordinary dictated content is never JUST the item
-    name alone in one clause, so this only ever fires on the genuinely unambiguous cases and
-    defers to the LLM's own Tier 1/2 matching everywhere a real chapter-heading rule would defer
-    too (mishearings, partial/Tier-2 matches, anything with extra words). It must never become a
-    new source of misrouting — when in doubt, it simply finds nothing.
-
-    Also detects the common "[item name]. Please delete." pattern, where the heading and the
-    delete command land in two separate clauses — the majority shape observed in real
-    transcripts — and marks that heading's `trailing_command` as 'delete'.
-
-    Returns: [{'start': int, 'end': int, 'item_id': str, 'item_name': str,
-               'trailing_command': 'delete' | None}]
-    """
-    t = transcript or ''
-    if not t:
-        return []
-
-    patterns = []
-    for item in items:
-        name = (item.get('name') or '').strip()
-        if not name:
-            continue
-        patterns.append((str(item.get('id')), name, _item_name_pattern(name)))
-    if not patterns:
-        return []
-
-    def match_one(text):
-        text = text.strip()
-        if not text:
-            return None
-        hits = [(iid, iname) for iid, iname, pat in patterns if pat.fullmatch(text)]
-        return hits[0] if len(hits) == 1 else None
-
-    clauses = []
-    for m in _re.finditer(r'[^.,;!?]+', t):
-        raw = m.group(0)
-        stripped = raw.strip()
-        if not stripped:
-            continue
-        offset = raw.index(stripped)
-        start = m.start() + offset
-        clauses.append((start, start + len(stripped), stripped))
-
-    headings = []
-    i = 0
-    while i < len(clauses):
-        start, end, text = clauses[i]
-        hit = match_one(text)
-        trailing_command = None
-        h_end = end
-        if hit and i + 1 < len(clauses):
-            n_start, n_end, n_text = clauses[i + 1]
-            if _DELETE_ONLY_CLAUSE_RE.match(n_text):
-                trailing_command = 'delete'
-                h_end = n_end
-                i += 1  # consume the delete clause too
-        if hit:
-            item_id, item_name = hit
-            headings.append({
-                'start': start, 'end': h_end,
-                'item_id': item_id, 'item_name': item_name,
-                'trailing_command': trailing_command,
-            })
-        i += 1
-    return headings
-
-
-def _annotate_transcript_with_headings(transcript: str, headings: list) -> str:
-    """
-    Replaces each confidently-located heading span (see _locate_confident_headings) with a
-    structural marker so the LLM doesn't need to re-derive these specific boundaries — it still
-    owns everything else (description/condition splitting, sub-item triggers, its own matching
-    for any heading NOT marked this way). Only used to build the prompt; the raw transcript is
-    still what's logged/returned to the client.
-    """
-    if not headings:
-        return transcript
-    out = []
-    cursor = 0
-    for h in sorted(headings, key=lambda h: h['start']):
-        if h['start'] < cursor:
-            continue  # overlapping heading (shouldn't happen) — keep the earlier one
-        out.append(transcript[cursor:h['start']])
-        if h['trailing_command'] == 'delete':
-            out.append(f"⟦DELETE: {h['item_name']}⟧")
-        else:
-            out.append(f"⟦ITEM: {h['item_name']}⟧")
-        cursor = h['end']
-    out.append(transcript[cursor:])
-    return ''.join(out)
-
-
-_HEADING_MARKER_PROMPT_NOTE = """
-CODE-VERIFIED HEADING MARKERS:
-Some standalone item-name headings in the transcript below have already been identified with
-complete certainty by the surrounding application code (not by you) and are marked inline as
-⟦ITEM: Item Name⟧ or ⟦DELETE: Item Name⟧. Treat every such marker as a confirmed, unambiguous
-chapter-heading switch to that exact item — do not re-derive or second-guess it using the
-matching tiers below.
-  - ⟦ITEM: Name⟧ marks the start of that item's chapter — everything after it (until the next
-    marker or the next standalone item name YOU recognise) belongs to that item.
-  - ⟦DELETE: Name⟧ marks an item the clerk explicitly deleted — do not fill any content for it;
-    the application handles the deletion itself regardless of what you output for it. Treat it as
-    fully closed: nothing before or after it should be treated as belonging to it.
-Any standalone item name NOT marked this way still needs your own judgement using the matching
-tiers below (it may be ambiguous, a mishearing, or a partial match — that's exactly why the code
-didn't mark it).
-"""
-
-
 def _split_transcript_by_chapter(transcript: str, items: list) -> dict:
     """
     Best-effort segmentation of a room transcript into per-item chunks, using the same
@@ -1997,12 +1875,19 @@ def _find_unmatched_delete_commands(transcript: str, items: list, filled: dict) 
     Deterministic backstop for "please delete" commands the prompt's own mishearing-tolerance
     rule didn't resolve (e.g. an unusual Whisper mishearing with no textual overlap at all with
     the real item name, so even relaxed partial-word matching can't fire). Finds each "please
-    delete" occurrence, takes the clause immediately before it, and fuzzy-scores it against every
-    item name that has no entry in `filled` yet, using difflib's similarity ratio (same approach
-    already used elsewhere in this codebase for word-level diffing — no new dependency).
+    delete" occurrence, takes the clause immediately before it, and fuzzy-scores it against
+    EVERY item name using difflib's similarity ratio (same approach already used elsewhere in
+    this codebase for word-level diffing — no new dependency).
 
-    Flags a candidate only when exactly one item is a clear best match (a similarity threshold
-    plus a margin over the runner-up) — ambiguous cases are left alone rather than guessed at.
+    Flags a candidate only when exactly one item is a clear best match: a high absolute
+    similarity AND a wide margin over the runner-up, scored across ALL items (not just unfilled
+    ones) — narrowing the comparison pool to unfilled items only let an already-filled item's
+    absence silently shrink the field of competitors, letting a mediocre match "win" by default
+    against whatever unfilled items happened to remain (e.g. "door fittings" scored only 0.571
+    against "Flooring" in isolation, but that would have lost decisively to "Door & Frame"
+    at 0.480 had Door & Frame not already been filled and excluded from the comparison).
+    The already-filled/deleted check is applied only when deciding whether to report the
+    candidate, after the ranking is decided on the full field.
 
     Returns: [{'item': item, 'heard': str, 'ratio': float}]
     """
@@ -2017,9 +1902,6 @@ def _find_unmatched_delete_commands(transcript: str, items: list, filled: dict) 
             continue  # a long preceding passage isn't a heading attempt
         scored = []
         for item in items:
-            item_id = str(item.get('id'))
-            if item_id in filled_keys:
-                continue
             name = (item.get('name') or '').strip()
             if not name:
                 continue
@@ -2030,7 +1912,10 @@ def _find_unmatched_delete_commands(transcript: str, items: list, filled: dict) 
         scored.sort(key=lambda x: x[0], reverse=True)
         best_ratio, best_item = scored[0]
         second_ratio = scored[1][0] if len(scored) > 1 else 0.0
-        if best_ratio >= 0.55 and (best_ratio - second_ratio) >= 0.15:
+        best_id = str(best_item.get('id'))
+        if best_id in filled_keys:
+            continue  # already has an entry — nothing to flag
+        if best_ratio >= 0.72 and (best_ratio - second_ratio) >= 0.15:
             candidates_out.append({'item': best_item, 'heard': heard, 'ratio': round(best_ratio, 2)})
     return candidates_out
 
@@ -2226,12 +2111,6 @@ def _claude_fill_room(transcript: str, section_name: str, items: list, processed
         for i, item in enumerate(items)
     )
 
-    # Deterministic pre-segmentation (see _locate_confident_headings): find the chapter-heading
-    # switches the code can be certain about before the LLM ever sees the transcript, and mark
-    # them inline so it doesn't have to re-derive them itself.
-    confident_headings = _locate_confident_headings(transcript, items)
-    annotated_transcript = _annotate_transcript_with_headings(transcript, confident_headings)
-
     processed_note = ''
     if processed_ids:
         id_list = ', '.join(f'"{pid}"' for pid in processed_ids)
@@ -2307,7 +2186,7 @@ The clerk walked through the room and spoke each item name aloud followed by its
 Item names act as CHAPTER HEADINGS. When the clerk says an item name as a standalone phrase that
 EXACTLY matches a name from the list above, everything that follows belongs to that item until
 the next exact item name is spoken as a standalone heading.
-{_HEADING_MARKER_PROMPT_NOTE}
+
 CHAPTER HEADING MATCHING RULES:
 A chapter heading is ONLY when the clerk speaks an item reference BY ITSELF — standalone,
 with no preceding adjectives, descriptive words, prepositions, or qualifiers.
@@ -2413,7 +2292,7 @@ woodwork, and flooring). None of these are standalone item announcements — the
 of the Built-in Storage item until the clerk explicitly announces a new item name alone.
 {processed_note}
 Transcript:
-"{annotated_transcript}"
+"{transcript}"
 
 RULES:
 1. A chapter heading MUST exactly match the full item name from the numbered list above (case-insensitive;
@@ -2931,19 +2810,10 @@ The "_delete" flag is only included when the clerk says "Please Delete" for that
         raise ValueError('AI response was too long and got cut off — please try again or record fewer items at once')
 
     try:
-        parsed = json.loads(_sanitise_json(raw))
+        return json.loads(_sanitise_json(raw)), message
     except json.JSONDecodeError as e:
         print(f'[_claude_fill_room] JSON parse error (stop_reason={stop_reason}): {e} — raw[:400]: {raw[:400]}')
         raise ValueError('AI returned an invalid response — please try again')
-
-    # Deterministic override: a heading the code confidently matched to "please delete" is
-    # forced to _delete regardless of what the model produced for that id — this is what makes
-    # the delete-omission failure fixed by construction rather than by hoping the model complies.
-    for h in confident_headings:
-        if h['trailing_command'] == 'delete':
-            parsed[h['item_id']] = {'_delete': True}
-
-    return parsed, message
 
 
 def _claude_fill_room_checkout(transcript: str, section_name: str, items: list) -> dict:
@@ -2968,28 +2838,19 @@ def _claude_fill_room_checkout(transcript: str, section_name: str, items: list) 
                 lines.append(f'    Sub-item: _sid="{sub["_sid"]}", Description: "{desc}"')
     items_list = '\n'.join(lines)
 
-    # Deterministic pre-segmentation for heading-boundary accuracy only — check-out has no
-    # delete concept (a check-out record must never lose a row by voice), so any detected
-    # "please delete" pattern is deliberately ignored here rather than acted on.
-    confident_headings = [
-        {**h, 'trailing_command': None}
-        for h in _locate_confident_headings(transcript, items)
-    ]
-    annotated_transcript = _annotate_transcript_with_headings(transcript, confident_headings)
-
     prompt = f"""You are processing a UK property CHECK-OUT inspection dictation for a single room.
 
 The clerk walks through the room describing each item's condition at the END of the tenancy.
 Item names act as CHAPTER HEADINGS — everything said after an item name fills that item's check-out condition.
 If an item has sub-items listed below it (indented), the clerk may name a sub-item by its description to target it specifically.
-{_HEADING_MARKER_PROMPT_NOTE}
+
 Room: {section_name}
 
 Items to fill (sub-items are indented below their parent):
 {items_list}
 
 Transcript:
-"{annotated_transcript}"
+"{transcript}"
 
 VERBATIM RULES — absolute, no exceptions:
 1. Use the EXACT words the clerk spoke for check-out conditions. Do NOT interpret, condense, or paraphrase.
@@ -3071,11 +2932,6 @@ def _claude_fill_room_damage(transcript: str, section_name: str, items: list, pr
         for item in items
     )
 
-    # Deterministic pre-segmentation (see _locate_confident_headings) — same mechanism as
-    # _claude_fill_room, including the forced-delete override applied below on return.
-    confident_headings = _locate_confident_headings(transcript, items)
-    annotated_transcript = _annotate_transcript_with_headings(transcript, confident_headings)
-
     processed_note = ''
     if processed_ids:
         id_list = ', '.join(f'"{pid}"' for pid in processed_ids)
@@ -3115,14 +2971,14 @@ and IMMEDIATELY follows with a command word ("Amend", "Add", "Sub-item"), treat 
 The clerk walks through the room and says each item name followed by a description of the damage.
 Item names act as CHAPTER HEADINGS — everything said after an item name goes into that item's
 "condition" field. There is NO description field in a damage report.
-{_HEADING_MARKER_PROMPT_NOTE}
+
 Room: {section_name}
 
 Items (use the ID as the JSON key, match by Name):
 {items_list}
 {processed_note}
 Transcript:
-"{annotated_transcript}"
+"{transcript}"
 
 RULES:
 1. CHAPTER HEADING MATCHING — two tiers, applied in order:
@@ -3243,17 +3099,10 @@ Return ONLY valid JSON — no markdown, no extra text.
         raise ValueError('AI response was too long and got cut off — please try again or record fewer items at once')
 
     try:
-        parsed = json.loads(_sanitise_json(raw))
+        return json.loads(_sanitise_json(raw)), message
     except json.JSONDecodeError as e:
         print(f'[_claude_fill_room_damage] JSON parse error (stop_reason={stop_reason}): {e} — raw[:400]: {raw[:400]}')
         raise ValueError('AI returned an invalid response — please try again')
-
-    # Deterministic override — see _claude_fill_room for the same mechanism and rationale.
-    for h in confident_headings:
-        if h['trailing_command'] == 'delete':
-            parsed[h['item_id']] = {'_delete': True}
-
-    return parsed, message
 
 
 def _claude_fill_fixed_section(transcript: str, section_name: str, section_type: str, items: list, is_check_out: bool = False) -> dict:

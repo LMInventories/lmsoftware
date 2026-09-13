@@ -637,6 +637,16 @@ function exportTranscription() {
             if (s.condition)   lines.push(`      Condition   : ${s.condition.replace(/\\n/g, '\n                    ')}`)
           }
         }
+        // Flags from the deterministic detectors (unmatched delete, missing item, sub-item
+        // shortfall, cross-item duplicate) that survived the server's one automatic retry —
+        // surfaced here so a reviewer can tell "confirmed empty" apart from "model forgot",
+        // which the AI RESULT block above cannot show on its own.
+        if (Array.isArray(entry.ambiguous) && entry.ambiguous.length > 0) {
+          lines.push('', '  ⚠ NEEDS REVIEW:')
+          for (const a of entry.ambiguous) {
+            lines.push(`    - ${a.item_name}: ${a.detail}`)
+          }
+        }
       } else if (entry.command === 'delete') {
         lines.push('  (item deleted)')
       } else if (entry.command === 'add_sub' && entry.filled?._subs) {

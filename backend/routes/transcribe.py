@@ -2,6 +2,7 @@ import os
 import json
 import tempfile
 import base64
+import difflib
 import anthropic
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
@@ -102,6 +103,10 @@ _TRANSCRIPT_CORRECTIONS = [
     # Normalise "please delete" variants (hyphen / spacing) — the only phrase
     # that deletes an item; see _EDIT_TRIGGERS.
     (_re.compile(r'\bplease-delete\b', _re.I),    'please delete'),
+    # "barbs (and taps)" → "baths" (Whisper mishearing of "Baths" ahead of
+    # "Bath & Taps" / "Baths and Taps" — observed causing a "please delete" for
+    # that item to go unmatched and the following item's content to bleed in)
+    (_re.compile(r'\bbarbs\b', _re.I),            'baths'),
 ]
 
 def _correct_transcript(text: str) -> str:
@@ -1694,6 +1699,149 @@ def _count_subitem_triggers(transcript: str) -> int:
     return len(_SUBITEM_TRIGGER_RE.findall(transcript or ''))
 
 
+def _item_name_pattern(name: str) -> _re.Pattern:
+    """
+    Case-insensitive regex matching `name` where '&' and 'and' are interchangeable and EVERY
+    content word may independently be singular or plural. Fixes the old _name_variants() gap,
+    which only added/removed one trailing 's' from the WHOLE name string and so never matched a
+    multi-word name pluralized on more than one word — e.g. "Shower & Screens" vs. spoken
+    "showers and screens" (both words pluralized) never matched under the old approach.
+    """
+    tokens = _re.findall(r"[A-Za-z0-9']+|&", name or '')
+    parts = []
+    for tok in tokens:
+        if tok == '&' or tok.lower() == 'and':
+            parts.append(r'(?:&|and)')
+        else:
+            stem = tok[:-1] if tok.lower().endswith('s') and len(tok) > 1 else tok
+            parts.append(_re.escape(stem) + r's?')
+    if not parts:
+        return _re.compile(r'(?!)')  # empty name — never matches
+    return _re.compile(r'\b' + r'\s+'.join(parts) + r'\b', _re.IGNORECASE)
+
+
+_DELETE_ONLY_CLAUSE_RE = _re.compile(r'^please\s+delete$', _re.IGNORECASE)
+
+
+def _locate_confident_headings(transcript: str, items: list) -> list:
+    """
+    Deterministically locates chapter-heading switches the code can be CERTAIN about, so the LLM
+    doesn't have to re-derive them by re-reading a long transcript in one pass — the single
+    biggest source of cross-item content bleed on long, multi-heading rooms (see the room-fill
+    prompt's own CURRENT-ITEM LOCK rule, which this complements rather than replaces).
+
+    A clause (text between . , ; ! ?) counts as a confident heading ONLY when the ENTIRE clause
+    reduces, via _item_name_pattern, to exactly one item's full name — not a substring, the WHOLE
+    clause. This is deliberately conservative: ordinary dictated content is never JUST the item
+    name alone in one clause, so this only ever fires on the genuinely unambiguous cases and
+    defers to the LLM's own Tier 1/2 matching everywhere a real chapter-heading rule would defer
+    too (mishearings, partial/Tier-2 matches, anything with extra words). It must never become a
+    new source of misrouting — when in doubt, it simply finds nothing.
+
+    Also detects the common "[item name]. Please delete." pattern, where the heading and the
+    delete command land in two separate clauses — the majority shape observed in real
+    transcripts — and marks that heading's `trailing_command` as 'delete'.
+
+    Returns: [{'start': int, 'end': int, 'item_id': str, 'item_name': str,
+               'trailing_command': 'delete' | None}]
+    """
+    t = transcript or ''
+    if not t:
+        return []
+
+    patterns = []
+    for item in items:
+        name = (item.get('name') or '').strip()
+        if not name:
+            continue
+        patterns.append((str(item.get('id')), name, _item_name_pattern(name)))
+    if not patterns:
+        return []
+
+    def match_one(text):
+        text = text.strip()
+        if not text:
+            return None
+        hits = [(iid, iname) for iid, iname, pat in patterns if pat.fullmatch(text)]
+        return hits[0] if len(hits) == 1 else None
+
+    clauses = []
+    for m in _re.finditer(r'[^.,;!?]+', t):
+        raw = m.group(0)
+        stripped = raw.strip()
+        if not stripped:
+            continue
+        offset = raw.index(stripped)
+        start = m.start() + offset
+        clauses.append((start, start + len(stripped), stripped))
+
+    headings = []
+    i = 0
+    while i < len(clauses):
+        start, end, text = clauses[i]
+        hit = match_one(text)
+        trailing_command = None
+        h_end = end
+        if hit and i + 1 < len(clauses):
+            n_start, n_end, n_text = clauses[i + 1]
+            if _DELETE_ONLY_CLAUSE_RE.match(n_text):
+                trailing_command = 'delete'
+                h_end = n_end
+                i += 1  # consume the delete clause too
+        if hit:
+            item_id, item_name = hit
+            headings.append({
+                'start': start, 'end': h_end,
+                'item_id': item_id, 'item_name': item_name,
+                'trailing_command': trailing_command,
+            })
+        i += 1
+    return headings
+
+
+def _annotate_transcript_with_headings(transcript: str, headings: list) -> str:
+    """
+    Replaces each confidently-located heading span (see _locate_confident_headings) with a
+    structural marker so the LLM doesn't need to re-derive these specific boundaries — it still
+    owns everything else (description/condition splitting, sub-item triggers, its own matching
+    for any heading NOT marked this way). Only used to build the prompt; the raw transcript is
+    still what's logged/returned to the client.
+    """
+    if not headings:
+        return transcript
+    out = []
+    cursor = 0
+    for h in sorted(headings, key=lambda h: h['start']):
+        if h['start'] < cursor:
+            continue  # overlapping heading (shouldn't happen) — keep the earlier one
+        out.append(transcript[cursor:h['start']])
+        if h['trailing_command'] == 'delete':
+            out.append(f"⟦DELETE: {h['item_name']}⟧")
+        else:
+            out.append(f"⟦ITEM: {h['item_name']}⟧")
+        cursor = h['end']
+    out.append(transcript[cursor:])
+    return ''.join(out)
+
+
+_HEADING_MARKER_PROMPT_NOTE = """
+CODE-VERIFIED HEADING MARKERS:
+Some standalone item-name headings in the transcript below have already been identified with
+complete certainty by the surrounding application code (not by you) and are marked inline as
+⟦ITEM: Item Name⟧ or ⟦DELETE: Item Name⟧. Treat every such marker as a confirmed, unambiguous
+chapter-heading switch to that exact item — do not re-derive or second-guess it using the
+matching tiers below.
+  - ⟦ITEM: Name⟧ marks the start of that item's chapter — everything after it (until the next
+    marker or the next standalone item name YOU recognise) belongs to that item.
+  - ⟦DELETE: Name⟧ marks an item the clerk explicitly deleted — do not fill any content for it;
+    the application handles the deletion itself regardless of what you output for it. Treat it as
+    fully closed: nothing before or after it should be treated as belonging to it.
+Any standalone item name NOT marked this way still needs your own judgement using the matching
+tiers below (it may be ambiguous, a mishearing, or a partial match — that's exactly why the code
+didn't mark it).
+"""
+
+
 def _split_transcript_by_chapter(transcript: str, items: list) -> dict:
     """
     Best-effort segmentation of a room transcript into per-item chunks, using the same
@@ -1715,14 +1863,8 @@ def _split_transcript_by_chapter(transcript: str, items: list) -> dict:
         name = (item.get('name') or '').strip()
         if not name:
             continue
-        variants = set()
-        for base in (name, name.replace('&', 'and'), name.replace(' and ', ' & ')):
-            variants |= _name_variants(base)
-        for variant in variants:
-            if not variant:
-                continue
-            for m in _re.finditer(r'\b' + _re.escape(variant) + r'\b', t, _re.IGNORECASE):
-                candidates.append((m.start(), m.end(), item_id))
+        for m in _item_name_pattern(name).finditer(t):
+            candidates.append((m.start(), m.end(), item_id))
 
     if not candidates:
         return {}
@@ -1803,24 +1945,17 @@ def _subitem_retry_note(shortfall_items: list) -> str:
     )
 
 
-def _name_variants(name: str) -> set:
-    """Singular/plural variants of an item name, lowercased, for loose substring matching."""
-    n = (name or '').strip().lower()
-    if not n:
-        return set()
-    return {n, (n[:-1] if n.endswith('s') else n + 's')}
-
-
 def _find_missing_mentioned_items(transcript: str, items: list, filled: dict) -> list:
     """
     Finds template items whose exact name is clearly spoken somewhere in the transcript
-    (as a substring, singular or plural) but which never appear as a key in `filled` AT ALL —
-    not even a "_delete" entry. This is a strong signal the model heard the heading but
-    swallowed its content into whichever item was already open, instead of switching to a
-    new chapter — the failure mode behind a "Contents" (or similar) section going missing
-    entirely, with its items wrongly attached as sub-items of the previous item.
+    (singular/plural per word, "&"/"and" interchangeable — see _item_name_pattern) but which
+    never appear as a key in `filled` AT ALL — not even a "_delete" entry. This is a strong
+    signal the model heard the heading but swallowed its content into whichever item was
+    already open, instead of switching to a new chapter — the failure mode behind a "Contents"
+    (or similar) section going missing entirely, with its items wrongly attached as sub-items
+    of the previous item.
     """
-    t = (transcript or '').lower()
+    t = transcript or ''
     if not t:
         return []
     filled_keys = {str(k) for k in (filled or {}).keys()}
@@ -1830,7 +1965,9 @@ def _find_missing_mentioned_items(transcript: str, items: list, filled: dict) ->
         if item_id in filled_keys:
             continue
         name = item.get('name') or ''
-        if any(v and v in t for v in _name_variants(name)):
+        if not name:
+            continue
+        if _item_name_pattern(name).search(t):
             missing.append(item)
     return missing
 
@@ -1852,25 +1989,158 @@ def _missing_item_retry_note(missing_items: list) -> str:
     )
 
 
+_PLEASE_DELETE_RE = _re.compile(r'([^.,;!?]+?)[.,;!?]?\s*please\s+delete\b', _re.IGNORECASE)
+
+
+def _find_unmatched_delete_commands(transcript: str, items: list, filled: dict) -> list:
+    """
+    Deterministic backstop for "please delete" commands the prompt's own mishearing-tolerance
+    rule didn't resolve (e.g. an unusual Whisper mishearing with no textual overlap at all with
+    the real item name, so even relaxed partial-word matching can't fire). Finds each "please
+    delete" occurrence, takes the clause immediately before it, and fuzzy-scores it against every
+    item name that has no entry in `filled` yet, using difflib's similarity ratio (same approach
+    already used elsewhere in this codebase for word-level diffing — no new dependency).
+
+    Flags a candidate only when exactly one item is a clear best match (a similarity threshold
+    plus a margin over the runner-up) — ambiguous cases are left alone rather than guessed at.
+
+    Returns: [{'item': item, 'heard': str, 'ratio': float}]
+    """
+    t = transcript or ''
+    if not t:
+        return []
+    filled_keys = {str(k) for k in (filled or {}).keys()}
+    candidates_out = []
+    for m in _PLEASE_DELETE_RE.finditer(t):
+        heard = m.group(1).strip(' .,;!?')
+        if not heard or len(heard) > 60:
+            continue  # a long preceding passage isn't a heading attempt
+        scored = []
+        for item in items:
+            item_id = str(item.get('id'))
+            if item_id in filled_keys:
+                continue
+            name = (item.get('name') or '').strip()
+            if not name:
+                continue
+            ratio = difflib.SequenceMatcher(None, heard.lower(), name.lower()).ratio()
+            scored.append((ratio, item))
+        if not scored:
+            continue
+        scored.sort(key=lambda x: x[0], reverse=True)
+        best_ratio, best_item = scored[0]
+        second_ratio = scored[1][0] if len(scored) > 1 else 0.0
+        if best_ratio >= 0.55 and (best_ratio - second_ratio) >= 0.15:
+            candidates_out.append({'item': best_item, 'heard': heard, 'ratio': round(best_ratio, 2)})
+    return candidates_out
+
+
+def _unmatched_delete_retry_note(unmatched: list) -> str:
+    """Prompt addendum used when a "please delete" was spoken but likely not matched to any item."""
+    lines = '\n'.join(
+        f'  - heard "{u["heard"]}, please delete" — likely means "{u["item"].get("name", "?")}"'
+        for u in unmatched
+    )
+    return (
+        f'\n══════════════════════════════════════════════════════\n'
+        f'RETRY — a "please delete" may not have matched its item\n'
+        f'══════════════════════════════════════════════════════\n'
+        f'The transcript contains "please delete" spoken right after a phrase that closely\n'
+        f'resembles one of these item names but does not exactly match it (likely a mishearing):\n{lines}\n'
+        f'If that is what the clerk meant, set "_delete": true on that item in your output. If a\n'
+        f'different item is genuinely a better fit, use that one instead — but do not leave the\n'
+        f'delete command unmatched and do not fill any content for the item it applies to.\n'
+    )
+
+
+def _find_cross_item_duplicates(filled: dict) -> list:
+    """
+    Generalizes _dedupe_redirect_leaks beyond its explicit-redirect-only scope: flags any line
+    long enough to be a specific observation (same >20-char threshold _dedupe_redirect_leaks
+    already uses) that appears, after normalization, under more than one distinct top-level item
+    — with neither copy tied to an explicit _descAction/_condAction amendment flag (that case is
+    already resolved deterministically by _dedupe_redirect_leaks). This catches ordinary chapter
+    items ending up with duplicated content with no redirect command involved at all.
+
+    Deliberately NOT auto-fixed here — there is no reliable way to know which copy is correct, so
+    this is surfaced via the ambiguous_commands channel for human review rather than silently
+    stripped.
+
+    Returns: [{'line': str, 'items': [item_id, ...]}]
+    """
+    if not isinstance(filled, dict):
+        return []
+    line_to_items: dict = {}
+    for item_id, fields in filled.items():
+        if not isinstance(fields, dict):
+            continue
+        if fields.get('_descAction') or fields.get('_condAction'):
+            continue  # already covered by _dedupe_redirect_leaks
+        texts = []
+        for key in ('description', 'condition', 'checkOutCondition'):
+            if isinstance(fields.get(key), str):
+                texts.append(fields[key])
+        for sub in (fields.get('_subs') or []):
+            if not isinstance(sub, dict):
+                continue
+            for key in ('description', 'condition', 'checkOutCondition'):
+                if isinstance(sub.get(key), str):
+                    texts.append(sub[key])
+        for text in texts:
+            for line in text.split('\n'):
+                n = _norm_fill_line(line)
+                if n and len(n) > 20:
+                    line_to_items.setdefault(n, set()).add(str(item_id))
+    return [
+        {'line': line, 'items': sorted(item_ids)}
+        for line, item_ids in line_to_items.items()
+        if len(item_ids) > 1
+    ]
+
+
+def _cross_duplicate_retry_note(duplicates: list) -> str:
+    """Prompt addendum used when the same specific observation appears under two different items."""
+    lines = '\n'.join(f'  - "{d["line"]}" appears under more than one item' for d in duplicates)
+    return (
+        f'\n══════════════════════════════════════════════════════\n'
+        f'RETRY — the same observation appeared under two different items\n'
+        f'══════════════════════════════════════════════════════\n'
+        f'Your previous pass output the exact same observation under more than one item:\n{lines}\n'
+        f'Each observation belongs to exactly ONE item — re-parse the transcript and determine\n'
+        f'which single chapter heading was actually open when that observation was spoken, then\n'
+        f'output it there only. Do not leave it duplicated, and do not simply pick one at random —\n'
+        f'use the chapter-heading rules to find the one place it actually belongs.\n'
+    )
+
+
 def _fill_room_with_subitem_retry(fill_fn, full_transcript, section_name, items, processed_item_ids, fn_name):
     """
-    Calls fill_fn (either _claude_fill_room or _claude_fill_room_damage), then checks for two
+    Calls fill_fn (either _claude_fill_room or _claude_fill_room_damage), then checks for four
     known LLM compliance slips: (1) fewer _subs produced than explicit "add sub item" triggers
     for a specific item (checked per-item — see _find_subitem_shortfall_items — so a shortfall
     on one item can't be hidden by an unrelated surplus elsewhere in the same room's totals),
-    and (2) a template item whose name is clearly spoken but never appears in the output at all
+    (2) a template item whose name is clearly spoken but never appears in the output at all
     (usually because its content got swallowed into the previous item's sub-item chain — e.g. a
-    "Contents" section vanishing entirely). Prompt reinforcement alone can't guarantee either
-    won't happen, so when either is detected this retries ONCE with a pointed correction — a
-    genuine second chance, bounded to a single extra call.
+    "Contents" section vanishing entirely), (3) a "please delete" that didn't cleanly match any
+    item (usually a Whisper mishearing with no textual overlap at all), and (4) the same specific
+    observation appearing under two different items with no explicit redirect tying it to either.
+    Prompt reinforcement alone can't guarantee any of these won't happen, so when one is detected
+    this retries ONCE with a pointed correction — a genuine second chance, bounded to a single
+    extra call. Whatever is still flagged after the retry is returned as `ambiguous` for the
+    caller to surface to a human reviewer rather than silently guessing.
+
+    Returns: (filled, fill_msg, ambiguous) — ambiguous is a list of
+             {'type', 'item_name', 'detail'} dicts, empty when nothing is still flagged.
     """
     filled, fill_msg = fill_fn(full_transcript, section_name, items, processed_item_ids or None)
     filled = _enforce_processed_skip(filled, processed_item_ids)
 
-    shortfall_items = _find_subitem_shortfall_items(full_transcript, items, filled)
-    missing_items   = _find_missing_mentioned_items(full_transcript, items, filled)
+    shortfall_items   = _find_subitem_shortfall_items(full_transcript, items, filled)
+    missing_items     = _find_missing_mentioned_items(full_transcript, items, filled)
+    unmatched_deletes = _find_unmatched_delete_commands(full_transcript, items, filled)
+    cross_duplicates  = _find_cross_item_duplicates(filled)
 
-    if shortfall_items or missing_items:
+    if shortfall_items or missing_items or unmatched_deletes or cross_duplicates:
         notes = []
         if shortfall_items:
             names = ', '.join(s['item'].get('name', '?') for s in shortfall_items)
@@ -1880,21 +2150,61 @@ def _fill_room_with_subitem_retry(fill_fn, full_transcript, section_name, items,
             names = ', '.join(i.get('name', '?') for i in missing_items)
             print(f'[{fn_name}] item(s) mentioned but never output in "{section_name}": {names}')
             notes.append(_missing_item_retry_note(missing_items))
+        if unmatched_deletes:
+            names = ', '.join(f'"{d["heard"]}"→"{d["item"].get("name", "?")}"' for d in unmatched_deletes)
+            print(f'[{fn_name}] possible unmatched "please delete" in "{section_name}": {names}')
+            notes.append(_unmatched_delete_retry_note(unmatched_deletes))
+        if cross_duplicates:
+            print(f'[{fn_name}] cross-item duplicate content detected in "{section_name}"')
+            notes.append(_cross_duplicate_retry_note(cross_duplicates))
 
         retry_note = ''.join(notes)
         retried, retry_msg = fill_fn(full_transcript, section_name, items, processed_item_ids or None, retry_note=retry_note)
         retried = _enforce_processed_skip(retried, processed_item_ids)
 
-        retry_shortfall = _find_subitem_shortfall_items(full_transcript, items, retried)
-        retry_missing   = _find_missing_mentioned_items(full_transcript, items, retried)
-        improved = len(retry_shortfall) < len(shortfall_items) or len(retry_missing) < len(missing_items)
+        retry_shortfall  = _find_subitem_shortfall_items(full_transcript, items, retried)
+        retry_missing    = _find_missing_mentioned_items(full_transcript, items, retried)
+        retry_unmatched  = _find_unmatched_delete_commands(full_transcript, items, retried)
+        retry_duplicates = _find_cross_item_duplicates(retried)
+        improved = (
+            len(retry_shortfall) < len(shortfall_items)
+            or len(retry_missing) < len(missing_items)
+            or len(retry_unmatched) < len(unmatched_deletes)
+            or len(retry_duplicates) < len(cross_duplicates)
+        )
         if improved:
             print(f'[{fn_name}] retry improved: sub-item shortfalls {len(shortfall_items)}→{len(retry_shortfall)}, '
-                  f'missing {len(missing_items)}→{len(retry_missing)}')
+                  f'missing {len(missing_items)}→{len(retry_missing)}, '
+                  f'unmatched deletes {len(unmatched_deletes)}→{len(retry_unmatched)}, '
+                  f'cross duplicates {len(cross_duplicates)}→{len(retry_duplicates)}')
             filled, fill_msg = retried, retry_msg
+            shortfall_items, missing_items = retry_shortfall, retry_missing
+            unmatched_deletes, cross_duplicates = retry_unmatched, retry_duplicates
         else:
             print(f'[{fn_name}] retry did not improve — keeping original')
-    return filled, fill_msg
+
+    ambiguous = []
+    for s in shortfall_items:
+        ambiguous.append({
+            'type': 'subitem_shortfall', 'item_name': s['item'].get('name', '?'),
+            'detail': f'{s["trigger_count"]} sub-item trigger(s) spoken but only {s["sub_count"]} emitted',
+        })
+    for i in missing_items:
+        ambiguous.append({
+            'type': 'missing_item', 'item_name': i.get('name', '?'),
+            'detail': 'item name spoken but no entry (filled or deleted) appeared in the output',
+        })
+    for d in unmatched_deletes:
+        ambiguous.append({
+            'type': 'unmatched_delete', 'item_name': d['item'].get('name', '?'),
+            'detail': f'possible "please delete" not confirmed (heard: "{d["heard"]}")',
+        })
+    for d in cross_duplicates:
+        ambiguous.append({
+            'type': 'cross_item_duplicate', 'item_name': ', '.join(d['items']),
+            'detail': f'same content appears under multiple items: "{d["line"][:60]}"',
+        })
+    return filled, fill_msg, ambiguous
 
 
 def _claude_fill_room(transcript: str, section_name: str, items: list, processed_ids: list = None, retry_note: str = '') -> dict:
@@ -1915,6 +2225,12 @@ def _claude_fill_room(transcript: str, section_name: str, items: list, processed
         f'  {i+1}. ID: "{item["id"]}", Name: "{item["name"]}"'
         for i, item in enumerate(items)
     )
+
+    # Deterministic pre-segmentation (see _locate_confident_headings): find the chapter-heading
+    # switches the code can be certain about before the LLM ever sees the transcript, and mark
+    # them inline so it doesn't have to re-derive them itself.
+    confident_headings = _locate_confident_headings(transcript, items)
+    annotated_transcript = _annotate_transcript_with_headings(transcript, confident_headings)
 
     processed_note = ''
     if processed_ids:
@@ -1991,7 +2307,7 @@ The clerk walked through the room and spoke each item name aloud followed by its
 Item names act as CHAPTER HEADINGS. When the clerk says an item name as a standalone phrase that
 EXACTLY matches a name from the list above, everything that follows belongs to that item until
 the next exact item name is spoken as a standalone heading.
-
+{_HEADING_MARKER_PROMPT_NOTE}
 CHAPTER HEADING MATCHING RULES:
 A chapter heading is ONLY when the clerk speaks an item reference BY ITSELF — standalone,
 with no preceding adjectives, descriptive words, prepositions, or qualifiers.
@@ -2000,18 +2316,20 @@ Case-insensitive; "&" and "and" are interchangeable; hyphens are optional.
 TWO TIERS OF MATCHING — apply in order:
 
 TIER 1 — EXACT MATCH (preferred):
-The spoken phrase matches the full item name from the list.
+The spoken phrase reduces to the FULL item name — every content word present, each word
+independently allowed to be singular or plural (not just one word of a multi-word name; that is
+a partial match, covered by Tier 2 below, not this tier).
   ✓ "Flooring" → triggers "Flooring"
   ✓ "Built-in storage" → triggers "Built-In Storage"
   ✓ "Kitchen base units" → triggers "Kitchen Base Units"
-
-SINGULAR/PLURAL OF THE SAME WORD also counts as Tier 1 — this is NOT the same thing as a
-partial word or a different word. Only apply this when the spoken word and the item-name word
-share the same root and differ ONLY by a trailing "s":
   ✓ "Content" → triggers "Contents" (same root word, singular spoken form)
-  ✓ "Curtain" → triggers "Curtains & Blinds" (same root word "curtain")
+  ✓ "Showers and screens" → triggers "Shower & Screens" (per-word singular/plural — EVERY
+    content word normalized independently, not just one — so both halves of a compound name
+    may be pluralized in speech and still count as an exact match)
   ✗ "Floor" does NOT trigger "Flooring" — different word, not a singular/plural pair
   ✗ "Door" does NOT trigger "Door & Frame" — that is a partial-word case, covered by Tier 2 rules below, not this one
+  ✗ "Curtain" does NOT trigger "Curtains & Blinds" on its own — only ONE word of a two-concept
+    name was spoken, not the full name; see the Tier 2 example below
 
 KNOWN WHISPER MISHEARING also counts as Tier 1 — Whisper frequently mis-transcribes "ceiling"
 as the homophone "sealing" (identical pronunciation). Treat "sealing" spoken as a standalone
@@ -2026,6 +2344,8 @@ the list AND does not appear in any other item name. Use this to handle natural 
   ✓ "Wall units" → triggers "Kitchen Wall Units" (only item containing "wall units")
   ✓ "Extractor" → triggers "Extractor Fan" (only item containing "extractor")
   ✓ "Sockets" → triggers "Switches & Sockets" (only item containing "sockets")
+  ✓ "Curtain" → triggers "Curtains & Blinds" (unique partial match of ONE word in a two-concept
+    name — this is Tier 2, not Tier 1, so the ambiguity safety rule below still applies to it)
   ✗ "Units" → does NOT match — "units" appears in both "Kitchen Base Units" and "Kitchen Wall Units" — ambiguous
   ✗ "Door" → does NOT match "Door & Frame" if there is also an "Internal Door" item — ambiguous
 
@@ -2093,7 +2413,7 @@ woodwork, and flooring). None of these are standalone item announcements — the
 of the Built-in Storage item until the clerk explicitly announces a new item name alone.
 {processed_note}
 Transcript:
-"{transcript}"
+"{annotated_transcript}"
 
 RULES:
 1. A chapter heading MUST exactly match the full item name from the numbered list above (case-insensitive;
@@ -2331,6 +2651,15 @@ match for that item.
 This relaxed matching applies ONLY to deletion. Chapter heading switches for content still
 require an exact match.
 
+MISHEARING TOLERANCE FOR DELETION ONLY — Whisper frequently mis-transcribes a spoken item name
+into a similar-sounding but textually different word (e.g. "barbs" for "baths"). If the word(s)
+immediately before "please delete" do not exactly match any item name or a distinctive part of
+one, but sound like a plausible mishearing of exactly one item name — and no other item name is
+a similarly plausible phonetic match — treat it as a match and delete that item. If more than one
+item name is a plausible phonetic match, do NOT delete either — same ambiguity safety rule as
+chapter headings above.
+  ✓ "Barbs and taps, please delete." → matches "Bath & Taps" (phonetic mishearing of "Baths")
+
 CRITICAL CONTEXT RULE FOR "please delete":
 "Please delete" is a delete command ONLY when it appears IMMEDIATELY after an item title with
 no intervening description. If it appears inside a longer passage about the item, it is highly
@@ -2413,11 +2742,6 @@ moment it is spoken, full stop.
     Smoke Alarms — the chapter heading "Contents" already switched the active item before either
     trigger was spoken, so both subs belong to Contents, never to the item spoken before it.
 
-Example — two-wall room with explicit trigger:
-  "Walls. White emulsion. In good order. Sub-item. Light scuffing to base of wall."
-  → main:   description="White emulsion"  condition="In good order"
-  → sub[0]: description=""               condition="Light scuffing to base of wall"
-
 Example — LONG condition run before the trigger (do NOT lose the trigger in the list):
   "Walls. Painted white. White scuff marks below left window. Odd scuff marks to left-hand
    wall. Line removal mark right of windows. 2 large shaded sections to facing wall. Odd
@@ -2440,12 +2764,6 @@ Example — sub-item condition wording matches the main item's condition wording
     condition ("Tested for power") repeats the main item's condition verbatim — the repeated
     wording is a coincidence of two different fittings both being tested and working, not a
     stitched/duplicated recording. The explicit "Add sub item" trigger still applies in full.
-
-Example — door and frame with "Add sub item":
-  "Door and frame. White UPVC door, chrome handle. In good order. Add sub item.
-   White painted frame, chrome hinges. Light scuffing to base."
-  → main:   description="White UPVC door\nChrome handle"     condition="In good order"
-  → sub[0]: description="White painted frame\nChrome hinges" condition="Light scuffing to base"
 
 Example — three elements with two triggers:
   "Walls. White emulsion. In good order. Sub-item. White emulsion. Light scuffing to base.
@@ -2486,24 +2804,6 @@ MULTI-COMPONENT (no sub-item): When the clerk lists several parts of the SAME th
 
 WORKED EXAMPLES:
 
-EXAMPLE 1 — Two walls described back-to-back, NO trigger spoken → ONE element, no sub-item:
-  Transcript: "Walls. Green painted, in good order. White painted, light scuffing to right hand side wall."
-  Parsing:
-    "green painted" → description
-    "in good order" → condition signal → description is now LOCKED
-    "white painted" → NOT a trigger phrase → stays in the condition list, does not reopen description
-    "light scuffing to right hand side wall" → more condition
-  → description="Green painted"
-    condition="In good order\nWhite painted\nLight scuffing to right hand side wall"
-  ✗ WRONG would be: creating a sub-item for "White painted" — no trigger was spoken.
-  (For this to split into two elements, the clerk must say "Sub-item" or "Add sub item" before
-   "White painted" — see EXAMPLE 1B.)
-
-EXAMPLE 1B — Same walls, WITH an explicit trigger → main + 1 sub-item:
-  Transcript: "Walls. Green painted, in good order. Sub-item. White painted, light scuffing to right hand side wall."
-  → main:   description="Green painted"   condition="In good order"
-  → sub[0]: description="White painted"   condition="Light scuffing to right hand side wall"
-
 EXAMPLE 2 — Door and frame, NO trigger spoken → ONE element, everything after the first
   condition signal (including the second door/frame passage) stays in that element's condition:
   "Door and frame. White UPVC door, chrome lever handle … in good order.
@@ -2518,16 +2818,6 @@ EXAMPLE 2B — Same content, WITH an explicit trigger → main + 1 sub-item:
    White painted timber frame, chrome hinges … light scuffing to base."
   → main:   description="White UPVC door\nChrome lever handle"           condition="In good order"
   → sub[0]: description="White painted timber frame\nChrome hinges"      condition="Light scuffing to base"
-
-EXAMPLE 3 — Multiple components, ONE shared condition → NOT a sub-item:
-  "Ceiling. White emulsion, coving to perimeter … in good order."
-  → description="White emulsion\nCoving to perimeter"  condition="In good order"
-  (No text after the condition → no sub-item needed.)
-
-EXAMPLE 4 — Defect with location qualifier → ONE element, no sub-item:
-  "Walls. White emulsion. Light scuffing to base of wall throughout."
-  → description="White emulsion"   condition="Light scuffing to base of wall throughout"
-  ("to base of wall throughout" qualifies the location → all stays in condition)
 
 ══════════════════════════════════════════════════════
 AMENDMENT RULES — correcting or extending a previously-filled item
@@ -2641,10 +2931,19 @@ The "_delete" flag is only included when the clerk says "Please Delete" for that
         raise ValueError('AI response was too long and got cut off — please try again or record fewer items at once')
 
     try:
-        return json.loads(_sanitise_json(raw)), message
+        parsed = json.loads(_sanitise_json(raw))
     except json.JSONDecodeError as e:
         print(f'[_claude_fill_room] JSON parse error (stop_reason={stop_reason}): {e} — raw[:400]: {raw[:400]}')
         raise ValueError('AI returned an invalid response — please try again')
+
+    # Deterministic override: a heading the code confidently matched to "please delete" is
+    # forced to _delete regardless of what the model produced for that id — this is what makes
+    # the delete-omission failure fixed by construction rather than by hoping the model complies.
+    for h in confident_headings:
+        if h['trailing_command'] == 'delete':
+            parsed[h['item_id']] = {'_delete': True}
+
+    return parsed, message
 
 
 def _claude_fill_room_checkout(transcript: str, section_name: str, items: list) -> dict:
@@ -2669,19 +2968,28 @@ def _claude_fill_room_checkout(transcript: str, section_name: str, items: list) 
                 lines.append(f'    Sub-item: _sid="{sub["_sid"]}", Description: "{desc}"')
     items_list = '\n'.join(lines)
 
+    # Deterministic pre-segmentation for heading-boundary accuracy only — check-out has no
+    # delete concept (a check-out record must never lose a row by voice), so any detected
+    # "please delete" pattern is deliberately ignored here rather than acted on.
+    confident_headings = [
+        {**h, 'trailing_command': None}
+        for h in _locate_confident_headings(transcript, items)
+    ]
+    annotated_transcript = _annotate_transcript_with_headings(transcript, confident_headings)
+
     prompt = f"""You are processing a UK property CHECK-OUT inspection dictation for a single room.
 
 The clerk walks through the room describing each item's condition at the END of the tenancy.
 Item names act as CHAPTER HEADINGS — everything said after an item name fills that item's check-out condition.
 If an item has sub-items listed below it (indented), the clerk may name a sub-item by its description to target it specifically.
-
+{_HEADING_MARKER_PROMPT_NOTE}
 Room: {section_name}
 
 Items to fill (sub-items are indented below their parent):
 {items_list}
 
 Transcript:
-"{transcript}"
+"{annotated_transcript}"
 
 VERBATIM RULES — absolute, no exceptions:
 1. Use the EXACT words the clerk spoke for check-out conditions. Do NOT interpret, condense, or paraphrase.
@@ -2763,6 +3071,11 @@ def _claude_fill_room_damage(transcript: str, section_name: str, items: list, pr
         for item in items
     )
 
+    # Deterministic pre-segmentation (see _locate_confident_headings) — same mechanism as
+    # _claude_fill_room, including the forced-delete override applied below on return.
+    confident_headings = _locate_confident_headings(transcript, items)
+    annotated_transcript = _annotate_transcript_with_headings(transcript, confident_headings)
+
     processed_note = ''
     if processed_ids:
         id_list = ', '.join(f'"{pid}"' for pid in processed_ids)
@@ -2802,20 +3115,22 @@ and IMMEDIATELY follows with a command word ("Amend", "Add", "Sub-item"), treat 
 The clerk walks through the room and says each item name followed by a description of the damage.
 Item names act as CHAPTER HEADINGS — everything said after an item name goes into that item's
 "condition" field. There is NO description field in a damage report.
-
+{_HEADING_MARKER_PROMPT_NOTE}
 Room: {section_name}
 
 Items (use the ID as the JSON key, match by Name):
 {items_list}
 {processed_note}
 Transcript:
-"{transcript}"
+"{annotated_transcript}"
 
 RULES:
 1. CHAPTER HEADING MATCHING — two tiers, applied in order:
-   TIER 1 (exact): spoken phrase matches the full item name (case-insensitive; "&"/"and" interchangeable;
-     singular/plural of the SAME root word counts as exact — "Content" matches "Contents", "Curtain"
-     matches "Curtains" — but a genuinely different word like "Floor" does NOT match "Flooring").
+   TIER 1 (exact): spoken phrase reduces to the FULL item name, every content word independently
+     singular or plural — "Content" matches "Contents", "Showers and screens" matches "Shower &
+     Screens" (both halves pluralized still counts as exact) — but a genuinely different word
+     like "Floor" does NOT match "Flooring", and ONE word of a multi-word name alone (e.g.
+     "Curtain" for "Curtains & Blinds") is only a Tier 2 partial match, not Tier 1.
      Also treat Whisper's common mishearing "Sealing" as "Ceiling" — they are the same heading.
    TIER 2 (unique partial): spoken phrase is a distinctive word/phrase found in exactly ONE item name
      and no other — e.g. "Base units" → "Kitchen Base Units" if that is the only match.
@@ -2854,6 +3169,11 @@ no intervening description. If it appears inside a longer passage about the item
 trigger deletion — dictate it as ordinary content instead.
   ✓ DELETE: "Windows & Frames. Please delete."  → _delete: true
   ✗ NOT DELETE: "Windows and Frames. White UPVC, chip to base." — no "please delete" spoken
+
+MISHEARING TOLERANCE FOR DELETION ONLY: if the word(s) immediately before "please delete" don't
+exactly match any item name, but sound like a plausible mishearing of exactly one item name (and
+no other item name is a similarly plausible phonetic match), delete that item.
+  ✓ "Barbs and taps, please delete." → matches "Bath & Taps" (phonetic mishearing of "Baths")
 
 ══════════════════════════════════════════════════════
 SUB-ITEMS
@@ -2923,10 +3243,17 @@ Return ONLY valid JSON — no markdown, no extra text.
         raise ValueError('AI response was too long and got cut off — please try again or record fewer items at once')
 
     try:
-        return json.loads(_sanitise_json(raw)), message
+        parsed = json.loads(_sanitise_json(raw))
     except json.JSONDecodeError as e:
         print(f'[_claude_fill_room_damage] JSON parse error (stop_reason={stop_reason}): {e} — raw[:400]: {raw[:400]}')
         raise ValueError('AI returned an invalid response — please try again')
+
+    # Deterministic override — see _claude_fill_room for the same mechanism and rationale.
+    for h in confident_headings:
+        if h['trailing_command'] == 'delete':
+            parsed[h['item_id']] = {'_delete': True}
+
+    return parsed, message
 
 
 def _claude_fill_fixed_section(transcript: str, section_name: str, section_type: str, items: list, is_check_out: bool = False) -> dict:
@@ -3070,6 +3397,10 @@ RELAXED NAME MATCHING FOR DELETION ONLY: if the clerk speaks a word that is a un
 distinctive part of an item name — and no other item in the list contains that word — treat it
 as a match for that item, even though ordinary chapter-heading matching for content is stricter.
   e.g. "gas, please delete" → matches "Gas Meter" (unique word)
+
+MISHEARING TOLERANCE FOR DELETION ONLY: if the word(s) immediately before "please delete" don't
+exactly match any item name, but sound like a plausible mishearing of exactly one item name (and
+no other item name is a similarly plausible phonetic match), delete that item.
 """
         delete_example = """
 
@@ -3155,7 +3486,11 @@ def transcribe_room():
       "transcript": "Ceiling. Good condition, white painted...",
       "filled": {
         "456": {"description": "White painted", "condition": "In good order"}
-      }
+      },
+      "ambiguous_commands": [
+        {"type": "unmatched_delete", "item_name": "Bath & Taps",
+         "detail": "possible \"please delete\" not confirmed (heard: \"barbs and taps\")"}
+      ]
     }
     """
     data = request.get_json()
@@ -3211,17 +3546,18 @@ def transcribe_room():
     if not full_transcript:
         return jsonify({'error': 'No speech detected in recording'}), 422
 
+    ambiguous = []
     try:
         if section_type == 'room':
             if is_check_out:
                 filled, fill_msg = _claude_fill_room_checkout(full_transcript, section_name, items)
             elif is_damage_report:
-                filled, fill_msg = _fill_room_with_subitem_retry(
+                filled, fill_msg, ambiguous = _fill_room_with_subitem_retry(
                     _claude_fill_room_damage, full_transcript, section_name, items,
                     processed_item_ids, 'transcribe/room damage'
                 )
             else:
-                filled, fill_msg = _fill_room_with_subitem_retry(
+                filled, fill_msg, ambiguous = _fill_room_with_subitem_retry(
                     _claude_fill_room, full_transcript, section_name, items,
                     processed_item_ids, 'transcribe/room'
                 )
@@ -3254,8 +3590,9 @@ def transcribe_room():
         pass  # never let logging break the response
 
     return jsonify({
-        'transcript': full_transcript,
-        'filled':     filled,
+        'transcript':         full_transcript,
+        'filled':             filled,
+        'ambiguous_commands': ambiguous,
     })
 
 

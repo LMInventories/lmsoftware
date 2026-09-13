@@ -107,6 +107,12 @@ _TRANSCRIPT_CORRECTIONS = [
     # "Bath & Taps" / "Baths and Taps" — observed causing a "please delete" for
     # that item to go unmatched and the following item's content to bleed in)
     (_re.compile(r'\bbarbs\b', _re.I),            'baths'),
+    # Digit-by-digit readings ("one two two three five six") come back from Whisper as
+    # hyphen-joined single digits ("1-2-2-3-5-6") instead of one continuous number.
+    # Collapse any run of 3+ single digits joined by hyphens into a plain number —
+    # affects meter readings and serial numbers read aloud digit-by-digit. Requires at
+    # least two hyphens (three digits) so a genuine short range like "9-5" is untouched.
+    (_re.compile(r'\b\d(?:-\d){2,}\b'),           lambda m: m.group(0).replace('-', '')),
 ]
 
 def _correct_transcript(text: str) -> str:
@@ -760,10 +766,14 @@ FORMATTING RULES — apply to all output fields:
 - locationSerial: where the meter is located and its serial number, formatted across lines:
     "Located to [location]\nSerial Number: [number]"
   If only location mentioned, just the location. If only serial, just the serial.
-- reading: the meter reading value(s). Usually a single number (e.g. "12345"), but some meters
-  have multiple registers or rates (e.g. day/night, multiple dials) — if the clerk dictates more
-  than one reading, put each on its own line, labelled if spoken (e.g. "Day: 12345\nNight: 6789").
-  Never drop a reading because more than one was given.
+- reading: the meter reading value(s), each as a PLAIN CONTINUOUS NUMBER with no spaces,
+  hyphens, or separators between digits — "122356", never "1-2-2-3-5-6" or "1 2 2 3 5 6", even
+  if the clerk read the digits out one at a time.
+  Usually a single reading, but some meters have multiple registers, rates, or dials — if the
+  clerk gives more than one reading, put each on its own line, and if the clerk spoke ANY label
+  before a reading (e.g. "Reading 1", "Reading 2", "Rate 1", "Rate 2", "Day", "Night", "Normal",
+  "Low", "High"), that exact label MUST prefix that line: "Reading 1: 122356\nReading 2: 254678".
+  Never drop a reading, and never drop or paraphrase a spoken label.
 Return ONLY valid JSON, no markdown:
 {"locationSerial": "...", "reading": ""}"""
 
@@ -1196,6 +1206,10 @@ def transcribe_item():
             })
 
         filled, filled_msg = _claude_fill_item(transcript, item_label, room_name, section_type, edit_mode, is_check_out, is_damage_report)
+        if isinstance(filled, dict):
+            # Safety net for fabricated hardware — see _strip_unspoken_fabrication's docstring.
+            # Reuses the room-mode guard by wrapping this single item's flat fields the same way.
+            filled = _strip_unspoken_fabrication({'_item': filled}, transcript).get('_item', filled)
 
         # Log usage
         try:
@@ -1698,6 +1712,80 @@ def _dedupe_redirect_leaks(filled: dict) -> dict:
                 s = dict(sub)
                 s['description'] = strip(s.get('description'), False)
                 s['condition']   = strip(s.get('condition'), False)
+                new_subs.append(s)
+            f['_subs'] = new_subs
+        out[item_id] = f
+    return out
+
+
+# Hardware/fitting nouns the model has been repeatedly observed to fabricate on door/frame and
+# similar items even with an explicit, prominent instruction not to (_NO_FABRICATION_RULE) —
+# these are typical enough for certain items ("a handle on a door") that the model "completes
+# the pattern" instead of reporting only what was actually said. This has already been diagnosed
+# and reinforced in the prompt once before (see the comment above _NO_FABRICATION_RULE) and still
+# recurs, so prompt wording alone is not sufficient — this is a deterministic backstop.
+_FABRICATION_PRONE_WORDS = [
+    'handle', 'hinge', 'lock', 'latch', 'knob', 'bolt', 'chain', 'letterbox',
+    'spyhole', 'spy hole', 'peephole', 'peep hole', 'doorstop', 'kickplate', 'kick plate',
+    'threshold', 'draught excluder', 'draft excluder',
+]
+_FABRICATION_WORD_RE = _re.compile(
+    r'\b(' + '|'.join(_re.escape(w) for w in _FABRICATION_PRONE_WORDS) + r')s?\b', _re.IGNORECASE
+)
+
+
+def _fab_stem(word: str) -> str:
+    w = word.lower()
+    return w[:-1] if w.endswith('s') and len(w) > 1 else w
+
+
+def _strip_unspoken_fabrication(filled: dict, transcript: str) -> dict:
+    """
+    Deterministic safety net for _NO_FABRICATION_RULE: for every line of every item/sub-item's
+    description/condition/checkOutCondition, if the line mentions one of the known
+    fabrication-prone hardware words and that word (singular or plural) never appears anywhere
+    in the raw transcript, drop the line — it was very likely invented rather than spoken.
+    """
+    if not isinstance(filled, dict):
+        return filled
+    t = transcript or ''
+    spoken = {_fab_stem(m.group(1)) for m in _FABRICATION_WORD_RE.finditer(t)}
+
+    def line_is_fabricated(line: str) -> bool:
+        for m in _FABRICATION_WORD_RE.finditer(line):
+            if _fab_stem(m.group(1)) not in spoken:
+                return True
+        return False
+
+    def clean(text):
+        if not isinstance(text, str) or not text:
+            return text
+        kept, dropped = [], []
+        for line in text.split('\n'):
+            (dropped if line_is_fabricated(line) else kept).append(line)
+        if dropped:
+            print(f'[fabrication-guard] dropped unspoken hardware line(s): {dropped}')
+        return '\n'.join(kept)
+
+    out = {}
+    for item_id, fields in filled.items():
+        if not isinstance(fields, dict):
+            out[item_id] = fields
+            continue
+        f = dict(fields)
+        for key in ('description', 'condition', 'checkOutCondition'):
+            if key in f:
+                f[key] = clean(f[key])
+        if isinstance(f.get('_subs'), list):
+            new_subs = []
+            for sub in f['_subs']:
+                if not isinstance(sub, dict):
+                    new_subs.append(sub)
+                    continue
+                s = dict(sub)
+                for key in ('description', 'condition', 'checkOutCondition'):
+                    if key in s:
+                        s[key] = clean(s[key])
                 new_subs.append(s)
             f['_subs'] = new_subs
         out[item_id] = f
@@ -3225,11 +3313,15 @@ def _claude_fill_fixed_section(transcript: str, section_name: str, section_type:
             '"locationSerial" — the location on the FIRST line and serial number on the SECOND line, '
             'separated by the \\n escape sequence, formatted EXACTLY as: '
             '"Located to [location]\\nSerial Number: [number]" (omit whichever part is not mentioned); '
-            '"reading" — the meter reading value(s), no units. Usually a single number, but some '
-            'meters have multiple registers or rates (e.g. day/night, multiple dials) — if the clerk '
-            'gives more than one reading for a meter, put each on its own line using the \\n escape '
-            'sequence, labelled if spoken (e.g. "Day: 12345\\nNight: 6789"). Never drop a reading '
-            'because more than one was given. '
+            '"reading" — each reading as a PLAIN CONTINUOUS NUMBER with no spaces, hyphens, or '
+            'separators between digits ("122356", never "1-2-2-3-5-6" or "1 2 2 3 5 6"), even if '
+            'the clerk read the digits out one at a time, no units. Usually a single reading, but '
+            'some meters have multiple registers, rates, or dials — if the clerk gives more than '
+            'one reading for a meter, put each on its own line using the \\n escape sequence, and '
+            'if the clerk spoke ANY label before a reading (e.g. "Reading 1", "Reading 2", "Rate 1", '
+            '"Rate 2", "Day", "Night", "Normal", "Low", "High"), that exact label MUST prefix that '
+            'line: "Reading 1: 122356\\nReading 2: 254678". Never drop a reading, and never drop or '
+            'paraphrase a spoken label. '
             'CRITICAL: locationSerial MUST use \\n between the Located line and the Serial Number line — '
             'never put them on a single line separated by a space or comma. '
             'Use the EXACT words the clerk spoke for location and serial number descriptions.'
@@ -3237,7 +3329,8 @@ def _claude_fill_fixed_section(transcript: str, section_name: str, section_type:
         field_example = (
             '{\n'
             '  "81": {"locationSerial": "Located to entrance hallway storage cupboard\\nSerial Number: AB123456", "reading": "8234.5"},\n'
-            '  "82": {"locationSerial": "Located to kitchen utility area\\nSerial Number: GX987654", "reading": "Day: 12345\\nNight: 6789"}\n'
+            '  "82": {"locationSerial": "Located to kitchen utility area\\nSerial Number: GX987654", "reading": "Day: 12345\\nNight: 6789"},\n'
+            '  "83": {"locationSerial": "Located to meter cupboard", "reading": "Reading 1: 122356\\nReading 2: 254678"}\n'
             '}'
         )
     else:
@@ -3443,6 +3536,9 @@ def transcribe_room():
             # Cross-item safety net: strip redirected text left behind on whatever
             # item/sub-item was open before a "Return to X, add to ..." command fired.
             filled = _dedupe_redirect_leaks(filled)
+            # Safety net for fabricated hardware (e.g. "chrome handle" invented on a door/frame
+            # item never mentioned aloud) — see _strip_unspoken_fabrication's docstring.
+            filled = _strip_unspoken_fabrication(filled, full_transcript)
         else:
             filled, fill_msg = _claude_fill_fixed_section(full_transcript, section_name, section_type, items, is_check_out)
     except Exception as e:

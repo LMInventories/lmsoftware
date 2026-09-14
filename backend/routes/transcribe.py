@@ -653,9 +653,41 @@ def _whisper_transcribe(audio_bytes: bytes, mime_type: str) -> tuple[str, float]
             )
         raw_transcript = str(response.text).strip()
         duration_seconds = float(response.duration or 0)
+        if raw_transcript and _looks_like_whisper_hallucination(response):
+            print(f'[transcribe] discarding likely hallucinated transcript on silent/no-speech audio: {raw_transcript!r}')
+            return '', duration_seconds
         return _correct_transcript(raw_transcript), duration_seconds
     finally:
         os.unlink(tmp_path)
+
+
+def _looks_like_whisper_hallucination(response) -> bool:
+    """
+    Detects Whisper's well-known failure mode on silent/near-silent or noise-only audio: instead
+    of returning empty text, it "hallucinates" plausible-sounding but fabricated speech (classic
+    example: "Thank you for watching."). Feeding that straight into the Claude fill step produces
+    a fabricated condition/description with no warning — there is nothing to catch this class of
+    error downstream, so it must be caught here.
+
+    Uses the same per-segment confidence signals Whisper's own reference implementation uses to
+    decide whether a segment is actually silence: high no_speech_prob together with a low average
+    log-probability. If every segment in the response meets both thresholds, the whole transcript
+    is treated as hallucinated and discarded (callers already handle an empty transcript as
+    "no speech detected").
+    """
+    segments = getattr(response, 'segments', None)
+    if not segments:
+        return False
+    NO_SPEECH_THRESHOLD = 0.6
+    LOGPROB_THRESHOLD = -1.0
+    for seg in segments:
+        no_speech_prob = getattr(seg, 'no_speech_prob', None)
+        avg_logprob = getattr(seg, 'avg_logprob', None)
+        if no_speech_prob is None or avg_logprob is None:
+            return False  # missing confidence data — don't guess, let it through
+        if not (no_speech_prob > NO_SPEECH_THRESHOLD and avg_logprob < LOGPROB_THRESHOLD):
+            return False
+    return True
 
 
 def _claude_fill_item(transcript: str, item_label: str, room_name: str, section_type: str = 'room', edit_mode: str = 'normal', is_check_out: bool = False, is_damage_report: bool = False) -> dict:
@@ -1828,9 +1860,16 @@ def _split_transcript_by_chapter(transcript: str, items: list) -> dict:
     Best-effort segmentation of a room transcript into per-item chunks, using the same
     chapter-heading convention the room-fill prompt teaches the model: an item's exact name
     (singular/plural, "&"/"and" interchangeable) spoken as a heading. This is a cheap
-    approximation for the QA heuristics below — not a replacement for the real parse — so a
-    heading name that happens to appear mid-sentence in another item's content can occasionally
-    be mis-segmented; that's an acceptable false-positive rate for a retry trigger.
+    approximation for the QA heuristics below — not a replacement for the real parse.
+
+    Only the FIRST occurrence of each item's name pattern is treated as its heading. Item names
+    are taught to the model as a heading spoken once, at the point of moving to a new item — a
+    later recurrence of the same word(s) is virtually always just content in another item's
+    section (e.g. "Walls" matching the standalone word "wall" inside "wall mounted fuse box" or
+    the item name "Wall Units" appearing further down the transcript), not a second real heading.
+    Treating every occurrence as a boundary previously caused the segmenter to reopen an
+    already-closed item's chapter mid-transcript and swallow unrelated later content (including
+    other items' "add sub item" triggers) into it, producing false shortfall warnings.
 
     Returns: { item_id: [transcript substrings attributed to that item] }
     """
@@ -1844,8 +1883,17 @@ def _split_transcript_by_chapter(transcript: str, items: list) -> dict:
         name = (item.get('name') or '').strip()
         if not name:
             continue
+        # Skip a match immediately followed by "mounted"/"fitted" — e.g. "wall mounted fuse
+        # box" or "ceiling fitted spotlight" said inside another item's content (commonly
+        # Contents) is never a real heading for "Walls"/"Ceiling", it's a compound descriptor.
+        # Single-word item names are especially exposed to this since UK inventory dictation
+        # uses "<surface> mounted/fitted <thing>" constantly outside that surface's own chapter.
         for m in _item_name_pattern(name).finditer(t):
+            following = t[m.end():m.end() + 12].strip().lower()
+            if following.startswith('mounted') or following.startswith('fitted'):
+                continue
             candidates.append((m.start(), m.end(), item_id))
+            break
 
     if not candidates:
         return {}

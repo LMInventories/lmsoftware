@@ -371,7 +371,18 @@ onMounted(() => { fetchProperties(); fetchClients() })
       @click="openCreateModal"
       title="Add Property"
     >+</button>
-    <div v-if="loading" class="loading">Loading properties...</div>
+    <!-- Skeleton loader -->
+    <div v-if="loading" :class="['properties-grid', 'grid-cols-' + gridCols]">
+      <div v-for="n in 8" :key="n" class="skeleton-card">
+        <div class="sk-photo"></div>
+        <div class="sk-body">
+          <div class="sk-line sk-line--short"></div>
+          <div class="sk-line sk-line--full"></div>
+          <div class="sk-line sk-line--med"></div>
+        </div>
+        <div class="sk-footer"></div>
+      </div>
+    </div>
 
     <!-- Grid view -->
     <div v-else-if="activeTab === 'grid'" :class="['properties-grid', 'grid-cols-' + gridCols]">
@@ -688,6 +699,20 @@ h1 { font-size: 21px; font-weight: 700; color: #0f172a; margin: 0 0 2px; }
 .toggle-btn.active { background: #6366f1; color: white; }
 
 .loading { text-align: center; padding: 60px; color: #94a3b8; }
+
+/* ── Skeleton loader ─────────────────────────────────────────────────────── */
+@keyframes shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+.skeleton-card { background: white; border: 1px solid #e8ecf1; border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; }
+.sk-photo { height: clamp(60px, 28cqw, 120px); background: linear-gradient(90deg, #e2e8f0 25%, #f1f5f9 50%, #e2e8f0 75%); background-size: 800px 100%; animation: shimmer 1.4s infinite linear; }
+.sk-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; flex: 1; }
+.sk-line { height: 12px; border-radius: 6px; background: linear-gradient(90deg, #e2e8f0 25%, #f1f5f9 50%, #e2e8f0 75%); background-size: 800px 100%; animation: shimmer 1.4s infinite linear; }
+.sk-line--short { width: 40%; }
+.sk-line--med   { width: 60%; }
+.sk-line--full  { width: 90%; }
+.sk-footer { height: 36px; border-top: 1px solid #f1f5f9; background: linear-gradient(90deg, #f8fafc 25%, #f1f5f9 50%, #f8fafc 75%); background-size: 800px 100%; animation: shimmer 1.4s infinite linear; }
 
 .properties-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
 /* Grid density picker — sets the auto-fill floor (a target at the current width, not a

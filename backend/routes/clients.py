@@ -1,5 +1,6 @@
 import secrets
 import string
+import time
 import types
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required
@@ -7,6 +8,29 @@ from sqlalchemy.orm import defer
 from models import db, Client, User
 
 clients_bp = Blueprint('clients', __name__)
+
+# ── Clients list cache ───────────────────────────────────────────────────────
+# get_clients() returns the same data for every user (no per-user filtering),
+# so a single global key is enough. Busted on any client create/update/delete.
+_CLIENTS_CACHE: dict = {}
+_CLIENTS_CACHE_TTL = 300  # 5 minutes
+_CLIENTS_CACHE_KEY = 'all'
+
+
+def _clients_cache_get():
+    entry = _CLIENTS_CACHE.get(_CLIENTS_CACHE_KEY)
+    if entry and time.monotonic() - entry['ts'] < _CLIENTS_CACHE_TTL:
+        return entry['data']
+    return None
+
+
+def _clients_cache_set(data):
+    _CLIENTS_CACHE[_CLIENTS_CACHE_KEY] = {'data': data, 'ts': time.monotonic()}
+
+
+def invalidate_clients_cache():
+    """Call after any write that changes client data."""
+    _CLIENTS_CACHE.clear()
 
 def _generate_password(length=12):
     """Generate a secure random password."""
@@ -94,8 +118,13 @@ def get_clients():
     # so it must stay. `logo_inverted` (the PDF-footer variant) is only ever read on the
     # single-client GeneralSettings view — defer it here so listing clients doesn't pull
     # a second full base64 blob per client that the list never uses.
+    cached = _clients_cache_get()
+    if cached is not None:
+        return jsonify(cached)
     clients = Client.query.options(defer(Client.logo_inverted)).all()
-    return jsonify([c.to_dict(include_logo_inverted=False) for c in clients])
+    data = [c.to_dict(include_logo_inverted=False) for c in clients]
+    _clients_cache_set(data)
+    return jsonify(data)
 
 @clients_bp.route('/<int:client_id>', methods=['GET'])
 @jwt_required()
@@ -128,6 +157,7 @@ def create_client():
 
     db.session.add(client)
     db.session.commit()
+    invalidate_clients_cache()
 
     # Create one User account per email address with a shared password
     plain_password = _generate_password()
@@ -181,6 +211,7 @@ def update_client(client_id):
         client.report_footer_text_color = data['report_footer_text_color']
 
     db.session.commit()
+    invalidate_clients_cache()
 
     # Sync user accounts whenever email is present in the update payload
     if 'email' in data:
@@ -246,4 +277,5 @@ def delete_client(client_id):
     client = Client.query.get_or_404(client_id)
     db.session.delete(client)
     db.session.commit()
+    invalidate_clients_cache()
     return '', 204

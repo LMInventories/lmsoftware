@@ -5,10 +5,11 @@
  * (must include https://)
  */
 
-import express   from 'express'
-import httpProxy from 'http-proxy'
-import http      from 'http'
-import https     from 'https'
+import express     from 'express'
+import compression from 'compression'
+import httpProxy   from 'http-proxy'
+import http        from 'http'
+import https       from 'https'
 import { fileURLToPath } from 'url'
 import { dirname, join }  from 'path'
 
@@ -93,6 +94,10 @@ app.use('/api', (req, res) => {
   req.url = '/api' + req.url
   proxy.web(req, res, { target: BACKEND_URL, agent: agentFor(BACKEND_URL) })
 })
+
+// Gzip the SPA bundle (JS/CSS/HTML). Proxied /api responses are already
+// compressed upstream by Flask-Compress, so this only touches static assets.
+app.use(compression())
 
 // Serve built Vue SPA.
 // Vite hashes all asset filenames (main.abc123.js) so they can be cached forever.

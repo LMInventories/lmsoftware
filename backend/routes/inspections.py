@@ -796,25 +796,45 @@ def update_inspection(inspection_id):
         log_activity(inspection.id, 'details_added', user_id=user.id)
 
     # ── Sync Google Sheets + Calendar when scheduling fields change ─────────
+    # Runs in a background thread, same pattern as the PDF-generation thread
+    # below: Sheets/Calendar calls can take several seconds (up to 15s per
+    # call on retry) and previously blocked the HTTP response while holding
+    # one of only 4 gunicorn workers for the whole save request.
     _SYNC_FIELDS = {'conduct_date', 'inspector_id', 'inspection_type',
                     'tenant_name', 'conduct_time_preference', 'reference_number'}
     if any(k in data for k in _SYNC_FIELDS):
-        try:
-            from services.google_sheets import sync_inspection_row
-            ok, err = sync_inspection_row(inspection)
-            if not ok:
-                print(f'[sheets] non-fatal: {err}')
-        except Exception as _sheet_exc:
-            print(f'[sheets] non-fatal exception: {_sheet_exc}')
+        from flask import current_app
+        import threading
 
-        try:
-            from services.google_calendar import push_calendar_event, is_calendar_connected
-            if is_calendar_connected() and inspection.conduct_date:
-                ok, result = push_calendar_event(inspection)
-                if not ok:
-                    print(f'[calendar] non-fatal: {result}')
-        except Exception as _cal_exc:
-            print(f'[calendar] non-fatal exception: {_cal_exc}')
+        _sync_app     = current_app._get_current_object()
+        _sync_insp_id = inspection_id
+
+        def _sync_sheets_and_calendar():
+            with _sync_app.app_context():
+                from models import db as _db, Inspection as _Inspection
+                insp = _db.session.get(_Inspection, _sync_insp_id)
+                if not insp:
+                    print(f'[sync] inspection {_sync_insp_id} not found in background thread')
+                    return
+
+                try:
+                    from services.google_sheets import sync_inspection_row
+                    ok, err = sync_inspection_row(insp)
+                    if not ok:
+                        print(f'[sheets] non-fatal: {err}')
+                except Exception as _sheet_exc:
+                    print(f'[sheets] non-fatal exception: {_sheet_exc}')
+
+                try:
+                    from services.google_calendar import push_calendar_event, is_calendar_connected
+                    if is_calendar_connected() and insp.conduct_date:
+                        ok, result = push_calendar_event(insp)
+                        if not ok:
+                            print(f'[calendar] non-fatal: {result}')
+                except Exception as _cal_exc:
+                    print(f'[calendar] non-fatal exception: {_cal_exc}')
+
+        threading.Thread(target=_sync_sheets_and_calendar, daemon=False).start()
 
     # ── Generate PDF and email in a background thread ────────────────────────
     # Runs after commit and completely outside the HTTP request so the client

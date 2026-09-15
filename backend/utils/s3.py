@@ -62,8 +62,14 @@ def public_url(key: str) -> str:
 
 # ── Client factory ────────────────────────────────────────────────────────────
 
+@lru_cache(maxsize=1)
 def _make_client():
-    """Create a boto3 S3 client from environment variables."""
+    """Create (and cache) a boto3 S3 client from environment variables.
+
+    boto3 clients are thread-safe for reuse, and gunicorn's sync workers are
+    separate processes, so a single cached client per worker is safe and
+    avoids paying client-construction overhead on every S3 call.
+    """
     import boto3
     endpoint = os.environ.get('S3_ENDPOINT_URL')
     # R2 and other S3-compatible stores use their own region names.

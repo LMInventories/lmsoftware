@@ -1,17 +1,29 @@
 ﻿<script setup>
-import { ref, onMounted, computed, watch, nextTick } from 'vue'
+import { ref, shallowRef, onMounted, computed, watch, nextTick, defineAsyncComponent } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import api from '../services/api'
 import { useToast } from '../composables/useToast'
 import { useAuthStore } from '../stores/auth'
-import FullCalendar from '@fullcalendar/vue3'
 import PdfImportModal from '../components/PdfImportModal.vue'
 
 const toast = useToast()
 const authStore = useAuthStore()
-import dayGridPlugin from '@fullcalendar/daygrid'
-import timeGridPlugin from '@fullcalendar/timegrid'
-import interactionPlugin from '@fullcalendar/interaction'
+
+// FullCalendar (+ plugins) is only needed for the calendar tab, which isn't
+// the default view — load it on demand instead of bundling it into every
+// visit to the Inspections page.
+const FullCalendar = defineAsyncComponent(() => import('@fullcalendar/vue3').then(m => m.default))
+const calendarPlugins = shallowRef([])
+
+async function ensureCalendarPlugins() {
+  if (calendarPlugins.value.length) return
+  const [dayGrid, timeGrid, interaction] = await Promise.all([
+    import('@fullcalendar/daygrid'),
+    import('@fullcalendar/timegrid'),
+    import('@fullcalendar/interaction'),
+  ])
+  calendarPlugins.value = [dayGrid.default, timeGrid.default, interaction.default]
+}
 
 const router = useRouter()
 const route  = useRoute()
@@ -22,6 +34,7 @@ watch(activeTab, val => {
   localStorage.setItem('inspections_view', val)
   hideEventPopup()
   if (val === 'calendar') {
+    ensureCalendarPlugins()
     // Give FullCalendar time to mount before reading title
     setTimeout(() => {
       if (calendarRef.value) calendarTitle.value = calendarRef.value.getApi().view.title
@@ -273,7 +286,7 @@ const statusOptions = [
 
 // FullCalendar options
 const calendarOptions = computed(() => ({
-  plugins: [dayGridPlugin, timeGridPlugin, interactionPlugin],
+  plugins: calendarPlugins.value,
   initialView: calendarView.value,
   firstDay: 1,
   headerToolbar: false,
@@ -739,7 +752,19 @@ async function fetchUsers() {
   }
 }
 
-function openModal() {
+let modalDataLoaded = false
+
+async function ensureModalData() {
+  // properties/templates are only needed for the Add Inspection modal, not the
+  // list view itself — fetch them lazily on first open rather than on every
+  // mount, and only once per page visit after that.
+  if (modalDataLoaded) return
+  modalDataLoaded = true
+  await Promise.all([fetchProperties(), fetchTemplates()])
+}
+
+async function openModal() {
+  await ensureModalData()
   propertySearchQuery.value = ''
   conductDateDisplay.value = ''
   form.value = {
@@ -845,6 +870,8 @@ function viewInspection(id) {
 }
 
 onMounted(async () => {
+  if (activeTab.value === 'calendar') ensureCalendarPlugins()
+
   // Pre-apply status filter if navigated from a dashboard workflow card
   const statusParam = route.query.status
   if (statusParam) {
@@ -863,10 +890,9 @@ onMounted(async () => {
   if (doAutoOpen) {
     // Wait for the data the modal needs before opening it
     await Promise.all([
-      fetchProperties(),
+      ensureModalData(),
       !authStore.isClient ? fetchClients()   : Promise.resolve(),
       !authStore.isClient ? fetchUsers()     : Promise.resolve(),
-      fetchTemplates()
     ])
     openModal()
     if (qClientId) {
@@ -874,14 +900,11 @@ onMounted(async () => {
       await nextTick()   // let filteredProperties recompute before setting property
     }
     if (qPropertyId) form.value.property_id = qPropertyId
-  } else {
-    fetchProperties()
-    if (!authStore.isClient) {
-      fetchClients()
-      fetchUsers()
-    }
-    fetchTemplates()
+  } else if (!authStore.isClient) {
+    fetchClients()
+    fetchUsers()
   }
+  // properties/templates are fetched lazily on modal open — see ensureModalData()
 })
 </script>
 
@@ -1150,7 +1173,7 @@ onMounted(async () => {
             <button class="cal-view-btn cal-goto-btn" @click="openDatePicker">Go to Date</button>
           </div>
         </div>
-        <FullCalendar ref="calendarRef" :options="calendarOptions" />
+        <FullCalendar v-if="calendarPlugins.length" ref="calendarRef" :options="calendarOptions" />
       </div>
 
       <!-- Hover (desktop) / long-press (mobile) preview for a calendar event —

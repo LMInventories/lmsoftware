@@ -27,6 +27,14 @@ function setGridCols(n) {
   localStorage.setItem('properties_grid_cols', n)
 }
 
+// List density picker — same idea as gridCols, but a hard column count (no
+// auto-fill reflow) since List cards are text-only and don't need it.
+const listCols = ref(Number(localStorage.getItem('properties_list_cols')) || 2)
+function setListCols(n) {
+  listCols.value = n
+  localStorage.setItem('properties_list_cols', n)
+}
+
 // ── Address Lookup ────────────────────────────────────────────────────────────
 // Mode A — postcode entered  → fetch full address list, show picker
 // Mode B — street/number     → autocomplete suggestions, select → fetch postcode list
@@ -357,6 +365,13 @@ onMounted(() => { fetchProperties(); fetchClients() })
           @click="setGridCols(n)"
         >{{ n }}</button>
       </div>
+      <div v-if="activeTab === 'list'" class="tab-toggle grid-cols-picker" title="Cards per row">
+        <button
+          v-for="n in [2,3,4,5]" :key="n"
+          :class="['toggle-btn', { active: listCols === n }]"
+          @click="setListCols(n)"
+        >{{ n }}</button>
+      </div>
     </div>
 
     
@@ -412,7 +427,7 @@ onMounted(() => { fetchProperties(); fetchClients() })
     </div>
 
     <!-- List view -->
-    <div v-else class="properties-list">
+    <div v-else :class="['properties-list', 'list-cols-' + listCols]">
       <div v-for="property in filteredProperties" :key="property.id" class="property-card">
         <div class="card-body">
           <div v-if="extractPostcode(property.address)" class="card-postcode">{{ extractPostcode(property.address) }}</div>
@@ -733,8 +748,12 @@ h1 { font-size: 21px; font-weight: 700; color: #0f172a; margin: 0 0 2px; }
 .btn-delete:hover { background: #fecaca; }
 .empty-state { grid-column: 1/-1; text-align: center; padding: 60px 20px; color: #94a3b8; }
 
-/* List view — same card content as Grid, minus the cover photo, 2-up on desktop */
+/* List view — same card content as Grid, minus the cover photo */
 .properties-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+.properties-list.list-cols-2 { grid-template-columns: repeat(2, 1fr); }
+.properties-list.list-cols-3 { grid-template-columns: repeat(3, 1fr); }
+.properties-list.list-cols-4 { grid-template-columns: repeat(4, 1fr); }
+.properties-list.list-cols-5 { grid-template-columns: repeat(5, 1fr); }
 
 /* ── Modal ── */
 .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 20px; }
@@ -816,7 +835,7 @@ h1 { font-size: 21px; font-weight: 700; color: #0f172a; margin: 0 0 2px; }
 
   .properties-grid { gap: 8px; }
   .grid-cols-picker { display: none; }
-  .properties-list { grid-template-columns: 1fr; gap: 8px; }
+  .properties-list { grid-template-columns: 1fr !important; gap: 8px; }
 
   /* Property cards: overview photo full-width on mobile */
   .property-overview-photo {

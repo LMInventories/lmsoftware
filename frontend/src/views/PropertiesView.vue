@@ -320,11 +320,6 @@ function openMapForProperty(property) {
   window.open('https://www.google.com/maps/search/' + encodeURIComponent(property.address), '_blank')
 }
 
-function openAllInMaps() {
-  if (filteredProperties.value.length === 0) return
-  window.open('https://www.google.com/maps/search/' + encodeURIComponent(filteredProperties.value[0].address), '_blank')
-}
-
 onMounted(() => { fetchProperties(); fetchClients() })
 </script>
 
@@ -353,7 +348,7 @@ onMounted(() => { fetchProperties(); fetchClients() })
       <button @click="clearFilters" class="btn-clear">Clear</button>
       <div class="tab-toggle">
         <button :class="['toggle-btn', { active: activeTab==='grid' }]" @click="activeTab='grid'">Grid</button>
-        <button :class="['toggle-btn', { active: activeTab==='map' }]" @click="activeTab='map'">Map</button>
+        <button :class="['toggle-btn', { active: activeTab==='list' }]" @click="activeTab='list'">List</button>
       </div>
       <div v-if="activeTab === 'grid'" class="tab-toggle grid-cols-picker" title="Cards per row (target — still adapts to window width)">
         <button
@@ -416,43 +411,31 @@ onMounted(() => { fetchProperties(); fetchClients() })
       </div>
     </div>
 
-    <!-- Map view -->
-    <div v-else class="map-view">
-      <div class="map-sidebar">
-        <div class="map-sidebar-header">{{ filteredProperties.length }} properties</div>
-        <div class="map-list">
-          <div v-for="property in filteredProperties" :key="property.id" class="map-list-item" @click="openMapForProperty(property)">
-            <div class="mli-pin">↗</div>
-            <div class="mli-body">
-              <div class="mli-addr">{{ property.address }}</div>
-              <div class="mli-meta">
-                <span v-if="property.client_name" class="mli-client">{{ property.client_name }}</span>
-                <span v-if="property.bedrooms" class="mli-spec">{{ property.bedrooms }}B</span>
-              </div>
-            </div>
-            <button @click.stop="router.push(`/properties/${property.id}`)" class="mli-view-btn">View</button>
+    <!-- List view -->
+    <div v-else class="properties-list">
+      <div v-for="property in filteredProperties" :key="property.id" class="property-card">
+        <div class="card-body">
+          <div v-if="extractPostcode(property.address)" class="card-postcode">{{ extractPostcode(property.address) }}</div>
+          <h3 class="card-address">{{ property.address }}</h3>
+          <div v-if="property.client_name" class="card-client">{{ property.client_name }}</div>
+          <div class="card-specs">
+            <span v-if="property.bedrooms" class="spec-chip">{{ property.bedrooms }} bed</span>
+            <span v-if="property.bathrooms" class="spec-chip">{{ property.bathrooms }} bath</span>
+            <span v-if="property.furnished" class="spec-chip">{{ property.furnished }}</span>
+            <span v-if="property.parking" class="spec-chip">Parking</span>
+            <span v-if="property.garden" class="spec-chip">Garden</span>
+            <span v-if="property.elevator" class="spec-chip">Lift</span>
           </div>
-          <div v-if="filteredProperties.length === 0" class="map-empty-list">No properties to show.</div>
+        </div>
+        <div class="card-footer">
+          <button @click="openMapForProperty(property)" class="btn-map" title="View on map">Map</button>
+          <button @click="router.push(`/properties/${property.id}`)" class="btn-view">View</button>
+          <button @click="openEditModal(property)" class="btn-edit">Edit</button>
+          <button @click="deleteProperty(property.id)" class="btn-delete">Delete</button>
         </div>
       </div>
-      <div class="map-canvas">
-        <div class="map-bg">
-          <div class="map-grid-overlay"></div>
-          <div class="map-content">
-            <div class="map-pins-wrap">
-              <div v-for="(p, i) in filteredProperties.slice(0,16)" :key="p.id" class="map-pin-chip" :style="{ animationDelay: (i*35)+'ms' }" @click="openMapForProperty(p)">
-                <span>↗</span>
-                <span class="pin-txt">{{ extractPostcode(p.address) || p.address.split(',').pop()?.trim() }}</span>
-              </div>
-            </div>
-            <div v-if="filteredProperties.length > 16" class="map-overflow">+{{ filteredProperties.length - 16 }} more</div>
-            <div v-if="filteredProperties.length > 0" class="map-cta">
-              <button class="btn-open-maps" @click="openAllInMaps">Open in Google Maps</button>
-              <span class="map-hint">Click any pin or use the list to open in Maps</span>
-            </div>
-            <div v-if="filteredProperties.length === 0" class="map-no-props">No properties to display</div>
-          </div>
-        </div>
+      <div v-if="filteredProperties.length === 0" class="empty-state">
+        {{ filters.client_id || filters.postcode ? 'No properties match your filters.' : 'No properties yet. Add your first property!' }}
       </div>
     </div>
 
@@ -750,37 +733,8 @@ h1 { font-size: 21px; font-weight: 700; color: #0f172a; margin: 0 0 2px; }
 .btn-delete:hover { background: #fecaca; }
 .empty-state { grid-column: 1/-1; text-align: center; padding: 60px 20px; color: #94a3b8; }
 
-/* Map */
-.map-view { display: grid; grid-template-columns: 300px 1fr; gap: 12px; min-height: 560px; }
-.map-sidebar { background: white; border: 1px solid #e9ecef; border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; }
-.map-sidebar-header { padding: 10px 13px; background: #fafbfc; border-bottom: 1px solid #f1f5f9; font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.4px; }
-.map-list { flex: 1; overflow-y: auto; }
-.map-list-item { display: flex; align-items: flex-start; gap: 7px; padding: 9px 12px; border-bottom: 1px solid #f8fafc; cursor: pointer; transition: background 0.1s; }
-.map-list-item:hover { background: #f8fafc; }
-.mli-pin { font-size: 13px; flex-shrink: 0; margin-top: 1px; }
-.mli-body { flex: 1; min-width: 0; }
-.mli-addr { font-size: 11px; font-weight: 600; color: #1e293b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.mli-meta { display: flex; gap: 5px; margin-top: 2px; }
-.mli-client { font-size: 10px; color: #6366f1; font-weight: 600; }
-.mli-spec { font-size: 10px; color: #94a3b8; }
-.mli-view-btn { padding: 3px 8px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 4px; font-size: 10px; font-weight: 600; color: #16a34a; cursor: pointer; white-space: nowrap; align-self: center; }
-.mli-view-btn:hover { background: #dcfce7; }
-.map-empty-list { padding: 30px; text-align: center; color: #cbd5e1; font-size: 12px; font-style: italic; }
-.map-canvas { background: white; border: 1px solid #e9ecef; border-radius: 10px; overflow: hidden; }
-.map-bg { width: 100%; height: 100%; min-height: 400px; background: linear-gradient(135deg, #eef2f7 0%, #e8ecf5 100%); position: relative; display: flex; align-items: center; justify-content: center; }
-.map-grid-overlay { position: absolute; inset: 0; background-image: linear-gradient(rgba(99,102,241,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(99,102,241,0.05) 1px, transparent 1px); background-size: 40px 40px; }
-.map-content { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center; gap: 18px; padding: 24px; width: 100%; }
-.map-pins-wrap { display: flex; flex-wrap: wrap; gap: 7px; justify-content: center; max-width: 520px; }
-.map-pin-chip { display: flex; align-items: center; gap: 4px; background: white; border: 1px solid #e2e8f0; border-radius: 20px; padding: 5px 11px; cursor: pointer; transition: all 0.15s; box-shadow: 0 1px 4px rgba(0,0,0,0.06); animation: pop-in 0.3s ease both; font-size: 12px; }
-.map-pin-chip:hover { border-color: #6366f1; box-shadow: 0 2px 8px rgba(99,102,241,0.15); transform: translateY(-2px); }
-.pin-txt { font-size: 11px; font-weight: 600; color: #374151; }
-@keyframes pop-in { from { opacity:0; transform: scale(0.8) translateY(4px); } to { opacity:1; transform: scale(1) translateY(0); } }
-.map-overflow { font-size: 12px; color: #94a3b8; }
-.map-cta { display: flex; flex-direction: column; align-items: center; gap: 5px; }
-.btn-open-maps { padding: 8px 18px; background: #6366f1; color: white; border: none; border-radius: 7px; font-size: 12px; font-weight: 600; cursor: pointer; }
-.btn-open-maps:hover { background: #4f46e5; }
-.map-hint { font-size: 10px; color: #94a3b8; }
-.map-no-props { color: #cbd5e1; font-size: 13px; }
+/* List view — same card content as Grid, minus the cover photo, 2-up on desktop */
+.properties-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
 
 /* ── Modal ── */
 .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 20px; }
@@ -843,7 +797,6 @@ h1 { font-size: 21px; font-weight: 700; color: #0f172a; margin: 0 0 2px; }
 .btn-inspect { padding: 7px 14px; background: #ecfdf5; color: #047857; border: 1px solid #6ee7b7; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
 .btn-inspect:hover { background: #d1fae5; border-color: #34d399; }
 
-@media (max-width: 900px) { .map-view { grid-template-columns: 1fr; } .map-bg { min-height: 300px; } }
 @media (max-width: 640px) { .modal-cols { grid-template-columns: 1fr; } .modal-col-divider { border-left: none; border-top: 1px solid #f1f5f9; } }
 
 /* ══════════════════════════════════════
@@ -863,6 +816,7 @@ h1 { font-size: 21px; font-weight: 700; color: #0f172a; margin: 0 0 2px; }
 
   .properties-grid { gap: 8px; }
   .grid-cols-picker { display: none; }
+  .properties-list { grid-template-columns: 1fr; gap: 8px; }
 
   /* Property cards: overview photo full-width on mobile */
   .property-overview-photo {

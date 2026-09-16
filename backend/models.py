@@ -779,3 +779,49 @@ class SystemSetting(db.Model):
     id    = db.Column(db.Integer, primary_key=True)
     key   = db.Column(db.String(100), unique=True, nullable=False)
     value = db.Column(db.Text)
+
+
+class TelegramLink(db.Model):
+    """1:1 mapping between a staff User and the Telegram chat they linked."""
+    __tablename__ = 'telegram_links'
+
+    id                   = db.Column(db.Integer, primary_key=True)
+    user_id              = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, unique=True, index=True)
+    chat_id              = db.Column(db.BigInteger, nullable=False, unique=True, index=True)
+    telegram_username    = db.Column(db.String(100))
+    telegram_first_name  = db.Column(db.String(100))
+    linked_at            = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    user = db.relationship('User', backref=db.backref('telegram_link', uselist=False))
+
+    def to_dict(self):
+        return {
+            'telegram_username':   self.telegram_username,
+            'telegram_first_name': self.telegram_first_name,
+            'linked_at':           self.linked_at.isoformat() if self.linked_at else None,
+        }
+
+
+class TelegramLinkCode(db.Model):
+    """Short-lived one-time code a user sends to the bot to link their chat."""
+    __tablename__ = 'telegram_link_codes'
+
+    id         = db.Column(db.Integer, primary_key=True)
+    code       = db.Column(db.String(16), nullable=False, unique=True, index=True)
+    user_id    = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    expires_at = db.Column(db.DateTime, nullable=False)
+    used_at    = db.Column(db.DateTime, nullable=True)
+
+
+class TelegramSession(db.Model):
+    """DB-backed slot-filling state per chat — must not be in-process, the
+    backend runs multiple Gunicorn workers so any webhook call can land on any of them."""
+    __tablename__ = 'telegram_sessions'
+
+    id                   = db.Column(db.Integer, primary_key=True)
+    chat_id              = db.Column(db.BigInteger, nullable=False, unique=True, index=True)
+    state                = db.Column(db.String(30), default='idle', nullable=False)  # idle | awaiting_field | awaiting_confirmation
+    pending_tool         = db.Column(db.String(30))                                  # 'create_property' | 'book_inspection'
+    pending_action_json  = db.Column(db.Text)                                        # accumulated tool args, JSON-encoded
+    updated_at           = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))

@@ -185,6 +185,7 @@ def create_app():
         ('routes.dropbox_integration', 'dropbox_bp',      '/api/dropbox'),
         ('routes.slack_integration',   'slack_bp',        '/api/slack'),
         ('routes.zapier',          'zapier_bp',           '/api/zapier'),
+        ('routes.telegram_integration', 'telegram_bp',    '/api/telegram'),
     ]
     import importlib
     for module_name, bp_name, prefix in _optional:

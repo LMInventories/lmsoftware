@@ -21,6 +21,7 @@ python3 migrate_floor_plan_scans.py          || echo "migrate_floor_plan_scans: 
 python3 migrate_floor_plans.py               || echo "migrate_floor_plans: skipped or already done"
 python3 migrate_floor_plan_levels.py         || echo "migrate_floor_plan_levels: skipped or already done"
 python3 migrate_inspection_activity.py       || echo "migrate_inspection_activity: skipped or already done"
+python3 migrate_telegram.py                  || echo "migrate_telegram: skipped or already done"
 
 echo "==> Starting Gunicorn..."
 exec gunicorn app:app --config gunicorn.conf.py

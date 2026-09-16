@@ -243,6 +243,51 @@ async function saveSlackChannel() {
   }
 }
 
+// ── Telegram — per-user chat linking ──────────────────────────────────────
+// Unlike the other integrations here, this isn't one workspace-wide OAuth
+// connection — every staff member links their own Telegram chat to their own
+// login, so the bot can act as them (same role permissions as the webapp).
+const showTelegramPanel  = ref(false)
+const telegramStatus     = ref({ linked: false, telegram_username: '', telegram_first_name: '', linked_at: '' })
+const telegramGenerating = ref(false)
+const telegramUnlinking  = ref(false)
+const telegramCode       = ref(null)   // { code, expires_at, bot_username } | null
+
+async function loadTelegramStatus() {
+  try {
+    const res = await api.http.get('/api/telegram/status')
+    telegramStatus.value = res.data
+  } catch (e) {
+    // Not linked yet — keep defaults
+  }
+}
+
+async function generateTelegramCode() {
+  telegramGenerating.value = true
+  try {
+    const res = await api.http.post('/api/telegram/link-code')
+    telegramCode.value = res.data
+  } catch (e) {
+    alert(e.response?.data?.error || 'Failed to generate a code — please try again.')
+  } finally {
+    telegramGenerating.value = false
+  }
+}
+
+async function unlinkTelegram() {
+  if (!confirm('Unlink Telegram? You will no longer be able to book inspections or create properties from the bot.')) return
+  telegramUnlinking.value = true
+  try {
+    await api.http.delete('/api/telegram/unlink')
+    telegramStatus.value = { linked: false, telegram_username: '', telegram_first_name: '', linked_at: '' }
+    telegramCode.value = null
+  } catch (e) {
+    alert('Failed to unlink — please try again.')
+  } finally {
+    telegramUnlinking.value = false
+  }
+}
+
 // ── Zapier — API key groundwork ───────────────────────────────────────────
 // Zapier doesn't have a "connect account" login screen — a real integration
 // means InspectPro gets listed on Zapier's platform and Zapier's own users
@@ -358,6 +403,7 @@ onMounted(async () => {
     loadSlackStatus(),
     loadSlackChannelSettings(),
     loadZapierStatus(),
+    loadTelegramStatus(),
   ])
 
   // Handle redirect-back from an OAuth provider
@@ -429,6 +475,17 @@ const integrations = [
     status: 'available',
     badge: 'Free tier',
     slackOAuth: true,
+  },
+  {
+    id: 'telegram',
+    category: 'Communication',
+    name: 'Telegram Bot',
+    logo: 'https://cdn.simpleicons.org/telegram',
+    description: 'Book inspections and create properties by texting the InspectPro bot in plain English. Each team member links their own account — the bot always confirms before creating anything.',
+    color: '#26A5E4',
+    status: 'available',
+    badge: 'Free',
+    configurable: true,
   },
   {
     id: 'ms_teams',
@@ -573,6 +630,7 @@ function handleConnect(integration) {
   if (integration.configurable) {
     if (integration.id === 'google_sheets') { showSheetsPanel.value = true }
     if (integration.id === 'zapier') { showZapierPanel.value = true }
+    if (integration.id === 'telegram') { showTelegramPanel.value = true; telegramCode.value = null }
     return
   }
   if (isAnyOAuth(integration)) {
@@ -672,6 +730,7 @@ function handleConnect(integration) {
               integration.status !== 'available' ? 'int-btn--soon' :
               (isAnyOAuth(integration) && oauthProviderConnected(integration)) ? 'int-btn--configured' :
               (integration.id === 'zapier' && zapierStatus.configured) ? 'int-btn--configured' :
+              (integration.id === 'telegram' && telegramStatus.linked) ? 'int-btn--configured' :
               'int-btn--connect'
             ]"
             @click="handleConnect(integration)"
@@ -681,6 +740,7 @@ function handleConnect(integration) {
             <span v-else-if="isAnyOAuth(integration) && isOAuthConnected(integration)">✓ Connected — Disconnect</span>
             <span v-else-if="isAnyOAuth(integration) && oauthProviderConnected(integration) && !isOAuthConnected(integration)">Re-authorise →</span>
             <span v-else-if="integration.id === 'zapier' && zapierStatus.configured">✓ Configured — Manage</span>
+            <span v-else-if="integration.id === 'telegram' && telegramStatus.linked">✓ Linked — Manage</span>
             <span v-else-if="integration.status === 'available'">Connect →</span>
             <span v-else>Notify Me</span>
           </button>
@@ -953,6 +1013,54 @@ function handleConnect(integration) {
           </button>
           <button class="btn-primary" :disabled="zapierGenerating" @click="generateZapierKey">
             {{ zapierGenerating ? 'Generating…' : (zapierStatus.configured ? 'Regenerate Key' : 'Generate Key') }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Telegram — link panel -->
+    <div v-if="showTelegramPanel" class="modal-overlay" @click.self="showTelegramPanel = false">
+      <div class="modal modal--wide">
+        <div class="modal-icon" style="font-size:28px;">💬</div>
+        <h3>Telegram Bot</h3>
+        <p class="modal-sub">
+          Link your account, then message the bot in plain English — "book an inspection at
+          12 Smith St for Thursday" or "add a new property for Acme Lettings". It always shows
+          you a summary and waits for your confirmation before creating anything.
+        </p>
+
+        <div v-if="telegramStatus.linked" class="config-notice">
+          ✅ Linked to Telegram{{ telegramStatus.telegram_username ? ' as @' + telegramStatus.telegram_username : '' }}.
+        </div>
+
+        <template v-else>
+          <div v-if="!telegramCode" class="config-status config-status--warn">
+            ⚠ Not linked yet — generate a code below and send it to the bot.
+          </div>
+          <div v-else class="config-notice">
+            <strong>Message the bot to finish linking:</strong>
+            <div style="margin-top:8px; font-size:13px;">
+              1. Open Telegram and search for
+              <strong>{{ telegramCode.bot_username ? '@' + telegramCode.bot_username : 'the InspectPro bot' }}</strong><br>
+              2. Send it:
+              <code style="background:#f1f5f9; padding:2px 6px; border-radius:5px;">/link {{ telegramCode.code }}</code>
+            </div>
+            <p class="field-hint" style="margin-top:8px;">Code expires at {{ new Date(telegramCode.expires_at).toLocaleTimeString() }}.</p>
+          </div>
+        </template>
+
+        <div class="modal-actions">
+          <button class="btn-secondary" @click="showTelegramPanel = false">Close</button>
+          <button
+            v-if="telegramStatus.linked"
+            class="btn-secondary"
+            :disabled="telegramUnlinking"
+            @click="unlinkTelegram"
+          >
+            {{ telegramUnlinking ? 'Unlinking…' : 'Unlink' }}
+          </button>
+          <button v-else class="btn-primary" :disabled="telegramGenerating" @click="generateTelegramCode">
+            {{ telegramGenerating ? 'Generating…' : (telegramCode ? 'Generate New Code' : 'Generate Code') }}
           </button>
         </div>
       </div>

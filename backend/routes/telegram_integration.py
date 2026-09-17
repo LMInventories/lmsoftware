@@ -1,11 +1,13 @@
 """
 routes/telegram_integration.py
 ─────────────────────────────────
-Lets staff book inspections and create properties by texting a Telegram bot
-in free text. Unlike Google/Microsoft/Dropbox/Slack/Zapier (all outbound,
-OAuth or self-issued-key authenticated), this module owns the one genuinely
-public, unauthenticated-by-JWT endpoint in the app: Telegram's webhook POSTs
-here directly. It's gated instead by a secret path segment AND Telegram's
+Lets staff book inspections, create properties, reschedule inspections, and
+share completed reports by texting a Telegram bot in free text (or via the
+/property, /inspection, /share commands). Unlike Google/Microsoft/Dropbox/
+Slack/Zapier (all outbound, OAuth or self-issued-key authenticated), this
+module owns the one genuinely public, unauthenticated-by-JWT endpoint in the
+app: Telegram's webhook POSTs here directly. It's gated instead by a secret
+path segment AND Telegram's
 `X-Telegram-Bot-Api-Secret-Token` header, both checked with a constant-time
 compare before anything else runs.
 
@@ -187,8 +189,10 @@ def _execute_pending_action(session, user):
         elif tool_name == 'book_inspection':
             ref = body.get('reference_number') or f"#{body.get('id')}"
             _send_message(session.chat_id, f"✅ Inspection booked: {ref} at {body.get('property_address', resolved.get('property_address'))}")
-        else:
+        elif tool_name == 'update_inspection':
             _send_message(session.chat_id, f"✅ Inspection updated at {resolved.get('property_address')}.")
+        else:
+            _send_message(session.chat_id, f"✅ Report sent to {', '.join(resolved.get('emails', []))}.")
     elif resp.status_code in (401, 403):
         _reset_session(session)
         _send_message(session.chat_id, "You don't have permission to do that.")
@@ -275,6 +279,7 @@ _HELP_TEXT = (
     '• /inspection — step-by-step form to book an inspection\n'
     '• To reschedule or change an inspection, just tell me, e.g. "move the check-out '
     'at 12 Smith St to next Friday"\n'
+    '• /share — send a completed report\'s PDF to the client and/or tenant\n'
     '• /cancel — cancel whatever we\'re doing'
 )
 
@@ -297,6 +302,11 @@ def _handle_command(session, text):
         return True
     if cmd == '/inspection':
         _start_wizard(session, 'book_inspection')
+        return True
+    if cmd == '/share':
+        # No wizard needed — share_report's own resolver already asks for the
+        # property and then who to send to, one question at a time.
+        _advance_session(session, 'share_report', {})
         return True
     return False
 
@@ -402,10 +412,11 @@ def _handle_text_message(message):
 
     forced_tool = session.pending_tool if session.state == 'awaiting_field' else None
 
-    # A bare number while update_inspection is disambiguating "which inspection?"
-    # is a pick, not free text to re-parse — re-parsing "2" would just make the
-    # model guess a nonsense property address out of a single digit.
-    if forced_tool == 'update_inspection' and text.strip().isdigit():
+    # A bare number while update_inspection/share_report is disambiguating
+    # "which inspection?" is a pick, not free text to re-parse — re-parsing
+    # "2" would just make the model guess a nonsense property address out of
+    # a single digit.
+    if forced_tool in ('update_inspection', 'share_report') and text.strip().isdigit():
         _advance_session(session, forced_tool, {'_pick': text.strip()})
         return
 

@@ -87,6 +87,22 @@ _TOOLS = [
             'required': ['property_address_fragment'],
         },
     },
+    {
+        'name': 'share_report',
+        'description': "Email a completed inspection's PDF report to the client, the tenant, or another address.",
+        'input_schema': {
+            'type': 'object',
+            'properties': {
+                'property_address_fragment': {'type': 'string', 'description': 'Any part of the address of the completed report to share'},
+                'recipients': {
+                    'type': 'string',
+                    'description': 'Who to send it to, if mentioned — "client", "tenant", "client and tenant", or an email address / comma-separated addresses',
+                },
+                'notes': {'type': 'string', 'description': 'A short note to include in the email, if mentioned'},
+            },
+            'required': ['property_address_fragment'],
+        },
+    },
 ]
 
 _DATE_TOOL = [{
@@ -104,14 +120,15 @@ def _system_prompt() -> str:
     today = datetime.now(timezone.utc).astimezone().strftime('%A %d %B %Y')
     return (
         f"Today is {today}. You help staff at a UK property inspection company book "
-        "inspections, create properties, and reschedule or update existing inspections by "
-        "extracting structured data from free-text chat messages. Normalize relative dates "
-        "(\"Thursday\", \"next week\") to ISO YYYY-MM-DD using today's date above. Use "
-        "update_inspection whenever the message describes changing something about an "
-        "inspection that likely already exists (moving a date, reassigning an inspector, "
-        "changing a tenant email) rather than creating a new one. If the message doesn't "
-        "relate to any of these, do not call any tool — just reply naturally, briefly "
-        "explaining what you can help with."
+        "inspections, create properties, reschedule or update existing inspections, and "
+        "share completed reports by extracting structured data from free-text chat "
+        "messages. Normalize relative dates (\"Thursday\", \"next week\") to ISO "
+        "YYYY-MM-DD using today's date above. Use update_inspection whenever the message "
+        "describes changing something about an inspection that likely already exists "
+        "(moving a date, reassigning an inspector, changing a tenant email) rather than "
+        "creating a new one. Use share_report when the message is about sending, emailing, "
+        "or sharing a finished report. If the message doesn't relate to any of these, do "
+        "not call any tool — just reply naturally, briefly explaining what you can help with."
     )
 
 
@@ -346,10 +363,111 @@ def resolve_update_inspection(raw: dict):
     return resolved, None
 
 
+def _parse_recipients(raw_value, client_email, tenant_email):
+    """Returns (emails: list[str]|None, error: str|None).
+    emails is None when we still need to ask who to send it to."""
+    if not raw_value:
+        return None, None
+    v = raw_value.strip().lower()
+    if v == 'client':
+        if client_email:
+            return [client_email], None
+        return None, 'No client email is on file — who should I send it to instead?'
+    if v == 'tenant':
+        if tenant_email:
+            return [tenant_email], None
+        return None, 'No tenant email is on file — who should I send it to instead?'
+    if v in ('both', 'client and tenant', 'tenant and client', 'client & tenant'):
+        emails = [e for e in (client_email, tenant_email) if e]
+        if emails:
+            return emails, None
+        return None, 'Neither a client nor tenant email is on file — who should I send it to?'
+    if '@' in raw_value:
+        import re
+        found = re.findall(r'[^\s,;]+@[^\s,;]+\.[^\s,;]+', raw_value)
+        if found:
+            return found, None
+        return None, "That doesn't look like a valid email address — who should I send it to?"
+    return None, None
+
+
+def resolve_share_report(raw: dict):
+    """Find the completed report being shared and who to send it to.
+
+    Like resolve_update_inspection, supports a numeric raw['_pick'] (1-based)
+    when a property has more than one completed report to disambiguate."""
+    frag = (raw.get('property_address_fragment') or '').strip()
+    if not frag:
+        return None, "Which property's report do you want to share? (give me the address)"
+
+    from models import Property
+    prop_matches = Property.query.filter(Property.address.ilike(f'%{frag}%')).limit(6).all()
+    if len(prop_matches) == 0:
+        return None, f'I couldn\'t find a property matching "{frag}" — could you give me more of the address?'
+    if len(prop_matches) > 1:
+        addrs = '; '.join(f'"{p.address}"' for p in prop_matches)
+        return None, f'I found more than one property matching "{frag}": {addrs}. Which one did you mean?'
+    prop = prop_matches[0]
+
+    from models import Inspection
+    candidates = (
+        Inspection.query
+        .filter(Inspection.property_id == prop.id, Inspection.status == 'complete', Inspection.report_data.isnot(None))
+        .order_by(Inspection.conduct_date.desc())
+        .all()
+    )
+    if not candidates:
+        return None, f'I couldn\'t find a completed report at "{prop.address}" to share.'
+
+    pick = raw.get('_pick')
+    if pick is not None:
+        try:
+            target = candidates[int(pick) - 1]
+        except (ValueError, IndexError):
+            return None, f'That\'s not one of the options — reply with a number from 1 to {len(candidates)}.'
+    elif len(candidates) == 1:
+        target = candidates[0]
+    else:
+        lines = [f'I found {len(candidates)} completed reports at "{prop.address}" — which one?']
+        for i, insp in enumerate(candidates, 1):
+            date_label = insp.conduct_date.strftime('%a %d %b %Y') if insp.conduct_date else 'no date'
+            lines.append(f'{i}. {insp.inspection_type.replace("_", " ").title()} — {date_label}')
+        lines.append('Reply with the number.')
+        return None, '\n'.join(lines)
+
+    client_email = (prop.client.email if prop.client else None) or None
+    tenant_email = target.tenant_email or None
+
+    emails, err = _parse_recipients(raw.get('recipients'), client_email, tenant_email)
+    if err:
+        return None, err
+    if emails is None:
+        options = []
+        if client_email:
+            options.append(f'"client" for {prop.client.name} ({client_email})')
+        if tenant_email:
+            options.append(f'"tenant" for {tenant_email}')
+        if options:
+            prompt = 'Who should I send the report to? Reply ' + ' or '.join(options) + ', or type an email address directly.'
+        else:
+            prompt = 'No client or tenant email is on file for this property — what email address should I send the report to?'
+        return None, prompt
+
+    resolved = {
+        'inspection_id':    target.id,
+        'property_address': prop.address,
+        'inspection_type':  target.inspection_type,
+        'emails':            emails,
+        'notes':             (raw.get('notes') or '').strip() or None,
+    }
+    return resolved, None
+
+
 RESOLVERS = {
     'create_property':   resolve_create_property,
     'book_inspection':   resolve_book_inspection,
     'update_inspection': resolve_update_inspection,
+    'share_report':      resolve_share_report,
 }
 
 
@@ -407,10 +525,23 @@ def summarize_update_inspection(resolved: dict) -> str:
     return '\n'.join(lines)
 
 
+def summarize_share_report(resolved: dict) -> str:
+    lines = [
+        'Share this report?',
+        f"• Property: {resolved['property_address']} ({resolved['inspection_type'].replace('_', ' ').title()})",
+        f"• Send to: {', '.join(resolved['emails'])}",
+    ]
+    if resolved.get('notes'):
+        lines.append(f"• Note: {resolved['notes']}")
+    lines.append('Reply YES to confirm, or tell me what to change.')
+    return '\n'.join(lines)
+
+
 SUMMARIZERS = {
     'create_property':   summarize_property,
     'book_inspection':   summarize_inspection,
     'update_inspection': summarize_update_inspection,
+    'share_report':      summarize_share_report,
 }
 
 
@@ -452,19 +583,28 @@ def build_update_inspection_payload(resolved: dict) -> dict:
     return payload
 
 
+def build_share_report_payload(resolved: dict) -> dict:
+    payload = {'emails': resolved['emails']}
+    if resolved.get('notes'):
+        payload['notes'] = resolved['notes']
+    return payload
+
+
 BUILD_PAYLOAD = {
     'create_property':   build_property_payload,
     'book_inspection':   build_inspection_payload,
     'update_inspection': build_update_inspection_payload,
+    'share_report':       build_share_report_payload,
 }
 
 # Each entry describes the internal HTTP call _execute_pending_action makes to
-# apply a confirmed action — method + a path builder (update needs the target
-# inspection's id, resolved earlier by resolve_update_inspection).
+# apply a confirmed action — method + a path builder (update/share need the
+# target inspection's id, resolved earlier by the corresponding resolver).
 ACTION_CONFIG = {
     'create_property':   {'method': 'POST', 'path': lambda resolved: '/api/properties'},
     'book_inspection':   {'method': 'POST', 'path': lambda resolved: '/api/inspections'},
     'update_inspection': {'method': 'PUT',  'path': lambda resolved: f"/api/inspections/{resolved['inspection_id']}"},
+    'share_report':       {'method': 'POST', 'path': lambda resolved: f"/api/inspections/{resolved['inspection_id']}/share-pdf"},
 }
 
 

@@ -47,7 +47,9 @@ from routes.telegram_intent import (
     RESOLVERS,
     SUMMARIZERS,
     BUILD_PAYLOAD,
-    API_ENDPOINT,
+    ACTION_CONFIG,
+    WIZARD_STEPS,
+    coerce_wizard_answer,
 )
 
 telegram_bp = Blueprint('telegram', __name__)
@@ -159,14 +161,15 @@ def _execute_pending_action(session, user):
     except (TypeError, ValueError):
         resolved = {}
 
-    endpoint = API_ENDPOINT.get(tool_name)
+    config = ACTION_CONFIG[tool_name]
     payload = BUILD_PAYLOAD[tool_name](resolved)
     backend_url = os.environ.get('BACKEND_URL', 'https://app.lminventories.co.uk').rstrip('/')
     token = create_access_token(identity=str(user.id), expires_delta=timedelta(minutes=2))
 
     try:
-        resp = requests.post(
-            f'{backend_url}{endpoint}',
+        resp = requests.request(
+            config['method'],
+            f"{backend_url}{config['path'](resolved)}",
             json=payload,
             headers={'Authorization': f'Bearer {token}'},
             timeout=15,
@@ -181,9 +184,11 @@ def _execute_pending_action(session, user):
         _reset_session(session)
         if tool_name == 'create_property':
             _send_message(session.chat_id, f"✅ Property created: {body.get('address', payload.get('address'))}")
-        else:
+        elif tool_name == 'book_inspection':
             ref = body.get('reference_number') or f"#{body.get('id')}"
             _send_message(session.chat_id, f"✅ Inspection booked: {ref} at {body.get('property_address', resolved.get('property_address'))}")
+        else:
+            _send_message(session.chat_id, f"✅ Inspection updated at {resolved.get('property_address')}.")
     elif resp.status_code in (401, 403):
         _reset_session(session)
         _send_message(session.chat_id, "You don't have permission to do that.")
@@ -192,6 +197,108 @@ def _execute_pending_action(session, user):
         _send_message(session.chat_id, f'That didn\'t go through: {resp.text[:200]}')
     else:
         _send_message(session.chat_id, 'Something went wrong on the server — try confirming again in a moment.')
+
+
+# ── Guided forms (/property, /inspection) ───────────────────────────────────
+# A wizard walks WIZARD_STEPS[tool_name] one field at a time (session.state =
+# 'wizard', with the collected fields plus a '_step' cursor stashed in
+# pending_action_json). Once every step is answered, the collected fields are
+# handed to _advance_session exactly like a free-text parse — so ambiguous
+# matches (e.g. two clients with a similar name) fall back into the same
+# awaiting_field question flow, and both entry points share one confirmation
+# step and one write path.
+
+def _wizard_keyboard(step):
+    if not step.get('options'):
+        return None
+    buttons = [{'text': opt, 'callback_data': f'wz:{opt}'} for opt in step['options']]
+    rows = [buttons[i:i + 3] for i in range(0, len(buttons), 3)]
+    return {'inline_keyboard': rows}
+
+
+def _send_wizard_step(session, tool_name, step_index):
+    step = WIZARD_STEPS[tool_name][step_index]
+    _send_message(session.chat_id, step['prompt'], reply_markup=_wizard_keyboard(step))
+
+
+def _start_wizard(session, tool_name):
+    from models import db
+    session.state = 'wizard'
+    session.pending_tool = tool_name
+    session.pending_action_json = json.dumps({'_step': 0})
+    session.updated_at = datetime.now(timezone.utc)
+    db.session.commit()
+    _send_wizard_step(session, tool_name, 0)
+
+
+def _handle_wizard_answer(session, user, raw_text):
+    from models import db
+
+    tool_name = session.pending_tool
+    steps = WIZARD_STEPS[tool_name]
+    try:
+        state = json.loads(session.pending_action_json or '{}')
+    except (TypeError, ValueError):
+        state = {}
+    step_index = state.get('_step', 0)
+    step = steps[step_index]
+
+    answer = coerce_wizard_answer(step, raw_text)
+    if answer.error:
+        _send_message(session.chat_id, answer.error)
+        _send_wizard_step(session, tool_name, step_index)
+        return
+
+    if not answer.skipped:
+        state[step['field']] = answer.value
+
+    next_index = step_index + 1
+    if next_index < len(steps):
+        state['_step'] = next_index
+        session.pending_action_json = json.dumps(state)
+        session.updated_at = datetime.now(timezone.utc)
+        db.session.commit()
+        _send_wizard_step(session, tool_name, next_index)
+        return
+
+    collected = {k: v for k, v in state.items() if k != '_step'}
+    session.pending_action_json = None  # drop the wizard's '_step' cursor before merging into _advance_session
+    _advance_session(session, tool_name, collected)
+
+
+# ── Commands ─────────────────────────────────────────────────────────────────
+
+_HELP_TEXT = (
+    'I can help you manage inspections and properties. Try:\n'
+    '• Just tell me what you need, e.g. "book an inspection at 12 Smith St for Thursday"\n'
+    '• /property — step-by-step form to create a property with full details\n'
+    '• /inspection — step-by-step form to book an inspection\n'
+    '• To reschedule or change an inspection, just tell me, e.g. "move the check-out '
+    'at 12 Smith St to next Friday"\n'
+    '• /cancel — cancel whatever we\'re doing'
+)
+
+
+def _handle_command(session, text):
+    """Returns True if `text` was a recognized command (and has already been
+    fully handled), False if the caller should fall through to normal
+    message handling."""
+    cmd = text.split()[0].lower()
+    if cmd in ('/start', '/help'):
+        _reset_session(session)
+        _send_message(session.chat_id, _HELP_TEXT)
+        return True
+    if cmd == '/cancel':
+        _reset_session(session)
+        _send_message(session.chat_id, 'Cancelled.')
+        return True
+    if cmd == '/property':
+        _start_wizard(session, 'create_property')
+        return True
+    if cmd == '/inspection':
+        _start_wizard(session, 'book_inspection')
+        return True
+    return False
 
 
 # ── Linking ────────────────────────────────────────────────────────────────
@@ -277,6 +384,9 @@ def _handle_text_message(message):
     user = link.user
     session = _get_or_create_session(chat_id)
 
+    if text.startswith('/') and _handle_command(session, text):
+        return
+
     if session.state != 'idle' and session.updated_at:
         age = datetime.now(timezone.utc) - session.updated_at.replace(tzinfo=timezone.utc)
         if age > _STALE_SESSION_AFTER:
@@ -286,7 +396,19 @@ def _handle_text_message(message):
         _handle_confirmation_reply(session, user, text)
         return
 
+    if session.state == 'wizard':
+        _handle_wizard_answer(session, user, text)
+        return
+
     forced_tool = session.pending_tool if session.state == 'awaiting_field' else None
+
+    # A bare number while update_inspection is disambiguating "which inspection?"
+    # is a pick, not free text to re-parse — re-parsing "2" would just make the
+    # model guess a nonsense property address out of a single digit.
+    if forced_tool == 'update_inspection' and text.strip().isdigit():
+        _advance_session(session, forced_tool, {'_pick': text.strip()})
+        return
+
     intent = parse_message(text, forced_tool=forced_tool)
 
     if intent.tool_name is None:
@@ -307,6 +429,11 @@ def _handle_callback_query(cq):
     if not link:
         return
     session = _get_or_create_session(chat_id)
+
+    if session.state == 'wizard' and data.startswith('wz:'):
+        _handle_wizard_answer(session, link.user, data[len('wz:'):])
+        return
+
     if session.state != 'awaiting_confirmation':
         return
 

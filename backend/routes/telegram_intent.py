@@ -112,6 +112,35 @@ _TOOLS = [
         },
     },
     {
+        'name': 'mark_invoice_paid',
+        'description': (
+            "Mark one or more inspections' invoices as paid. Each inspection can be "
+            'identified by its reference number (e.g. "INS-101"), its property address, '
+            'or both — optionally with a date to narrow down which inspection at that '
+            'property. Supports several at once, e.g. "mark INS-101, INS-102 and 12 Smith '
+            'St as paid".'
+        ),
+        'input_schema': {
+            'type': 'object',
+            'properties': {
+                'items': {
+                    'type': 'array',
+                    'description': 'One entry per inspection to mark as paid',
+                    'items': {
+                        'type': 'object',
+                        'properties': {
+                            'reference_number':          {'type': 'string', 'description': 'e.g. "INS-101", if mentioned'},
+                            'property_address_fragment': {'type': 'string', 'description': 'Any part of the property address, if mentioned'},
+                            'date': {'type': 'string', 'description': 'ISO YYYY-MM-DD, only if a date is mentioned to help tell apart multiple inspections at the same property'},
+                        },
+                        'required': [],
+                    },
+                },
+            },
+            'required': ['items'],
+        },
+    },
+    {
         'name': 'query_schedule',
         'description': (
             "Answer a read-only question about what's scheduled or happening — a day's "
@@ -176,14 +205,17 @@ def _system_prompt() -> str:
     today = datetime.now(timezone.utc).astimezone().strftime('%A %d %B %Y')
     return (
         f"Today is {today}. You help staff at a UK property inspection company book "
-        "inspections, create properties, reschedule or update existing inspections, and "
-        "share completed reports by extracting structured data from free-text chat "
-        "messages. Normalize relative dates (\"Thursday\", \"next week\") to ISO "
+        "inspections, create properties, reschedule or update existing inspections, share "
+        "completed reports, and mark invoices paid by extracting structured data from "
+        "free-text chat messages. Normalize relative dates (\"Thursday\", \"next week\") to ISO "
         "YYYY-MM-DD using today's date above. Use update_inspection whenever the message "
         "describes changing something about an inspection that likely already exists "
         "(moving a date, reassigning an inspector, changing a tenant email) rather than "
         "creating a new one. Use share_report when the message is about sending, emailing, "
-        "or sharing a finished report. Use query_schedule for read-only questions about "
+        "or sharing a finished report. Use mark_invoice_paid when the message says an "
+        "invoice has been paid, settled, or received — it accepts several inspections at "
+        "once, identified by reference number and/or property address. Use query_schedule "
+        "for read-only questions about "
         "what's scheduled, happening, or done — a day's agenda, a property's status, an "
         "inspector's workload, or unassigned inspections — and query_availability only "
         "when asked who is free/available/busy on a given day. When a date range like "
@@ -226,8 +258,8 @@ def parse_message(text: str, *, forced_tool: str | None = None) -> ParsedIntent:
     reply_text = ''.join(b.text for b in message.content if b.type == 'text').strip()
     return ParsedIntent(reply_text=reply_text or (
         "I can create a property, book an inspection, reschedule/update one, share a "
-        "report, or answer schedule/status questions — tell me what you need, or try "
-        "/property or /inspection for a step-by-step form."
+        "report, mark invoices paid, or answer schedule/status questions — tell me what "
+        "you need, or try /property or /inspection for a step-by-step form."
     ))
 
 
@@ -525,11 +557,104 @@ def resolve_share_report(raw: dict):
     return resolved, None
 
 
+def _resolve_invoice_item(item: dict):
+    """Resolve one {reference_number?, property_address_fragment?, date?} entry to a
+    single Inspection row. Returns (inspection, reason) — reason is a short phrase
+    (not a full sentence) so several failures can be listed together in one summary,
+    e.g. "12 Smith St: more than one inspection matches"."""
+    ref = (item.get('reference_number') or '').strip()
+    frag = (item.get('property_address_fragment') or '').strip()
+    date_str = (item.get('date') or '').strip()
+
+    if not ref and not frag:
+        return None, 'give me a reference number or property address'
+
+    from models import Inspection
+    if ref:
+        matches = Inspection.query.filter(Inspection.reference_number.ilike(ref)).all()
+        if not matches:
+            matches = Inspection.query.filter(Inspection.reference_number.ilike(f'%{ref}%')).limit(6).all()
+        if len(matches) == 1:
+            return matches[0], None
+        if len(matches) > 1:
+            refs = ', '.join(m.reference_number for m in matches)
+            return None, f'more than one inspection matches reference "{ref}" ({refs})'
+        if not frag:
+            return None, f'no inspection found with reference "{ref}"'
+
+    from models import Property
+    prop_matches = Property.query.filter(Property.address.ilike(f'%{frag}%')).limit(6).all()
+    if len(prop_matches) == 0:
+        return None, f'no property matching "{frag}"'
+    if len(prop_matches) > 1:
+        addrs = '; '.join(f'"{p.address}"' for p in prop_matches)
+        return None, f'more than one property matches "{frag}" ({addrs})'
+    prop = prop_matches[0]
+
+    insp_query = Inspection.query.filter(Inspection.property_id == prop.id, Inspection.pdf_import.is_(False))
+    if date_str:
+        try:
+            target_date = datetime.fromisoformat(date_str).date()
+        except (ValueError, TypeError):
+            return None, f'couldn\'t understand the date "{date_str}"'
+        day_start = datetime.combine(target_date, datetime.min.time())
+        day_end = day_start + timedelta(days=1)
+        insp_query = insp_query.filter(Inspection.conduct_date >= day_start, Inspection.conduct_date < day_end)
+
+    candidates = insp_query.order_by(Inspection.conduct_date.desc()).all()
+    if len(candidates) == 0:
+        return None, f'no inspection found at "{prop.address}"' + (f' on {date_str}' if date_str else '')
+    if len(candidates) == 1:
+        return candidates[0], None
+    return None, (
+        f'more than one inspection at "{prop.address}"'
+        + (f' on {date_str}' if date_str else '')
+        + ' — add a date or reference number'
+    )
+
+
+def resolve_mark_invoice_paid(raw: dict):
+    """Batch resolver — unlike the single-target resolvers above, this doesn't return
+    a single "question" on partial failure. Items that resolve go to confirmation;
+    items that don't are listed as failures alongside them, so a batch of 5 with one
+    typo'd address doesn't block marking the other 4 paid. Only returns (None,
+    question) when NOTHING in the batch could be resolved."""
+    items = raw.get('items') or []
+    if not items:
+        return None, ('Which inspection(s) should I mark as paid? Give me a reference '
+                       'number or property address — you can list several at once.')
+
+    resolved_items = []
+    failures = []
+    seen_ids = set()
+    for item in items:
+        insp, reason = _resolve_invoice_item(item)
+        if insp is None:
+            label = item.get('reference_number') or item.get('property_address_fragment') or '(unspecified)'
+            failures.append(f'{label}: {reason}')
+            continue
+        if insp.id in seen_ids:
+            continue
+        seen_ids.add(insp.id)
+        resolved_items.append({
+            'inspection_id':    insp.id,
+            'reference_number': insp.reference_number or f'#{insp.id}',
+            'property_address': insp.property.address if insp.property else 'Unknown property',
+            'already_paid':     bool(insp.invoice_paid),
+        })
+
+    if not resolved_items:
+        return None, 'I couldn\'t find any of those:\n' + '\n'.join(f'• {f}' for f in failures)
+
+    return {'items': resolved_items, 'failures': failures}, None
+
+
 RESOLVERS = {
     'create_property':   resolve_create_property,
     'book_inspection':   resolve_book_inspection,
     'update_inspection': resolve_update_inspection,
     'share_report':      resolve_share_report,
+    'mark_invoice_paid': resolve_mark_invoice_paid,
 }
 
 
@@ -599,11 +724,30 @@ def summarize_share_report(resolved: dict) -> str:
     return '\n'.join(lines)
 
 
+def summarize_mark_invoice_paid(resolved: dict) -> str:
+    items = resolved.get('items', [])
+    failures = resolved.get('failures', [])
+
+    lines = ['Mark invoice paid for:']
+    for it in items:
+        tag = ' (already marked paid)' if it.get('already_paid') else ''
+        lines.append(f"• {it['reference_number']} — {it['property_address']}{tag}")
+    if failures:
+        lines.append('')
+        lines.append('Couldn\'t identify:')
+        for f in failures:
+            lines.append(f'• {f}')
+    lines.append('')
+    lines.append('Reply YES to confirm, or tell me what to change.')
+    return '\n'.join(lines)
+
+
 SUMMARIZERS = {
     'create_property':   summarize_property,
     'book_inspection':   summarize_inspection,
     'update_inspection': summarize_update_inspection,
     'share_report':      summarize_share_report,
+    'mark_invoice_paid': summarize_mark_invoice_paid,
 }
 
 
@@ -662,12 +806,19 @@ BUILD_PAYLOAD = {
 # Each entry describes the internal HTTP call _execute_pending_action makes to
 # apply a confirmed action — method + a path builder (update/share need the
 # target inspection's id, resolved earlier by the corresponding resolver).
+# mark_invoice_paid is NOT here — see MULTI_TARGET_TOOLS below, it needs one
+# HTTP call per resolved item rather than a single method+path.
 ACTION_CONFIG = {
     'create_property':   {'method': 'POST', 'path': lambda resolved: '/api/properties'},
     'book_inspection':   {'method': 'POST', 'path': lambda resolved: '/api/inspections'},
     'update_inspection': {'method': 'PUT',  'path': lambda resolved: f"/api/inspections/{resolved['inspection_id']}"},
     'share_report':       {'method': 'POST', 'path': lambda resolved: f"/api/inspections/{resolved['inspection_id']}/share-pdf"},
 }
+
+# Tools whose confirmed action means N separate writes (one per resolved item)
+# rather than the single HTTP call ACTION_CONFIG describes. telegram_integration.py's
+# _execute_pending_action branches on this before touching ACTION_CONFIG/BUILD_PAYLOAD.
+MULTI_TARGET_TOOLS = {'mark_invoice_paid'}
 
 
 # ── Read-only schedule/status queries ───────────────────────────────────────

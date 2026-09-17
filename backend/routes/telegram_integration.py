@@ -50,6 +50,7 @@ from routes.telegram_intent import (
     SUMMARIZERS,
     BUILD_PAYLOAD,
     ACTION_CONFIG,
+    MULTI_TARGET_TOOLS,
     WIZARD_STEPS,
     coerce_wizard_answer,
     READ_ONLY_TOOLS,
@@ -165,6 +166,10 @@ def _execute_pending_action(session, user):
     except (TypeError, ValueError):
         resolved = {}
 
+    if tool_name in MULTI_TARGET_TOOLS:
+        _execute_mark_invoice_paid(session, user, resolved)
+        return
+
     config = ACTION_CONFIG[tool_name]
     payload = BUILD_PAYLOAD[tool_name](resolved)
     backend_url = os.environ.get('BACKEND_URL', 'https://app.lminventories.co.uk').rstrip('/')
@@ -193,7 +198,7 @@ def _execute_pending_action(session, user):
             _send_message(session.chat_id, f"✅ Inspection booked: {ref} at {body.get('property_address', resolved.get('property_address'))}")
         elif tool_name == 'update_inspection':
             _send_message(session.chat_id, f"✅ Inspection updated at {resolved.get('property_address')}.")
-        else:
+        else:  # share_report
             _send_message(session.chat_id, f"✅ Report sent to {', '.join(resolved.get('emails', []))}.")
     elif resp.status_code in (401, 403):
         _reset_session(session)
@@ -203,6 +208,49 @@ def _execute_pending_action(session, user):
         _send_message(session.chat_id, f'That didn\'t go through: {resp.text[:200]}')
     else:
         _send_message(session.chat_id, 'Something went wrong on the server — try confirming again in a moment.')
+
+
+def _execute_mark_invoice_paid(session, user, resolved):
+    """mark_invoice_paid's confirmed items each need their own PUT — this doesn't fit
+    ACTION_CONFIG's single method+path shape, so it's a dedicated executor rather than
+    a generic one forced to handle N targets."""
+    items = resolved.get('items', [])
+    backend_url = os.environ.get('BACKEND_URL', 'https://app.lminventories.co.uk').rstrip('/')
+    token = create_access_token(identity=str(user.id), expires_delta=timedelta(minutes=2))
+
+    succeeded, failed = [], []
+    for item in items:
+        label = f"{item['reference_number']} — {item['property_address']}"
+        try:
+            resp = requests.put(
+                f"{backend_url}/api/inspections/{item['inspection_id']}",
+                json={'invoice_paid': True},
+                headers={'Authorization': f'Bearer {token}'},
+                timeout=15,
+            )
+        except requests.RequestException as e:
+            print(f'[telegram] internal API call failed for inspection {item["inspection_id"]}: {e}')
+            failed.append(f'{label}: connection error')
+            continue
+
+        if 200 <= resp.status_code < 300:
+            succeeded.append(label)
+        elif resp.status_code in (401, 403):
+            failed.append(f'{label}: no permission')
+        else:
+            failed.append(f'{label}: server error')
+
+    _reset_session(session)
+    lines = []
+    if succeeded:
+        lines.append('✅ Marked as paid:')
+        lines += [f'• {s}' for s in succeeded]
+    if failed:
+        if lines:
+            lines.append('')
+        lines.append('⚠️ Could not update:')
+        lines += [f'• {f}' for f in failed]
+    _send_message(session.chat_id, '\n'.join(lines) or 'Nothing was updated.')
 
 
 # ── Guided forms (/property, /inspection) ───────────────────────────────────
@@ -282,6 +330,8 @@ _HELP_TEXT = (
     '• To reschedule or change an inspection, just tell me, e.g. "move the check-out '
     'at 12 Smith St to next Friday"\n'
     '• /share — send a completed report\'s PDF to the client and/or tenant\n'
+    '• Mark invoices paid, e.g. "mark INS-101 and 12 Smith St as paid" — works for '
+    'several at once\n'
     '• Ask me things like "what\'s on today?", "is 12 Smith St\'s report done?", or '
     '"who\'s free tomorrow?"\n'
     '• /cancel — cancel whatever we\'re doing'

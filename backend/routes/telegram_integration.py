@@ -52,6 +52,8 @@ from routes.telegram_intent import (
     ACTION_CONFIG,
     WIZARD_STEPS,
     coerce_wizard_answer,
+    READ_ONLY_TOOLS,
+    ANSWERERS,
 )
 
 telegram_bp = Blueprint('telegram', __name__)
@@ -280,6 +282,8 @@ _HELP_TEXT = (
     '• To reschedule or change an inspection, just tell me, e.g. "move the check-out '
     'at 12 Smith St to next Friday"\n'
     '• /share — send a completed report\'s PDF to the client and/or tenant\n'
+    '• Ask me things like "what\'s on today?", "is 12 Smith St\'s report done?", or '
+    '"who\'s free tomorrow?"\n'
     '• /cancel — cancel whatever we\'re doing'
 )
 
@@ -424,6 +428,14 @@ def _handle_text_message(message):
 
     if intent.tool_name is None:
         _send_message(chat_id, intent.reply_text)
+        return
+
+    if intent.tool_name in READ_ONLY_TOOLS:
+        # Reads have no side effects — answer immediately, no session/confirm
+        # step. Only reachable here (idle-state, auto tool_choice): forced_tool
+        # during awaiting_field is always a write-tool name, so a query tool
+        # can never surface mid-flow.
+        _send_message(chat_id, ANSWERERS[intent.tool_name](intent.args, user))
         return
 
     _advance_session(session, intent.tool_name, intent.args)

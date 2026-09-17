@@ -4,10 +4,17 @@ routes/telegram_intent.py
 Free-text intent parsing for the Telegram bot integration
 (routes/telegram_integration.py).
 
-Three supported actions: create_property, book_inspection, update_inspection.
+Four write actions (create_property, book_inspection, update_inspection,
+share_report) plus two read-only ones (query_schedule, query_availability).
 Uses the Anthropic client (same pattern as backend/learning/proposal.py) with
 native tool-use so model output is structured instead of ask-for-JSON-and-
 strip-fences.
+
+The read-only tools skip the resolve->confirm->write pipeline entirely —
+there's nothing to roll back, so they answer directly from a single parse
+(see READ_ONLY_TOOLS / ANSWERERS below and telegram_integration.py's
+_handle_text_message, which branches on READ_ONLY_TOOLS before ever touching
+session/confirmation state).
 
 Also defines WIZARD_STEPS — the deterministic, no-LLM step-by-step forms
 behind the /property and /inspection commands. A wizard just walks its step
@@ -25,7 +32,8 @@ misheard or fuzzy phrase can never become a wrong foreign key on its own.
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import anthropic
 
@@ -103,6 +111,54 @@ _TOOLS = [
             'required': ['property_address_fragment'],
         },
     },
+    {
+        'name': 'query_schedule',
+        'description': (
+            "Answer a read-only question about what's scheduled or happening — a day's "
+            "agenda, a specific property's inspection/report status, what a named inspector "
+            "has on, or which inspections have no inspector assigned yet. Never changes "
+            "anything."
+        ),
+        'input_schema': {
+            'type': 'object',
+            'properties': {
+                'date': {
+                    'type': 'string',
+                    'description': (
+                        "Start date normalized to ISO YYYY-MM-DD, resolved against the "
+                        "'today' fact in the system prompt. Leave unset if the question is "
+                        "only about a property with no date mentioned."
+                    ),
+                },
+                'date_range_end': {
+                    'type': 'string',
+                    'description': (
+                        "End date (inclusive), ISO YYYY-MM-DD, only when the question spans "
+                        "a range — e.g. 'this week' means the coming Monday to Sunday. Leave "
+                        "unset for a single day or no date."
+                    ),
+                },
+                'property_address_fragment': {'type': 'string', 'description': 'Any part of a property address, if the question is about a specific property'},
+                'inspector_name': {'type': 'string', 'description': "A field inspector's name, if the question is about what a specific person has on"},
+                'unassigned_only': {'type': 'boolean', 'description': 'True only for questions specifically about inspections with no inspector assigned yet'},
+            },
+            'required': [],
+        },
+    },
+    {
+        'name': 'query_availability',
+        'description': "Answer a read-only question about which field inspectors are free or busy on a given day, e.g. \"who's free tomorrow?\". Never changes anything.",
+        'input_schema': {
+            'type': 'object',
+            'properties': {
+                'date': {
+                    'type': 'string',
+                    'description': "Date normalized to ISO YYYY-MM-DD, resolved against the 'today' fact in the system prompt. Defaults to today if not mentioned.",
+                },
+            },
+            'required': [],
+        },
+    },
 ]
 
 _DATE_TOOL = [{
@@ -127,8 +183,13 @@ def _system_prompt() -> str:
         "describes changing something about an inspection that likely already exists "
         "(moving a date, reassigning an inspector, changing a tenant email) rather than "
         "creating a new one. Use share_report when the message is about sending, emailing, "
-        "or sharing a finished report. If the message doesn't relate to any of these, do "
-        "not call any tool — just reply naturally, briefly explaining what you can help with."
+        "or sharing a finished report. Use query_schedule for read-only questions about "
+        "what's scheduled, happening, or done — a day's agenda, a property's status, an "
+        "inspector's workload, or unassigned inspections — and query_availability only "
+        "when asked who is free/available/busy on a given day. When a date range like "
+        "\"this week\" is meant, expand it to the Monday–Sunday of that week using today's "
+        "date above. If the message doesn't relate to any of these, do not call any tool — "
+        "just reply naturally, briefly explaining what you can help with."
     )
 
 
@@ -164,8 +225,9 @@ def parse_message(text: str, *, forced_tool: str | None = None) -> ParsedIntent:
 
     reply_text = ''.join(b.text for b in message.content if b.type == 'text').strip()
     return ParsedIntent(reply_text=reply_text or (
-        "I can create a property, book an inspection, or reschedule/update one — tell me what "
-        "you need, or try /property or /inspection for a step-by-step form."
+        "I can create a property, book an inspection, reschedule/update one, share a "
+        "report, or answer schedule/status questions — tell me what you need, or try "
+        "/property or /inspection for a step-by-step form."
     ))
 
 
@@ -605,6 +667,230 @@ ACTION_CONFIG = {
     'book_inspection':   {'method': 'POST', 'path': lambda resolved: '/api/inspections'},
     'update_inspection': {'method': 'PUT',  'path': lambda resolved: f"/api/inspections/{resolved['inspection_id']}"},
     'share_report':       {'method': 'POST', 'path': lambda resolved: f"/api/inspections/{resolved['inspection_id']}/share-pdf"},
+}
+
+
+# ── Read-only schedule/status queries ───────────────────────────────────────
+# No resolve->confirm->write split here — these never change anything, so
+# each ANSWERERS function runs its query and returns the reply text directly.
+
+_LONDON = ZoneInfo('Europe/London')
+
+
+def _today_london():
+    """conduct_date is a naive local wall-clock column — resolve_book_inspection and
+    the /api/inspections POST/PUT handlers both write it via datetime.fromisoformat()
+    with no timezone shift, so it holds the literal calendar date the user meant, not
+    a UTC instant. "Today" therefore has to come from the Europe/London calendar day,
+    and the query boundaries below stay naive/unshifted to match how it was written —
+    do NOT apply the UTC-conversion pattern used elsewhere for genuinely-UTC columns
+    like InspectionActivity.created_at."""
+    return datetime.now(_LONDON).date()
+
+
+def _day_bounds(d):
+    start = datetime.combine(d, datetime.min.time())
+    return start, start + timedelta(days=1)
+
+
+def _resolve_property_by_fragment(frag: str):
+    from models import Property
+    matches = Property.query.filter(Property.address.ilike(f'%{frag}%')).limit(6).all()
+    if len(matches) == 1:
+        return matches[0], None
+    if len(matches) > 1:
+        addrs = '; '.join(f'"{p.address}"' for p in matches)
+        return None, f'I found more than one property matching "{frag}": {addrs}. Could you be more specific?'
+    return None, f'I couldn\'t find a property matching "{frag}".'
+
+
+def _resolve_inspector_by_name(name: str):
+    from models import User
+    matches = User.query.filter(User.role == 'clerk', User.name.ilike(f'%{name}%')).limit(6).all()
+    if len(matches) == 1:
+        return matches[0], None
+    if len(matches) > 1:
+        names = ', '.join(u.name for u in matches)
+        return None, f'I found more than one inspector matching "{name}": {names}. Could you be more specific?'
+    return None, f'I couldn\'t find an inspector named "{name}".'
+
+
+def _resolve_query_range(raw: dict):
+    """Returns (start: date|None, end: date|None, label: str|None, error: str|None).
+    (None, None, None, None) means "no date filter" — only reachable when a property
+    fragment was given and neither date field was extracted, so a pure status lookup
+    like "is 12 Smith St's report done?" isn't silently narrowed to today."""
+    date_str = (raw.get('date') or '').strip()
+    end_str = (raw.get('date_range_end') or '').strip()
+    has_property = bool((raw.get('property_address_fragment') or '').strip())
+
+    if not date_str and not end_str:
+        if has_property:
+            return None, None, None, None
+        today = _today_london()
+        return today, today, 'today', None
+
+    try:
+        start = datetime.fromisoformat(date_str).date() if date_str else _today_london()
+    except (ValueError, TypeError):
+        return None, None, None, f'I couldn\'t understand the date "{date_str}".'
+
+    end = start
+    if end_str:
+        try:
+            end = datetime.fromisoformat(end_str).date()
+        except (ValueError, TypeError):
+            return None, None, None, f'I couldn\'t understand the date "{end_str}".'
+    if end < start:
+        start, end = end, start
+
+    label = 'today' if start == end == _today_london() else (
+        start.strftime('%a %d %b %Y') if start == end
+        else f"{start.strftime('%a %d %b')} – {end.strftime('%a %d %b %Y')}"
+    )
+    return start, end, label, None
+
+
+def _format_inspection_line(insp) -> str:
+    date_label = insp.conduct_date.strftime('%a %d %b') if insp.conduct_date else 'no date'
+    if insp.conduct_time_preference:
+        date_label += f' {insp.conduct_time_preference}'
+    address = insp.property.address if insp.property else 'Unknown property'
+    kind = insp.inspection_type.replace('_', ' ').title()
+    inspector_name = insp.inspector.name if insp.inspector else 'Unassigned'
+    status = (insp.status or 'unknown').replace('_', ' ').title()
+    return f'{date_label} — {address} ({kind}) — {inspector_name} — {status}'
+
+
+def answer_query_schedule(raw: dict, user) -> str:
+    from sqlalchemy.orm import selectinload
+    from models import Inspection
+    from permissions import filter_inspections_for_user
+
+    frag = (raw.get('property_address_fragment') or '').strip()
+    inspector_name = (raw.get('inspector_name') or '').strip()
+    unassigned_only = bool(raw.get('unassigned_only'))
+
+    prop = inspector = None
+    if frag:
+        prop, err = _resolve_property_by_fragment(frag)
+        if err:
+            return err
+    if inspector_name:
+        inspector, err = _resolve_inspector_by_name(inspector_name)
+        if err:
+            return err
+
+    start, end, label, err = _resolve_query_range(raw)
+    if err:
+        return err
+
+    # filter_inspections_for_user already applies the same role-scoping the
+    # webapp uses (admin/manager: everything; clerk: own assigned jobs;
+    # typist: own processing jobs; client: own properties) — no new
+    # permission logic needed here.
+    query = filter_inspections_for_user(Inspection.query, user)
+    query = query.filter(Inspection.pdf_import.is_(False))  # backdated paper imports aren't "scheduled" work
+    if start is not None:
+        range_start, _ = _day_bounds(start)
+        _, range_end = _day_bounds(end)
+        query = query.filter(Inspection.conduct_date >= range_start, Inspection.conduct_date < range_end)
+    if prop is not None:
+        query = query.filter(Inspection.property_id == prop.id)
+    if inspector is not None:
+        query = query.filter(Inspection.inspector_id == inspector.id)
+    if unassigned_only:
+        query = query.filter(Inspection.inspector_id.is_(None))
+
+    # Property-only, no date ("is 12 Smith St's report done?") — most recent
+    # first, small cap, since the useful answer is the latest status, not
+    # the full history.
+    no_date_property_lookup = (start is None and prop is not None)
+    query = query.options(selectinload(Inspection.property), selectinload(Inspection.inspector))
+    query = query.order_by(Inspection.conduct_date.desc() if no_date_property_lookup else Inspection.conduct_date.asc())
+
+    cap = 8 if no_date_property_lookup else 25
+    rows = query.limit(cap + 1).all()
+    if not rows:
+        if prop is not None:
+            return f'No inspections found at "{prop.address}"' + (f' for {label}.' if label else '.')
+        if unassigned_only:
+            return 'No unassigned inspections' + (f' for {label}.' if label else '.')
+        if inspector is not None:
+            return f'{inspector.name} has nothing scheduled' + (f' for {label}.' if label else '.')
+        return 'Nothing scheduled' + (f' for {label}.' if label else '.')
+
+    truncated = len(rows) > cap
+    rows = rows[:cap]
+
+    header_bits = [b for b in (prop.address if prop else None, inspector.name if inspector else None, 'unassigned' if unassigned_only else None) if b]
+    header = ' — '.join(header_bits) if header_bits else 'Schedule'
+    if label:
+        header += f' ({label})'
+
+    lines = [f'{header}:'] + ['• ' + _format_inspection_line(i) for i in rows]
+    if truncated:
+        lines.append('…and more — narrow it down by date, property, or inspector for the full list.')
+    return '\n'.join(lines)
+
+
+def answer_query_availability(raw: dict, user) -> str:
+    from permissions import is_admin_or_manager
+    if not is_admin_or_manager(user):
+        return "You don't have permission to do that — availability is visible to managers only."
+
+    from sqlalchemy.orm import selectinload
+    from models import Inspection, User
+
+    date_str = (raw.get('date') or '').strip()
+    try:
+        d = datetime.fromisoformat(date_str).date() if date_str else _today_london()
+    except (ValueError, TypeError):
+        return f'I couldn\'t understand the date "{date_str}".'
+    label = 'today' if d == _today_london() else d.strftime('%a %d %b %Y')
+    range_start, range_end = _day_bounds(d)
+
+    roster = User.query.filter(User.role == 'clerk').order_by(User.name.asc()).all()
+    if not roster:
+        return 'No field inspectors are set up yet.'
+
+    busy_rows = (
+        Inspection.query
+        .filter(
+            Inspection.conduct_date >= range_start,
+            Inspection.conduct_date < range_end,
+            Inspection.inspector_id.isnot(None),
+            Inspection.pdf_import.is_(False),
+        )
+        .options(selectinload(Inspection.property))
+        .order_by(Inspection.conduct_date.asc())
+        .all()
+    )
+    busy_by_inspector = {}
+    for insp in busy_rows:
+        busy_by_inspector.setdefault(insp.inspector_id, []).append(insp)
+
+    free = [u for u in roster if u.id not in busy_by_inspector]
+    busy = [u for u in roster if u.id in busy_by_inspector]
+
+    lines = [f'Availability for {label}:', 'Free: ' + (', '.join(u.name for u in free) if free else 'nobody')]
+    if busy:
+        lines.append('Busy:')
+        for u in busy:
+            job_bits = []
+            for insp in busy_by_inspector[u.id]:
+                addr = insp.property.address if insp.property else 'Unknown'
+                time_bit = f' {insp.conduct_time_preference}' if insp.conduct_time_preference else ''
+                job_bits.append(f'{addr}{time_bit}')
+            lines.append(f'• {u.name} — {"; ".join(job_bits)}')
+    return '\n'.join(lines)
+
+
+READ_ONLY_TOOLS = {'query_schedule', 'query_availability'}
+
+ANSWERERS = {
+    'query_schedule':     answer_query_schedule,
+    'query_availability': answer_query_availability,
 }
 
 

@@ -529,7 +529,12 @@ _APPLIANCE_FORMATTING_RULE = (
     '- Order: appliance type, then colour and brand, then model number, then serial number\n'
     '  CORRECT:   "Washing machine\\nWhite Indesit\\nModel number: WD1234\\nSerial number: AB5678"\n'
     '  INCORRECT: "White Indesit washing machine, model number WD1234, serial number AB5678"\n'
-    '- Format spoken model/serial references as "Model number: X" and "Serial number: X"'
+    '- Format spoken model/serial references as "Model number: X" and "Serial number: X"\n'
+    '- MODEL AND SERIAL NUMBERS ALWAYS GO IN THE DESCRIPTION — never in condition, wherever in the '
+    'dictation they were spoken (even AFTER a condition observation, and even when the clerk says '
+    'they were not visible, e.g. "Serial number: not seen"). They are identifying details, not '
+    'condition signals, so they do NOT close the description. This is an exception to the rule '
+    'that description closes once a condition signal is encountered.'
 )
 
 

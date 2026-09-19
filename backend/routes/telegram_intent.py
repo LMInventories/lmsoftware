@@ -84,7 +84,7 @@ _TOOLS = [
                     'type': 'string',
                     'description': "The inspection date normalized to ISO YYYY-MM-DD, resolved against the 'today' fact in the system prompt",
                 },
-                'conduct_time_preference': {'type': 'string', 'description': "Free text time, e.g. '2pm', 'morning'"},
+                'conduct_time_preference': {'type': 'string', 'description': "Time as the user said it, e.g. 'AM', 'PM', 'afternoon', '2:30pm', 'anytime'"},
                 'inspector_name': {
                     'type': 'string',
                     'description': (
@@ -268,6 +268,9 @@ class ParsedIntent:
         self.reply_text = reply_text  # set only when the model didn't call a tool
 
 
+_REFERENCE_RE = re.compile(r'\bref(?:erence)?(?:\s*(?:number|no\.?|num|#))?\s*[:#=\-]?\s*([A-Za-z0-9\-_/]*\d[A-Za-z0-9\-_/]*)', re.I)
+
+
 def _context_prompt(context: dict) -> str:
     question = context.get('question')
     collected = json.dumps(context.get('collected') or {}, default=str)
@@ -319,7 +322,13 @@ def parse_message(text: str, *, forced_tool: str | None = None, context: dict | 
 
     for block in message.content:
         if block.type == 'tool_use':
-            return ParsedIntent(tool_name=block.name, args=dict(block.input))
+            args = dict(block.input)
+            if block.name == 'book_inspection' and not args.get('reference_number'):
+                # Don't rely on the model alone to pick a reference out of a busy message.
+                m = _REFERENCE_RE.search(text)
+                if m:
+                    args['reference_number'] = m.group(1)
+            return ParsedIntent(tool_name=block.name, args=args)
 
     reply_text = ''.join(b.text for b in message.content if b.type == 'text').strip()
     return ParsedIntent(reply_text=reply_text or (
@@ -581,6 +590,14 @@ def resolve_book_inspection(raw: dict):
     else:
         return None, f'I couldn\'t find an inspector named "{inspector_name}" — who should this be assigned to?'
 
+    time_pref = None
+    raw_time = (raw.get('conduct_time_preference') or '').strip()
+    if raw_time:
+        time_pref = normalize_time_preference(raw_time)
+        if not time_pref:
+            raw.pop('conduct_time_preference', None)
+            return None, f'I didn\'t understand the time "{raw_time}" — say AM, PM, anytime, or a specific time like 2:30pm.'
+
     # ── Lifecycle continuation (check_in <-> check_out) ───────────────────
     # Standalone types (midterm/damage_report/heads_up) are never offered
     # this — they're not part of the check_in -> check_out lifecycle.
@@ -612,7 +629,7 @@ def resolve_book_inspection(raw: dict):
         'property_address':        prop.address,
         'inspection_type':         inspection_type,
         'conduct_date':            conduct_dt.isoformat(),
-        'conduct_time_preference': raw.get('conduct_time_preference'),
+        'conduct_time_preference': time_pref,
         'inspector_id':            inspector_id,
         'inspector_name':          inspector_name_display,
         'tenant_email':            raw.get('tenant_email'),
@@ -692,6 +709,14 @@ def resolve_update_inspection(raw: dict):
         except (ValueError, TypeError):
             return None, f'I couldn\'t understand the date "{new_date_str}" — what date should it be changed to?'
 
+    new_time_pref = None
+    raw_time = (raw.get('new_conduct_time_preference') or '').strip()
+    if raw_time:
+        new_time_pref = normalize_time_preference(raw_time)
+        if not new_time_pref:
+            raw.pop('new_conduct_time_preference', None)
+            return None, f'I didn\'t understand the time "{raw_time}" — say AM, PM, anytime, or a specific time like 2:30pm.'
+
     resolved = {
         'inspection_id':      target.id,
         'property_address':   prop.address,
@@ -700,7 +725,7 @@ def resolve_update_inspection(raw: dict):
         'old_time':           target.conduct_time_preference,
         'old_inspector_name': target.inspector.name if target.inspector else None,
         'new_conduct_date':            new_date_iso,
-        'new_conduct_time_preference': raw.get('new_conduct_time_preference') or None,
+        'new_conduct_time_preference': new_time_pref,
         'new_inspector_id':            new_inspector_id,
         'new_inspector_name':          new_inspector_name_display,
         'new_tenant_email':            raw.get('new_tenant_email') or None,
@@ -939,7 +964,7 @@ def summarize_inspection(resolved: dict) -> str:
     dt = datetime.fromisoformat(resolved['conduct_date'])
     date_line = f"• Date: {dt.strftime('%a %d %b %Y')}"
     if resolved.get('conduct_time_preference'):
-        date_line += f" — {resolved['conduct_time_preference']}"
+        date_line += f" — {format_time_preference(resolved['conduct_time_preference'])}"
     lines = [
         'Book this inspection?',
         f"• Property: {resolved['property_address']}",
@@ -963,13 +988,13 @@ def summarize_update_inspection(resolved: dict) -> str:
         old_dt = datetime.fromisoformat(resolved['old_conduct_date'])
         current = f"• Currently: {old_dt.strftime('%a %d %b %Y')}"
         if resolved.get('old_time'):
-            current += f" — {resolved['old_time']}"
+            current += f" — {format_time_preference(resolved['old_time'])}"
         lines.append(current)
     if resolved.get('new_conduct_date'):
         new_dt = datetime.fromisoformat(resolved['new_conduct_date'])
         lines.append(f"• New date: {new_dt.strftime('%a %d %b %Y')}")
     if resolved.get('new_conduct_time_preference'):
-        lines.append(f"• New time: {resolved['new_conduct_time_preference']}")
+        lines.append(f"• New time: {format_time_preference(resolved['new_conduct_time_preference'])}")
     if resolved.get('new_inspector_name'):
         lines.append(f"• New inspector: {resolved['new_inspector_name']} (was {resolved.get('old_inspector_name') or 'unassigned'})")
     if resolved.get('new_tenant_email'):
@@ -1123,8 +1148,9 @@ def _day_bounds(d):
 
 
 def _resolve_property_by_fragment(frag: str):
-    from models import Property
-    matches = Property.query.filter(Property.address.ilike(f'%{frag}%')).limit(6).all()
+    """Read-only lookups can't ask a follow-up, so a single match — exact or loose — is
+    used, and several are listed."""
+    matches, _ = _find_property_matches(frag)
     if len(matches) == 1:
         return matches[0], None
     if len(matches) > 1:
@@ -1180,20 +1206,53 @@ def _resolve_query_range(raw: dict):
     return start, end, label, None
 
 
-def _format_inspection_line(insp) -> str:
-    date_label = insp.conduct_date.strftime('%a %d %b') if insp.conduct_date else 'no date'
-    if insp.conduct_time_preference:
-        date_label += f' {insp.conduct_time_preference}'
-    address = insp.property.address if insp.property else 'Unknown property'
-    kind = insp.inspection_type.replace('_', ' ').title()
-    inspector_name = insp.inspector.name if insp.inspector else 'Unassigned'
-    status = (insp.status or 'unknown').replace('_', ' ').title()
-    return f'{date_label} — {address} ({kind}) — {inspector_name} — {status}'
+def _format_schedule_rows(rows, by_date: bool) -> str:
+    """Agenda grouped by inspector, saying each thing once: the inspector's name, then
+    "address - AM/PM/time" and the client per job. A date heading is added only when
+    the answer spans several days."""
+    days = {}
+    for insp in rows:
+        days.setdefault(insp.conduct_date.date() if insp.conduct_date else None, []).append(insp)
+
+    blocks = []
+    for day, day_rows in sorted(days.items(), key=lambda kv: (kv[0] is None, kv[0])):
+        by_inspector = {}
+        for insp in sorted(day_rows, key=lambda i: _time_sort_key(i.conduct_time_preference)):
+            by_inspector.setdefault(insp.inspector.name if insp.inspector else 'Unassigned', []).append(insp)
+        for name in sorted(by_inspector, key=lambda n: (n == 'Unassigned', n.lower())):
+            lines = [name]
+            for insp in by_inspector[name]:
+                addr = insp.property.address if insp.property else 'Unknown property'
+                time_label = format_time_preference(insp.conduct_time_preference)
+                lines.append(addr if time_label == 'Anytime' else f'{addr} - {time_label}')
+                client = insp.property.client.name if insp.property and insp.property.client else None
+                if client:
+                    lines.append(client)
+            blocks.append('\n'.join(lines))
+        if by_date:
+            heading = day.strftime('%a %d %b') if day else 'No date'
+            blocks[-len(by_inspector)] = heading + '\n' + blocks[-len(by_inspector)]
+    return '\n\n'.join(blocks)
+
+
+def _format_property_rows(rows) -> str:
+    """Status view for a single property: the address is already known from the
+    question, so each inspection is just date/type/time and who has it, and its status."""
+    blocks = []
+    for insp in rows:
+        date_label = insp.conduct_date.strftime('%a %d %b') if insp.conduct_date else 'No date'
+        kind = insp.inspection_type.replace('_', ' ').title()
+        time_label = format_time_preference(insp.conduct_time_preference)
+        head = f'{date_label} - {kind}' + ('' if time_label == 'Anytime' else f' - {time_label}')
+        who = insp.inspector.name if insp.inspector else 'Unassigned'
+        status = (insp.status or 'unknown').replace('_', ' ').title()
+        blocks.append(f'{head}\n{who} - {status}')
+    return '\n\n'.join(blocks)
 
 
 def answer_query_schedule(raw: dict, user) -> str:
     from sqlalchemy.orm import selectinload
-    from models import Inspection
+    from models import Inspection, Property
     from permissions import filter_inspections_for_user
 
     frag = (raw.get('property_address_fragment') or '').strip()
@@ -1235,7 +1294,7 @@ def answer_query_schedule(raw: dict, user) -> str:
     # first, small cap, since the useful answer is the latest status, not
     # the full history.
     no_date_property_lookup = (start is None and prop is not None)
-    query = query.options(selectinload(Inspection.property), selectinload(Inspection.inspector))
+    query = query.options(selectinload(Inspection.property).selectinload(Property.client), selectinload(Inspection.inspector))
     query = query.order_by(Inspection.conduct_date.desc() if no_date_property_lookup else Inspection.conduct_date.asc())
 
     cap = 8 if no_date_property_lookup else 25
@@ -1252,15 +1311,13 @@ def answer_query_schedule(raw: dict, user) -> str:
     truncated = len(rows) > cap
     rows = rows[:cap]
 
-    header_bits = [b for b in (prop.address if prop else None, inspector.name if inspector else None, 'unassigned' if unassigned_only else None) if b]
-    header = ' — '.join(header_bits) if header_bits else 'Schedule'
-    if label:
-        header += f' ({label})'
-
-    lines = [f'{header}:'] + ['• ' + _format_inspection_line(i) for i in rows]
+    if prop is not None:
+        text = _format_property_rows(rows)
+    else:
+        text = _format_schedule_rows(rows, by_date=(start is None or start != end))
     if truncated:
-        lines.append('…and more — narrow it down by date, property, or inspector for the full list.')
-    return '\n'.join(lines)
+        text += '\n\n…and more — narrow it down by date, property, or inspector for the full list.'
+    return text
 
 
 def answer_query_availability(raw: dict, user) -> str:
@@ -1340,6 +1397,7 @@ TEMPLATES = {
         ('Type', 'inspection_type', 'type'),
         ('Date', 'conduct_date', 'date'),
         ('Inspector', 'inspector_name', 'str'),
+        ('Reference', 'reference_number', 'str'),
     ],
 }
 
@@ -1349,6 +1407,7 @@ _TEMPLATE_ALIASES = {
     'bedrooms': 'bedrooms', 'beds': 'bedrooms', 'bathrooms': 'bathrooms', 'baths': 'bathrooms',
     'date': 'date', 'inspector': 'inspector', 'clerk': 'inspector',
     'type': 'type', 'inspection type': 'type',
+    'reference': 'reference', 'reference number': 'reference', 'ref': 'reference', 'ref no': 'reference',
 }
 
 INSPECTION_TYPES = ('check_in', 'check_out', 'midterm', 'damage_report', 'heads_up')
@@ -1370,12 +1429,79 @@ def normalize_inspection_type(value: str) -> str | None:
     return _INSPECTION_TYPE_LOOKUP.get(key) or (key.replace(' ', '_') if key.replace(' ', '_') in INSPECTION_TYPES else None)
 
 
+def normalize_time_preference(value: str) -> str | None:
+    """Turn what a person types into what the webapp stores in conduct_time_preference:
+    'am', 'pm', 'anytime' or 'specific:HH_MM'. The webapp doesn't understand free
+    text like "afternoon" (it falls back to showing Anytime), so anything unrecognised
+    returns None and the caller asks again."""
+    v = (value or '').strip().lower()
+    if not v:
+        return None
+    if re.fullmatch(r'specific:\d{1,2}_\d{2}', v) or v in ('am', 'pm', 'anytime'):
+        return v
+    flat = re.sub(r'[^a-z0-9]', '', v)
+    if flat in ('any', 'anytime', 'allday', 'flexible', 'none'):
+        return 'anytime'
+    if flat in ('am', 'morning', 'inthemorning', 'amslot'):
+        return 'am'
+    if flat in ('pm', 'afternoon', 'intheafternoon', 'pmslot', 'evening'):
+        return 'pm'
+
+    if 'noon' in v or 'midday' in v:
+        hour, minute = 12, 0
+    else:
+        m = re.search(r'\b(\d{1,2})(?:[:.](\d{2}))?\s*([ap])\.?m?\b', v) or re.search(r'\b(\d{1,2})[:.](\d{2})()\b', v)
+        if not m:
+            m = re.search(r'\b(?:at\s+)?(\d{1,2})()()\b', v)
+        if not m:
+            return None
+        hour, minute, suffix = int(m.group(1)), int(m.group(2) or 0), (m.group(3) or '')
+        if hour > 23 or minute > 59:
+            return None
+        if suffix == 'p' and hour < 12:
+            hour += 12
+        elif suffix == 'a' and hour == 12:
+            hour = 0
+        elif not suffix and 1 <= hour <= 8:
+            hour += 12  # a bare "2" means mid-afternoon on a working day
+    minute = min(45, round(minute / 15) * 15) if minute < 53 else 45  # the webapp's picker steps in 15s
+    return f'specific:{hour:02d}_{minute:02d}'
+
+
+def format_time_preference(pref: str | None) -> str:
+    p = (pref or '').strip().lower()
+    if p in ('am', 'pm'):
+        return p.upper()
+    if p.startswith('specific:'):
+        try:
+            hour, minute = p.split(':', 1)[1].split('_')
+            return f'{int(hour):02d}:{minute}'
+        except ValueError:
+            return p
+    return 'Anytime' if not p or p == 'anytime' else p
+
+
+def _time_sort_key(pref: str | None) -> int:
+    p = (pref or '').strip().lower()
+    if p == 'am':
+        return 540
+    if p == 'pm':
+        return 780
+    if p.startswith('specific:'):
+        try:
+            hour, minute = p.split(':', 1)[1].split('_')
+            return int(hour) * 60 + int(minute)
+        except ValueError:
+            pass
+    return 1440
+
+
 def render_template(tool_name: str) -> str:
     lines = [f'{label}:' for label, _, _ in TEMPLATES[tool_name]]
     heading = 'new property' if tool_name == 'create_property' else 'inspection booking'
     text = f'Copy this, fill it in and send it back for the {heading}:\n\n' + '\n'.join(lines)
     if tool_name == 'book_inspection':
-        text += '\n\nOptions for Type: check-in, check-out, midterm, damage report or heads-up (leave blank for check-in). Shorthand like CI, CO, MT and DR works too.'
+        text += '\n\nOptions for Type: check-in, check-out, midterm, damage report or heads-up (leave blank for check-in). Shorthand like CI, CO, MT and DR works too.\nReference is autofilled if left blank.'
     return text
 
 
@@ -1394,7 +1520,7 @@ def parse_template(tool_name: str, text: str) -> dict | None:
             continue
         found_label = True
         value = value.strip()
-        if not value:
+        if not value or (value.startswith('(') and value.endswith(')')):
             continue
         arg, kind = fields[_TEMPLATE_ALIASES.get(label, label)]
         if kind == 'int':

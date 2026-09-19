@@ -161,6 +161,7 @@ def create_property():
         meter_water=data.get('meter_water'),
         client_id=data.get('client_id'),
         overview_photo=data.get('overview_photo'),
+        notes=data.get('notes'),
     )
     db.session.add(prop)
     db.session.commit()

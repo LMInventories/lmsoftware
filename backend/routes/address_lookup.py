@@ -269,6 +269,43 @@ def find_by_postcode(postcode):
     return jsonify({'postcode': pc, 'addresses': addresses})
 
 
+def search_suggestions(q: str) -> list:
+    """Typeahead suggestions [{address, url}] for a free-text query. Shared by the
+    /autocomplete route and the Telegram bot. May raise requests errors from the
+    Nominatim fallback — callers decide how to handle them."""
+    # ── GetAddress.io path ────────────────────────────────────────────────────
+    if _use_getaddress():
+        try:
+            suggestions = _ga_autocomplete(q)
+            if suggestions is not None:
+                return suggestions
+        except Exception as e:
+            print(f'[address] GetAddress.io autocomplete exception: {e}')
+
+    # ── Nominatim fallback ────────────────────────────────────────────────────
+    r = requests.get(
+        f'{_NOMINATIM_BASE}/search',
+        params={'q': q, 'countrycodes': 'gb', 'addressdetails': 1,
+                'format': 'json', 'limit': 10},
+        headers={'User-Agent': _UA}, timeout=8,
+    )
+    if r.status_code != 200:
+        return []
+
+    suggestions = []
+    seen = set()
+    for item in r.json():
+        display = _trim_display(item.get('display_name', ''))
+        if not display or display in seen:
+            continue
+        seen.add(display)
+        osm_type = (item.get('osm_type') or '')[:1].upper()
+        osm_id   = str(item.get('osm_id', ''))
+        osm_ref  = f'{osm_type}{osm_id}' if osm_type and osm_id else ''
+        suggestions.append({'address': display, 'url': osm_ref})
+    return suggestions
+
+
 @address_lookup_bp.route('/autocomplete', methods=['GET'])
 @jwt_required()
 def autocomplete():
@@ -276,40 +313,8 @@ def autocomplete():
     if not q or len(q) < 3:
         return jsonify({'suggestions': []}), 200
 
-    # ── GetAddress.io path ────────────────────────────────────────────────────
-    if _use_getaddress():
-        try:
-            suggestions = _ga_autocomplete(q)
-            if suggestions is not None:
-                return jsonify({'suggestions': suggestions})
-        except Exception as e:
-            print(f'[address] GetAddress.io autocomplete exception: {e}')
-
-    # ── Nominatim fallback ────────────────────────────────────────────────────
     try:
-        r = requests.get(
-            f'{_NOMINATIM_BASE}/search',
-            params={'q': q, 'countrycodes': 'gb', 'addressdetails': 1,
-                    'format': 'json', 'limit': 10},
-            headers={'User-Agent': _UA}, timeout=8,
-        )
-        if r.status_code != 200:
-            return jsonify({'suggestions': []}), 200
-
-        suggestions = []
-        seen = set()
-        for item in r.json():
-            display = _trim_display(item.get('display_name', ''))
-            if not display or display in seen:
-                continue
-            seen.add(display)
-            osm_type = (item.get('osm_type') or '')[:1].upper()
-            osm_id   = str(item.get('osm_id', ''))
-            osm_ref  = f'{osm_type}{osm_id}' if osm_type and osm_id else ''
-            suggestions.append({'address': display, 'url': osm_ref})
-
-        return jsonify({'suggestions': suggestions})
-
+        return jsonify({'suggestions': search_suggestions(q)})
     except requests.Timeout:
         return jsonify({'error': 'Autocomplete timed out'}), 504
     except Exception as e:

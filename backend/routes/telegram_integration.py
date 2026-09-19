@@ -51,8 +51,8 @@ from routes.telegram_intent import (
     BUILD_PAYLOAD,
     ACTION_CONFIG,
     MULTI_TARGET_TOOLS,
-    WIZARD_STEPS,
-    coerce_wizard_answer,
+    parse_template,
+    render_template,
     READ_ONLY_TOOLS,
     ANSWERERS,
 )
@@ -132,13 +132,19 @@ def _advance_session(session, tool_name, raw_args):
     follow-up question or move to confirmation."""
     from models import db
 
-    existing = {}
-    if session.pending_tool == tool_name and session.pending_action_json:
-        try:
-            existing = json.loads(session.pending_action_json)
-        except (TypeError, ValueError):
-            existing = {}
-    merged = {**existing, **{k: v for k, v in raw_args.items() if v not in (None, '')}}
+    existing = _load_pending_raw(session) if session.pending_tool == tool_name else {}
+    new_args = {k: v for k, v in raw_args.items() if v not in (None, '')}
+
+    # A different address/property fragment invalidates any lookup done for the old one.
+    for key, stale in (
+        ('address', ('_address_options', '_address_confirmed')),
+        ('property_address_fragment', ('_property_id', '_property_options')),
+    ):
+        if key in new_args and existing.get(key) and new_args[key] != existing[key]:
+            for k in stale:
+                existing.pop(k, None)
+
+    merged = {**existing, **new_args}
 
     resolved, question = RESOLVERS[tool_name](merged)
 
@@ -153,10 +159,65 @@ def _advance_session(session, tool_name, raw_args):
 
     session.state = 'awaiting_confirmation'
     session.pending_tool = tool_name
-    session.pending_action_json = json.dumps(resolved)
+    # '_raw' keeps the free-text fields (e.g. the property fragment) that `resolved` drops,
+    # so a correction at the confirm step re-resolves from everything already collected.
+    session.pending_action_json = json.dumps({**resolved, '_raw': merged})
     session.updated_at = datetime.now(timezone.utc)
     db.session.commit()
     _send_message(session.chat_id, SUMMARIZERS[tool_name](resolved), reply_markup=_confirm_keyboard())
+
+
+def _load_pending_raw(session):
+    """The collected free-text fields for the in-progress flow. During confirmation the
+    stored blob is the resolved action with the raw fields tucked under '_raw'."""
+    try:
+        data = json.loads(session.pending_action_json or '{}')
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    raw = data.get('_raw', data)
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def _conversation_context(session):
+    """What the parser needs to make sense of a short follow-up: the question just
+    asked (awaiting_field only) and what's already collected."""
+    raw = _load_pending_raw(session)
+    question = None
+    if session.state == 'awaiting_field':
+        _, question = RESOLVERS[session.pending_tool](dict(raw))
+    collected = {k: v for k, v in raw.items() if not k.startswith('_') and v not in (None, '')}
+    return {'question': question, 'collected': collected}
+
+
+def _numeric_pick_key(session):
+    """Which numbered list a bare-digit reply answers, or None if it isn't a pick."""
+    raw = _load_pending_raw(session)
+    if raw.get('_property_options') and not raw.get('_property_id'):
+        return '_property_pick'
+    if session.pending_tool == 'create_property' and raw.get('_address_options') and not raw.get('_address_confirmed'):
+        return '_address_pick'
+    if session.pending_tool in ('update_inspection', 'share_report'):
+        return '_pick'
+    return None
+
+
+def _book_inspection_pending_yn_field(session):
+    """Peeks at what resolve_book_inspection would ask next — without
+    persisting anything — so a bare yes/no reply can be routed straight to
+    the right field instead of being sent through the LLM parser blind.
+    Returns None when book_inspection isn't currently waiting on one of its
+    two yes/no questions (continue_from_previous, include_photos)."""
+    raw = _load_pending_raw(session)
+    _, question = RESOLVERS['book_inspection'](raw)
+    if not question:
+        return None
+    if question.startswith('Continue this report'):
+        return 'continue_from_previous'
+    if question.startswith('Include photos'):
+        return 'include_photos'
+    return None
 
 
 def _execute_pending_action(session, user):
@@ -253,71 +314,30 @@ def _execute_mark_invoice_paid(session, user, resolved):
     _send_message(session.chat_id, '\n'.join(lines) or 'Nothing was updated.')
 
 
-# ── Guided forms (/property, /inspection) ───────────────────────────────────
-# A wizard walks WIZARD_STEPS[tool_name] one field at a time (session.state =
-# 'wizard', with the collected fields plus a '_step' cursor stashed in
-# pending_action_json). Once every step is answered, the collected fields are
-# handed to _advance_session exactly like a free-text parse — so ambiguous
-# matches (e.g. two clients with a similar name) fall back into the same
-# awaiting_field question flow, and both entry points share one confirmation
-# step and one write path.
+# ── Fill-in templates (/property, /inspection) ─────────────────────────────
+# The command replies with a template of the required fields and parks the
+# session in state 'template'. The user's filled-in reply is read by
+# parse_template and handed to _advance_session exactly like a free-text
+# parse, so anything blank or ambiguous falls into the normal question flow.
 
-def _wizard_keyboard(step):
-    if not step.get('options'):
-        return None
-    buttons = [{'text': opt, 'callback_data': f'wz:{opt}'} for opt in step['options']]
-    rows = [buttons[i:i + 3] for i in range(0, len(buttons), 3)]
-    return {'inline_keyboard': rows}
-
-
-def _send_wizard_step(session, tool_name, step_index):
-    step = WIZARD_STEPS[tool_name][step_index]
-    _send_message(session.chat_id, step['prompt'], reply_markup=_wizard_keyboard(step))
-
-
-def _start_wizard(session, tool_name):
+def _send_template(session, tool_name):
     from models import db
-    session.state = 'wizard'
+    session.state = 'template'
     session.pending_tool = tool_name
-    session.pending_action_json = json.dumps({'_step': 0})
+    session.pending_action_json = None
     session.updated_at = datetime.now(timezone.utc)
     db.session.commit()
-    _send_wizard_step(session, tool_name, 0)
+    _send_message(session.chat_id, render_template(tool_name))
 
 
-def _handle_wizard_answer(session, user, raw_text):
-    from models import db
-
+def _handle_template_reply(session, text):
     tool_name = session.pending_tool
-    steps = WIZARD_STEPS[tool_name]
-    try:
-        state = json.loads(session.pending_action_json or '{}')
-    except (TypeError, ValueError):
-        state = {}
-    step_index = state.get('_step', 0)
-    step = steps[step_index]
-
-    answer = coerce_wizard_answer(step, raw_text)
-    if answer.error:
-        _send_message(session.chat_id, answer.error)
-        _send_wizard_step(session, tool_name, step_index)
-        return
-
-    if not answer.skipped:
-        state[step['field']] = answer.value
-
-    next_index = step_index + 1
-    if next_index < len(steps):
-        state['_step'] = next_index
-        session.pending_action_json = json.dumps(state)
-        session.updated_at = datetime.now(timezone.utc)
-        db.session.commit()
-        _send_wizard_step(session, tool_name, next_index)
-        return
-
-    collected = {k: v for k, v in state.items() if k != '_step'}
-    session.pending_action_json = None  # drop the wizard's '_step' cursor before merging into _advance_session
-    _advance_session(session, tool_name, collected)
+    args = parse_template(tool_name, text)
+    if args is None:
+        # They ignored the template and wrote a sentence — treat it as free text.
+        intent = parse_message(text, forced_tool=tool_name, context={'question': None, 'collected': {}})
+        args = intent.args if intent.tool_name else {}
+    _advance_session(session, tool_name, args)
 
 
 # ── Commands ─────────────────────────────────────────────────────────────────
@@ -325,8 +345,8 @@ def _handle_wizard_answer(session, user, raw_text):
 _HELP_TEXT = (
     'I can help you manage inspections and properties. Try:\n'
     '• Just tell me what you need, e.g. "book an inspection at 12 Smith St for Thursday"\n'
-    '• /property — step-by-step form to create a property with full details\n'
-    '• /inspection — step-by-step form to book an inspection\n'
+    '• /property — get a template to fill in to create a property\n'
+    '• /inspection — get a template to fill in to book an inspection\n'
     '• To reschedule or change an inspection, just tell me, e.g. "move the check-out '
     'at 12 Smith St to next Friday"\n'
     '• /share — send a completed report\'s PDF to the client and/or tenant\n'
@@ -352,13 +372,13 @@ def _handle_command(session, text):
         _send_message(session.chat_id, 'Cancelled.')
         return True
     if cmd == '/property':
-        _start_wizard(session, 'create_property')
+        _send_template(session, 'create_property')
         return True
     if cmd == '/inspection':
-        _start_wizard(session, 'book_inspection')
+        _send_template(session, 'book_inspection')
         return True
     if cmd == '/share':
-        # No wizard needed — share_report's own resolver already asks for the
+        # No template needed — share_report's own resolver already asks for the
         # property and then who to send to, one question at a time.
         _advance_session(session, 'share_report', {})
         return True
@@ -425,7 +445,7 @@ def _handle_confirmation_reply(session, user, text):
         _send_message(session.chat_id, 'Cancelled.')
         return
     # Treat anything else as a correction — re-parse against the same tool and merge.
-    intent = parse_message(text, forced_tool=session.pending_tool)
+    intent = parse_message(text, forced_tool=session.pending_tool, context=_conversation_context(session))
     if intent.tool_name:
         _advance_session(session, intent.tool_name, intent.args)
     else:
@@ -460,8 +480,8 @@ def _handle_text_message(message):
         _handle_confirmation_reply(session, user, text)
         return
 
-    if session.state == 'wizard':
-        _handle_wizard_answer(session, user, text)
+    if session.state == 'template':
+        _handle_template_reply(session, text)
         return
 
     forced_tool = session.pending_tool if session.state == 'awaiting_field' else None
@@ -470,11 +490,30 @@ def _handle_text_message(message):
     # "which inspection?" is a pick, not free text to re-parse — re-parsing
     # "2" would just make the model guess a nonsense property address out of
     # a single digit.
-    if forced_tool in ('update_inspection', 'share_report') and text.strip().isdigit():
-        _advance_session(session, forced_tool, {'_pick': text.strip()})
+    if forced_tool and text.strip().isdigit():
+        pick_key = _numeric_pick_key(session)
+        if pick_key:
+            _advance_session(session, forced_tool, {pick_key: text.strip()})
+            return
+
+    # "keep" while a new property's address is being confirmed means use it as typed.
+    if (forced_tool == 'create_property' and text.strip().lower() in ('keep', 'as typed', 'keep it', 'no')
+            and _numeric_pick_key(session) == '_address_pick'):
+        _advance_session(session, forced_tool, {'_address_confirmed': True})
         return
 
-    intent = parse_message(text, forced_tool=forced_tool)
+    # Same idea for a bare yes/no while book_inspection is asking whether to
+    # continue from a previous report or include its photos — a direct
+    # answer, not free text to re-parse blind.
+    normalized = text.strip().lower()
+    if forced_tool == 'book_inspection' and (normalized in _AFFIRMATIVE or normalized in _NEGATIVE):
+        pending_field = _book_inspection_pending_yn_field(session)
+        if pending_field:
+            _advance_session(session, forced_tool, {pending_field: normalized in _AFFIRMATIVE})
+            return
+
+    context = _conversation_context(session) if forced_tool else None
+    intent = parse_message(text, forced_tool=forced_tool, context=context)
 
     if intent.tool_name is None:
         _send_message(chat_id, intent.reply_text)
@@ -502,10 +541,6 @@ def _handle_callback_query(cq):
     if not link:
         return
     session = _get_or_create_session(chat_id)
-
-    if session.state == 'wizard' and data.startswith('wz:'):
-        _handle_wizard_answer(session, link.user, data[len('wz:'):])
-        return
 
     if session.state != 'awaiting_confirmation':
         return

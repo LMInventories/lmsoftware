@@ -16,13 +16,12 @@ there's nothing to roll back, so they answer directly from a single parse
 _handle_text_message, which branches on READ_ONLY_TOOLS before ever touching
 session/confirmation state).
 
-Also defines WIZARD_STEPS — the deterministic, no-LLM step-by-step forms
-behind the /property and /inspection commands. A wizard just walks its step
-list collecting one field at a time (with inline-keyboard buttons for
-enums/booleans); once every step is answered it hands the collected raw
-fields to the same resolver/confirmation/payload-building code the free-text
-flow uses, so both entry points converge on one confirmation step and one
-write path.
+Also defines TEMPLATES — the fill-in-the-blanks messages sent by /property and
+/inspection. The user copies the template, fills in the required fields and sends
+it back; parse_template() reads the "Label: value" lines without the LLM (only a
+free-text date goes through normalize_date_text) and hands the raw fields to the
+same resolver/confirmation/payload-building code the free-text flow uses, so
+anything missing or ambiguous falls into the usual one-question-at-a-time flow.
 
 The LLM never sees or produces database IDs — it only extracts free-text
 fields (a client name, a property address fragment, an inspector's name).
@@ -31,7 +30,10 @@ misheard or fuzzy phrase can never become a wrong foreign key on its own.
 """
 from __future__ import annotations
 
+import copy
+import json
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -52,6 +54,15 @@ _TOOLS = [
                 'bedrooms':      {'type': 'integer'},
                 'bathrooms':     {'type': 'integer'},
                 'furnished':     {'type': 'string', 'description': "'Furnished', 'Part Furnished', or 'Unfurnished'"},
+                'parking':       {'type': 'boolean', 'description': 'True/false only if parking is explicitly mentioned'},
+                'garden':        {'type': 'boolean', 'description': 'True/false only if a garden is explicitly mentioned'},
+                'elevator':      {'type': 'boolean', 'description': 'True/false only if a lift/elevator is explicitly mentioned'},
+                'detachment_type': {'type': 'string', 'description': "e.g. 'Terraced', 'Semi-Detached', 'Detached', 'Purpose Built Flat', 'Converted Flat', 'Bungalow', 'Penthouse', if mentioned"},
+                'elevation':     {'type': 'string', 'description': "Floor, e.g. 'Ground Floor', '1st Floor', if mentioned"},
+                'meter_electricity': {'type': 'string', 'description': 'Electricity meter location/reading, if mentioned'},
+                'meter_gas':         {'type': 'string', 'description': 'Gas meter location/reading, if mentioned'},
+                'meter_heat':        {'type': 'string', 'description': 'Heat meter location/reading, if mentioned'},
+                'meter_water':       {'type': 'string', 'description': 'Water meter location/reading, if mentioned'},
                 'notes':         {'type': 'string'},
             },
             'required': ['address', 'client_name'],
@@ -74,8 +85,30 @@ _TOOLS = [
                     'description': "The inspection date normalized to ISO YYYY-MM-DD, resolved against the 'today' fact in the system prompt",
                 },
                 'conduct_time_preference': {'type': 'string', 'description': "Free text time, e.g. '2pm', 'morning'"},
-                'inspector_name': {'type': 'string', 'description': 'Name of the field inspector to assign, if mentioned'},
+                'inspector_name': {
+                    'type': 'string',
+                    'description': (
+                        'Name of the field inspector/clerk to assign, if mentioned — including '
+                        'when given as "clerk <name>" or "inspector <name>", e.g. "Clerk Robyn" '
+                        'means Robyn.'
+                    ),
+                },
                 'tenant_email':   {'type': 'string'},
+                'reference_number': {'type': 'string', 'description': 'A reference number/code for the inspection, if explicitly given, e.g. "reference number 13939" or "ref INS-4"'},
+                'continue_from_previous': {
+                    'type': 'boolean',
+                    'description': (
+                        'Only set this when the user is directly answering a yes/no question about '
+                        "whether to continue this report from a previous inspection's report."
+                    ),
+                },
+                'include_photos': {
+                    'type': 'boolean',
+                    'description': (
+                        'Only set this when the user is directly answering a yes/no question about '
+                        'including photos from a previous inspection.'
+                    ),
+                },
             },
             'required': ['property_address_fragment', 'conduct_date'],
         },
@@ -220,8 +253,11 @@ def _system_prompt() -> str:
         "inspector's workload, or unassigned inspections — and query_availability only "
         "when asked who is free/available/busy on a given day. When a date range like "
         "\"this week\" is meant, expand it to the Monday–Sunday of that week using today's "
-        "date above. If the message doesn't relate to any of these, do not call any tool — "
-        "just reply naturally, briefly explaining what you can help with."
+        "date above. Messages often pack several facts into short trailing sentences (e.g. "
+        "\"...next Wednesday. Reference number 13939. Clerk Robyn\") — extract every field "
+        "mentioned anywhere in the message, not just the first clause. If the message doesn't "
+        "relate to any of these, do not call any tool — just reply naturally, briefly "
+        "explaining what you can help with."
     )
 
 
@@ -232,21 +268,51 @@ class ParsedIntent:
         self.reply_text = reply_text  # set only when the model didn't call a tool
 
 
-def parse_message(text: str, *, forced_tool: str | None = None) -> ParsedIntent:
+def _context_prompt(context: dict) -> str:
+    question = context.get('question')
+    collected = json.dumps(context.get('collected') or {}, default=str)
+    if question:
+        lead = f'You just asked the user: "{question}" and their message is the reply. '
+    else:
+        lead = 'The user is reviewing a summary of what you are about to do, and their message is a correction. '
+    return (
+        '\n\nYou are partway through a conversation, not starting a new one. ' + lead +
+        f'Fields collected so far: {collected}. Extract ONLY what this message provides and '
+        'leave every other field unset. Never repeat, guess, or change a collected value unless '
+        'the user explicitly corrects it. A short reply such as a bare name, number or address '
+        'fragment answers the question you just asked — put it in the matching field.'
+    )
+
+
+def parse_message(text: str, *, forced_tool: str | None = None, context: dict | None = None) -> ParsedIntent:
     """Run one Anthropic call to extract a tool call (or a plain reply) from `text`.
 
     forced_tool: when a slot-filling flow is already in progress, force the
     model to keep extracting args for that same tool rather than risking a
     fresh/ambiguous classification on a short follow-up reply like "2pm".
+
+    context: {'question': str|None, 'collected': dict} for that same in-progress
+    flow. Without it the model sees a bare "Acme" with no idea what was asked and,
+    because the forced tool has required fields, invents or overwrites values to
+    satisfy them. With it, required-ness is dropped and the model is told what
+    was asked and what is already known.
     """
     client = anthropic.Anthropic(api_key=os.environ.get('ANTHROPIC_API_KEY'))
     tool_choice = {'type': 'tool', 'name': forced_tool} if forced_tool else {'type': 'auto'}
 
+    tools = _TOOLS
+    system = _system_prompt()
+    if context is not None:
+        tools = copy.deepcopy(_TOOLS)
+        for t in tools:
+            t['input_schema']['required'] = []
+        system += _context_prompt(context)
+
     message = client.messages.create(
         model=_MODEL,
         max_tokens=1000,
-        system=_system_prompt(),
-        tools=_TOOLS,
+        system=system,
+        tools=tools,
         tool_choice=tool_choice,
         messages=[{'role': 'user', 'content': text}],
     )
@@ -259,12 +325,12 @@ def parse_message(text: str, *, forced_tool: str | None = None) -> ParsedIntent:
     return ParsedIntent(reply_text=reply_text or (
         "I can create a property, book an inspection, reschedule/update one, share a "
         "report, mark invoices paid, or answer schedule/status questions — tell me what "
-        "you need, or try /property or /inspection for a step-by-step form."
+        "you need, or try /property or /inspection for a fill-in template."
     ))
 
 
 def normalize_date_text(text: str) -> str | None:
-    """One-off helper for the wizard's date step, where the reply is nothing but a date
+    """One-off helper for a template's free-text date, where the reply is nothing but a date
     phrase — a forced call on the full book_inspection/update_inspection tools would also
     force the model to guess unrelated required fields from that same short phrase."""
     client = anthropic.Anthropic(api_key=os.environ.get('ANTHROPIC_API_KEY'))
@@ -282,6 +348,108 @@ def normalize_date_text(text: str) -> str | None:
     return None
 
 
+_UK_POSTCODE_RE = re.compile(r'\b[A-Z]{1,2}[0-9][0-9A-Z]?\s*[0-9][A-Z]{2}\b', re.I)
+
+
+def _confirm_address(raw: dict, address: str):
+    """A new property's address should be a full one. If it has no postcode, look it up
+    and let the user pick a match (or keep what they typed) before going further.
+    Returns (address, question). Works on `raw` in place — the caller persists it, so
+    the option list is fetched once and a numeric reply lands in raw['_address_pick']."""
+    if raw.get('_address_confirmed') or _UK_POSTCODE_RE.search(address):
+        return address, None
+
+    options = raw.get('_address_options')
+    if options is None:
+        try:
+            from routes.address_lookup import search_suggestions
+            options = [s['address'] for s in search_suggestions(address)[:5]]
+        except Exception as e:
+            print(f'[telegram] address lookup failed: {e}')
+            options = []
+        raw['_address_options'] = options
+        if not options:  # nothing to offer, so don't block on it
+            raw['_address_confirmed'] = True
+            return address, None
+
+    pick = raw.pop('_address_pick', None)
+    if pick is not None:
+        try:
+            idx = int(pick) - 1
+            if idx < 0:
+                raise IndexError
+            raw['address'] = options[idx]
+        except (ValueError, IndexError):
+            return address, f"That's not one of the options — reply with a number from 1 to {len(options)}, or \"keep\" to use it as typed."
+        raw['_address_confirmed'] = True
+        return raw['address'], None
+
+    lines = [f'"{address}" doesn\'t look like a full address. Did you mean:']
+    lines += [f'{i}. {a}' for i, a in enumerate(options, 1)]
+    lines.append('Reply with a number, or "keep" to use it as typed.')
+    return address, '\n'.join(lines)
+
+
+def _find_property_matches(frag: str):
+    """(properties, fuzzy). Substring match first; if that finds nothing, fall back to
+    matching every word independently, so "123 Test Property" still finds
+    "123, Test Property Road" (punctuation/ordering differences)."""
+    from models import Property
+    from sqlalchemy import and_
+    exact = Property.query.filter(Property.address.ilike(f'%{frag}%')).limit(6).all()
+    if exact:
+        return exact, False
+    tokens = [t for t in re.split(r'\W+', frag) if t]
+    if not tokens:
+        return [], False
+    loose = Property.query.filter(and_(*[Property.address.ilike(f'%{t}%') for t in tokens])).limit(6).all()
+    return loose, True
+
+
+def _resolve_property(raw: dict, frag: str):
+    """Shared property lookup for book/update/share. Returns (property, question).
+    A lone exact match is used straight away; several matches, or any loose match, are
+    listed for the user to pick by number (raw['_property_pick']), never guessed."""
+    from models import db, Property
+
+    pid = raw.get('_property_id')
+    if pid:
+        prop = db.session.get(Property, pid)
+        if prop:
+            return prop, None
+
+    options = raw.get('_property_options')
+    pick = raw.pop('_property_pick', None)
+    if options and pick is not None:
+        try:
+            idx = int(pick) - 1
+            if idx < 0:
+                raise IndexError
+            prop = db.session.get(Property, options[idx])
+        except (ValueError, IndexError):
+            return None, f"That's not one of the options — reply with a number from 1 to {len(options)}."
+        if prop:
+            raw['_property_id'] = prop.id
+            return prop, None
+
+    matches, fuzzy = _find_property_matches(frag)
+    if not matches:
+        raw.pop('_property_options', None)
+        return None, f'I couldn\'t find a property matching "{frag}" — could you give me more of the address?'
+    if len(matches) == 1 and not fuzzy:
+        return matches[0], None
+
+    raw['_property_options'] = [p.id for p in matches]
+    if fuzzy:
+        lead = f'I couldn\'t find an exact match for "{frag}" — did you mean:'
+        tail = 'Reply with a number, or send a fuller address.'
+    else:
+        lead = f'I found more than one property matching "{frag}":'
+        tail = 'Reply with the number.'
+    lines = [lead] + [f'{i}. {p.address}' for i, p in enumerate(matches, 1)] + [tail]
+    return None, '\n'.join(lines)
+
+
 def resolve_create_property(raw: dict):
     """Returns (resolved: dict|None, question: str|None).
     `resolved` is None whenever something's still missing or ambiguous, in
@@ -289,6 +457,9 @@ def resolve_create_property(raw: dict):
     address = (raw.get('address') or '').strip()
     if not address:
         return None, "What's the property address?"
+    address, question = _confirm_address(raw, address)
+    if question:
+        return None, question
 
     client_name = (raw.get('client_name') or '').strip()
     if not client_name:
@@ -302,18 +473,75 @@ def resolve_create_property(raw: dict):
         names = ', '.join(f'"{c.name}"' for c in matches)
         return None, f'I found more than one client matching "{client_name}": {names}. Which one did you mean?'
 
+    # Bedrooms/bathrooms are required for every property, same as address and
+    # client — a studio flat is 0 bedrooms, so check for None, not falsiness.
+    bedrooms = raw.get('bedrooms')
+    if bedrooms is None:
+        return None, 'How many bedrooms?'
+
+    bathrooms = raw.get('bathrooms')
+    if bathrooms is None:
+        return None, 'How many bathrooms?'
+
     client = matches[0]
     resolved = {
-        'address':       address,
-        'client_id':     client.id,
-        'client_name':   client.name,
-        'property_type': raw.get('property_type') or 'residential',
-        'bedrooms':      raw.get('bedrooms'),
-        'bathrooms':     raw.get('bathrooms'),
-        'furnished':     raw.get('furnished'),
-        'notes':         raw.get('notes'),
+        'address':           address,
+        'client_id':         client.id,
+        'client_name':       client.name,
+        'property_type':     raw.get('property_type') or 'residential',
+        'bedrooms':          bedrooms,
+        'bathrooms':         bathrooms,
+        'furnished':         raw.get('furnished'),
+        'parking':           raw.get('parking'),
+        'garden':            raw.get('garden'),
+        'elevator':          raw.get('elevator'),
+        'detachment_type':   raw.get('detachment_type'),
+        'elevation':         raw.get('elevation'),
+        'meter_electricity': raw.get('meter_electricity'),
+        'meter_gas':         raw.get('meter_gas'),
+        'meter_heat':        raw.get('meter_heat'),
+        'meter_water':       raw.get('meter_water'),
+        'notes':             raw.get('notes'),
     }
     return resolved, None
+
+
+def _find_lifecycle_source(prop, inspection_type):
+    """Mirrors InspectionsView.vue's auto-suggested "work from previous report"
+    lookup: a check_out continues from the most recently created check_in at
+    the property (regardless of whether it has report data yet — the link is
+    what matters); a check_in continues from the most recently created
+    check_out that has report data, falling back to the most recent check_in
+    with report data if there's no check_out on record (e.g. a tenant who
+    never had a move-out done). Standalone types (midterm/damage_report/
+    heads_up) never have a source — callers only call this for check_in/
+    check_out."""
+    from models import Inspection
+
+    if inspection_type == 'check_out':
+        return (
+            Inspection.query
+            .filter(Inspection.property_id == prop.id, Inspection.inspection_type == 'check_in')
+            .order_by(Inspection.created_at.desc())
+            .first()
+        )
+
+    source = (
+        Inspection.query
+        .filter(Inspection.property_id == prop.id, Inspection.inspection_type == 'check_out',
+                Inspection.report_data.isnot(None))
+        .order_by(Inspection.created_at.desc())
+        .first()
+    )
+    if source:
+        return source
+    return (
+        Inspection.query
+        .filter(Inspection.property_id == prop.id, Inspection.inspection_type == 'check_in',
+                Inspection.report_data.isnot(None))
+        .order_by(Inspection.created_at.desc())
+        .first()
+    )
 
 
 def resolve_book_inspection(raw: dict):
@@ -321,14 +549,9 @@ def resolve_book_inspection(raw: dict):
     if not frag:
         return None, 'Which property is this for? (give me the address or part of it)'
 
-    from models import Property
-    matches = Property.query.filter(Property.address.ilike(f'%{frag}%')).limit(6).all()
-    if len(matches) == 0:
-        return None, f'I couldn\'t find a property matching "{frag}" — could you give me more of the address?'
-    if len(matches) > 1:
-        addrs = '; '.join(f'"{p.address}"' for p in matches)
-        return None, f'I found more than one property matching "{frag}": {addrs}. Which one did you mean?'
-    prop = matches[0]
+    prop, question = _resolve_property(raw, frag)
+    if question:
+        return None, question
 
     date_str = (raw.get('conduct_date') or '').strip()
     if not date_str:
@@ -340,30 +563,63 @@ def resolve_book_inspection(raw: dict):
     if conduct_dt.date() < datetime.now(timezone.utc).date():
         return None, f'That date ({conduct_dt.date().isoformat()}) is in the past — what date did you mean?'
 
-    inspector_id = None
-    inspector_name_display = None
+    # A clerk must be assigned, same as the webapp's "Please assign a clerk"
+    # requirement on this form — Telegram must not create unassigned
+    # inspections just because the field was optional to extract.
     inspector_name = (raw.get('inspector_name') or '').strip()
-    if inspector_name:
-        from models import User
-        insp_matches = User.query.filter(User.role == 'clerk', User.name.ilike(f'%{inspector_name}%')).limit(6).all()
-        if len(insp_matches) == 1:
-            inspector_id = insp_matches[0].id
-            inspector_name_display = insp_matches[0].name
-        elif len(insp_matches) > 1:
-            names = ', '.join(i.name for i in insp_matches)
-            return None, f'I found more than one inspector matching "{inspector_name}": {names}. Which one did you mean?'
-        else:
-            return None, f'I couldn\'t find an inspector named "{inspector_name}" — who should this be assigned to? (or say "no inspector yet")'
+    if not inspector_name:
+        return None, 'Who should this be assigned to? (give me the inspector\'s name)'
+
+    from models import User
+    insp_matches = User.query.filter(User.role == 'clerk', User.name.ilike(f'%{inspector_name}%')).limit(6).all()
+    if len(insp_matches) == 1:
+        inspector_id = insp_matches[0].id
+        inspector_name_display = insp_matches[0].name
+    elif len(insp_matches) > 1:
+        names = ', '.join(i.name for i in insp_matches)
+        return None, f'I found more than one inspector matching "{inspector_name}": {names}. Which one did you mean?'
+    else:
+        return None, f'I couldn\'t find an inspector named "{inspector_name}" — who should this be assigned to?'
+
+    # ── Lifecycle continuation (check_in <-> check_out) ───────────────────
+    # Standalone types (midterm/damage_report/heads_up) are never offered
+    # this — they're not part of the check_in -> check_out lifecycle.
+    inspection_type = raw.get('inspection_type') or 'check_in'
+    inspection_type = normalize_inspection_type(inspection_type) or inspection_type
+    if inspection_type not in INSPECTION_TYPES:
+        raw.pop('inspection_type', None)
+        return None, (f'I don\'t recognise the inspection type "{inspection_type}" — is it a check-in, '
+                      'check-out, midterm, damage report or heads-up?')
+    source_inspection_id = None
+    source_label = None
+    include_photos = False
+    if inspection_type in ('check_in', 'check_out'):
+        source = _find_lifecycle_source(prop, inspection_type)
+        if source:
+            continue_from_previous = raw.get('continue_from_previous')
+            date_label = source.conduct_date.strftime('%a %d %b %Y') if source.conduct_date else 'no date on record'
+            source_label = f"{source.inspection_type.replace('_', ' ').title()} on {date_label}"
+            if continue_from_previous is None:
+                return None, f'Continue this report from the {source_label}? (yes/no)'
+            if continue_from_previous:
+                source_inspection_id = source.id
+                include_photos = raw.get('include_photos')
+                if include_photos is None:
+                    return None, 'Include photos from that inspection? (yes/no)'
 
     resolved = {
         'property_id':             prop.id,
         'property_address':        prop.address,
-        'inspection_type':         raw.get('inspection_type') or 'check_in',
+        'inspection_type':         inspection_type,
         'conduct_date':            conduct_dt.isoformat(),
         'conduct_time_preference': raw.get('conduct_time_preference'),
         'inspector_id':            inspector_id,
         'inspector_name':          inspector_name_display,
         'tenant_email':            raw.get('tenant_email'),
+        'reference_number':        (raw.get('reference_number') or '').strip() or None,
+        'source_inspection_id':    source_inspection_id,
+        'source_label':            source_label if source_inspection_id else None,
+        'include_photos':          bool(include_photos),
     }
     return resolved, None
 
@@ -383,14 +639,9 @@ def resolve_update_inspection(raw: dict):
     if not any((raw.get(f) or '').strip() for f in change_fields):
         return None, 'What would you like to change — the date, time, inspector, or tenant email?'
 
-    from models import Property
-    prop_matches = Property.query.filter(Property.address.ilike(f'%{frag}%')).limit(6).all()
-    if len(prop_matches) == 0:
-        return None, f'I couldn\'t find a property matching "{frag}" — could you give me more of the address?'
-    if len(prop_matches) > 1:
-        addrs = '; '.join(f'"{p.address}"' for p in prop_matches)
-        return None, f'I found more than one property matching "{frag}": {addrs}. Which one did you mean?'
-    prop = prop_matches[0]
+    prop, question = _resolve_property(raw, frag)
+    if question:
+        return None, question
 
     from models import Inspection
     candidates = (
@@ -494,14 +745,9 @@ def resolve_share_report(raw: dict):
     if not frag:
         return None, "Which property's report do you want to share? (give me the address)"
 
-    from models import Property
-    prop_matches = Property.query.filter(Property.address.ilike(f'%{frag}%')).limit(6).all()
-    if len(prop_matches) == 0:
-        return None, f'I couldn\'t find a property matching "{frag}" — could you give me more of the address?'
-    if len(prop_matches) > 1:
-        addrs = '; '.join(f'"{p.address}"' for p in prop_matches)
-        return None, f'I found more than one property matching "{frag}": {addrs}. Which one did you mean?'
-    prop = prop_matches[0]
+    prop, question = _resolve_property(raw, frag)
+    if question:
+        return None, question
 
     from models import Inspection
     candidates = (
@@ -664,12 +910,27 @@ def summarize_property(resolved: dict) -> str:
         f"• Address: {resolved['address']}",
         f"• Client: {resolved['client_name']}",
     ]
-    if resolved.get('bedrooms'):
+    if resolved.get('bedrooms') is not None:
         lines.append(f"• Bedrooms: {resolved['bedrooms']}")
-    if resolved.get('bathrooms'):
+    if resolved.get('bathrooms') is not None:
         lines.append(f"• Bathrooms: {resolved['bathrooms']}")
     if resolved.get('furnished'):
         lines.append(f"• Furnished: {resolved['furnished']}")
+    if resolved.get('detachment_type'):
+        lines.append(f"• Type: {resolved['detachment_type']}")
+    if resolved.get('elevation'):
+        lines.append(f"• Floor: {resolved['elevation']}")
+    features = [name for name, key in (('Parking', 'parking'), ('Garden', 'garden'), ('Lift', 'elevator')) if resolved.get(key)]
+    if features:
+        lines.append(f"• Features: {', '.join(features)}")
+    meters = [f"{label} ({resolved[key]})" for label, key in (
+        ('Electricity', 'meter_electricity'), ('Gas', 'meter_gas'),
+        ('Heat', 'meter_heat'), ('Water', 'meter_water'),
+    ) if resolved.get(key)]
+    if meters:
+        lines.append(f"• Meters: {', '.join(meters)}")
+    if resolved.get('notes'):
+        lines.append(f"• Notes: {resolved['notes']}")
     lines.append('Reply YES to confirm, or tell me what to change.')
     return '\n'.join(lines)
 
@@ -687,6 +948,11 @@ def summarize_inspection(resolved: dict) -> str:
     ]
     if resolved.get('inspector_name'):
         lines.append(f"• Inspector: {resolved['inspector_name']}")
+    if resolved.get('reference_number'):
+        lines.append(f"• Reference: {resolved['reference_number']}")
+    if resolved.get('source_inspection_id'):
+        lines.append(f"• Continuing from: {resolved['source_label']}")
+        lines.append(f"• Include photos: {'Yes' if resolved.get('include_photos') else 'No'}")
     lines.append('Reply YES to confirm, or tell me what to change.')
     return '\n'.join(lines)
 
@@ -753,13 +1019,22 @@ SUMMARIZERS = {
 
 def build_property_payload(resolved: dict) -> dict:
     return {
-        'address':       resolved['address'],
-        'client_id':     resolved['client_id'],
-        'property_type': resolved.get('property_type') or 'residential',
-        'bedrooms':      resolved.get('bedrooms'),
-        'bathrooms':     resolved.get('bathrooms'),
-        'furnished':     resolved.get('furnished'),
-        'notes':         resolved.get('notes'),
+        'address':           resolved['address'],
+        'client_id':         resolved['client_id'],
+        'property_type':     resolved.get('property_type') or 'residential',
+        'bedrooms':          resolved.get('bedrooms'),
+        'bathrooms':         resolved.get('bathrooms'),
+        'furnished':         resolved.get('furnished'),
+        'parking':           resolved.get('parking'),
+        'garden':            resolved.get('garden'),
+        'elevator':          resolved.get('elevator'),
+        'detachment_type':   resolved.get('detachment_type'),
+        'elevation':         resolved.get('elevation'),
+        'meter_electricity': resolved.get('meter_electricity'),
+        'meter_gas':         resolved.get('meter_gas'),
+        'meter_heat':        resolved.get('meter_heat'),
+        'meter_water':       resolved.get('meter_water'),
+        'notes':             resolved.get('notes'),
     }
 
 
@@ -771,6 +1046,9 @@ def build_inspection_payload(resolved: dict) -> dict:
         'conduct_time_preference': resolved.get('conduct_time_preference'),
         'inspector_id':            resolved.get('inspector_id'),
         'tenant_email':            resolved.get('tenant_email'),
+        'reference_number':        resolved.get('reference_number'),
+        'source_inspection_id':    resolved.get('source_inspection_id'),
+        'include_photos':          resolved.get('include_photos', False),
     }
 
 
@@ -1045,79 +1323,97 @@ ANSWERERS = {
 }
 
 
-# ── /property and /inspection guided forms ─────────────────────────────────
-# Each step: 'field' (key stored in the wizard's collected dict), 'prompt',
-# 'required' (blocks Skip and re-asks on empty input), and optionally
-# 'options' (rendered as inline-keyboard buttons, also accepted as typed
-# text), 'value_map' (button label -> stored value, e.g. 'Check-in' ->
-# 'check_in'), 'type' ('int' | 'bool', default plain string), or
-# 'freeform_date' (routes the reply through normalize_date_text()).
-WIZARD_STEPS = {
+# ── /property and /inspection fill-in templates ───────────────────────────
+# Only the required fields — everything optional can still be added in free
+# text, or is asked for when the resolver needs it. Each entry is
+# (label, arg name, type); type is 'int', 'date' (routed through
+# normalize_date_text unless already ISO), 'type' (inspection type) or 'str'.
+TEMPLATES = {
     'create_property': [
-        {'field': 'address', 'prompt': "What's the property address?", 'required': True},
-        {'field': 'client_name', 'prompt': 'Which client/agent is this property for?', 'required': True},
-        {'field': 'property_type', 'prompt': 'Property type?', 'options': ['Residential', 'Commercial'],
-         'value_map': {'Residential': 'residential', 'Commercial': 'commercial'}},
-        {'field': 'bedrooms', 'prompt': 'How many bedrooms? (or Skip)', 'type': 'int'},
-        {'field': 'bathrooms', 'prompt': 'How many bathrooms? (or Skip)', 'type': 'int'},
-        {'field': 'furnished', 'prompt': 'Furnished status?', 'options': ['Furnished', 'Part Furnished', 'Unfurnished']},
-        {'field': 'parking', 'prompt': 'Parking available?', 'options': ['Yes', 'No'], 'type': 'bool'},
-        {'field': 'garden', 'prompt': 'Garden?', 'options': ['Yes', 'No'], 'type': 'bool'},
-        {'field': 'elevator', 'prompt': 'Lift/elevator?', 'options': ['Yes', 'No'], 'type': 'bool'},
-        {'field': 'detachment_type', 'prompt': 'Detachment type? e.g. Terraced, Semi-Detached, Detached (or Skip)'},
-        {'field': 'elevation', 'prompt': 'Floor/elevation? e.g. Ground Floor, 1st Floor (or Skip)'},
-        {'field': 'meter_electricity', 'prompt': 'Electricity meter reading/number? (or Skip)'},
-        {'field': 'meter_gas', 'prompt': 'Gas meter reading/number? (or Skip)'},
-        {'field': 'meter_water', 'prompt': 'Water meter reading/number? (or Skip)'},
-        {'field': 'notes', 'prompt': 'Any notes? (or Skip)'},
+        ('Address', 'address', 'str'),
+        ('Client', 'client_name', 'str'),
+        ('Bedrooms', 'bedrooms', 'int'),
+        ('Bathrooms', 'bathrooms', 'int'),
     ],
     'book_inspection': [
-        {'field': 'property_address_fragment', 'prompt': 'Which property? (address or part of it)', 'required': True},
-        {'field': 'inspection_type', 'prompt': 'Inspection type?',
-         'options': ['Check-in', 'Check-out', 'Midterm', 'Damage Report', 'Heads-up'],
-         'value_map': {'Check-in': 'check_in', 'Check-out': 'check_out', 'Midterm': 'midterm',
-                        'Damage Report': 'damage_report', 'Heads-up': 'heads_up'}},
-        {'field': 'conduct_date', 'prompt': 'What date? (e.g. "Thursday", or 2026-09-25)', 'required': True, 'freeform_date': True},
-        {'field': 'conduct_time_preference', 'prompt': 'Preferred time? (or Skip)'},
-        {'field': 'inspector_name', 'prompt': 'Assign an inspector? Give their name, or Skip'},
-        {'field': 'tenant_email', 'prompt': "Tenant's email? (or Skip)"},
+        ('Property', 'property_address_fragment', 'str'),
+        ('Type', 'inspection_type', 'type'),
+        ('Date', 'conduct_date', 'date'),
+        ('Inspector', 'inspector_name', 'str'),
     ],
 }
 
+_TEMPLATE_ALIASES = {
+    'client': 'client', 'agent': 'client', 'client/agent': 'client',
+    'address': 'address', 'property': 'property', 'property address': 'property',
+    'bedrooms': 'bedrooms', 'beds': 'bedrooms', 'bathrooms': 'bathrooms', 'baths': 'bathrooms',
+    'date': 'date', 'inspector': 'inspector', 'clerk': 'inspector',
+    'type': 'type', 'inspection type': 'type',
+}
 
-class WizardAnswer:
-    def __init__(self, value=None, skipped=False, error=None):
-        self.value = value
-        self.skipped = skipped
-        self.error = error
+INSPECTION_TYPES = ('check_in', 'check_out', 'midterm', 'damage_report', 'heads_up')
+
+_INSPECTION_TYPE_ALIASES = {
+    'check_in':      ('ci', 'check in', 'checkin', 'inventory', 'fresh'),
+    'check_out':     ('co', 'check out', 'checkout'),
+    'midterm':       ('mt', 'mid term', 'midterm'),
+    'damage_report': ('dr', 'damage', 'damage report'),
+    'heads_up':      ('heads up', 'headsup'),
+}
+_INSPECTION_TYPE_LOOKUP = {a: t for t, aliases in _INSPECTION_TYPE_ALIASES.items() for a in aliases}
 
 
-def coerce_wizard_answer(step: dict, raw_text: str) -> WizardAnswer:
-    raw_text = (raw_text or '').strip()
-    if not raw_text:
-        return WizardAnswer(error='Please send a value.') if step.get('required') else WizardAnswer(skipped=True)
-    if not step.get('required') and raw_text.lower() in ('skip', 'none', '-', 'n/a'):
-        return WizardAnswer(skipped=True)
+def normalize_inspection_type(value: str) -> str | None:
+    """Map "CI", "Check In", "inventory", "damage", etc. to a canonical inspection_type,
+    or None if it isn't recognised."""
+    key = re.sub(r'[\s_\-/]+', ' ', (value or '').strip().lower())
+    return _INSPECTION_TYPE_LOOKUP.get(key) or (key.replace(' ', '_') if key.replace(' ', '_') in INSPECTION_TYPES else None)
 
-    if step.get('options'):
-        matched = next((opt for opt in step['options'] if raw_text.lower() == opt.lower()), None)
-        if not matched:
-            return WizardAnswer(error=f"Please choose one of: {', '.join(step['options'])}")
-        raw_text = step.get('value_map', {}).get(matched, matched)
 
-    if step.get('type') == 'int':
-        try:
-            return WizardAnswer(value=int(raw_text))
-        except ValueError:
-            return WizardAnswer(error='Please send a number.')
+def render_template(tool_name: str) -> str:
+    lines = [f'{label}:' for label, _, _ in TEMPLATES[tool_name]]
+    heading = 'new property' if tool_name == 'create_property' else 'inspection booking'
+    text = f'Copy this, fill it in and send it back for the {heading}:\n\n' + '\n'.join(lines)
+    if tool_name == 'book_inspection':
+        text += '\n\nOptions for Type: check-in, check-out, midterm, damage report or heads-up (leave blank for check-in). Shorthand like CI, CO, MT and DR works too.'
+    return text
 
-    if step.get('type') == 'bool':
-        return WizardAnswer(value=raw_text.lower() == 'yes')
 
-    if step.get('freeform_date'):
-        iso = normalize_date_text(raw_text)
-        if not iso:
-            return WizardAnswer(error='I couldn\'t understand that date — try again (e.g. "Thursday" or "2026-09-25").')
-        return WizardAnswer(value=iso)
-
-    return WizardAnswer(value=raw_text)
+def parse_template(tool_name: str, text: str) -> dict | None:
+    """Read a filled-in template. Returns the raw args found (blank lines omitted), or
+    None if the text has no recognisable "Label: value" lines at all — i.e. the user
+    ignored the template and wrote a normal sentence, which the caller should parse
+    as free text instead."""
+    fields = {label.lower(): (arg, kind) for label, arg, kind in TEMPLATES[tool_name]}
+    found_label = False
+    args = {}
+    for line in text.splitlines():
+        label, sep, value = line.partition(':')
+        label = label.strip().lower().lstrip('•-* ')
+        if not sep or _TEMPLATE_ALIASES.get(label, label) not in fields:
+            continue
+        found_label = True
+        value = value.strip()
+        if not value:
+            continue
+        arg, kind = fields[_TEMPLATE_ALIASES.get(label, label)]
+        if kind == 'int':
+            m = re.search(r'\d+', value)
+            if m:
+                args[arg] = int(m.group())
+            elif value.lower() == 'studio':
+                args[arg] = 0
+        elif kind == 'type':
+            # Unrecognised text is kept as-is so the resolver asks, not silently defaulted.
+            args[arg] = normalize_inspection_type(value) or value
+        elif kind == 'date':
+            try:
+                datetime.fromisoformat(value)
+                args[arg] = value
+            except ValueError:
+                iso = normalize_date_text(value)
+                if iso:
+                    args[arg] = iso
+        else:
+            args[arg] = value
+    return args if found_label else None

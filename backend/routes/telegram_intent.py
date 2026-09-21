@@ -208,6 +208,30 @@ _TOOLS = [
         },
     },
     {
+        'name': 'query_inspection',
+        'description': (
+            "Look up the full details of a specific inspection, identified by its reference "
+            "number (e.g. \"INS-150\") and/or a property address, optionally narrowed by "
+            "inspection type or date — e.g. \"what inspection is INS-150?\" or \"when is 123 "
+            "Test Property check in?\". Prefer this over query_schedule whenever the question "
+            "is about one particular inspection rather than a day's agenda. Never changes anything."
+        ),
+        'input_schema': {
+            'type': 'object',
+            'properties': {
+                'reference_number': {'type': 'string', 'description': 'e.g. "INS-150", if mentioned'},
+                'property_address_fragment': {'type': 'string', 'description': 'Any part of the property address, if mentioned'},
+                'inspection_type': {
+                    'type': 'string',
+                    'enum': ['check_in', 'check_out', 'midterm', 'damage_report', 'heads_up'],
+                    'description': 'Only if a type is mentioned, e.g. "check in", "check out"',
+                },
+                'date': {'type': 'string', 'description': 'ISO YYYY-MM-DD, only if a specific date is mentioned'},
+            },
+            'required': [],
+        },
+    },
+    {
         'name': 'query_availability',
         'description': "Answer a read-only question about which field inspectors are free or busy on a given day, e.g. \"who's free tomorrow?\". Never changes anything.",
         'input_schema': {
@@ -247,8 +271,10 @@ def _system_prompt() -> str:
         "creating a new one. Use share_report when the message is about sending, emailing, "
         "or sharing a finished report. Use mark_invoice_paid when the message says an "
         "invoice has been paid, settled, or received — it accepts several inspections at "
-        "once, identified by reference number and/or property address. Use query_schedule "
-        "for read-only questions about "
+        "once, identified by reference number and/or property address. Use query_inspection "
+        "when asked about one specific inspection's details — by reference number (\"what is "
+        "INS-150?\") or by property and type (\"when is 123 Test Property check in?\"). Use "
+        "query_schedule for read-only questions about "
         "what's scheduled, happening, or done — a day's agenda, a property's status, an "
         "inspector's workload, or unassigned inspections — and query_availability only "
         "when asked who is free/available/busy on a given day. When a date range like "
@@ -1372,9 +1398,107 @@ def answer_query_availability(raw: dict, user) -> str:
     return '\n'.join(lines)
 
 
-READ_ONLY_TOOLS = {'query_schedule', 'query_availability'}
+def _format_inspection_details(insp, show_internal: bool) -> str:
+    prop = insp.property
+    client = prop.client if prop else None
+    kind = (insp.inspection_type or 'unknown').replace('_', ' ').title()
+    date_label = insp.conduct_date.strftime('%a %d %b %Y') if insp.conduct_date else 'No date set'
+    time_label = format_time_preference(insp.conduct_time_preference)
+
+    lines = [f"{insp.reference_number or f'#{insp.id}'} — {kind}"]
+    lines.append(f"Property: {prop.address if prop else 'Unknown property'}")
+    if client:
+        lines.append(f"Client: {client.name}" + (f' ({client.company})' if client.company else ''))
+    lines.append(f"Date: {date_label}" + ('' if time_label == 'Anytime' else f' - {time_label}'))
+    lines.append(f"Status: {(insp.status or 'unknown').replace('_', ' ').title()}")
+    lines.append(f"Inspector: {insp.inspector.name if insp.inspector else 'Unassigned'}")
+    if insp.typist:
+        lines.append(f"Typist: {insp.typist.name}")
+    if insp.tenant_name:
+        lines.append(f"Tenant: {insp.tenant_name}")
+    if insp.tenant_email:
+        lines.append(f"Tenant email: {insp.tenant_email}")
+    if insp.landlord_email:
+        lines.append(f"Landlord email: {insp.landlord_email}")
+    if insp.key_location:
+        lines.append(f"Key location: {insp.key_location}")
+    if insp.key_return:
+        lines.append(f"Key return: {insp.key_return}")
+    lines.append(f"Confirmed: {'Yes' if insp.confirmed else 'No'}")
+    lines.append(f"Invoice paid: {'Yes' if insp.invoice_paid else 'No'}")
+    if insp.deposit_amount is not None:
+        dep = f"£{insp.deposit_amount}"
+        if insp.deposit_scheme:
+            dep += f" ({insp.deposit_scheme}"
+            dep += f", ref {insp.deposit_ref})" if insp.deposit_ref else ')'
+        lines.append(f"Deposit: {dep}")
+    if insp.notes:
+        lines.append(f"Notes: {insp.notes}")
+    if show_internal and insp.internal_notes:
+        lines.append(f"Internal notes: {insp.internal_notes}")
+    return '\n'.join(lines)
+
+
+def answer_query_inspection(raw: dict, user) -> str:
+    from sqlalchemy.orm import selectinload
+    from models import Inspection, Property
+    from permissions import filter_inspections_for_user, is_admin_or_manager
+
+    ref = (raw.get('reference_number') or '').strip()
+    frag = (raw.get('property_address_fragment') or '').strip()
+    insp_type = normalize_inspection_type(raw.get('inspection_type') or '') if raw.get('inspection_type') else None
+    date_str = (raw.get('date') or '').strip()
+
+    if not ref and not frag:
+        return 'Which inspection? Give me a reference number (e.g. INS-150) or a property address.'
+
+    query = filter_inspections_for_user(Inspection.query, user).options(
+        selectinload(Inspection.property).selectinload(Property.client),
+        selectinload(Inspection.inspector),
+        selectinload(Inspection.typist),
+    )
+
+    if ref:
+        rows = query.filter(Inspection.reference_number.ilike(ref)).all()
+        if not rows:
+            rows = query.filter(Inspection.reference_number.ilike(f'%{ref}%')).limit(6).all()
+        if not rows:
+            return f'I couldn\'t find an inspection with reference "{ref}".'
+        label = f'reference "{ref}"'
+    else:
+        prop, err = _resolve_property_by_fragment(frag)
+        if err:
+            return err
+        query = query.filter(Inspection.property_id == prop.id)
+        if insp_type:
+            query = query.filter(Inspection.inspection_type == insp_type)
+        if date_str:
+            try:
+                d = datetime.fromisoformat(date_str).date()
+            except (ValueError, TypeError):
+                return f'I couldn\'t understand the date "{date_str}".'
+            day_start, day_end = _day_bounds(d)
+            query = query.filter(Inspection.conduct_date >= day_start, Inspection.conduct_date < day_end)
+        rows = query.order_by(Inspection.conduct_date.desc()).limit(4).all()
+        if not rows:
+            kind = f' {insp_type.replace("_", " ")}' if insp_type else ''
+            return f'I couldn\'t find a{kind} inspection at "{prop.address}".'
+        label = f'"{prop.address}"'
+
+    show_internal = is_admin_or_manager(user)
+    shown, extra = rows[:3], len(rows) > 3
+    text = '\n\n'.join(_format_inspection_details(i, show_internal) for i in shown)
+    if len(rows) > 1 and ref:
+        text = f'{len(rows)} inspections match {label}:\n\n' + text
+    elif extra:
+        text += f'\n\n…and more at {label} — add a type or date to narrow it down.'
+    return text
+
+
+READ_ONLY_TOOLS = {'query_schedule', 'query_availability', 'query_inspection'}
 
 ANSWERERS = {
+    'query_inspection':   answer_query_inspection,
     'query_schedule':     answer_query_schedule,
     'query_availability': answer_query_availability,
 }

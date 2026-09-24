@@ -95,6 +95,7 @@ _TOOLS = [
                 },
                 'tenant_email':   {'type': 'string'},
                 'reference_number': {'type': 'string', 'description': 'A reference number/code for the inspection, if explicitly given, e.g. "reference number 13939" or "ref INS-4"'},
+                'template_name': {'type': 'string', 'description': 'Name of the report template to use, only if the user names one (or answers a "which template?" question by name)'},
                 'continue_from_previous': {
                     'type': 'boolean',
                     'description': (
@@ -579,6 +580,76 @@ def _find_lifecycle_source(prop, inspection_type):
     )
 
 
+# Types the webapp's Add Inspection form offers no room template for — they use
+# sections configured in Settings instead.
+TEMPLATELESS_TYPES = ('midterm', 'heads_up')
+
+
+def _resolve_template(raw: dict, inspection_type: str):
+    """Template lookup for book_inspection, mirroring the webapp's Add Inspection form:
+    templates of the chosen type only, transient PDF-import skeletons excluded. Returns
+    (template_or_None, question). One template is used straight away; several are listed
+    for the user to pick by number (raw['_template_pick']) or name (raw['template_name']).
+    No templates for the type means None with no question — the backend then falls back
+    to the type's default, same as the webapp."""
+    from models import db, Template
+
+    if inspection_type in TEMPLATELESS_TYPES:
+        for k in ('_template_id', '_template_options', '_template_pick', 'template_name'):
+            raw.pop(k, None)
+        return None, None
+
+    tid = raw.get('_template_id')
+    if tid:
+        tpl = db.session.get(Template, tid)
+        if tpl and tpl.inspection_type == inspection_type:
+            return tpl, None
+        # Stale: the type changed since this was picked.
+        for k in ('_template_id', '_template_options'):
+            raw.pop(k, None)
+
+    templates = (
+        Template.query
+        .filter(Template.inspection_type == inspection_type,
+                (Template.is_transient == False) | (Template.is_transient == None))  # noqa: E712
+        .order_by(Template.is_default.desc(), Template.name)
+        .all()
+    )
+    if not templates:
+        return None, None
+    if len(templates) == 1:
+        return templates[0], None
+
+    pick = raw.pop('_template_pick', None)
+    if pick is not None:
+        try:
+            idx = int(pick) - 1
+            if idx < 0:
+                raise IndexError
+            options = raw.get('_template_options') or [t.id for t in templates]
+            tpl = db.session.get(Template, options[idx])
+        except (ValueError, IndexError):
+            return None, f"That's not one of the options — reply with a number from 1 to {len(templates)}."
+        if tpl and tpl.inspection_type == inspection_type:
+            raw['_template_id'] = tpl.id
+            return tpl, None
+
+    name = (raw.pop('template_name', None) or '').strip().lower()
+    if name:
+        exact = [t for t in templates if t.name.strip().lower() == name]
+        loose = exact or [t for t in templates if name in t.name.lower()]
+        if len(loose) == 1:
+            raw['_template_id'] = loose[0].id
+            return loose[0], None
+
+    raw['_template_options'] = [t.id for t in templates]
+    label = inspection_type.replace('_', ' ')
+    lines = [f'Which template for this {label}?'] + [
+        f"{i}. {t.name}{' (default)' if t.is_default else ''}" for i, t in enumerate(templates, 1)
+    ] + ['Reply with the number.']
+    return None, '\n'.join(lines)
+
+
 def resolve_book_inspection(raw: dict):
     frag = (raw.get('property_address_fragment') or '').strip()
     if not frag:
@@ -633,6 +704,10 @@ def resolve_book_inspection(raw: dict):
         raw.pop('inspection_type', None)
         return None, (f'I don\'t recognise the inspection type "{inspection_type}" — is it a check-in, '
                       'check-out, midterm, damage report or heads-up?')
+    template, question = _resolve_template(raw, inspection_type)
+    if question:
+        return None, question
+
     source_inspection_id = None
     source_label = None
     include_photos = False
@@ -660,6 +735,8 @@ def resolve_book_inspection(raw: dict):
         'inspector_name':          inspector_name_display,
         'tenant_email':            raw.get('tenant_email'),
         'reference_number':        (raw.get('reference_number') or '').strip() or None,
+        'template_id':             template.id if template else None,
+        'template_name':           template.name if template else None,
         'source_inspection_id':    source_inspection_id,
         'source_label':            source_label if source_inspection_id else None,
         'include_photos':          bool(include_photos),
@@ -999,6 +1076,8 @@ def summarize_inspection(resolved: dict) -> str:
     ]
     if resolved.get('inspector_name'):
         lines.append(f"• Inspector: {resolved['inspector_name']}")
+    if resolved.get('template_name'):
+        lines.append(f"• Template: {resolved['template_name']}")
     if resolved.get('reference_number'):
         lines.append(f"• Reference: {resolved['reference_number']}")
     if resolved.get('source_inspection_id'):
@@ -1098,6 +1177,7 @@ def build_inspection_payload(resolved: dict) -> dict:
         'inspector_id':            resolved.get('inspector_id'),
         'tenant_email':            resolved.get('tenant_email'),
         'reference_number':        resolved.get('reference_number'),
+        'template_id':             resolved.get('template_id'),
         'source_inspection_id':    resolved.get('source_inspection_id'),
         'include_photos':          resolved.get('include_photos', False),
     }
@@ -1625,7 +1705,7 @@ def render_template(tool_name: str) -> str:
     heading = 'new property' if tool_name == 'create_property' else 'inspection booking'
     text = f'Copy this, fill it in and send it back for the {heading}:\n\n' + '\n'.join(lines)
     if tool_name == 'book_inspection':
-        text += '\n\nOptions for Type: check-in, check-out, midterm, damage report or heads-up (leave blank for check-in). Shorthand like CI, CO, MT and DR works too.\nReference is autofilled if left blank.'
+        text += '\n\nOptions for Type: check-in, check-out, midterm, damage report or heads-up (leave blank for check-in). Shorthand like CI, CO, MT and DR works too.\nReference is autofilled if left blank.\nI\'ll list the available report templates for you to pick from once I have the type.'
     return text
 
 

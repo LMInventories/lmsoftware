@@ -139,6 +139,7 @@ def _advance_session(session, tool_name, raw_args):
     for key, stale in (
         ('address', ('_address_options', '_address_confirmed')),
         ('property_address_fragment', ('_property_id', '_property_options')),
+        ('inspection_type', ('_template_id', '_template_options')),
     ):
         if key in new_args and existing.get(key) and new_args[key] != existing[key]:
             for k in stale:
@@ -198,6 +199,8 @@ def _numeric_pick_key(session):
         return '_property_pick'
     if session.pending_tool == 'create_property' and raw.get('_address_options') and not raw.get('_address_confirmed'):
         return '_address_pick'
+    if session.pending_tool == 'book_inspection' and raw.get('_template_options') and not raw.get('_template_id'):
+        return '_template_pick'
     if session.pending_tool in ('update_inspection', 'share_report'):
         return '_pick'
     return None

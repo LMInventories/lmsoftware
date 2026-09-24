@@ -528,8 +528,12 @@ function activityMeta(eventType) {
 
 function formatActivityTime(dateString) {
   if (!dateString) return ''
-  return new Date(dateString).toLocaleString('en-GB', {
+  // created_at is stored as UTC but serialised without a zone suffix — without the 'Z'
+  // the browser would read it as local time and the London conversion would be off.
+  const utc = /(Z|[+-]\d{2}:?\d{2})$/.test(dateString) ? dateString : `${dateString}Z`
+  return new Date(utc).toLocaleString('en-GB', {
     day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
+    timeZone: 'Europe/London',
   })
 }
 

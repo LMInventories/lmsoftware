@@ -1247,6 +1247,8 @@ def transcribe_item():
             # Safety net for fabricated hardware — see _strip_unspoken_fabrication's docstring.
             # Reuses the room-mode guard by wrapping this single item's flat fields the same way.
             filled = _strip_unspoken_fabrication({'_item': filled}, transcript).get('_item', filled)
+            if is_check_out:
+                filled = _strip_trailing_full_stops({'_item': filled}).get('_item', filled)
 
         # Log usage
         try:
@@ -1697,6 +1699,40 @@ def _dedupe_filled(filled: dict) -> dict:
     return out
 
 
+_FULL_STOP_FIELDS = ('description', 'condition', 'checkOutCondition', 'notes',
+                     'cleanlinessNotes', 'locationSerial', 'reading')
+
+
+def _strip_trailing_full_stops(filled: dict) -> dict:
+    """
+    Check-out fills: drop the full stop the model tends to leave at the end of each line.
+    Applied per line (fields are \\n-separated), including newly created _subs. An
+    ellipsis ("...") is left alone.
+    """
+    if not isinstance(filled, dict):
+        return filled
+
+    def strip_lines(text):
+        lines = []
+        for line in text.split('\n'):
+            s = line.rstrip()
+            if s.endswith('.') and not s.endswith('..'):
+                s = s[:-1].rstrip()
+            lines.append(s if s != line.rstrip() else line)
+        return '\n'.join(lines)
+
+    def clean(fields):
+        f = dict(fields)
+        for key in _FULL_STOP_FIELDS:
+            if isinstance(f.get(key), str) and f[key]:
+                f[key] = strip_lines(f[key])
+        if isinstance(f.get('_subs'), list):
+            f['_subs'] = [clean(s) if isinstance(s, dict) else s for s in f['_subs']]
+        return f
+
+    return {k: clean(v) if isinstance(v, dict) else v for k, v in filled.items()}
+
+
 def _dedupe_redirect_leaks(filled: dict) -> dict:
     """
     Cross-item safety net for "Return to [item], add to condition/description, ..." commands.
@@ -2092,6 +2128,143 @@ def _unmatched_delete_retry_note(unmatched: list) -> str:
         f'different item is genuinely a better fit, use that one instead — but do not leave the\n'
         f'delete command unmatched and do not fill any content for the item it applies to.\n'
     )
+
+
+_NUMBER_WORDS = {w: str(n) for n, w in enumerate(
+    ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'])}
+
+
+def _norm_spoken(s: str) -> str:
+    """Lowercase, hyphens/punctuation to spaces, number words to digits — so "three-tiered"
+    (spoken) and "3-tiered" (written by the model) compare equal."""
+    toks = _re.findall(r"[a-z0-9]+", (s or '').lower().replace('-', ' '))
+    return ' '.join(_NUMBER_WORDS.get(t, t) for t in toks)
+
+
+def _dedupe_cross_item_subs(filled: dict, transcript: str, items: list) -> dict:
+    """
+    Deterministic fix for a newly created sub-item that shows up under two different items —
+    typically Contents sub-items (bathrooms especially) emitted under BOTH Contents and the item
+    spoken just before the Contents heading.
+
+    _find_cross_item_duplicates only flags lines over 20 chars and never removes anything, so
+    a copy on the wrong item survives. Here, for each identical (description, condition) that
+    appears as a new sub-item (no _sid) on one item and anywhere (sub-item or main entry) on
+    another, the owner is the item whose heading was spoken most recently BEFORE that text in
+    the transcript. Copies of the sub-item on any other item are dropped. Every occurrence of an
+    item name counts as a heading (not just the first, as _split_transcript_by_chapter does) —
+    a bathroom dictated "contents not fully inspected" mid-way through Built-in Storage, so the
+    first-occurrence rule would have mis-attributed the real Contents chapter. If the text can't
+    be located, or is spoken under several of the items, nothing is dropped — no guessing.
+    """
+    if not isinstance(filled, dict):
+        return filled
+    # Word list with clause info. A heading is an item name that stands alone as a clause
+    # (", contents," / ", toilet,") — the clerk announces it and pauses. An item name inside
+    # a longer clause is content ("toilet brush and holder", "contents not fully inspected",
+    # "wall mounted ...") and must not steal ownership of the sub-items that follow it.
+    words, before_punct, after_punct = [], [], []
+    pending_punct = True
+    for tok in _re.findall(r"[a-z0-9]+|[,.;:!?]", (transcript or '').lower().replace('-', ' ')):
+        if tok in ',.;:!?':
+            if after_punct:
+                after_punct[-1] = True
+            pending_punct = True
+            continue
+        words.append(_NUMBER_WORDS.get(tok, tok))
+        before_punct.append(pending_punct)
+        after_punct.append(False)
+        pending_punct = False
+    if not words:
+        return filled
+    t = ' '.join(words)
+    word_at = {}
+    off = 0
+    for i, w in enumerate(words):
+        word_at[off] = i
+        off += len(w) + 1
+    end_word = {}
+    off = 0
+    for i, w in enumerate(words):
+        end_word[off + len(w)] = i
+        off += len(w) + 1
+
+    headings = []  # (word_index, item_id)
+    for item in items:
+        name = _norm_spoken((item.get('name') or '').replace('&', ' and '))
+        if not name:
+            continue
+        for m in _item_name_pattern(name).finditer(t):
+            first, last = word_at.get(m.start()), end_word.get(m.end())
+            if first is None or last is None:
+                continue
+            if before_punct[first] and after_punct[last]:
+                headings.append((first, str(item.get('id'))))
+    if not headings:
+        return filled
+    headings.sort()
+
+    def owner_at(word_idx):
+        owner = None
+        for start, item_id in headings:
+            if start > word_idx:
+                break
+            owner = item_id
+        return owner
+
+    def norm_multi(text):
+        return _norm_fill_line(text or '')
+
+    def sub_key(sub):
+        return (norm_multi(sub.get('description')), norm_multi(sub.get('condition')))
+
+    # key -> {'subs': [item_id, ...], 'mains': [item_id, ...]}
+    copies = {}
+    for item_id, fields in filled.items():
+        if not isinstance(fields, dict):
+            continue
+        iid = str(item_id)
+        main_k = (norm_multi(fields.get('description')), norm_multi(fields.get('condition')))
+        if main_k[0]:
+            copies.setdefault(main_k, {'subs': [], 'mains': []})['mains'].append(iid)
+        for sub in (fields.get('_subs') or []):
+            if isinstance(sub, dict) and not sub.get('_sid'):
+                k = sub_key(sub)
+                if k[0]:
+                    copies.setdefault(k, {'subs': [], 'mains': []})['subs'].append(iid)
+
+    drop = {}  # item_id -> set of sub keys to remove from that item's _subs
+    for k, where in copies.items():
+        holders = set(where['subs']) | set(where['mains'])
+        if not where['subs'] or len(holders) < 2:
+            continue
+        toks = _norm_spoken(k[0]).split()  # newlines are already collapsed by _norm_fill_line
+        owners = set()
+        for n in range(len(toks), 0 if len(toks) == 1 else 1, -1):  # full phrase, then shorter prefixes (min 2 words)
+            phrase = ' '.join(toks[:n])
+            positions = [word_at[m.start()] for m in _re.finditer(r'\b' + _re.escape(phrase) + r'\b', t) if m.start() in word_at]
+            if positions:
+                owners = {o for o in (owner_at(p) for p in positions) if o}
+                break
+        supported = owners & holders
+        if not supported:
+            continue
+        for iid in set(where['subs']) - supported:
+            drop.setdefault(iid, set()).add(k)
+
+    if not drop:
+        return filled
+    out = {}
+    for item_id, fields in filled.items():
+        keys = drop.get(str(item_id))
+        if not keys or not isinstance(fields, dict):
+            out[item_id] = fields
+            continue
+        kept = [s for s in fields.get('_subs') or []
+                if not (isinstance(s, dict) and not s.get('_sid') and sub_key(s) in keys)]
+        print(f'[transcribe/room] dropped cross-item duplicate sub-item(s) from item {item_id}: {sorted(keys)}')
+        out[item_id] = {**fields, '_subs': kept}
+    return out
 
 
 def _find_cross_item_duplicates(filled: dict) -> list:
@@ -3589,11 +3762,17 @@ def transcribe_room():
             # Cross-item safety net: strip redirected text left behind on whatever
             # item/sub-item was open before a "Return to X, add to ..." command fired.
             filled = _dedupe_redirect_leaks(filled)
+            # Short sub-items (e.g. Contents) echoed under the item spoken before their heading.
+            filled = _dedupe_cross_item_subs(filled, full_transcript, items)
             # Safety net for fabricated hardware (e.g. "chrome handle" invented on a door/frame
             # item never mentioned aloud) — see _strip_unspoken_fabrication's docstring.
             filled = _strip_unspoken_fabrication(filled, full_transcript)
+            if is_check_out:
+                filled = _strip_trailing_full_stops(filled)
         else:
             filled, fill_msg = _claude_fill_fixed_section(full_transcript, section_name, section_type, items, is_check_out)
+            if is_check_out:
+                filled = _strip_trailing_full_stops(filled)
     except Exception as e:
         print(f'[transcribe/room] claude error: {e}')
         return jsonify({'error': f'AI fill error: {str(e)}'}), 500

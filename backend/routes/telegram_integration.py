@@ -62,6 +62,7 @@ telegram_bp = Blueprint('telegram', __name__)
 _AFFIRMATIVE = {'yes', 'y', 'confirm', 'confirmed', 'ok', 'okay', 'yep', 'yeah'}
 _NEGATIVE = {'no', 'n', 'cancel', 'nah'}
 _STALE_SESSION_AFTER = timedelta(minutes=15)
+_LOOKUP_HISTORY_TURNS = 3
 
 
 # ── Telegram API helpers ──────────────────────────────────────────────────
@@ -90,6 +91,10 @@ def _send_message(chat_id, text, reply_markup=None):
     if reply_markup:
         params['reply_markup'] = reply_markup
     _telegram_call('sendMessage', **params)
+
+
+def _send_typing(chat_id):
+    _telegram_call('sendChatAction', chat_id=chat_id, action='typing')
 
 
 def _answer_callback_query(callback_query_id):
@@ -123,7 +128,31 @@ def _reset_session(session):
     session.state = 'idle'
     session.pending_tool = None
     session.pending_action_json = None
+    session.lookup_history_json = None
     session.updated_at = datetime.now(timezone.utc)
+    db.session.commit()
+
+
+def _lookup_entries(session):
+    """Stored read-only {'q', 'a', 'at'} exchanges, dropping any older than
+    _STALE_SESSION_AFTER so an unrelated question hours later starts fresh."""
+    try:
+        entries = json.loads(session.lookup_history_json or '[]')
+        cutoff = datetime.now(timezone.utc) - _STALE_SESSION_AFTER
+        return [e for e in entries if datetime.fromisoformat(e['at']) > cutoff]
+    except (ValueError, TypeError, KeyError):
+        return []
+
+
+def _lookup_history(session):
+    return [{'q': e['q'], 'a': e['a']} for e in _lookup_entries(session)]
+
+
+def _remember_lookup(session, question, answer):
+    from models import db
+    entries = _lookup_entries(session)
+    entries.append({'q': question, 'a': answer, 'at': datetime.now(timezone.utc).isoformat()})
+    session.lookup_history_json = json.dumps(entries[-_LOOKUP_HISTORY_TURNS:])
     db.session.commit()
 
 
@@ -357,6 +386,8 @@ _HELP_TEXT = (
     'several at once\n'
     '• Ask me things like "what\'s on today?", "is 12 Smith St\'s report done?", or '
     '"who\'s free tomorrow?"\n'
+    '• Look anything up, e.g. "who\'s the landlord at 12 Smith St?", "show the activity '
+    'log for INS-150", "what\'s Acme\'s email?" — follow-up questions work too\n'
     '• /cancel — cancel whatever we\'re doing'
 )
 
@@ -516,7 +547,8 @@ def _handle_text_message(message):
             return
 
     context = _conversation_context(session) if forced_tool else None
-    intent = parse_message(text, forced_tool=forced_tool, context=context)
+    history = None if forced_tool else _lookup_history(session)
+    intent = parse_message(text, forced_tool=forced_tool, context=context, history=history)
 
     if intent.tool_name is None:
         _send_message(chat_id, intent.reply_text)
@@ -527,7 +559,13 @@ def _handle_text_message(message):
         # step. Only reachable here (idle-state, auto tool_choice): forced_tool
         # during awaiting_field is always a write-tool name, so a query tool
         # can never surface mid-flow.
-        _send_message(chat_id, ANSWERERS[intent.tool_name](intent.args, user))
+        args = dict(intent.args)
+        if intent.tool_name == 'lookup':
+            _send_typing(chat_id)  # the lookup loop takes a few seconds
+            args.update(_text=text, _history=history)
+        answer = ANSWERERS[intent.tool_name](args, user)
+        _send_message(chat_id, answer)
+        _remember_lookup(session, args.get('question') or text, answer)
         return
 
     _advance_session(session, intent.tool_name, intent.args)

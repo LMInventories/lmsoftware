@@ -92,6 +92,32 @@ def filter_inspections_for_user(query, user):
     return query.filter(False)
 
 
+def filter_clients_for_user(query, user):
+    """
+    Apply role-based filtering to a Client query.
+
+    - admin/manager: see everything
+    - client: only their own client record
+    - clerk: only clients owning a property with an inspection assigned to them
+    - typist: nothing
+    """
+    from models import Client, Property, Inspection
+    if user.role in ('admin', 'manager'):
+        return query
+    elif user.role == 'client':
+        return query.filter(Client.id == user.client_id)
+    elif user.role == 'clerk':
+        client_ids = (
+            Property.query
+            .join(Inspection, Inspection.property_id == Property.id)
+            .filter(Inspection.inspector_id == user.id)
+            .with_entities(Property.client_id)
+            .distinct()
+        )
+        return query.filter(Client.id.in_(client_ids))
+    return query.filter(False)
+
+
 def filter_properties_for_user(query, user):
     """
     Apply role-based filtering to a Property query.

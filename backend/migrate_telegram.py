@@ -68,6 +68,10 @@ with engine.connect() as conn:
     conn.execute(text(
         "CREATE UNIQUE INDEX IF NOT EXISTS ix_telegram_sessions_chat_id ON telegram_sessions (chat_id)"
     ))
+    # Recent read-only Q&A so follow-up questions ("and the tenant's email?") work.
+    conn.execute(text(
+        "ALTER TABLE telegram_sessions ADD COLUMN IF NOT EXISTS lookup_history_json TEXT"
+    ))
 
     conn.commit()
 

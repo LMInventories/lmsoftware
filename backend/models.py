@@ -824,4 +824,5 @@ class TelegramSession(db.Model):
     state                = db.Column(db.String(30), default='idle', nullable=False)  # idle | awaiting_field | awaiting_confirmation
     pending_tool         = db.Column(db.String(30))                                  # 'create_property' | 'book_inspection'
     pending_action_json  = db.Column(db.Text)                                        # accumulated tool args, JSON-encoded
+    lookup_history_json  = db.Column(db.Text)                                        # last few read-only [{q, a, at}] for follow-ups
     updated_at           = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))

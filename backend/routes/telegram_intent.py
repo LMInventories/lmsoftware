@@ -4,8 +4,10 @@ routes/telegram_intent.py
 Free-text intent parsing for the Telegram bot integration
 (routes/telegram_integration.py).
 
-Four write actions (create_property, book_inspection, update_inspection,
-share_report) plus two read-only ones (query_schedule, query_availability).
+Five write actions (create_property, book_inspection, update_inspection,
+share_report, mark_invoice_paid) plus read-only ones: query_schedule,
+query_inspection and query_availability have tuned reply formats, and lookup
+hands any other question about stored data to telegram_lookup.py's tool loop.
 Uses the Anthropic client (same pattern as backend/learning/proposal.py) with
 native tool-use so model output is structured instead of ask-for-JSON-and-
 strip-fences.
@@ -233,6 +235,30 @@ _TOOLS = [
         },
     },
     {
+        'name': 'lookup',
+        'description': (
+            'Any other read-only question about properties, clients or inspections — contact '
+            'details and emails (client, tenant, landlord), property details/meters/notes, keys, '
+            'deposits, signatures, invoices, activity logs/history, "anything mentioning X", '
+            'lists like "which of Acme\'s inspections are unpaid". Use when none of the more '
+            'specific query tools fit. Never changes anything.'
+        ),
+        'input_schema': {
+            'type': 'object',
+            'properties': {
+                'question': {
+                    'type': 'string',
+                    'description': (
+                        "The user's question, restated so it stands on its own — if it's a "
+                        'follow-up to the recent exchange, fill in what "it"/"they"/"there" '
+                        'refers to (address, reference, client).'
+                    ),
+                },
+            },
+            'required': ['question'],
+        },
+    },
+    {
         'name': 'query_availability',
         'description': "Answer a read-only question about which field inspectors are free or busy on a given day, e.g. \"who's free tomorrow?\". Never changes anything.",
         'input_schema': {
@@ -278,7 +304,10 @@ def _system_prompt() -> str:
         "query_schedule for read-only questions about "
         "what's scheduled, happening, or done — a day's agenda, a property's status, an "
         "inspector's workload, or unassigned inspections — and query_availability only "
-        "when asked who is free/available/busy on a given day. When a date range like "
+        "when asked who is free/available/busy on a given day. Use lookup for any other "
+        "question about stored data — contact details, emails, notes, meters, keys, deposits, "
+        "signatures, activity logs, clients, or searches — and for follow-up questions about "
+        "something just answered. When a date range like "
         "\"this week\" is meant, expand it to the Monday–Sunday of that week using today's "
         "date above. Messages often pack several facts into short trailing sentences (e.g. "
         "\"...next Wednesday. Reference number 13939. Clerk Robyn\") — extract every field "
@@ -314,7 +343,20 @@ def _context_prompt(context: dict) -> str:
     )
 
 
-def parse_message(text: str, *, forced_tool: str | None = None, context: dict | None = None) -> ParsedIntent:
+def _history_prompt(history: list[dict]) -> str:
+    lines = []
+    for h in history:
+        lines.append(f"User: {h['q']}")
+        lines.append(f"You: {h['a'][:600]}")
+    return (
+        '\n\nRecent read-only exchange in this chat (oldest first):\n' + '\n'.join(lines) +
+        '\nIf the new message is a follow-up question about that (e.g. "and the tenant\'s '
+        'email?"), use lookup with the question restated to stand on its own.'
+    )
+
+
+def parse_message(text: str, *, forced_tool: str | None = None, context: dict | None = None,
+                  history: list[dict] | None = None) -> ParsedIntent:
     """Run one Anthropic call to extract a tool call (or a plain reply) from `text`.
 
     forced_tool: when a slot-filling flow is already in progress, force the
@@ -326,6 +368,9 @@ def parse_message(text: str, *, forced_tool: str | None = None, context: dict | 
     because the forced tool has required fields, invents or overwrites values to
     satisfy them. With it, required-ness is dropped and the model is told what
     was asked and what is already known.
+
+    history: recent read-only [{'q', 'a'}] exchanges (idle state only), so a
+    follow-up question can be routed to lookup with its referent filled in.
     """
     client = anthropic.Anthropic(api_key=os.environ.get('ANTHROPIC_API_KEY'))
     tool_choice = {'type': 'tool', 'name': forced_tool} if forced_tool else {'type': 'auto'}
@@ -337,6 +382,8 @@ def parse_message(text: str, *, forced_tool: str | None = None, context: dict | 
         for t in tools:
             t['input_schema']['required'] = []
         system += _context_prompt(context)
+    elif history:
+        system += _history_prompt(history)
 
     message = client.messages.create(
         model=_MODEL,
@@ -360,8 +407,9 @@ def parse_message(text: str, *, forced_tool: str | None = None, context: dict | 
     reply_text = ''.join(b.text for b in message.content if b.type == 'text').strip()
     return ParsedIntent(reply_text=reply_text or (
         "I can create a property, book an inspection, reschedule/update one, share a "
-        "report, mark invoices paid, or answer schedule/status questions — tell me what "
-        "you need, or try /property or /inspection for a fill-in template."
+        "report, mark invoices paid, or look up anything about your properties, clients "
+        "and inspections — tell me what you need, or try /property or /inspection for a "
+        "fill-in template."
     ))
 
 
@@ -426,19 +474,23 @@ def _confirm_address(raw: dict, address: str):
     return address, '\n'.join(lines)
 
 
-def _find_property_matches(frag: str):
+def _find_property_matches(frag: str, base_query=None, limit: int = 6):
     """(properties, fuzzy). Substring match first; if that finds nothing, fall back to
     matching every word independently, so "123 Test Property" still finds
-    "123, Test Property Road" (punctuation/ordering differences)."""
+    "123, Test Property Road" (punctuation/ordering differences).
+
+    base_query lets telegram_lookup.py pass an already permission-scoped query."""
     from models import Property
     from sqlalchemy import and_
-    exact = Property.query.filter(Property.address.ilike(f'%{frag}%')).limit(6).all()
+    if base_query is None:
+        base_query = Property.query
+    exact = base_query.filter(Property.address.ilike(f'%{frag}%')).limit(limit).all()
     if exact:
         return exact, False
     tokens = [t for t in re.split(r'\W+', frag) if t]
     if not tokens:
         return [], False
-    loose = Property.query.filter(and_(*[Property.address.ilike(f'%{t}%') for t in tokens])).limit(6).all()
+    loose = base_query.filter(and_(*[Property.address.ilike(f'%{t}%') for t in tokens])).limit(limit).all()
     return loose, True
 
 
@@ -1575,12 +1627,25 @@ def answer_query_inspection(raw: dict, user) -> str:
     return text
 
 
-READ_ONLY_TOOLS = {'query_schedule', 'query_availability', 'query_inspection'}
+def answer_lookup(raw: dict, user) -> str:
+    """telegram_integration.py adds the original text as `_text` (fallback if the
+    model left `question` empty) and prior exchanges as `_history`."""
+    from routes.telegram_lookup import answer_lookup as run_lookup
+    question = (raw.get('question') or raw.get('_text') or '').strip()
+    try:
+        return run_lookup(question, user, raw.get('_history'))
+    except anthropic.APIError as e:
+        print(f'[telegram] lookup API error: {e}')
+        return "Sorry, I couldn't look that up just now — please try again in a moment."
+
+
+READ_ONLY_TOOLS = {'query_schedule', 'query_availability', 'query_inspection', 'lookup'}
 
 ANSWERERS = {
     'query_inspection':   answer_query_inspection,
     'query_schedule':     answer_query_schedule,
     'query_availability': answer_query_availability,
+    'lookup':             answer_lookup,
 }
 
 

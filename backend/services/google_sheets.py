@@ -318,10 +318,14 @@ def _find_existing_row(sheet_id: str, token: str, inspection) -> Optional[int]:
 
 def _get_next_row(sheet_id: str, token: str) -> int:
     """
-    Read column A to find the last populated cell, then return the next row
-    number.  Starts at row 2 (row 1 is the header).
+    Return the row after the last row holding real data (A:G or the K ID
+    stamp; H:J formulas are ignored).  Starts at row 2 (row 1 is the header).
+
+    Uses the last populated row index rather than a count of non-blank
+    cells in column A — a blank client name or a gap would otherwise keep
+    the count static and every new inspection would overwrite the same row.
     """
-    url = f'{_SHEETS_BASE}/{sheet_id}/values/A:A'
+    url = f'{_SHEETS_BASE}/{sheet_id}/values/A:K'
     req = urllib.request.Request(
         url,
         headers={'Authorization': f'Bearer {token}'},
@@ -330,9 +334,13 @@ def _get_next_row(sheet_id: str, token: str) -> int:
     with urllib.request.urlopen(req, timeout=10) as resp:
         data = json.loads(resp.read())
 
-    values    = data.get('values', [])
-    populated = sum(1 for r in values if r and str(r[0]).strip())
-    return max(2, populated + 1)
+    values = data.get('values', [])
+    last = 1
+    for idx, r in enumerate(values, start=1):
+        cells = list(r[:7]) + ([r[10]] if len(r) > 10 else [])
+        if any(str(c).strip() for c in cells):
+            last = idx
+    return last + 1
 
 
 def _write_row(sheet_id: str, token: str, row_number: int,

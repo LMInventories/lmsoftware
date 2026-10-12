@@ -821,8 +821,9 @@ class TelegramSession(db.Model):
 
     id                   = db.Column(db.Integer, primary_key=True)
     chat_id              = db.Column(db.BigInteger, nullable=False, unique=True, index=True)
-    state                = db.Column(db.String(30), default='idle', nullable=False)  # idle | awaiting_field | awaiting_confirmation
-    pending_tool         = db.Column(db.String(30))                                  # 'create_property' | 'book_inspection'
-    pending_action_json  = db.Column(db.Text)                                        # accumulated tool args, JSON-encoded
-    lookup_history_json  = db.Column(db.Text)                                        # last few read-only [{q, a, at}] for follow-ups
+    state                = db.Column(db.String(30), default='idle', nullable=False)  # idle | flow | lookup
+    pending_tool         = db.Column(db.String(30))                                  # flow name while state == 'flow': 'create_property' | 'book_inspection'
+    pending_action_json  = db.Column(db.Text)                                        # flow engine state (telegram_flows.py), JSON-encoded
+    lookup_history_json  = db.Column(db.Text)                                        # /lookup conversation [{role, content}] for follow-ups
+    last_update_id       = db.Column(db.BigInteger)                                  # newest Telegram update_id handled, to drop redeliveries
     updated_at           = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))

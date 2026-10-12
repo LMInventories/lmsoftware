@@ -40,3 +40,17 @@ resp = requests.post(
 )
 
 print(resp.status_code, resp.json())
+
+# Fill the "/" menu in the chat with the bot's commands.
+commands = requests.post(
+    f'https://api.telegram.org/bot{token}/setMyCommands',
+    json={'commands': [
+        {'command': 'property', 'description': 'Add a property'},
+        {'command': 'inspection', 'description': 'Book an inspection'},
+        {'command': 'lookup', 'description': 'Ask about properties, inspections, clients, the schedule'},
+        {'command': 'cancel', 'description': 'Stop what we are doing'},
+        {'command': 'help', 'description': 'What I can do'},
+    ]},
+    timeout=15,
+)
+print(commands.status_code, commands.json())

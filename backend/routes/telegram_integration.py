@@ -1,15 +1,21 @@
 """
 routes/telegram_integration.py
 ─────────────────────────────────
-Lets staff book inspections, create properties, reschedule inspections, and
-share completed reports by texting a Telegram bot in free text (or via the
-/property, /inspection, /share commands). Unlike Google/Microsoft/Dropbox/
-Slack/Zapier (all outbound, OAuth or self-issued-key authenticated), this
-module owns the one genuinely public, unauthenticated-by-JWT endpoint in the
-app: Telegram's webhook POSTs here directly. It's gated instead by a secret
-path segment AND Telegram's
-`X-Telegram-Bot-Api-Secret-Token` header, both checked with a constant-time
-compare before anything else runs.
+Staff (admin / manager) drive the app from a Telegram bot with three commands:
+
+  /property    guided, button-driven flow that adds a property
+  /inspection  guided, button-driven flow that books an inspection
+  /lookup      conversational, read-only questions about properties, inspections,
+               clients, the schedule and unpaid invoices (Claude, with memory of
+               the conversation until /cancel or 30 idle minutes)
+
+Report sharing and marking invoices paid come back as commands in a later phase
+(their resolvers and executors are kept in telegram_intent.py / below).
+
+This module owns the one genuinely public, unauthenticated-by-JWT endpoint in the
+app: Telegram's webhook POSTs here directly. It's gated by a secret path segment
+AND Telegram's `X-Telegram-Bot-Api-Secret-Token` header, both checked with a
+constant-time compare before anything else runs.
 
 Endpoints:
   POST   /api/telegram/webhook/<secret_path>  → Telegram's webhook receiver
@@ -22,19 +28,23 @@ Env vars:
                             access token in one — never store it in SystemSetting.
   TELEGRAM_WEBHOOK_SECRET — random string, e.g. secrets.token_urlsafe(32).
   TELEGRAM_BOT_USERNAME   — optional, shown in link-code instructions.
-  BACKEND_URL             — reused from the Google/Slack integrations' env vars;
-                            base URL used for the internal self-call that
-                            actually creates the property/inspection.
+  BACKEND_URL             — base URL for the internal self-call that actually
+                            creates the property/inspection.
+  ANTHROPIC_API_KEY       — /lookup only.
 
-Every write goes through a human-in-the-loop confirmation (see telegram_intent.py
-for the parsing/resolution logic) and then an ordinary internal HTTP call to
+Every write goes through a confirm card and then an ordinary internal HTTP call to
 this app's own /api/properties or /api/inspections, authenticated with a
 short-lived JWT minted for the linked user — so all existing role checks,
 validation, and side effects (Sheet sync, Calendar push) apply unchanged.
+
+Session (TelegramSession) states: idle | flow | lookup. In 'flow',
+pending_tool is the flow name and pending_action_json the flow engine's state
+(see telegram_flows.py); in 'lookup', lookup_history_json is the conversation.
 """
 from __future__ import annotations
 
 import json
+import logging
 import os
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -43,26 +53,15 @@ import requests
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, create_access_token
 
-from permissions import get_current_user
-from routes.telegram_intent import (
-    parse_message,
-    RESOLVERS,
-    SUMMARIZERS,
-    BUILD_PAYLOAD,
-    ACTION_CONFIG,
-    MULTI_TARGET_TOOLS,
-    parse_template,
-    render_template,
-    READ_ONLY_TOOLS,
-    ANSWERERS,
-)
+from permissions import get_current_user, is_admin_or_manager
+from routes import telegram_flows
+from routes.telegram_intent import ACTION_CONFIG, BUILD_PAYLOAD, MULTI_TARGET_TOOLS
 
 telegram_bp = Blueprint('telegram', __name__)
+log = logging.getLogger(__name__)
 
-_AFFIRMATIVE = {'yes', 'y', 'confirm', 'confirmed', 'ok', 'okay', 'yep', 'yeah'}
-_NEGATIVE = {'no', 'n', 'cancel', 'nah'}
-_STALE_SESSION_AFTER = timedelta(minutes=15)
-_LOOKUP_HISTORY_TURNS = 3
+_STALE_SESSION_AFTER = timedelta(minutes=30)
+_LOOKUP_MEMORY_CHARS = 14000  # rough cap on replayed conversation
 
 
 # ── Telegram API helpers ──────────────────────────────────────────────────
@@ -70,7 +69,7 @@ _LOOKUP_HISTORY_TURNS = 3
 def _telegram_call(method: str, **params):
     token = os.environ.get('TELEGRAM_BOT_TOKEN', '')
     if not token:
-        print('[telegram] TELEGRAM_BOT_TOKEN not set — skipping API call')
+        log.warning('[telegram] TELEGRAM_BOT_TOKEN not set — skipping API call')
         return None
     try:
         resp = requests.post(
@@ -79,10 +78,10 @@ def _telegram_call(method: str, **params):
             timeout=10,
         )
         if not resp.ok:
-            print(f'[telegram] {method} failed: {resp.status_code} {resp.text[:200]}')
+            log.warning('[telegram] %s failed: %s %s', method, resp.status_code, resp.text[:200])
         return resp
     except requests.RequestException as e:
-        print(f'[telegram] {method} error (non-fatal): {e}')
+        log.warning('[telegram] %s error (non-fatal): %s', method, e)
         return None
 
 
@@ -93,34 +92,55 @@ def _send_message(chat_id, text, reply_markup=None):
     _telegram_call('sendMessage', **params)
 
 
+def _send_replies(chat_id, replies):
+    for text, keyboard in replies:
+        _send_message(chat_id, text, reply_markup=keyboard)
+
+
 def _send_typing(chat_id):
     _telegram_call('sendChatAction', chat_id=chat_id, action='typing')
 
 
-def _answer_callback_query(callback_query_id):
-    _telegram_call('answerCallbackQuery', callback_query_id=callback_query_id)
-
-
-def _confirm_keyboard():
-    return {
-        'inline_keyboard': [[
-            {'text': '✅ Confirm', 'callback_data': 'confirm'},
-            {'text': '✏️ Edit', 'callback_data': 'edit'},
-            {'text': '❌ Cancel', 'callback_data': 'cancel'},
-        ]]
-    }
+def _answer_callback_query(callback_query_id, text=None):
+    params = {'callback_query_id': callback_query_id}
+    if text:
+        params['text'] = text
+    _telegram_call('answerCallbackQuery', **params)
 
 
 # ── Session helpers ────────────────────────────────────────────────────────
 
 def _get_or_create_session(chat_id):
     from models import db, TelegramSession
+    from sqlalchemy.exc import IntegrityError
     session = TelegramSession.query.filter_by(chat_id=chat_id).first()
     if session is None:
         session = TelegramSession(chat_id=chat_id, state='idle')
         db.session.add(session)
-        db.session.commit()
+        try:
+            db.session.commit()
+        except IntegrityError:  # a concurrent worker created it first
+            db.session.rollback()
+            session = TelegramSession.query.filter_by(chat_id=chat_id).first()
     return session
+
+
+def _is_duplicate_update(session, update_id) -> bool:
+    """Telegram redelivers an update when a webhook is slow to answer. The atomic
+    UPDATE only succeeds for the first worker to see a given update_id."""
+    if update_id is None:
+        return False
+    from models import db, TelegramSession
+    claimed = (
+        TelegramSession.query
+        .filter(TelegramSession.id == session.id,
+                (TelegramSession.last_update_id.is_(None)) | (TelegramSession.last_update_id < update_id))
+        .update({'last_update_id': update_id}, synchronize_session=False)
+    )
+    db.session.commit()
+    if claimed:
+        db.session.refresh(session)
+    return not claimed
 
 
 def _reset_session(session):
@@ -133,136 +153,60 @@ def _reset_session(session):
     db.session.commit()
 
 
-def _lookup_entries(session):
-    """Stored read-only {'q', 'a', 'at'} exchanges, dropping any older than
-    _STALE_SESSION_AFTER so an unrelated question hours later starts fresh."""
-    try:
-        entries = json.loads(session.lookup_history_json or '[]')
-        cutoff = datetime.now(timezone.utc) - _STALE_SESSION_AFTER
-        return [e for e in entries if datetime.fromisoformat(e['at']) > cutoff]
-    except (ValueError, TypeError, KeyError):
-        return []
-
-
-def _lookup_history(session):
-    return [{'q': e['q'], 'a': e['a']} for e in _lookup_entries(session)]
-
-
-def _remember_lookup(session, question, answer):
+def _touch(session):
     from models import db
-    entries = _lookup_entries(session)
-    entries.append({'q': question, 'a': answer, 'at': datetime.now(timezone.utc).isoformat()})
-    session.lookup_history_json = json.dumps(entries[-_LOOKUP_HISTORY_TURNS:])
-    db.session.commit()
-
-
-def _advance_session(session, tool_name, raw_args):
-    """Merge newly-extracted args into the session, resolve, and either ask a
-    follow-up question or move to confirmation."""
-    from models import db
-
-    existing = _load_pending_raw(session) if session.pending_tool == tool_name else {}
-    new_args = {k: v for k, v in raw_args.items() if v not in (None, '')}
-
-    # A different address/property fragment invalidates any lookup done for the old one.
-    for key, stale in (
-        ('address', ('_address_options', '_address_confirmed')),
-        ('property_address_fragment', ('_property_id', '_property_options')),
-        ('inspection_type', ('_template_id', '_template_options')),
-    ):
-        if key in new_args and existing.get(key) and new_args[key] != existing[key]:
-            for k in stale:
-                existing.pop(k, None)
-
-    merged = {**existing, **new_args}
-
-    resolved, question = RESOLVERS[tool_name](merged)
-
-    if question:
-        session.state = 'awaiting_field'
-        session.pending_tool = tool_name
-        session.pending_action_json = json.dumps(merged)
-        session.updated_at = datetime.now(timezone.utc)
-        db.session.commit()
-        _send_message(session.chat_id, question)
-        return
-
-    session.state = 'awaiting_confirmation'
-    session.pending_tool = tool_name
-    # '_raw' keeps the free-text fields (e.g. the property fragment) that `resolved` drops,
-    # so a correction at the confirm step re-resolves from everything already collected.
-    session.pending_action_json = json.dumps({**resolved, '_raw': merged})
     session.updated_at = datetime.now(timezone.utc)
     db.session.commit()
-    _send_message(session.chat_id, SUMMARIZERS[tool_name](resolved), reply_markup=_confirm_keyboard())
 
 
-def _load_pending_raw(session):
-    """The collected free-text fields for the in-progress flow. During confirmation the
-    stored blob is the resolved action with the raw fields tucked under '_raw'."""
+def _expire_if_stale(session):
+    if session.state != 'idle' and session.updated_at:
+        age = datetime.now(timezone.utc) - session.updated_at.replace(tzinfo=timezone.utc)
+        if age > _STALE_SESSION_AFTER:
+            _reset_session(session)
+
+
+# ── Flows (/property, /inspection) ─────────────────────────────────────────
+
+def _save_flow(session, state):
+    from models import db
+    session.state = 'flow'
+    session.pending_tool = state['flow']
+    session.pending_action_json = json.dumps(state)
+    session.updated_at = datetime.now(timezone.utc)
+    db.session.commit()
+
+
+def _load_flow(session):
     try:
-        data = json.loads(session.pending_action_json or '{}')
+        state = json.loads(session.pending_action_json or '')
     except (TypeError, ValueError):
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    raw = data.get('_raw', data)
-    return dict(raw) if isinstance(raw, dict) else {}
-
-
-def _conversation_context(session):
-    """What the parser needs to make sense of a short follow-up: the question just
-    asked (awaiting_field only) and what's already collected."""
-    raw = _load_pending_raw(session)
-    question = None
-    if session.state == 'awaiting_field':
-        _, question = RESOLVERS[session.pending_tool](dict(raw))
-    collected = {k: v for k, v in raw.items() if not k.startswith('_') and v not in (None, '')}
-    return {'question': question, 'collected': collected}
-
-
-def _numeric_pick_key(session):
-    """Which numbered list a bare-digit reply answers, or None if it isn't a pick."""
-    raw = _load_pending_raw(session)
-    if raw.get('_property_options') and not raw.get('_property_id'):
-        return '_property_pick'
-    if session.pending_tool == 'create_property' and raw.get('_address_options') and not raw.get('_address_confirmed'):
-        return '_address_pick'
-    if session.pending_tool == 'book_inspection' and raw.get('_template_options') and not raw.get('_template_id'):
-        return '_template_pick'
-    if session.pending_tool in ('update_inspection', 'share_report'):
-        return '_pick'
-    return None
-
-
-def _book_inspection_pending_yn_field(session):
-    """Peeks at what resolve_book_inspection would ask next — without
-    persisting anything — so a bare yes/no reply can be routed straight to
-    the right field instead of being sent through the LLM parser blind.
-    Returns None when book_inspection isn't currently waiting on one of its
-    two yes/no questions (continue_from_previous, include_photos)."""
-    raw = _load_pending_raw(session)
-    _, question = RESOLVERS['book_inspection'](raw)
-    if not question:
         return None
-    if question.startswith('Continue this report'):
-        return 'continue_from_previous'
-    if question.startswith('Include photos'):
-        return 'include_photos'
-    return None
+    return state if isinstance(state, dict) and state.get('flow') in telegram_flows.STEPS else None
 
 
-def _execute_pending_action(session, user):
-    tool_name = session.pending_tool
-    try:
-        resolved = json.loads(session.pending_action_json or '{}')
-    except (TypeError, ValueError):
-        resolved = {}
+def _start_flow(session, flow_name):
+    state, replies, _ = telegram_flows.start(flow_name)
+    session.lookup_history_json = None
+    _save_flow(session, state)
+    _send_replies(session.chat_id, replies)
 
-    if tool_name in MULTI_TARGET_TOOLS:
-        _execute_mark_invoice_paid(session, user, resolved)
-        return
 
+def _continue_flow(session, user, result):
+    """Persist the engine's new state, send its replies, and act on 'execute'/'cancelled'."""
+    state, replies, action = result
+    _save_flow(session, state)
+    _send_replies(session.chat_id, replies)
+    if action == 'cancelled':
+        _reset_session(session)
+        _send_message(session.chat_id, 'Cancelled.')
+    elif action == 'execute':
+        _execute_flow(session, user, state)
+
+
+def _execute_flow(session, user, state):
+    tool_name = state['flow']
+    resolved = telegram_flows.build_resolved(state)
     config = ACTION_CONFIG[tool_name]
     payload = BUILD_PAYLOAD[tool_name](resolved)
     backend_url = os.environ.get('BACKEND_URL', 'https://app.lminventories.co.uk').rstrip('/')
@@ -277,8 +221,9 @@ def _execute_pending_action(session, user):
             timeout=15,
         )
     except requests.RequestException as e:
-        print(f'[telegram] internal API call failed: {e}')
-        _send_message(session.chat_id, 'Something went wrong reaching the app — try confirming again in a moment.')
+        log.warning('[telegram] internal API call failed: %s', e)
+        _send_message(session.chat_id, 'Something went wrong reaching the app — tap Confirm again in a moment.',
+                      reply_markup=telegram_flows._confirm_reply(state)[1])
         return
 
     if 200 <= resp.status_code < 300:
@@ -286,21 +231,19 @@ def _execute_pending_action(session, user):
         _reset_session(session)
         if tool_name == 'create_property':
             _send_message(session.chat_id, f"✅ Property created: {body.get('address', payload.get('address'))}")
-        elif tool_name == 'book_inspection':
+        else:
             ref = body.get('reference_number') or f"#{body.get('id')}"
             _send_message(session.chat_id, f"✅ Inspection booked: {ref} at {body.get('property_address', resolved.get('property_address'))}")
-        elif tool_name == 'update_inspection':
-            _send_message(session.chat_id, f"✅ Inspection updated at {resolved.get('property_address')}.")
-        else:  # share_report
-            _send_message(session.chat_id, f"✅ Report sent to {', '.join(resolved.get('emails', []))}.")
     elif resp.status_code in (401, 403):
         _reset_session(session)
         _send_message(session.chat_id, "You don't have permission to do that.")
     elif resp.status_code == 400:
         _reset_session(session)
-        _send_message(session.chat_id, f'That didn\'t go through: {resp.text[:200]}')
+        _send_message(session.chat_id, f"That didn't go through: {resp.text[:200]}")
     else:
-        _send_message(session.chat_id, 'Something went wrong on the server — try confirming again in a moment.')
+        log.warning('[telegram] internal API call returned %s: %s', resp.status_code, resp.text[:200])
+        _send_message(session.chat_id, 'Something went wrong on the server — tap Confirm again in a moment.',
+                      reply_markup=telegram_flows._confirm_reply(state)[1])
 
 
 def _execute_mark_invoice_paid(session, user, resolved):
@@ -346,57 +289,93 @@ def _execute_mark_invoice_paid(session, user, resolved):
     _send_message(session.chat_id, '\n'.join(lines) or 'Nothing was updated.')
 
 
-# ── Fill-in templates (/property, /inspection) ─────────────────────────────
-# The command replies with a template of the required fields and parks the
-# session in state 'template'. The user's filled-in reply is read by
-# parse_template and handed to _advance_session exactly like a free-text
-# parse, so anything blank or ambiguous falls into the normal question flow.
+# ── Lookup (/lookup) ───────────────────────────────────────────────────────
 
-def _send_template(session, tool_name):
+def _lookup_messages(session):
+    """The stored conversation as [{'role', 'content'}], newest turns kept within a
+    character budget so a long chat never blows the context window."""
+    try:
+        turns = json.loads(session.lookup_history_json or '[]')
+    except (TypeError, ValueError):
+        return []
+    kept, budget = [], _LOOKUP_MEMORY_CHARS
+    for t in reversed(turns):
+        if not isinstance(t, dict) or 'role' not in t or 'content' not in t:
+            continue
+        budget -= len(t['content'])
+        if budget < 0 and kept:
+            break
+        kept.append({'role': t['role'], 'content': t['content']})
+    kept.reverse()
+    while kept and kept[0]['role'] != 'user':  # a conversation must open with the user
+        kept.pop(0)
+    return kept
+
+
+def _remember_lookup(session, question, stored_answer):
     from models import db
-    session.state = 'template'
-    session.pending_tool = tool_name
+    try:
+        turns = json.loads(session.lookup_history_json or '[]')
+    except (TypeError, ValueError):
+        turns = []
+    turns += [{'role': 'user', 'content': question}, {'role': 'assistant', 'content': stored_answer}]
+    session.lookup_history_json = json.dumps(turns[-40:])
+    session.updated_at = datetime.now(timezone.utc)
+    db.session.commit()
+
+
+def _lookup_turn(session, user, text):
+    import anthropic
+    from routes.telegram_lookup import answer_lookup
+
+    _send_typing(session.chat_id)  # the lookup loop takes a few seconds
+    try:
+        reply, stored = answer_lookup(text, user, _lookup_messages(session))
+    except anthropic.APIError as e:
+        log.warning('[telegram] lookup API error: %s', e)
+        _send_message(session.chat_id, "Sorry, I couldn't look that up just now — please try again in a moment.")
+        return
+    _send_message(session.chat_id, reply)
+    _remember_lookup(session, text, stored)
+
+
+def _start_lookup(session, user, question):
+    from models import db
+    if session.state != 'lookup':  # a fresh conversation
+        session.lookup_history_json = None
+    session.state = 'lookup'
+    session.pending_tool = None
     session.pending_action_json = None
     session.updated_at = datetime.now(timezone.utc)
     db.session.commit()
-    _send_message(session.chat_id, render_template(tool_name))
-
-
-def _handle_template_reply(session, text):
-    tool_name = session.pending_tool
-    args = parse_template(tool_name, text)
-    if args is None:
-        # They ignored the template and wrote a sentence — treat it as free text.
-        intent = parse_message(text, forced_tool=tool_name, context={'question': None, 'collected': {}})
-        args = intent.args if intent.tool_name else {}
-    _advance_session(session, tool_name, args)
+    if question:
+        _lookup_turn(session, user, question)
+    else:
+        _send_message(session.chat_id, _LOOKUP_INTRO)
 
 
 # ── Commands ─────────────────────────────────────────────────────────────────
 
 _HELP_TEXT = (
-    'I can help you manage inspections and properties. Try:\n'
-    '• Just tell me what you need, e.g. "book an inspection at 12 Smith St for Thursday"\n'
-    '• /property — get a template to fill in to create a property\n'
-    '• /inspection — get a template to fill in to book an inspection\n'
-    '• To reschedule or change an inspection, just tell me, e.g. "move the check-out '
-    'at 12 Smith St to next Friday"\n'
-    '• /share — send a completed report\'s PDF to the client and/or tenant\n'
-    '• Mark invoices paid, e.g. "mark INS-101 and 12 Smith St as paid" — works for '
-    'several at once\n'
-    '• Ask me things like "what\'s on today?", "is 12 Smith St\'s report done?", or '
-    '"who\'s free tomorrow?"\n'
-    '• Look anything up, e.g. "who\'s the landlord at 12 Smith St?", "show the activity '
-    'log for INS-150", "what\'s Acme\'s email?" — follow-up questions work too\n'
-    '• /cancel — cancel whatever we\'re doing'
+    'I can add properties and inspections, and answer questions. Commands:\n'
+    "• /property — add a property (I'll ask you step by step)\n"
+    '• /inspection — book an inspection\n'
+    '• /lookup — ask about a property, inspection, client, the schedule or unpaid '
+    "invoices; I remember what we've talked about, so follow-ups work\n"
+    "• /cancel — stop whatever we're doing"
+)
+
+_LOOKUP_INTRO = (
+    'Ask me anything about properties, inspections, clients, the schedule or unpaid invoices — '
+    'e.g. "what\'s on tomorrow?", "who\'s the tenant at 12 Smith St?", "what has Acme not paid yet?". '
+    "Follow-up questions work. /cancel when you're done."
 )
 
 
-def _handle_command(session, text):
-    """Returns True if `text` was a recognized command (and has already been
-    fully handled), False if the caller should fall through to normal
-    message handling."""
-    cmd = text.split()[0].lower()
+def _handle_command(session, user, text):
+    """True if `text` was a recognised command (already fully handled)."""
+    head, _, rest = text.partition(' ')
+    cmd = head.split('@')[0].lower()
     if cmd in ('/start', '/help'):
         _reset_session(session)
         _send_message(session.chat_id, _HELP_TEXT)
@@ -406,15 +385,13 @@ def _handle_command(session, text):
         _send_message(session.chat_id, 'Cancelled.')
         return True
     if cmd == '/property':
-        _send_template(session, 'create_property')
+        _start_flow(session, telegram_flows.PROPERTY_FLOW)
         return True
     if cmd == '/inspection':
-        _send_template(session, 'book_inspection')
+        _start_flow(session, telegram_flows.INSPECTION_FLOW)
         return True
-    if cmd == '/share':
-        # No template needed — share_report's own resolver already asks for the
-        # property and then who to send to, one question at a time.
-        _advance_session(session, 'share_report', {})
+    if cmd == '/lookup':
+        _start_lookup(session, user, rest.strip())
         return True
     return False
 
@@ -469,24 +446,10 @@ def _try_link(chat_id, code, message):
 
 # ── Message / callback handling ────────────────────────────────────────────
 
-def _handle_confirmation_reply(session, user, text):
-    normalized = text.strip().lower()
-    if normalized in _AFFIRMATIVE:
-        _execute_pending_action(session, user)
-        return
-    if normalized in _NEGATIVE:
-        _reset_session(session)
-        _send_message(session.chat_id, 'Cancelled.')
-        return
-    # Treat anything else as a correction — re-parse against the same tool and merge.
-    intent = parse_message(text, forced_tool=session.pending_tool, context=_conversation_context(session))
-    if intent.tool_name:
-        _advance_session(session, intent.tool_name, intent.args)
-    else:
-        _send_message(session.chat_id, 'Reply YES to confirm, NO to cancel, or tell me what to change.')
+_REFUSAL = "Sorry — this bot is for office staff (admins and managers) only."
 
 
-def _handle_text_message(message):
+def _handle_text_message(message, update_id=None):
     chat_id = message['chat']['id']
     text = (message.get('text') or '').strip()
     if not text:
@@ -501,99 +464,55 @@ def _handle_text_message(message):
 
     user = link.user
     session = _get_or_create_session(chat_id)
-
-    if text.startswith('/') and _handle_command(session, text):
+    if _is_duplicate_update(session, update_id):
+        return
+    if not is_admin_or_manager(user):
+        _send_message(chat_id, _REFUSAL)
         return
 
-    if session.state != 'idle' and session.updated_at:
-        age = datetime.now(timezone.utc) - session.updated_at.replace(tzinfo=timezone.utc)
-        if age > _STALE_SESSION_AFTER:
+    _expire_if_stale(session)
+
+    if text.startswith('/') and _handle_command(session, user, text):
+        return
+
+    if session.state == 'flow':
+        state = _load_flow(session)
+        if state is None:
             _reset_session(session)
-
-    if session.state == 'awaiting_confirmation':
-        _handle_confirmation_reply(session, user, text)
-        return
-
-    if session.state == 'template':
-        _handle_template_reply(session, text)
-        return
-
-    forced_tool = session.pending_tool if session.state == 'awaiting_field' else None
-
-    # A bare number while update_inspection/share_report is disambiguating
-    # "which inspection?" is a pick, not free text to re-parse — re-parsing
-    # "2" would just make the model guess a nonsense property address out of
-    # a single digit.
-    if forced_tool and text.strip().isdigit():
-        pick_key = _numeric_pick_key(session)
-        if pick_key:
-            _advance_session(session, forced_tool, {pick_key: text.strip()})
+            _send_message(chat_id, 'That got lost — start again with /property or /inspection.')
             return
-
-    # "keep" while a new property's address is being confirmed means use it as typed.
-    if (forced_tool == 'create_property' and text.strip().lower() in ('keep', 'as typed', 'keep it', 'no')
-            and _numeric_pick_key(session) == '_address_pick'):
-        _advance_session(session, forced_tool, {'_address_confirmed': True})
-        return
-
-    # Same idea for a bare yes/no while book_inspection is asking whether to
-    # continue from a previous report or include its photos — a direct
-    # answer, not free text to re-parse blind.
-    normalized = text.strip().lower()
-    if forced_tool == 'book_inspection' and (normalized in _AFFIRMATIVE or normalized in _NEGATIVE):
-        pending_field = _book_inspection_pending_yn_field(session)
-        if pending_field:
-            _advance_session(session, forced_tool, {pending_field: normalized in _AFFIRMATIVE})
-            return
-
-    context = _conversation_context(session) if forced_tool else None
-    history = None if forced_tool else _lookup_history(session)
-    intent = parse_message(text, forced_tool=forced_tool, context=context, history=history)
-
-    if intent.tool_name is None:
-        _send_message(chat_id, intent.reply_text)
-        return
-
-    if intent.tool_name in READ_ONLY_TOOLS:
-        # Reads have no side effects — answer immediately, no session/confirm
-        # step. Only reachable here (idle-state, auto tool_choice): forced_tool
-        # during awaiting_field is always a write-tool name, so a query tool
-        # can never surface mid-flow.
-        args = dict(intent.args)
-        if intent.tool_name == 'lookup':
-            _send_typing(chat_id)  # the lookup loop takes a few seconds
-            args.update(_text=text, _history=history)
-        answer = ANSWERERS[intent.tool_name](args, user)
-        _send_message(chat_id, answer)
-        _remember_lookup(session, args.get('question') or text, answer)
-        return
-
-    _advance_session(session, intent.tool_name, intent.args)
+        _continue_flow(session, user, telegram_flows.handle_text(state, text))
+    elif session.state == 'lookup':
+        _lookup_turn(session, user, text)
+    else:
+        _send_message(chat_id, 'Use /property, /inspection or /lookup — or /help to see what I can do.')
 
 
-def _handle_callback_query(cq):
+def _handle_callback_query(cq, update_id=None):
     chat_id = cq['message']['chat']['id']
     data = cq.get('data', '')
-    _answer_callback_query(cq['id'])
 
     from models import TelegramLink
 
     link = TelegramLink.query.filter_by(chat_id=chat_id).first()
-    if not link:
+    if not link or not is_admin_or_manager(link.user):
+        _answer_callback_query(cq['id'])
         return
     session = _get_or_create_session(chat_id)
-
-    if session.state != 'awaiting_confirmation':
+    if _is_duplicate_update(session, update_id):
         return
 
-    if data == 'confirm':
-        _execute_pending_action(session, link.user)
-    elif data == 'cancel':
-        _reset_session(session)
-        _send_message(chat_id, 'Cancelled.')
-    elif data == 'edit':
-        _send_message(chat_id, 'Tell me what to change.')
-        # Stays in awaiting_confirmation — the next text message is treated as a correction.
+    parts = data.split(':', 2)
+    state = _load_flow(session) if session.state == 'flow' else None
+    if len(parts) != 3 or parts[0] != 'f' or state is None:
+        _answer_callback_query(cq['id'], 'That button has expired.')
+        return
+    _answer_callback_query(cq['id'])
+    _expire_if_stale(session)
+    if session.state != 'flow':
+        _send_message(chat_id, 'That timed out — start again with /property or /inspection.')
+        return
+    _continue_flow(session, link.user, telegram_flows.handle_callback(state, parts[1], parts[2]))
 
 
 # ── Routes ──────────────────────────────────────────────────────────────────
@@ -610,17 +529,32 @@ def webhook(secret_path):
         return '', 403
 
     update = request.get_json(silent=True) or {}
+    update_id = update.get('update_id')
 
     try:
         if 'callback_query' in update:
-            _handle_callback_query(update['callback_query'])
+            _handle_callback_query(update['callback_query'], update_id)
         elif 'message' in update and 'text' in update['message']:
-            _handle_text_message(update['message'])
+            _handle_text_message(update['message'], update_id)
         # Other update types (photos, stickers, edited messages, ...) are ignored.
-    except Exception as e:
-        print(f'[telegram] webhook handler error (non-fatal): {e}')
+    except Exception:
+        log.exception('[telegram] webhook handler error (non-fatal)')
+        _tell_user_it_failed(update)
 
     return '', 200
+
+
+def _tell_user_it_failed(update):
+    """Never leave the user with silence after an unexpected error."""
+    try:
+        from models import db
+        db.session.rollback()
+        msg = update.get('message') or (update.get('callback_query') or {}).get('message') or {}
+        chat_id = (msg.get('chat') or {}).get('id')
+        if chat_id:
+            _send_message(chat_id, 'Something went wrong on my side — please try again, or /cancel to start over.')
+    except Exception:
+        log.exception('[telegram] could not report failure to user')
 
 
 @telegram_bp.route('/link-code', methods=['OPTIONS'])

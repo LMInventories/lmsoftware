@@ -275,7 +275,7 @@ async function generateTelegramCode() {
 }
 
 async function unlinkTelegram() {
-  if (!confirm('Unlink Telegram? You will no longer be able to book inspections or create properties from the bot.')) return
+  if (!confirm('Unlink Telegram? You will no longer be able to add properties, book inspections or look things up from the bot.')) return
   telegramUnlinking.value = true
   try {
     await api.http.delete('/api/telegram/unlink')
@@ -481,7 +481,7 @@ const integrations = [
     category: 'Communication',
     name: 'Telegram Bot',
     logo: 'https://cdn.simpleicons.org/telegram',
-    description: 'Book inspections and create properties by texting the InspectPro bot in plain English. Each team member links their own account — the bot always confirms before creating anything.',
+    description: 'Add properties, book inspections and look things up by messaging the InspectPro bot (/property, /inspection, /lookup). For admins and managers — each links their own account, and the bot always confirms before creating anything.',
     color: '#26A5E4',
     status: 'available',
     badge: 'Free',

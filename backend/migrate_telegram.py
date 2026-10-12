@@ -4,7 +4,7 @@ migrate_telegram.py
 Creates the telegram_links, telegram_link_codes, and telegram_sessions
 tables (see models.py::TelegramLink/TelegramLinkCode/TelegramSession) — the
 Telegram bot integration for booking inspections / creating properties
-via free-text chat.
+via guided chat flows and conversational lookups.
 
 Run once (or automatically via start.sh on deploy):
     python migrate_telegram.py
@@ -71,6 +71,11 @@ with engine.connect() as conn:
     # Recent read-only Q&A so follow-up questions ("and the tenant's email?") work.
     conn.execute(text(
         "ALTER TABLE telegram_sessions ADD COLUMN IF NOT EXISTS lookup_history_json TEXT"
+    ))
+
+    # Newest handled Telegram update_id, so redelivered webhooks are ignored.
+    conn.execute(text(
+        "ALTER TABLE telegram_sessions ADD COLUMN IF NOT EXISTS last_update_id BIGINT"
     ))
 
     conn.commit()

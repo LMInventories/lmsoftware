@@ -1,16 +1,15 @@
 """
 routes/telegram_lookup.py
 ───────────────────────────
-Open-ended, read-only lookups for the Telegram bot — "who's the landlord at 12
-Smith St?", "show the activity log for INS-150", "any notes mentioning the
-boiler?". telegram_intent.py routes anything that doesn't fit its tuned
-query_schedule / query_inspection / query_availability tools to the `lookup`
-tool, whose answerer is answer_lookup() below.
+The conversational, read-only /lookup for the Telegram bot — "who's the landlord
+at 12 Smith St?", "what's on tomorrow?", "what hasn't Acme paid yet?", "show the
+activity log for INS-150".
 
-Instead of one hand-written tool + reply format per question shape, a small
-tool-use loop lets the model search and fetch Properties, Clients and
-Inspections (plus activity logs and a free-text search across notes/emails)
-and then write the reply itself.
+A small tool-use loop lets Claude search and fetch Properties, Clients and
+Inspections (plus activity logs, the schedule, clerk availability, unpaid
+invoices and a free-text search across notes/emails) and then write the reply
+itself. telegram_integration.py replays the earlier turns of the conversation on
+every message, so follow-ups like "and the tenant's email?" work.
 
 Every tool is read-only and permission-scoped with the same helpers the webapp
 uses (permissions.filter_*_for_user), so a clerk or client user can never see
@@ -449,6 +448,70 @@ def search_text(user, query: str):
     return {'truncated': len(hits) > 20 or None, 'matches': hits[:20]}
 
 
+def get_schedule(user, date_from: str = '', date_to: str = '', inspector_name: str = '',
+                 unassigned_only: bool = False):
+    """The agenda for a day or range (default: today), soonest first."""
+    from routes.telegram_intent import _today_london
+    today = _today_london().isoformat()
+    return search_inspections(
+        user, date_from=date_from or today, date_to=date_to or date_from or today,
+        inspector_name=inspector_name, unassigned_only=unassigned_only, newest_first=False,
+    )
+
+
+def get_availability(user, date: str = ''):
+    """Which clerks have nothing booked on a day, and what the busy ones are doing."""
+    from models import Inspection, User
+    from permissions import is_admin_or_manager
+    from routes.telegram_intent import _day_bounds, _today_london, format_time_preference
+    from sqlalchemy.orm import selectinload
+
+    if not is_admin_or_manager(user):
+        return {'error': 'Availability is visible to managers only.'}
+    try:
+        d = datetime.fromisoformat(date).date() if date else _today_london()
+    except ValueError:
+        return {'error': 'Date must be ISO YYYY-MM-DD.'}
+    start, end = _day_bounds(d)
+    roster = User.query.filter(User.role == 'clerk').order_by(User.name.asc()).all()
+    if not roster:
+        return {'error': 'No clerks are set up.'}
+    busy = {}
+    rows = (Inspection.query
+            .filter(Inspection.conduct_date >= start, Inspection.conduct_date < end,
+                    Inspection.inspector_id.isnot(None), Inspection.pdf_import.is_(False))
+            .options(selectinload(Inspection.property)).order_by(Inspection.conduct_date.asc()).all())
+    for insp in rows:
+        busy.setdefault(insp.inspector_id, []).append(_clean({
+            'address': insp.property.address if insp.property else None,
+            'type': _label(insp.inspection_type),
+            'time': format_time_preference(insp.conduct_time_preference),
+        }))
+    return {
+        'date': _local_date(datetime.combine(d, datetime.min.time())),
+        'free_clerks': [u.name for u in roster if u.id not in busy],
+        'busy_clerks': [{'name': u.name, 'jobs': busy[u.id]} for u in roster if u.id in busy],
+    }
+
+
+def list_unpaid_invoices(user, client_name: str = '', client_id: int | None = None):
+    """Completed inspections whose invoice hasn't been marked paid, optionally for one client."""
+    from models import Client
+    if client_name and not client_id:
+        matches = _clients(user).filter(
+            Client.name.ilike(f'%{client_name}%') | Client.company.ilike(f'%{client_name}%')).limit(6).all()
+        if not matches:
+            return {'error': f'No client matching "{client_name}".'}
+        if len(matches) > 1:
+            return {'error': 'More than one client matches — ask which.',
+                    'clients': [{'client_id': c.id, 'name': c.name, 'company': c.company} for c in matches]}
+        client_id = matches[0].id
+    result = search_inspections(user, client_id=client_id, status='complete', invoice_paid=False,
+                                newest_first=False)
+    result['note'] = 'Completed inspections not yet marked invoice-paid, oldest first.'
+    return result
+
+
 _IMPLS = {
     'search_properties': search_properties,
     'get_property': get_property,
@@ -458,6 +521,9 @@ _IMPLS = {
     'get_inspection': get_inspection,
     'get_activity_log': get_activity_log,
     'search_text': search_text,
+    'get_schedule': get_schedule,
+    'get_availability': get_availability,
+    'list_unpaid_invoices': list_unpaid_invoices,
 }
 
 _ID = {'type': 'integer'}
@@ -524,6 +590,35 @@ LOOKUP_TOOLS = [
         'input_schema': {'type': 'object', 'properties': {'inspection_id': _ID}, 'required': ['inspection_id']},
     },
     {
+        'name': 'get_schedule',
+        'description': (
+            "The agenda: inspections booked for a day or date range (default today), soonest first, "
+            "optionally for one clerk or only the unassigned ones. Use for 'what's on today/tomorrow/this week', "
+            "'what's Sam doing Thursday', 'what's unassigned'."
+        ),
+        'input_schema': {'type': 'object', 'properties': {
+            'date_from': {'type': 'string', 'description': 'ISO YYYY-MM-DD, inclusive (default today)'},
+            'date_to': {'type': 'string', 'description': 'ISO YYYY-MM-DD, inclusive (default = date_from)'},
+            'inspector_name': {'type': 'string'},
+            'unassigned_only': {'type': 'boolean'},
+        }, 'required': []},
+    },
+    {
+        'name': 'get_availability',
+        'description': "Which clerks are free on a day and what the busy ones are doing. Use for 'who's free tomorrow'.",
+        'input_schema': {'type': 'object', 'properties': {
+            'date': {'type': 'string', 'description': 'ISO YYYY-MM-DD (default today)'},
+        }, 'required': []},
+    },
+    {
+        'name': 'list_unpaid_invoices',
+        'description': "Completed inspections whose invoice hasn't been marked paid, oldest first, optionally for one client (by name or client_id).",
+        'input_schema': {'type': 'object', 'properties': {
+            'client_name': {'type': 'string'},
+            'client_id': _ID,
+        }, 'required': []},
+    },
+    {
         'name': 'search_text',
         'description': (
             'Free-text search across property addresses/notes/meters, inspection notes, tenant '
@@ -565,9 +660,13 @@ def _system_prompt(user) -> str:
         "candidates briefly and ask which one.\n"
         "- The tools only return what this user is allowed to see; 'not found' may mean no access. "
         "Don't speculate about hidden records.\n"
-        "- You cannot change anything — for changes, tell the user to ask for it directly "
-        "(e.g. \"reschedule …\", \"mark … paid\"). You can't read report contents (room-by-room "
-        "conditions) yet.\n"
+        "- You are in a running conversation: earlier messages are above, so resolve follow-ups "
+        "('and the tenant?', 'what about tomorrow?') from them. Their notes in [brackets] list the "
+        "records you looked at — reuse those ids rather than searching again.\n"
+        "- You cannot change anything. To add a property or book an inspection, tell the user to "
+        "use /property or /inspection. You can't read report contents (room-by-room conditions) yet.\n"
+        "- For schedule questions use get_schedule / get_availability; for unpaid invoices use "
+        "list_unpaid_invoices.\n"
         "- Reply in plain text for Telegram: no markdown tables, no ** or #, short lines, "
         "at most ~10 list items (then say how many more and offer to narrow down).\n"
         "- Refer to inspections by reference number (or type + date + address), never by "
@@ -576,16 +675,27 @@ def _system_prompt(user) -> str:
     )
 
 
-def answer_lookup(question: str, user, history: list[dict] | None = None) -> str:
-    """history: previous [{'q', 'a'}] exchanges in this chat, oldest first, so a
-    follow-up like "and the tenant's email?" has something to refer to."""
+def _touched_note(touched: dict) -> str:
+    """A bracketed memory aid appended to the stored (not the sent) reply: the records
+    the model looked at, so a follow-up can go straight to get_* by id."""
+    bits = [f'{kind} {", ".join(str(i) for i in ids)}' for kind, ids in touched.items() if ids]
+    return f'\n[looked at: {"; ".join(bits)}]' if bits else ''
+
+
+_ID_ARGS = {'property_id': 'property_id', 'client_id': 'client_id', 'inspection_id': 'inspection_id'}
+
+
+def answer_lookup(question: str, user, history: list[dict] | None = None) -> tuple[str, str]:
+    """history: the conversation so far as [{'role', 'content'}] (user first), so a
+    follow-up like "and the tenant's email?" has something to refer to.
+
+    Returns (reply_to_send, text_to_remember). The remembered text is the reply plus
+    a note of the record ids looked at."""
     client = anthropic.Anthropic(api_key=os.environ.get('ANTHROPIC_API_KEY'))
     system = [{'type': 'text', 'text': _system_prompt(user)}]
+    touched: dict[str, list] = {key: [] for key in _ID_ARGS}
 
-    messages = []
-    for h in history or []:
-        messages.append({'role': 'user', 'content': h['q']})
-        messages.append({'role': 'assistant', 'content': h['a']})
+    messages = [{'role': h['role'], 'content': h['content']} for h in history or []]
     messages.append({'role': 'user', 'content': question})
 
     for _ in range(_MAX_ROUNDS):
@@ -598,12 +708,19 @@ def answer_lookup(question: str, user, history: list[dict] | None = None) -> str
         )
         if response.stop_reason != 'tool_use':
             text = ''.join(b.text for b in response.content if b.type == 'text').strip()
-            return (text or _NOT_PINNED_DOWN)[:_MAX_REPLY_CHARS]
+            reply = (text or _NOT_PINNED_DOWN)[:_MAX_REPLY_CHARS]
+            return reply, reply + _touched_note(touched)
 
         messages.append({'role': 'assistant', 'content': response.content})
-        messages.append({'role': 'user', 'content': [
-            {'type': 'tool_result', 'tool_use_id': b.id, 'content': _run_tool(b.name, dict(b.input), user)}
-            for b in response.content if b.type == 'tool_use'
-        ]})
+        results = []
+        for b in response.content:
+            if b.type != 'tool_use':
+                continue
+            args = dict(b.input)
+            for key in _ID_ARGS:
+                if isinstance(args.get(key), int) and args[key] not in touched[key]:
+                    touched[key].append(args[key])
+            results.append({'type': 'tool_result', 'tool_use_id': b.id, 'content': _run_tool(b.name, args, user)})
+        messages.append({'role': 'user', 'content': results})
 
-    return _NOT_PINNED_DOWN
+    return _NOT_PINNED_DOWN, _NOT_PINNED_DOWN

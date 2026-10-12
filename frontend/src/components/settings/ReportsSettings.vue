@@ -24,6 +24,7 @@ const form = ref({
   photo_room_item:            'below',        // 'above' | 'below' | 'hyperlink'
   show_photo_timestamp:       false,          // overlay timestamp on enlarged photos
   action_summary_position:    'bottom',       // 'top' | 'bottom' | 'none'
+  health_safety_summary:      false,          // add a Health & Safety Issues Summary page to every report
   invert_logo:                false,          // false = light mode (standard logo + dark text), true = dark mode (inverted logo + white text)
 })
 
@@ -75,7 +76,8 @@ async function selectClient(id) {
     form.value.photo_room_item        = ps.photo_room_item        || 'below'
     form.value.show_photo_timestamp      = ps.show_photo_timestamp      || false
     form.value.action_summary_position  = ps.action_summary_position  || 'bottom'
-    form.value.invert_logo               = !!selectedClient.value.invert_logo
+    form.value.health_safety_summary    = ps.health_safety_summary === true
+    form.value.invert_logo              = !!selectedClient.value.invert_logo
   } catch (err) {
     console.error('Failed to load client:', err)
   }
@@ -99,6 +101,7 @@ async function saveSettings() {
         photo_room_item:       form.value.photo_room_item,
         show_photo_timestamp:      form.value.show_photo_timestamp,
         action_summary_position:  form.value.action_summary_position,
+        health_safety_summary:    form.value.health_safety_summary,
       }),
     })
     saved.value = true
@@ -113,6 +116,7 @@ async function saveSettings() {
         photo_room_item:          form.value.photo_room_item,
         show_photo_timestamp:     form.value.show_photo_timestamp,
         action_summary_position:  form.value.action_summary_position,
+        health_safety_summary:    form.value.health_safety_summary,
       })
     }
     setTimeout(() => saved.value = false, 2500)
@@ -518,6 +522,21 @@ onMounted(() => fetchClients())
               <span class="action-pos-desc">No summary page</span>
             </button>
           </div>
+        </div>
+
+        <!-- Health & Safety Issues Summary -->
+        <div class="panel">
+          <div class="panel-hd">
+            <span class="panel-icon">⚠️</span>
+            Health &amp; Safety Issues Summary
+          </div>
+          <p class="panel-desc">
+            Adds a page at the end of Check In and Check Out reports listing each Yes/No fixed-section question answered "No", with the clerk's notes. Omitted when there are no issues.
+          </p>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <input type="checkbox" v-model="form.health_safety_summary" />
+            Include for this client
+          </label>
         </div>
 
         <!-- Disclaimer -->

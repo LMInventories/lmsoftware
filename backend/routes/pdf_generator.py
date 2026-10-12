@@ -292,6 +292,7 @@ class _PDFBuilder:
         self.item_pos = ps.get('photo_room_item',         'below')
         self.add_ts   = ps.get('show_photo_timestamp',    False) is True
         self.act_pos  = ps.get('action_summary_position', 'bottom')
+        self.hs_summary_enabled = ps.get('health_safety_summary', False) is True
 
         # ── System settings (branding, AIIC logo) ────────────────────────────
         self.sys_settings = {}
@@ -827,6 +828,7 @@ class _PDFBuilder:
         if self.is_heads_up:
             # Heads-Up Reports: cover then sections only — no disclaimer, rooms, or action summary
             story += self._fixed_sections()
+            story += self._hs_issues_summary()
             return story
         story += self._contents(page_map=page_map)
         story += self._disclaimer()
@@ -839,6 +841,7 @@ class _PDFBuilder:
             story += self._rooms()
         if self.is_check_out and self.act_pos == 'bottom':
             story += self._action_summary()
+        story += self._hs_issues_summary()
         story += self._signatures_page()
         return story
 
@@ -1248,6 +1251,8 @@ class _PDFBuilder:
             add(r.get('name', ''), f'anchor_room_{r["id"]}')
         if self.is_check_out and self.act_pos == 'bottom' and self.actions_summary:
             add('Action Summary', 'anchor_action_summary')
+        if self._hs_issues():
+            add('Health & Safety Issues Summary', 'anchor_hs_issues')
         add('Signatures', 'anchor_signatures')
 
         uw  = self._uw()
@@ -1662,6 +1667,62 @@ class _PDFBuilder:
             story += [PageBreak()] if is_last else [Spacer(1, 6*mm)]
 
         return story
+
+    # ── Health & Safety issues summary ────────────────────────────────────────
+    # Optional per client (report_photo_settings.health_safety_summary). Questions
+    # are worded so that "Yes" is the good answer, so every "No" is an issue.
+
+    def _hs_issues(self):
+        """Return [{'section', 'ref', 'question', 'notes'}] for every "No" answer
+        in the Yes/No sections. Cached; empty when the client hasn't enabled the
+        summary, and always empty for midterm / heads-up reports."""
+        if hasattr(self, '_hs_issues_cache'):
+            return self._hs_issues_cache
+        issues = []
+        if self.hs_summary_enabled and not (self.is_midterm or self.is_heads_up):
+            for si, section in enumerate(self.fixed_sections):
+                t   = section.get('type', '')
+                sid = section['id']
+                letter = self.LETTERS[si] if si < len(self.LETTERS) else str(si + 1)
+                vis = [r for r in (section.get('rows') or []) if not self._hidden(sid, r['id'])]
+                extra = self._extra(sid)
+                if t not in ('smoke_alarms', 'health_safety', 'fire_door_safety'):
+                    continue
+                sec_names = (self.rd.get(str(sid)) or {}).get('_names') or {}
+                for idx, r in enumerate(vis + extra):
+                    is_extra = idx >= len(vis)
+                    ans = (r.get('answer') if is_extra else (self._get(sid, r['id'], 'answer') or r.get('answer'))) or ''
+                    if ans.strip().lower() != 'no':
+                        continue
+                    notes = (r.get('notes') if is_extra else (self._get(sid, r['id'], 'notes') or r.get('notes'))) or ''
+                    if t == 'fire_door_safety':
+                        name = sec_names.get(str(r.get('id'))) or r.get('name', '')
+                        question = f"{name} — {r.get('question', '')}".strip(' —')
+                    else:
+                        question = r.get('question') or r.get('name', '')
+                    issues.append({'section': section.get('name', ''), 'ref': f'{letter}.{idx + 1}',
+                                   'question': question, 'notes': notes})
+        self._hs_issues_cache = issues
+        return issues
+
+    def _hs_issues_summary(self):
+        issues = self._hs_issues()
+        if not issues:
+            return []
+        uw     = self._uw()
+        widths = [10*mm, uw*0.22, uw*0.40, uw*0.28]
+        heads  = ['Ref', 'Section', 'Question', 'Notes']
+        hdr_p  = ParagraphStyle('hsh', fontName='Helvetica-Bold', fontSize=7.5, leading=10, textColor=_RED_TXT)
+        tbl_data = [[Paragraph(h, hdr_p) for h in heads]]
+        for i in issues:
+            tbl_data.append([Paragraph(i['ref'], self.s_ref), self._p(i['section']),
+                             self._p(i['question']), self._p(i['notes'] or '—', self.s_cell_sm)])
+        tbl = Table(tbl_data, colWidths=widths, repeatRows=1)
+        tbl.setStyle(self._table_style(brand=_RED_TXT, hdr_c=_WHITE))
+        story = [_HeaderBar('Health & Safety Issues Summary', self.brand, self.hdr_c, anchor='anchor_hs_issues'),
+                 Spacer(1, 2*mm), tbl]
+
+        return story + [PageBreak()]
 
     # ── Declaration ───────────────────────────────────────────────────────────
 

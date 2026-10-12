@@ -2,12 +2,12 @@
 routes/telegram_flows.py
 ──────────────────────────
 Guided, button-driven flows for the Telegram bot's /property, /inspection,
-/share and /paid commands. No LLM: every reply is routed by the step the flow is currently on.
+/share and /invoice commands. No LLM: every reply is routed by the step the flow is currently on.
 
 A flow is an ordered list of steps. State is a small JSON-able dict kept in
 TelegramSession.pending_action_json:
 
-    {'flow': 'create_property' | 'book_inspection' | 'share_report' | 'mark_invoice_paid',
+    {'flow': 'create_property' | 'book_inspection' | 'share_report' | 'invoice',
      'step': <current step name, or 'confirm' / 'edit'>,
      'data': {...answers so far...},
      'options': [...ids or strings behind the numbered buttons currently shown...]}
@@ -50,14 +50,14 @@ from routes.telegram_intent import (
 PROPERTY_FLOW = 'create_property'
 INSPECTION_FLOW = 'book_inspection'
 SHARE_FLOW = 'share_report'
-PAID_FLOW = 'mark_invoice_paid'
+INVOICE_FLOW = 'invoice'
 
 PROPERTY_STEPS = ['client', 'address', 'bedrooms', 'bathrooms', 'furnished', 'features', 'elevation', 'notes']
 INSPECTION_STEPS = ['property', 'type', 'date', 'time', 'clerk', 'template', 'source', 'photos', 'tenant_email', 'reference']
 SHARE_STEPS = ['report', 'recipients', 'note']
-PAID_STEPS = ['invoices']
+INVOICE_STEPS = ['invoice']
 STEPS = {PROPERTY_FLOW: PROPERTY_STEPS, INSPECTION_FLOW: INSPECTION_STEPS,
-         SHARE_FLOW: SHARE_STEPS, PAID_FLOW: PAID_STEPS}
+         SHARE_FLOW: SHARE_STEPS, INVOICE_FLOW: INVOICE_STEPS}
 
 # Keys each step owns in `data` — cleared when the step is re-asked.
 _STEP_KEYS = {
@@ -82,7 +82,7 @@ _STEP_KEYS = {
     'report': ['report_id', 'report_label', 'property_address', 'inspection_type', 'candidates'],
     'recipients': ['emails', 'recipients_done'],
     'note': ['note', 'note_done'],
-    'invoices': ['items', 'invoices_done', 'awaiting_client'],
+    'invoice': ['inspection_id'],
 }
 # Answers that become invalid when an earlier one changes.
 _DEPENDENTS = {
@@ -97,7 +97,7 @@ _EDIT_LABELS = {
     INSPECTION_FLOW: [('property', 'Property'), ('type', 'Type'), ('date', 'Date'), ('time', 'Time'),
                       ('clerk', 'Clerk'), ('tenant_email', 'Tenant email'), ('reference', 'Reference')],
     SHARE_FLOW: [('report', 'Report'), ('recipients', 'Recipients'), ('note', 'Message')],
-    PAID_FLOW: [('invoices', 'Change selection')],
+    INVOICE_FLOW: [],
 }
 
 _TYPE_LABELS = [('check_in', 'Check-in'), ('check_out', 'Check-out'), ('midterm', 'Midterm'),
@@ -826,137 +826,73 @@ def _accept_note(state, text, value):
     return None
 
 
-# ── Flow: mark_invoice_paid (step: invoices) ─────────────────────────────────
-
-_MAX_INVOICES = 20
-
+# ── Flow: invoice (step: invoice) ────────────────────────────────────────────
+# Look an inspection up by reference or address, see its invoice status, and
+# flip it paid / unpaid with one tap. The flow stays open on the card so another
+# change (or another lookup) is one tap away; /cancel or 30 idle minutes ends it.
 
 def _invoice_label(insp):
     when = insp.conduct_date.strftime('%d %b %Y') if insp.conduct_date else 'no date'
     addr = insp.property.address if insp.property else 'Unknown property'
-    paid = ' (paid)' if insp.invoice_paid else ''
+    paid = ' ✅' if insp.invoice_paid else ''
     return f"{insp.reference_number or f'#{insp.id}'} · {insp.inspection_type.replace('_', ' ').title()} · {when} · {addr}{paid}"
 
 
-def _invoices_prompt(state, lead=None):
+def invoice_card(state):
     d = state['data']
-    items = d.setdefault('items', [])
-    lines = [lead] if lead else []
-    if d.get('awaiting_client'):
-        lines.append('Type part of the client name.')
-    else:
-        lines.append('Which invoices have been paid? Type a reference number or address to add one, or use the buttons.')
-    if items:
-        lines.append('')
-        lines.append('To mark paid:')
-        lines += [f"• {it['reference_number']} — {it['property_address']}" for it in items]
-    rows = [[_btn('All unpaid', 'invoices', 'all'), _btn('By client', 'invoices', 'client')]]
-    rows += _chunk([_btn(f"✖ {it['reference_number']}", 'invoices', f'x{i}') for i, it in enumerate(items)], 3)
-    if items:
-        rows.append([_btn('Done', 'invoices', 'done')])
-    return '\n'.join(lines), _keyboard(rows)
+    paid = bool(d['paid'])
+    lines = [
+        f"Invoice for {d['reference_number']}",
+        f"• Property: {d['property_address']}",
+        f"• Client: {d.get('client_name') or 'Unknown'}",
+        f"• {d['inspection_type'].replace('_', ' ').title()} · {d['date_label']} · {d['status'].replace('_', ' ').title()}",
+        f"• Invoice: {'✅ Paid' if paid else '❌ Not paid'}",
+    ]
+    toggle = _btn('Mark as unpaid', 'invoice', 'unpay') if paid else _btn('Mark as paid', 'invoice', 'pay')
+    return '\n'.join(lines), _keyboard([[toggle], [_btn('Look up another', 'invoice', 'another')]])
 
 
-def _ask_invoices(state):
-    if state['data'].get('invoices_done'):
-        return None
-    return _invoices_prompt(state)
+def _ask_invoice(state):
+    if 'inspection_id' in state['data']:
+        return invoice_card(state)
+    return 'Which inspection? Type a reference number or part of the address.', None
 
 
-def _add_invoice(state, insp):
-    """Add one inspection to the selection. Returns a short note about what happened."""
-    items = state['data'].setdefault('items', [])
-    ref = insp.reference_number or f'#{insp.id}'
-    if insp.invoice_paid:
-        return f'{ref} is already marked paid.'
-    if any(it['inspection_id'] == insp.id for it in items):
-        return f'{ref} is already in the list.'
-    if len(items) >= _MAX_INVOICES:
-        return f'That is the most I can do at once ({_MAX_INVOICES}) — tap Done, then run /paid again for the rest.'
-    items.append({'inspection_id': insp.id, 'reference_number': ref, 'already_paid': False,
-                  'property_address': insp.property.address if insp.property else 'Unknown property'})
-    return f'Added {ref}.'
+def _load_invoice(state, insp):
+    d = state['data']
+    prop = insp.property
+    client = prop.client if prop else None
+    d.update(
+        inspection_id=insp.id, reference_number=insp.reference_number or f'#{insp.id}',
+        property_address=prop.address if prop else 'Unknown property',
+        client_name=client.name if client else None, inspection_type=insp.inspection_type,
+        status=insp.status or '', paid=bool(insp.invoice_paid),
+        date_label=insp.conduct_date.strftime('%d %b %Y') if insp.conduct_date else 'no date',
+    )
 
 
-def _unpaid_query(client_id=None):
+def _accept_invoice(state, text, value):
     from sqlalchemy.orm import defer
-    from models import Inspection, Property
-    q = (Inspection.query.options(defer(Inspection.report_data))
-         .filter(Inspection.status == 'complete', Inspection.invoice_paid.isnot(True)))
-    if client_id is not None:
-        q = q.join(Property, Inspection.property_id == Property.id).filter(Property.client_id == client_id)
-    return q.order_by(Inspection.conduct_date.asc())
-
-
-def _add_unpaid(state, client_id=None, who='anyone'):
-    rows = _unpaid_query(client_id).limit(_MAX_INVOICES).all()
-    if not rows:
-        return _invoices_prompt(state, f'No unpaid invoices found for {who}.')
-    notes = [_add_invoice(state, r) for r in rows]
-    full = next((n for n in notes if n.startswith('That is the most')), None)
-    return _invoices_prompt(state, full or f'Added {sum(n.startswith("Added") for n in notes)} unpaid invoice(s) for {who}.')
-
-
-def _accept_invoices(state, text, value):
-    from models import Client, Inspection, db
+    from models import Inspection, db
     d = state['data']
-    items = d.setdefault('items', [])
-    if value == 'done':
-        if not items:
-            return _invoices_prompt(state, 'Add at least one invoice first.')
-        d['invoices_done'] = True
-        return None
-    if value == 'all':
-        d['awaiting_client'] = False
-        return _add_unpaid(state)
-    if value == 'client':
-        d['awaiting_client'] = True
-        return _invoices_prompt(state)
-    if value and value[0] == 'x' and value[1:].isdigit():
-        i = int(value[1:])
-        if i < len(items):
-            gone = items.pop(i)
-            return _invoices_prompt(state, f"Removed {gone['reference_number']}.")
-        return _invoices_prompt(state)
-    if value and value[0] == 'o' and value[1:].isdigit():  # one of several matches
+    if value == 'another':
+        d.clear()
+        return 'Which inspection? Type a reference number or part of the address.', None
+    if value is not None:
+        if 'inspection_id' in d:
+            return invoice_card(state)              # a stale pay/unpay tap
         try:
-            insp = db.session.get(Inspection, state['options'][int(value[1:])])
-        except (IndexError, TypeError):
+            insp = db.session.get(Inspection, state['options'][int(value)])
+        except (ValueError, IndexError, TypeError):
             insp = None
         if insp is None:
-            return _invoices_prompt(state, 'That option has expired — search again.')
-        return _invoices_prompt(state, _add_invoice(state, insp))
-    if value and value[0] == 'c' and value[1:].isdigit():  # one of several clients
-        try:
-            client = db.session.get(Client, state['options'][int(value[1:])])
-        except (IndexError, TypeError):
-            client = None
-        if client is None:
-            return _invoices_prompt(state, 'That option has expired — type the client name again.')
-        d['awaiting_client'] = False
-        return _add_unpaid(state, client.id, client.name)
-    if value is not None:
-        return _invoices_prompt(state)
-
+            return 'That option has expired — search again.', None
+        _load_invoice(state, insp)
+        return invoice_card(state)
     q = (text or '').strip()
     if len(q) < 2:
-        return _invoices_prompt(state, 'Type a reference number or part of an address.')
-    if q.lower() == 'done':
-        return _accept_invoices(state, None, 'done')
-
-    if d.get('awaiting_client'):
-        rows = (Client.query.filter(Client.name.ilike(f'%{q}%') | Client.company.ilike(f'%{q}%'))
-                .order_by(Client.name.asc()).limit(_MAX_OPTIONS).all())
-        if not rows:
-            return _invoices_prompt(state, f'No client matching "{q}".')
-        if len(rows) > 1:
-            state['options'] = [c.id for c in rows]
-            return 'Which client?', _keyboard([[_btn(_clip(c.name + (f' ({c.company})' if c.company else '')), 'invoices', f'c{i}')]
-                                               for i, c in enumerate(rows)])
-        d['awaiting_client'] = False
-        return _add_unpaid(state, rows[0].id, rows[0].name)
-
-    from sqlalchemy.orm import defer
+        return 'Type a reference number or part of the address.', None
+    d.clear()                                       # a new search replaces the card
     base = Inspection.query.options(defer(Inspection.report_data)).filter(Inspection.pdf_import.is_(False))
     newest = Inspection.conduct_date.desc()
     rows = base.filter(Inspection.reference_number.ilike(q)).all() \
@@ -965,12 +901,15 @@ def _accept_invoices(state, text, value):
         props, _ = _find_property_matches(q, limit=_MAX_OPTIONS)
         if props:
             rows = base.filter(Inspection.property_id.in_([p.id for p in props])).order_by(newest).limit(_MAX_OPTIONS).all()
+            if not rows:
+                return f'There are no inspections at "{props[0].address}".', None
     if not rows:
-        return _invoices_prompt(state, f'Nothing found for "{q}".')
+        return f'Nothing found for "{q}" — try another reference or part of the address.', None
     if len(rows) == 1:
-        return _invoices_prompt(state, _add_invoice(state, rows[0]))
+        _load_invoice(state, rows[0])
+        return invoice_card(state)
     state['options'] = [r.id for r in rows]
-    return 'Which one?', _keyboard([[_btn(_clip(_invoice_label(r), 60), 'invoices', f'o{i}')] for i, r in enumerate(rows)])
+    return 'Which inspection?', _keyboard([[_btn(_clip(_invoice_label(r), 60), 'invoice', i)] for i, r in enumerate(rows)])
 
 
 _ASK = {
@@ -979,7 +918,7 @@ _ASK = {
     'property': _ask_property, 'type': _ask_type, 'date': _ask_date, 'time': _ask_time, 'clerk': _ask_clerk,
     'template': _ask_template, 'source': _ask_source, 'photos': _ask_photos,
     'tenant_email': _ask_tenant_email, 'reference': _ask_reference,
-    'report': _ask_report, 'recipients': _ask_recipients, 'note': _ask_note, 'invoices': _ask_invoices,
+    'report': _ask_report, 'recipients': _ask_recipients, 'note': _ask_note, 'invoice': _ask_invoice,
 }
 _ACCEPT = {
     'client': _accept_client, 'address': _accept_address,
@@ -988,7 +927,7 @@ _ACCEPT = {
     'property': _accept_property, 'type': _accept_type, 'date': _accept_date, 'time': _accept_time,
     'clerk': _accept_clerk, 'template': _accept_template, 'source': _accept_source, 'photos': _accept_photos,
     'tenant_email': _accept_tenant_email, 'reference': _accept_reference,
-    'report': _accept_report, 'recipients': _accept_recipients, 'note': _accept_note, 'invoices': _accept_invoices,
+    'report': _accept_report, 'recipients': _accept_recipients, 'note': _accept_note, 'invoice': _accept_invoice,
 }
 
 
@@ -1007,8 +946,9 @@ def build_resolved(state) -> dict:
     if state['flow'] == SHARE_FLOW:
         return {'inspection_id': d['report_id'], 'property_address': d['property_address'],
                 'inspection_type': d['inspection_type'], 'emails': list(d['emails']), 'notes': d.get('note')}
-    if state['flow'] == PAID_FLOW:
-        return {'items': d['items'], 'failures': []}
+    if state['flow'] == INVOICE_FLOW:
+        return {'inspection_id': d['inspection_id'], 'reference_number': d['reference_number'],
+                'property_address': d['property_address'], 'paid': bool(d.get('target'))}
     return {
         'property_id': d['property_id'], 'property_address': d['property_address'],
         'inspection_type': d['inspection_type'], 'conduct_date': datetime.fromisoformat(d['conduct_date']).isoformat(),
@@ -1080,7 +1020,7 @@ def _advance(state, replies):
         asked = _ASK[step](state)
         if asked is not None:
             state['step'] = step
-            state['options'] = state.get('options') if step in ('client', 'property', 'clerk', 'template') else []
+            state['options'] = state.get('options') if step in ('client', 'property', 'clerk', 'template', 'report', 'invoice') else []
             return state, replies + [asked], None
     state['step'] = 'confirm'
     state['options'] = []
@@ -1138,6 +1078,9 @@ def handle_callback(state, step, value):
 
 
 def _apply(state, step, text=None, value=None):
+    if state['flow'] == INVOICE_FLOW and value in ('pay', 'unpay') and 'inspection_id' in state['data']:
+        state['data']['target'] = value == 'pay'
+        return state, [], 'execute'
     stay = _ACCEPT[step](state, text, value)
     if stay is not None:
         return state, [stay], None

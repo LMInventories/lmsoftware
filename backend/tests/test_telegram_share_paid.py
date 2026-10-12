@@ -1,4 +1,4 @@
-"""/share and /paid: the flow steps, then through the dispatcher with the app's HTTP API stubbed."""
+"""/share and /invoice: the flow steps, then through the dispatcher with the app's HTTP API stubbed."""
 from datetime import datetime, timedelta
 
 import pytest
@@ -93,42 +93,33 @@ def test_share_edit_recipients_keeps_the_report(reports):
     assert state['step'] == 'recipients' and state['data']['report_id'] == reports['beta'].id
 
 
-# ── /paid ───────────────────────────────────────────────────────────────────
+# ── /invoice ────────────────────────────────────────────────────────────────
 
-def test_paid_add_by_reference_skips_paid_and_removes(reports):
-    state, _, _ = flows.start(flows.PAID_FLOW)
-    state, replies, _ = flows.handle_text(state, 'INS-11')
-    assert 'already marked paid' in _texts(replies) and state['data']['items'] == []
+def test_invoice_lookup_by_reference_shows_status_and_toggle(reports):
+    state, replies, _ = flows.start(flows.INVOICE_FLOW)
+    assert 'reference' in _texts(replies)
     state, replies, _ = flows.handle_text(state, 'INS-10')
-    assert [i['reference_number'] for i in state['data']['items']] == ['INS-10']
-    state, replies, _ = flows.handle_text(state, 'INS-10')
-    assert 'already in the list' in _texts(replies)
-    state, replies, _ = flows.handle_callback(state, 'invoices', 'x0')
-    assert state['data']['items'] == []
-    state, replies, _ = flows.handle_callback(state, 'invoices', 'done')
-    assert state['step'] == 'invoices' and 'at least one' in _texts(replies)
+    assert 'Not paid' in _texts(replies) and 'Acme' in _texts(replies)
+    assert [b['text'] for b in _buttons(replies)] == ['Mark as paid', 'Look up another']
+    state, replies, _ = flows.handle_text(state, 'INS-11')                    # a new search replaces the card
+    assert 'Paid' in _texts(replies) and _buttons(replies)[0]['text'] == 'Mark as unpaid'
 
 
-def test_paid_all_unpaid_and_by_client(reports):
-    state, _, _ = flows.start(flows.PAID_FLOW)
-    state, replies, _ = flows.handle_callback(state, 'invoices', 'all')
-    assert [i['reference_number'] for i in state['data']['items']] == ['INS-10', 'INS-13']     # oldest first
-
-    state, _, _ = flows.start(flows.PAID_FLOW)
-    state, _, _ = flows.handle_callback(state, 'invoices', 'client')
-    state, replies, _ = flows.handle_text(state, 'beta')
-    assert [i['reference_number'] for i in state['data']['items']] == ['INS-13']
-    state, replies, _ = flows.handle_callback(state, 'invoices', 'done')
-    assert state['step'] == 'confirm' and 'INS-13' in _texts(replies)
-    assert flows.build_resolved(state)['items'][0]['inspection_id'] == reports['beta'].id
-
-
-def test_paid_ambiguous_address_shows_choices(reports):
-    state, _, _ = flows.start(flows.PAID_FLOW)
+def test_invoice_lookup_by_address_offers_choices(reports):
+    state, _, _ = flows.start(flows.INVOICE_FLOW)
     state, replies, _ = flows.handle_text(state, 'smith street')
-    assert state['data']['items'] == [] and len(_buttons(replies)) == 3
-    state, replies, _ = flows.handle_callback(state, 'invoices', 'o0')
-    assert len(state['data']['items']) == 1
+    assert 'inspection_id' not in state['data'] and len(_buttons(replies)) == 3
+    state, replies, _ = flows.handle_callback(state, 'invoice', '0')
+    assert 'inspection_id' in state['data'] and 'Invoice for' in _texts(replies)
+
+
+def test_invoice_not_found_and_look_up_another(reports):
+    state, _, _ = flows.start(flows.INVOICE_FLOW)
+    state, replies, _ = flows.handle_text(state, 'zzzz nothing')
+    assert 'Nothing found' in _texts(replies)
+    state, _, _ = flows.handle_text(state, 'INS-10')
+    state, replies, _ = flows.handle_callback(state, 'invoice', 'another')
+    assert state['data'] == {} and 'Which inspection' in _texts(replies)
 
 
 # ── Through the dispatcher ──────────────────────────────────────────────────
@@ -184,29 +175,38 @@ def test_share_posts_emails_to_the_share_endpoint(reports, sent, monkeypatch):
     assert 'Sending the report' in _last(sent) and 'b@example.com' in _last(sent)
 
 
-def test_paid_puts_invoice_paid_for_each_item_and_reports_failures(reports, sent, monkeypatch):
+def test_invoice_toggle_puts_the_new_status_and_redraws_the_card(reports, sent, monkeypatch):
     _link(reports)
     puts = []
 
     class Resp:
-        def __init__(self, code):
-            self.status_code = code
+        status_code = 200
 
-    def fake_put(url, json=None, **kw):
-        puts.append((url, json))
-        return Resp(500 if url.endswith(f"/{reports['beta'].id}") else 200)
-    monkeypatch.setattr(tg.requests, 'put', fake_put)
-
-    _say('/paid')
-    _tap('f:invoices:all')
-    _tap('f:invoices:done')
-    _tap('f:confirm:yes')
-    assert [p[1] for p in puts] == [{'invoice_paid': True}] * 2
+    monkeypatch.setattr(tg.requests, 'put', lambda url, json=None, **kw: puts.append((url, json)) or Resp())
+    _say('/invoice')
+    _say('INS-10')
+    _tap('f:invoice:pay')
+    assert puts[-1][1] == {'invoice_paid': True} and puts[-1][0].endswith(f"/api/inspections/{reports['out'].id}")
     text = _last(sent)
-    assert 'Marked as paid' in text and 'INS-10' in text and 'Could not update' in text and 'INS-13' in text
-    assert tg._get_or_create_session(CHAT).state == 'idle'
+    assert 'Marked as paid' in text and 'Invoice: ✅ Paid' in text
+    _tap('f:invoice:unpay')
+    assert puts[-1][1] == {'invoice_paid': False} and 'Invoice: ❌ Not paid' in _last(sent)
+    assert tg._get_or_create_session(CHAT).state == 'flow'
+
+
+def test_invoice_failure_changes_nothing(reports, sent, monkeypatch):
+    _link(reports)
+
+    class Resp:
+        status_code = 500
+
+    monkeypatch.setattr(tg.requests, 'put', lambda *a, **k: Resp())
+    _say('/invoice')
+    _say('INS-10')
+    _tap('f:invoice:pay')
+    assert "Couldn't update" in _last(sent) and 'Invoice: ❌ Not paid' in _last(sent)
 
 
 def test_commands_are_registered_and_listed():
     assert 'share' in flows.STEPS[flows.SHARE_FLOW] or flows.SHARE_FLOW in flows.STEPS
-    assert '/share' in tg._HELP_TEXT and '/paid' in tg._HELP_TEXT
+    assert '/share' in tg._HELP_TEXT and '/invoice' in tg._HELP_TEXT and '/paid' not in tg._HELP_TEXT

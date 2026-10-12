@@ -6,7 +6,7 @@ Staff (admin / manager) drive the app from a Telegram bot with these commands:
   /property    guided, button-driven flow that adds a property
   /inspection  guided, button-driven flow that books an inspection
   /share       guided flow that emails a completed report's PDF
-  /paid        guided flow that marks one or more invoices paid
+  /invoice     look up an inspection by reference or address, then mark its invoice paid or unpaid
   /lookup      conversational, read-only questions about properties, inspections,
                clients, the schedule and unpaid invoices (Claude, with memory of
                the conversation until /cancel or 30 idle minutes)
@@ -205,10 +205,10 @@ def _continue_flow(session, user, result):
 
 def _execute_flow(session, user, state):
     tool_name = state['flow']
-    resolved = telegram_flows.build_resolved(state)
-    if tool_name == telegram_flows.PAID_FLOW:
-        _execute_mark_invoice_paid(session, user, resolved)
+    if tool_name == telegram_flows.INVOICE_FLOW:
+        _execute_invoice_change(session, user, state)
         return
+    resolved = telegram_flows.build_resolved(state)
     config = ACTION_CONFIG[tool_name]
     payload = BUILD_PAYLOAD[tool_name](resolved)
     backend_url = os.environ.get('BACKEND_URL', 'https://app.lminventories.co.uk').rstrip('/')
@@ -251,48 +251,32 @@ def _execute_flow(session, user, state):
                       reply_markup=telegram_flows._confirm_reply(state)[1])
 
 
-def _execute_mark_invoice_paid(session, user, resolved):
-    """mark_invoice_paid's confirmed items each need their own PUT — this doesn't fit
-    ACTION_CONFIG's single method+path shape, so it's a dedicated executor rather than
-    a generic one forced to handle N targets."""
-    items = resolved.get('items', [])
+def _execute_invoice_change(session, user, state):
+    """Flip one inspection's invoice_paid via the app's own API (so the Sheet sync runs),
+    then show the card again with the new status."""
+    d = state['data']
+    want = bool(d.get('target'))
     backend_url = os.environ.get('BACKEND_URL', 'https://app.lminventories.co.uk').rstrip('/')
     token = create_access_token(identity=str(user.id), expires_delta=timedelta(minutes=2))
-
-    succeeded, failed = [], []
-    for item in items:
-        label = f"{item['reference_number']} — {item['property_address']}"
-        try:
-            resp = requests.put(
-                f"{backend_url}/api/inspections/{item['inspection_id']}",
-                json={'invoice_paid': True},
-                headers={'Authorization': f'Bearer {token}'},
-                timeout=15,
-            )
-        except requests.RequestException as e:
-            log.warning('[telegram] internal API call failed for inspection %s: %s', item['inspection_id'], e)
-            failed.append(f'{label}: connection error')
-            continue
-
-        if 200 <= resp.status_code < 300:
-            succeeded.append(label)
-        elif resp.status_code in (401, 403):
-            failed.append(f'{label}: no permission')
-        else:
-            log.warning('[telegram] mark paid for inspection %s returned %s', item['inspection_id'], resp.status_code)
-            failed.append(f'{label}: server error')
-
-    _reset_session(session)
-    lines = []
-    if succeeded:
-        lines.append('✅ Marked as paid:')
-        lines += [f'• {s}' for s in succeeded]
-    if failed:
-        if lines:
-            lines.append('')
-        lines.append('⚠️ Could not update:')
-        lines += [f'• {f}' for f in failed]
-    _send_message(session.chat_id, '\n'.join(lines) or 'Nothing was updated.')
+    try:
+        resp = requests.put(f"{backend_url}/api/inspections/{d['inspection_id']}", json={'invoice_paid': want},
+                            headers={'Authorization': f'Bearer {token}'}, timeout=15)
+    except requests.RequestException as e:
+        log.warning('[telegram] invoice update failed for inspection %s: %s', d['inspection_id'], e)
+        resp = None
+    d.pop('target', None)
+    if resp is not None and 200 <= resp.status_code < 300:
+        d['paid'] = want
+        lead = f"✅ Marked as {'paid' if want else 'unpaid'}."
+    elif resp is not None and resp.status_code in (401, 403):
+        lead = "You don't have permission to do that."
+    else:
+        if resp is not None:
+            log.warning('[telegram] invoice update for inspection %s returned %s', d['inspection_id'], resp.status_code)
+        lead = "Couldn't update that — nothing was changed. Try again in a moment."
+    _save_flow(session, state)
+    text, kb = telegram_flows.invoice_card(state)
+    _send_message(session.chat_id, f'{lead}\n\n{text}', reply_markup=kb)
 
 
 # ── Lookup (/lookup) ───────────────────────────────────────────────────────
@@ -363,11 +347,11 @@ def _start_lookup(session, user, question):
 # ── Commands ─────────────────────────────────────────────────────────────────
 
 _HELP_TEXT = (
-    'I can add properties and inspections, email reports, mark invoices paid and answer questions. Commands:\n'
+    'I can add properties and inspections, email reports, update invoices and answer questions. Commands:\n'
     "• /property — add a property (I'll ask you step by step)\n"
     '• /inspection — book an inspection\n'
     '• /share — email a completed report to the client, tenant or anyone else\n'
-    '• /paid — mark one or more invoices as paid\n'
+    '• /invoice — look up an inspection and mark its invoice paid or unpaid\n'
     '• /lookup — ask about a property, inspection, client, the schedule or unpaid '
     "invoices; I remember what we've talked about, so follow-ups work\n"
     "• /cancel — stop whatever we're doing"
@@ -401,8 +385,8 @@ def _handle_command(session, user, text):
     if cmd == '/share':
         _start_flow(session, telegram_flows.SHARE_FLOW)
         return True
-    if cmd == '/paid':
-        _start_flow(session, telegram_flows.PAID_FLOW)
+    if cmd == '/invoice':
+        _start_flow(session, telegram_flows.INVOICE_FLOW)
         return True
     if cmd == '/lookup':
         _start_lookup(session, user, rest.strip())
@@ -499,7 +483,7 @@ def _handle_text_message(message, update_id=None):
     elif session.state == 'lookup':
         _lookup_turn(session, user, text)
     else:
-        _send_message(chat_id, 'Use /property, /inspection, /share, /paid or /lookup — or /help to see what I can do.')
+        _send_message(chat_id, 'Use /property, /inspection, /share, /invoice or /lookup — or /help to see what I can do.')
 
 
 def _handle_callback_query(cq, update_id=None):

@@ -1,13 +1,13 @@
 """
 routes/telegram_flows.py
 ──────────────────────────
-Guided, button-driven flows for the Telegram bot's /property and /inspection
-commands. No LLM: every reply is routed by the step the flow is currently on.
+Guided, button-driven flows for the Telegram bot's /property, /inspection,
+/share and /paid commands. No LLM: every reply is routed by the step the flow is currently on.
 
 A flow is an ordered list of steps. State is a small JSON-able dict kept in
 TelegramSession.pending_action_json:
 
-    {'flow': 'create_property' | 'book_inspection',
+    {'flow': 'create_property' | 'book_inspection' | 'share_report' | 'mark_invoice_paid',
      'step': <current step name, or 'confirm' / 'edit'>,
      'data': {...answers so far...},
      'options': [...ids or strings behind the numbered buttons currently shown...]}
@@ -49,10 +49,15 @@ from routes.telegram_intent import (
 
 PROPERTY_FLOW = 'create_property'
 INSPECTION_FLOW = 'book_inspection'
+SHARE_FLOW = 'share_report'
+PAID_FLOW = 'mark_invoice_paid'
 
 PROPERTY_STEPS = ['client', 'address', 'bedrooms', 'bathrooms', 'furnished', 'features', 'elevation', 'notes']
 INSPECTION_STEPS = ['property', 'type', 'date', 'time', 'clerk', 'template', 'source', 'photos', 'tenant_email', 'reference']
-STEPS = {PROPERTY_FLOW: PROPERTY_STEPS, INSPECTION_FLOW: INSPECTION_STEPS}
+SHARE_STEPS = ['report', 'recipients', 'note']
+PAID_STEPS = ['invoices']
+STEPS = {PROPERTY_FLOW: PROPERTY_STEPS, INSPECTION_FLOW: INSPECTION_STEPS,
+         SHARE_FLOW: SHARE_STEPS, PAID_FLOW: PAID_STEPS}
 
 # Keys each step owns in `data` — cleared when the step is re-asked.
 _STEP_KEYS = {
@@ -74,11 +79,16 @@ _STEP_KEYS = {
     'photos': ['include_photos'],
     'tenant_email': ['tenant_email', 'tenant_email_done'],
     'reference': ['reference_number', 'reference_done'],
+    'report': ['report_id', 'report_label', 'property_address', 'inspection_type', 'candidates'],
+    'recipients': ['emails', 'recipients_done'],
+    'note': ['note', 'note_done'],
+    'invoices': ['items', 'invoices_done', 'awaiting_client'],
 }
 # Answers that become invalid when an earlier one changes.
 _DEPENDENTS = {
     'property': ['template', 'source', 'photos'],
     'type': ['template', 'source', 'photos'],
+    'report': ['recipients'],
 }
 
 _EDIT_LABELS = {
@@ -86,6 +96,8 @@ _EDIT_LABELS = {
                     ('furnished', 'Furnished'), ('features', 'Features'), ('elevation', 'Floor'), ('notes', 'Notes')],
     INSPECTION_FLOW: [('property', 'Property'), ('type', 'Type'), ('date', 'Date'), ('time', 'Time'),
                       ('clerk', 'Clerk'), ('tenant_email', 'Tenant email'), ('reference', 'Reference')],
+    SHARE_FLOW: [('report', 'Report'), ('recipients', 'Recipients'), ('note', 'Message')],
+    PAID_FLOW: [('invoices', 'Change selection')],
 }
 
 _TYPE_LABELS = [('check_in', 'Check-in'), ('check_out', 'Check-out'), ('midterm', 'Midterm'),
@@ -681,12 +693,293 @@ def _accept_reference(state, text, value):
     return None
 
 
+# ── Flow: share_report (steps: report, recipients, note) ─────────────────────
+
+def _report_label(insp):
+    when = insp.conduct_date.strftime('%d %b %Y') if insp.conduct_date else 'no date'
+    addr = insp.property.address if insp.property else 'Unknown property'
+    return f"{insp.inspection_type.replace('_', ' ').title()} · {when} · {insp.reference_number or f'#{insp.id}'} · {addr}"
+
+
+def _ask_report(state):
+    if 'report_id' in state['data']:
+        return None
+    return 'Which report do you want to email? Type part of the address or a reference number.', None
+
+
+def _accept_report(state, text, value):
+    from sqlalchemy.orm import defer
+    from models import Inspection, db
+    data = state['data']
+    if value is not None:
+        try:
+            insp = db.session.get(Inspection, state['options'][int(value)])
+        except (ValueError, IndexError, TypeError):
+            insp = None
+        if insp is None:
+            return 'That option has expired — search again.', None
+    else:
+        q = (text or '').strip()
+        if len(q) < 2:
+            return 'Type part of the address or a reference number.', None
+        base = (Inspection.query.options(defer(Inspection.report_data))
+                .filter(Inspection.status == 'complete', Inspection.report_data.isnot(None)))
+        newest = Inspection.conduct_date.desc()
+        rows = base.filter(Inspection.reference_number.ilike(f'%{q}%')).order_by(newest).limit(_MAX_OPTIONS).all()
+        if not rows:
+            props, _ = _find_property_matches(q, limit=_MAX_OPTIONS)
+            if props:
+                rows = base.filter(Inspection.property_id.in_([p.id for p in props])).order_by(newest).limit(_MAX_OPTIONS).all()
+                if not rows:
+                    return f'There is no completed report at "{props[0].address}" to share.', None
+        if not rows:
+            return f'No completed report matching "{q}" — try another part of the address or the reference.', None
+        if len(rows) > 1:
+            state['options'] = [r.id for r in rows]
+            return 'Which report?', _keyboard([[_btn(_clip(_report_label(r), 60), 'report', i)] for i, r in enumerate(rows)])
+        insp = rows[0]
+
+    prop = insp.property
+    client = prop.client if prop else None
+    candidates, seen = [], set()
+
+    def add(label, email):
+        if email and email.lower() not in seen:
+            seen.add(email.lower())
+            candidates.append({'label': label, 'email': email})
+
+    if client and client.email:
+        add(f'Client: {client.name}', client.email.strip())
+    for e in re.split(r'[,;\s]+', insp.tenant_email or ''):
+        add('Tenant', e.strip())
+    data.update(
+        report_id=insp.id, report_label=_report_label(insp),
+        property_address=prop.address if prop else 'Unknown property',
+        inspection_type=insp.inspection_type, candidates=candidates,
+        emails=[candidates[0]['email']] if len(candidates) == 1 else [],
+    )
+    return None
+
+
+_RECIPIENTS_PROMPT = 'Who should receive it? Tap an address to toggle it, or type an email address to add one. Then Done.'
+
+
+def _recipients_keyboard(data):
+    selected = {e.lower() for e in data.get('emails', [])}
+    rows = [[_btn(_clip(('☑ ' if c['email'].lower() in selected else '☐ ') + f"{c['label']} ({c['email']})", 60), 'recipients', i)]
+            for i, c in enumerate(data.get('candidates', []))]
+    return _keyboard(rows + [[_btn('Done', 'recipients', 'done')]])
+
+
+def _ask_recipients(state):
+    if state['data'].get('recipients_done'):
+        return None
+    state['data'].setdefault('emails', [])
+    return _RECIPIENTS_PROMPT, _recipients_keyboard(state['data'])
+
+
+def _accept_recipients(state, text, value):
+    data = state['data']
+    emails = data.setdefault('emails', [])
+    cands = data.setdefault('candidates', [])
+    again = (_RECIPIENTS_PROMPT, _recipients_keyboard(data))
+    if value == 'done' or (value is None and (text or '').strip().lower() == 'done'):
+        if not emails:
+            return 'Pick at least one recipient, or type an email address.', again[1]
+        data['recipients_done'] = True
+        return None
+    if value is not None:
+        try:
+            email = cands[int(value)]['email']
+        except (ValueError, IndexError, TypeError):
+            return again
+        if email in emails:
+            emails.remove(email)
+        else:
+            emails.append(email)
+        return again
+    found = [e for e in re.split(r'[,;\s]+', text or '') if e]
+    if not found or not all(_EMAIL_RE.match(e) for e in found):
+        return "That doesn't look like a valid email address — type one, or tap Done.", again[1]
+    known = {c['email'].lower() for c in cands}
+    for e in found:
+        if e.lower() not in known:
+            known.add(e.lower())
+            cands.append({'label': 'Added', 'email': e})
+        if e not in emails and e.lower() not in {x.lower() for x in emails}:
+            emails.append(e)
+    return again
+
+
+def _ask_note(state):
+    if state['data'].get('note_done'):
+        return None
+    return 'Add a message to the email? Type it, or Skip.', _keyboard([_skip_row('note')])
+
+
+def _accept_note(state, text, value):
+    data = state['data']
+    note = None if value == 'skip' else (text or '').strip()
+    if note and len(note) > 500:
+        return 'That message is too long — keep it under 500 characters, or Skip.', _keyboard([_skip_row('note')])
+    data.update(note=note or None, note_done=True)
+    return None
+
+
+# ── Flow: mark_invoice_paid (step: invoices) ─────────────────────────────────
+
+_MAX_INVOICES = 20
+
+
+def _invoice_label(insp):
+    when = insp.conduct_date.strftime('%d %b %Y') if insp.conduct_date else 'no date'
+    addr = insp.property.address if insp.property else 'Unknown property'
+    paid = ' (paid)' if insp.invoice_paid else ''
+    return f"{insp.reference_number or f'#{insp.id}'} · {insp.inspection_type.replace('_', ' ').title()} · {when} · {addr}{paid}"
+
+
+def _invoices_prompt(state, lead=None):
+    d = state['data']
+    items = d.setdefault('items', [])
+    lines = [lead] if lead else []
+    if d.get('awaiting_client'):
+        lines.append('Type part of the client name.')
+    else:
+        lines.append('Which invoices have been paid? Type a reference number or address to add one, or use the buttons.')
+    if items:
+        lines.append('')
+        lines.append('To mark paid:')
+        lines += [f"• {it['reference_number']} — {it['property_address']}" for it in items]
+    rows = [[_btn('All unpaid', 'invoices', 'all'), _btn('By client', 'invoices', 'client')]]
+    rows += _chunk([_btn(f"✖ {it['reference_number']}", 'invoices', f'x{i}') for i, it in enumerate(items)], 3)
+    if items:
+        rows.append([_btn('Done', 'invoices', 'done')])
+    return '\n'.join(lines), _keyboard(rows)
+
+
+def _ask_invoices(state):
+    if state['data'].get('invoices_done'):
+        return None
+    return _invoices_prompt(state)
+
+
+def _add_invoice(state, insp):
+    """Add one inspection to the selection. Returns a short note about what happened."""
+    items = state['data'].setdefault('items', [])
+    ref = insp.reference_number or f'#{insp.id}'
+    if insp.invoice_paid:
+        return f'{ref} is already marked paid.'
+    if any(it['inspection_id'] == insp.id for it in items):
+        return f'{ref} is already in the list.'
+    if len(items) >= _MAX_INVOICES:
+        return f'That is the most I can do at once ({_MAX_INVOICES}) — tap Done, then run /paid again for the rest.'
+    items.append({'inspection_id': insp.id, 'reference_number': ref, 'already_paid': False,
+                  'property_address': insp.property.address if insp.property else 'Unknown property'})
+    return f'Added {ref}.'
+
+
+def _unpaid_query(client_id=None):
+    from sqlalchemy.orm import defer
+    from models import Inspection, Property
+    q = (Inspection.query.options(defer(Inspection.report_data))
+         .filter(Inspection.status == 'complete', Inspection.invoice_paid.isnot(True)))
+    if client_id is not None:
+        q = q.join(Property, Inspection.property_id == Property.id).filter(Property.client_id == client_id)
+    return q.order_by(Inspection.conduct_date.asc())
+
+
+def _add_unpaid(state, client_id=None, who='anyone'):
+    rows = _unpaid_query(client_id).limit(_MAX_INVOICES).all()
+    if not rows:
+        return _invoices_prompt(state, f'No unpaid invoices found for {who}.')
+    notes = [_add_invoice(state, r) for r in rows]
+    full = next((n for n in notes if n.startswith('That is the most')), None)
+    return _invoices_prompt(state, full or f'Added {sum(n.startswith("Added") for n in notes)} unpaid invoice(s) for {who}.')
+
+
+def _accept_invoices(state, text, value):
+    from models import Client, Inspection, db
+    d = state['data']
+    items = d.setdefault('items', [])
+    if value == 'done':
+        if not items:
+            return _invoices_prompt(state, 'Add at least one invoice first.')
+        d['invoices_done'] = True
+        return None
+    if value == 'all':
+        d['awaiting_client'] = False
+        return _add_unpaid(state)
+    if value == 'client':
+        d['awaiting_client'] = True
+        return _invoices_prompt(state)
+    if value and value[0] == 'x' and value[1:].isdigit():
+        i = int(value[1:])
+        if i < len(items):
+            gone = items.pop(i)
+            return _invoices_prompt(state, f"Removed {gone['reference_number']}.")
+        return _invoices_prompt(state)
+    if value and value[0] == 'o' and value[1:].isdigit():  # one of several matches
+        try:
+            insp = db.session.get(Inspection, state['options'][int(value[1:])])
+        except (IndexError, TypeError):
+            insp = None
+        if insp is None:
+            return _invoices_prompt(state, 'That option has expired — search again.')
+        return _invoices_prompt(state, _add_invoice(state, insp))
+    if value and value[0] == 'c' and value[1:].isdigit():  # one of several clients
+        try:
+            client = db.session.get(Client, state['options'][int(value[1:])])
+        except (IndexError, TypeError):
+            client = None
+        if client is None:
+            return _invoices_prompt(state, 'That option has expired — type the client name again.')
+        d['awaiting_client'] = False
+        return _add_unpaid(state, client.id, client.name)
+    if value is not None:
+        return _invoices_prompt(state)
+
+    q = (text or '').strip()
+    if len(q) < 2:
+        return _invoices_prompt(state, 'Type a reference number or part of an address.')
+    if q.lower() == 'done':
+        return _accept_invoices(state, None, 'done')
+
+    if d.get('awaiting_client'):
+        rows = (Client.query.filter(Client.name.ilike(f'%{q}%') | Client.company.ilike(f'%{q}%'))
+                .order_by(Client.name.asc()).limit(_MAX_OPTIONS).all())
+        if not rows:
+            return _invoices_prompt(state, f'No client matching "{q}".')
+        if len(rows) > 1:
+            state['options'] = [c.id for c in rows]
+            return 'Which client?', _keyboard([[_btn(_clip(c.name + (f' ({c.company})' if c.company else '')), 'invoices', f'c{i}')]
+                                               for i, c in enumerate(rows)])
+        d['awaiting_client'] = False
+        return _add_unpaid(state, rows[0].id, rows[0].name)
+
+    from sqlalchemy.orm import defer
+    base = Inspection.query.options(defer(Inspection.report_data)).filter(Inspection.pdf_import.is_(False))
+    newest = Inspection.conduct_date.desc()
+    rows = base.filter(Inspection.reference_number.ilike(q)).all() \
+        or base.filter(Inspection.reference_number.ilike(f'%{q}%')).order_by(newest).limit(_MAX_OPTIONS).all()
+    if not rows:
+        props, _ = _find_property_matches(q, limit=_MAX_OPTIONS)
+        if props:
+            rows = base.filter(Inspection.property_id.in_([p.id for p in props])).order_by(newest).limit(_MAX_OPTIONS).all()
+    if not rows:
+        return _invoices_prompt(state, f'Nothing found for "{q}".')
+    if len(rows) == 1:
+        return _invoices_prompt(state, _add_invoice(state, rows[0]))
+    state['options'] = [r.id for r in rows]
+    return 'Which one?', _keyboard([[_btn(_clip(_invoice_label(r), 60), 'invoices', f'o{i}')] for i, r in enumerate(rows)])
+
+
 _ASK = {
     'client': _ask_client, 'address': _ask_address, 'bedrooms': _ask_bedrooms, 'bathrooms': _ask_bathrooms,
     'furnished': _ask_furnished, 'features': _ask_features, 'elevation': _ask_elevation, 'notes': _ask_notes,
     'property': _ask_property, 'type': _ask_type, 'date': _ask_date, 'time': _ask_time, 'clerk': _ask_clerk,
     'template': _ask_template, 'source': _ask_source, 'photos': _ask_photos,
     'tenant_email': _ask_tenant_email, 'reference': _ask_reference,
+    'report': _ask_report, 'recipients': _ask_recipients, 'note': _ask_note, 'invoices': _ask_invoices,
 }
 _ACCEPT = {
     'client': _accept_client, 'address': _accept_address,
@@ -695,6 +988,7 @@ _ACCEPT = {
     'property': _accept_property, 'type': _accept_type, 'date': _accept_date, 'time': _accept_time,
     'clerk': _accept_clerk, 'template': _accept_template, 'source': _accept_source, 'photos': _accept_photos,
     'tenant_email': _accept_tenant_email, 'reference': _accept_reference,
+    'report': _accept_report, 'recipients': _accept_recipients, 'note': _accept_note, 'invoices': _accept_invoices,
 }
 
 
@@ -710,6 +1004,11 @@ def build_resolved(state) -> dict:
             'furnished': d.get('furnished'), 'parking': bool(d.get('parking')), 'garden': bool(d.get('garden')),
             'elevator': bool(d.get('elevator')), 'elevation': d.get('elevation'), 'notes': d.get('notes'),
         }
+    if state['flow'] == SHARE_FLOW:
+        return {'inspection_id': d['report_id'], 'property_address': d['property_address'],
+                'inspection_type': d['inspection_type'], 'emails': list(d['emails']), 'notes': d.get('note')}
+    if state['flow'] == PAID_FLOW:
+        return {'items': d['items'], 'failures': []}
     return {
         'property_id': d['property_id'], 'property_address': d['property_address'],
         'inspection_type': d['inspection_type'], 'conduct_date': datetime.fromisoformat(d['conduct_date']).isoformat(),
@@ -732,7 +1031,7 @@ def _warnings(state) -> list[str]:
         if state['flow'] == PROPERTY_FLOW:
             if Property.query.filter(Property.client_id == d['client_id'], Property.address.ilike(d['address'])).first():
                 out.append('⚠️ This client already has a property with that address.')
-        else:
+        elif state['flow'] == INSPECTION_FLOW:
             start, end = _day_bounds(date.fromisoformat(d['conduct_date']))
             if d.get('inspector_id'):
                 n = Inspection.query.filter(

@@ -1,16 +1,15 @@
 """
 routes/telegram_integration.py
 ─────────────────────────────────
-Staff (admin / manager) drive the app from a Telegram bot with three commands:
+Staff (admin / manager) drive the app from a Telegram bot with these commands:
 
   /property    guided, button-driven flow that adds a property
   /inspection  guided, button-driven flow that books an inspection
+  /share       guided flow that emails a completed report's PDF
+  /paid        guided flow that marks one or more invoices paid
   /lookup      conversational, read-only questions about properties, inspections,
                clients, the schedule and unpaid invoices (Claude, with memory of
                the conversation until /cancel or 30 idle minutes)
-
-Report sharing and marking invoices paid come back as commands in a later phase
-(their resolvers and executors are kept in telegram_intent.py / below).
 
 This module owns the one genuinely public, unauthenticated-by-JWT endpoint in the
 app: Telegram's webhook POSTs here directly. It's gated by a secret path segment
@@ -33,7 +32,7 @@ Env vars:
   ANTHROPIC_API_KEY       — /lookup only.
 
 Every write goes through a confirm card and then an ordinary internal HTTP call to
-this app's own /api/properties or /api/inspections, authenticated with a
+this app's own /api/properties, /api/inspections or share-pdf endpoint, authenticated with a
 short-lived JWT minted for the linked user — so all existing role checks,
 validation, and side effects (Sheet sync, Calendar push) apply unchanged.
 
@@ -55,7 +54,7 @@ from flask_jwt_extended import jwt_required, create_access_token
 
 from permissions import get_current_user, is_admin_or_manager
 from routes import telegram_flows
-from routes.telegram_intent import ACTION_CONFIG, BUILD_PAYLOAD, MULTI_TARGET_TOOLS
+from routes.telegram_intent import ACTION_CONFIG, BUILD_PAYLOAD
 
 telegram_bp = Blueprint('telegram', __name__)
 log = logging.getLogger(__name__)
@@ -207,6 +206,9 @@ def _continue_flow(session, user, result):
 def _execute_flow(session, user, state):
     tool_name = state['flow']
     resolved = telegram_flows.build_resolved(state)
+    if tool_name == telegram_flows.PAID_FLOW:
+        _execute_mark_invoice_paid(session, user, resolved)
+        return
     config = ACTION_CONFIG[tool_name]
     payload = BUILD_PAYLOAD[tool_name](resolved)
     backend_url = os.environ.get('BACKEND_URL', 'https://app.lminventories.co.uk').rstrip('/')
@@ -231,6 +233,9 @@ def _execute_flow(session, user, state):
         _reset_session(session)
         if tool_name == 'create_property':
             _send_message(session.chat_id, f"✅ Property created: {body.get('address', payload.get('address'))}")
+        elif tool_name == 'share_report':
+            _send_message(session.chat_id, f"✅ Sending the report for {resolved['property_address']} to "
+                                           f"{', '.join(resolved['emails'])}. It can take a minute or two to arrive.")
         else:
             ref = body.get('reference_number') or f"#{body.get('id')}"
             _send_message(session.chat_id, f"✅ Inspection booked: {ref} at {body.get('property_address', resolved.get('property_address'))}")
@@ -265,7 +270,7 @@ def _execute_mark_invoice_paid(session, user, resolved):
                 timeout=15,
             )
         except requests.RequestException as e:
-            print(f'[telegram] internal API call failed for inspection {item["inspection_id"]}: {e}')
+            log.warning('[telegram] internal API call failed for inspection %s: %s', item['inspection_id'], e)
             failed.append(f'{label}: connection error')
             continue
 
@@ -274,6 +279,7 @@ def _execute_mark_invoice_paid(session, user, resolved):
         elif resp.status_code in (401, 403):
             failed.append(f'{label}: no permission')
         else:
+            log.warning('[telegram] mark paid for inspection %s returned %s', item['inspection_id'], resp.status_code)
             failed.append(f'{label}: server error')
 
     _reset_session(session)
@@ -357,9 +363,11 @@ def _start_lookup(session, user, question):
 # ── Commands ─────────────────────────────────────────────────────────────────
 
 _HELP_TEXT = (
-    'I can add properties and inspections, and answer questions. Commands:\n'
+    'I can add properties and inspections, email reports, mark invoices paid and answer questions. Commands:\n'
     "• /property — add a property (I'll ask you step by step)\n"
     '• /inspection — book an inspection\n'
+    '• /share — email a completed report to the client, tenant or anyone else\n'
+    '• /paid — mark one or more invoices as paid\n'
     '• /lookup — ask about a property, inspection, client, the schedule or unpaid '
     "invoices; I remember what we've talked about, so follow-ups work\n"
     "• /cancel — stop whatever we're doing"
@@ -389,6 +397,12 @@ def _handle_command(session, user, text):
         return True
     if cmd == '/inspection':
         _start_flow(session, telegram_flows.INSPECTION_FLOW)
+        return True
+    if cmd == '/share':
+        _start_flow(session, telegram_flows.SHARE_FLOW)
+        return True
+    if cmd == '/paid':
+        _start_flow(session, telegram_flows.PAID_FLOW)
         return True
     if cmd == '/lookup':
         _start_lookup(session, user, rest.strip())
@@ -479,13 +493,13 @@ def _handle_text_message(message, update_id=None):
         state = _load_flow(session)
         if state is None:
             _reset_session(session)
-            _send_message(chat_id, 'That got lost — start again with /property or /inspection.')
+            _send_message(chat_id, 'That got lost — please start again with the command you were using.')
             return
         _continue_flow(session, user, telegram_flows.handle_text(state, text))
     elif session.state == 'lookup':
         _lookup_turn(session, user, text)
     else:
-        _send_message(chat_id, 'Use /property, /inspection or /lookup — or /help to see what I can do.')
+        _send_message(chat_id, 'Use /property, /inspection, /share, /paid or /lookup — or /help to see what I can do.')
 
 
 def _handle_callback_query(cq, update_id=None):
@@ -510,7 +524,7 @@ def _handle_callback_query(cq, update_id=None):
     _answer_callback_query(cq['id'])
     _expire_if_stale(session)
     if session.state != 'flow':
-        _send_message(chat_id, 'That timed out — start again with /property or /inspection.')
+        _send_message(chat_id, 'That timed out — please start again with the command you were using.')
         return
     _continue_flow(session, link.user, telegram_flows.handle_callback(state, parts[1], parts[2]))
 

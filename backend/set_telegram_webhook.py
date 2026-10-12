@@ -47,6 +47,8 @@ commands = requests.post(
     json={'commands': [
         {'command': 'property', 'description': 'Add a property'},
         {'command': 'inspection', 'description': 'Book an inspection'},
+        {'command': 'share', 'description': 'Email a completed report'},
+        {'command': 'paid', 'description': 'Mark invoices as paid'},
         {'command': 'lookup', 'description': 'Ask about properties, inspections, clients, the schedule'},
         {'command': 'cancel', 'description': 'Stop what we are doing'},
         {'command': 'help', 'description': 'What I can do'},

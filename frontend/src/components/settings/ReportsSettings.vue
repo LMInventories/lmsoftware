@@ -25,6 +25,7 @@ const form = ref({
   show_photo_timestamp:       false,          // overlay timestamp on enlarged photos
   action_summary_position:    'bottom',       // 'top' | 'bottom' | 'none'
   health_safety_summary:      false,          // add a Health & Safety Issues Summary page to every report
+  sheet_update_ci:            false,          // Master Sheet: log a Check In worked from a previous Check Out as "Update CI"
   invert_logo:                false,          // false = light mode (standard logo + dark text), true = dark mode (inverted logo + white text)
 })
 
@@ -77,6 +78,7 @@ async function selectClient(id) {
     form.value.show_photo_timestamp      = ps.show_photo_timestamp      || false
     form.value.action_summary_position  = ps.action_summary_position  || 'bottom'
     form.value.health_safety_summary    = ps.health_safety_summary === true
+    form.value.sheet_update_ci          = ps.sheet_update_ci === true
     form.value.invert_logo              = !!selectedClient.value.invert_logo
   } catch (err) {
     console.error('Failed to load client:', err)
@@ -102,6 +104,7 @@ async function saveSettings() {
         show_photo_timestamp:      form.value.show_photo_timestamp,
         action_summary_position:  form.value.action_summary_position,
         health_safety_summary:    form.value.health_safety_summary,
+        sheet_update_ci:          form.value.sheet_update_ci,
       }),
     })
     saved.value = true
@@ -117,6 +120,7 @@ async function saveSettings() {
         show_photo_timestamp:     form.value.show_photo_timestamp,
         action_summary_position:  form.value.action_summary_position,
         health_safety_summary:    form.value.health_safety_summary,
+        sheet_update_ci:          form.value.sheet_update_ci,
       })
     }
     setTimeout(() => saved.value = false, 2500)
@@ -536,6 +540,21 @@ onMounted(() => fetchClients())
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
             <input type="checkbox" v-model="form.health_safety_summary" />
             Include for this client
+          </label>
+        </div>
+
+        <!-- Master Sheet: Update CI -->
+        <div class="panel">
+          <div class="panel-hd">
+            <span class="panel-icon">📊</span>
+            Update CI Pricing
+          </div>
+          <p class="panel-desc">
+            When an Inventory &amp; Check In is booked with "Work from Check Out report" ticked, write "Update CI" to the Job column of the Master Sheet instead of "Inventory &amp; Check In".
+          </p>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <input type="checkbox" v-model="form.sheet_update_ci" />
+            Use "Update CI" for this client
           </label>
         </div>
 

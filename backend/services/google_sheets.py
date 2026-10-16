@@ -239,13 +239,7 @@ def _build_row(inspection) -> list:
 
     address = prop.address if prop else ''
 
-    type_map = {
-        'check_in':      'Inventory & Check In',
-        'check_out':     'Check Out',
-        'midterm':       'Midterm',
-        'damage_report': 'Damage Report',
-    }
-    job = type_map.get(inspection.inspection_type or '', inspection.inspection_type or '')
+    job = _job_for(inspection.inspection_type, inspection)
 
     bedrooms = prop.bedrooms if prop else None
     size = str(bedrooms) if bedrooms is not None else ''
@@ -253,13 +247,40 @@ def _build_row(inspection) -> list:
     return [client_name, clerk_name, date_str, ref, address, job, size]
 
 
-def _job_for(inspection_type: str) -> str:
+def _update_ci_enabled(inspection) -> bool:
+    """
+    True when this is a Check In worked from a previous Check Out report and
+    the client has "Update CI" enabled (report_photo_settings.sheet_update_ci).
+    """
+    if getattr(inspection, 'inspection_type', None) != 'check_in':
+        return False
+    source_id = getattr(inspection, 'source_inspection_id', None)
+    if not source_id:
+        return False
+
+    prop   = inspection.property
+    client = prop.client if prop else None
+    try:
+        ps = json.loads(client.report_photo_settings or '{}') if client else {}
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(ps, dict) or ps.get('sheet_update_ci') is not True:
+        return False
+
+    from models import Inspection, db
+    source = db.session.get(Inspection, source_id)
+    return bool(source and source.inspection_type == 'check_out')
+
+
+def _job_for(inspection_type: str, inspection=None) -> str:
     type_map = {
         'check_in':      'Inventory & Check In',
         'check_out':     'Check Out',
         'midterm':       'Midterm',
         'damage_report': 'Damage Report',
     }
+    if inspection is not None and _update_ci_enabled(inspection):
+        return 'Update CI'
     return type_map.get(inspection_type or '', inspection_type or '')
 
 
@@ -291,7 +312,7 @@ def _find_existing_row(sheet_id: str, token: str, inspection) -> Optional[int]:
 
     prop     = inspection.property
     address  = (prop.address if prop else '').strip().lower()
-    job      = _job_for(inspection.inspection_type or '').lower()
+    job      = _job_for(inspection.inspection_type or '', inspection).lower()
     date_obj = inspection.conduct_date or inspection.scheduled_date
     date_str = date_obj.strftime('%d/%m/%Y') if date_obj else ''
 

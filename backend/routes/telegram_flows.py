@@ -53,7 +53,7 @@ SHARE_FLOW = 'share_report'
 INVOICE_FLOW = 'invoice'
 
 PROPERTY_STEPS = ['client', 'address', 'bedrooms', 'bathrooms', 'furnished', 'features', 'elevation', 'notes']
-INSPECTION_STEPS = ['property', 'type', 'date', 'time', 'clerk', 'template', 'source', 'photos', 'tenant_email', 'reference']
+INSPECTION_STEPS = ['property', 'type', 'date', 'time', 'clerk', 'template', 'source', 'photos', 'tenant_email', 'heads_up', 'reference']
 SHARE_STEPS = ['report', 'recipients', 'note']
 INVOICE_STEPS = ['invoice']
 STEPS = {PROPERTY_FLOW: PROPERTY_STEPS, INSPECTION_FLOW: INSPECTION_STEPS,
@@ -78,6 +78,7 @@ _STEP_KEYS = {
     'source': ['continue', 'source_inspection_id', 'source_label'],
     'photos': ['include_photos'],
     'tenant_email': ['tenant_email', 'tenant_email_done'],
+    'heads_up': ['create_heads_up'],
     'reference': ['reference_number', 'reference_done'],
     'report': ['report_id', 'report_label', 'property_address', 'inspection_type', 'candidates'],
     'recipients': ['emails', 'recipients_done'],
@@ -95,7 +96,8 @@ _EDIT_LABELS = {
     PROPERTY_FLOW: [('client', 'Client'), ('address', 'Address'), ('bedrooms', 'Bedrooms'), ('bathrooms', 'Bathrooms'),
                     ('furnished', 'Furnished'), ('features', 'Features'), ('elevation', 'Floor'), ('notes', 'Notes')],
     INSPECTION_FLOW: [('property', 'Property'), ('type', 'Type'), ('date', 'Date'), ('time', 'Time'),
-                      ('clerk', 'Clerk'), ('tenant_email', 'Tenant email'), ('reference', 'Reference')],
+                      ('clerk', 'Clerk'), ('tenant_email', 'Tenant email'), ('heads_up', 'Heads-up'),
+                      ('reference', 'Reference')],
     SHARE_FLOW: [('report', 'Report'), ('recipients', 'Recipients'), ('note', 'Message')],
     INVOICE_FLOW: [],
 }
@@ -678,6 +680,24 @@ def _accept_tenant_email(state, text, value):
     return None
 
 
+def _ask_heads_up(state):
+    data = state['data']
+    if 'create_heads_up' in data:
+        return None
+    if data.get('inspection_type') == 'heads_up':  # already a heads-up; the backend ignores the flag
+        data['create_heads_up'] = False
+        return None
+    return 'Create Heads Up Report? (adds a linked heads-up for this property)', _yn_keyboard('heads_up')
+
+
+def _accept_heads_up(state, text, value):
+    raw = (value if value is not None else text or '').strip().lower()
+    if raw not in ('y', 'yes', 'n', 'no'):
+        return 'Yes or No?', _yn_keyboard('heads_up')
+    state['data']['create_heads_up'] = raw in ('y', 'yes')
+    return None
+
+
 def _ask_reference(state):
     if state['data'].get('reference_done'):
         return None
@@ -917,7 +937,7 @@ _ASK = {
     'furnished': _ask_furnished, 'features': _ask_features, 'elevation': _ask_elevation, 'notes': _ask_notes,
     'property': _ask_property, 'type': _ask_type, 'date': _ask_date, 'time': _ask_time, 'clerk': _ask_clerk,
     'template': _ask_template, 'source': _ask_source, 'photos': _ask_photos,
-    'tenant_email': _ask_tenant_email, 'reference': _ask_reference,
+    'tenant_email': _ask_tenant_email, 'heads_up': _ask_heads_up, 'reference': _ask_reference,
     'report': _ask_report, 'recipients': _ask_recipients, 'note': _ask_note, 'invoice': _ask_invoice,
 }
 _ACCEPT = {
@@ -926,7 +946,7 @@ _ACCEPT = {
     'furnished': _accept_furnished, 'features': _accept_features, 'elevation': _accept_elevation, 'notes': _accept_notes,
     'property': _accept_property, 'type': _accept_type, 'date': _accept_date, 'time': _accept_time,
     'clerk': _accept_clerk, 'template': _accept_template, 'source': _accept_source, 'photos': _accept_photos,
-    'tenant_email': _accept_tenant_email, 'reference': _accept_reference,
+    'tenant_email': _accept_tenant_email, 'heads_up': _accept_heads_up, 'reference': _accept_reference,
     'report': _accept_report, 'recipients': _accept_recipients, 'note': _accept_note, 'invoice': _accept_invoice,
 }
 
@@ -1000,9 +1020,6 @@ def _confirm_reply(state):
 
 def _edit_reply(state):
     buttons = [_btn(label, 'edit', step) for step, label in _EDIT_LABELS[state['flow']]]
-    if state['flow'] == INSPECTION_FLOW and state['data'].get('inspection_type') in ('check_in', 'check_out'):
-        on = state['data'].get('create_heads_up')
-        buttons.append(_btn(('✅ ' if on else '⬜ ') + 'Heads-up', 'edit', 'headsup'))
     rows = _chunk(buttons, 2) + [[_btn('« Back', 'edit', 'back')]]
     return 'What would you like to change?', _keyboard(rows)
 
@@ -1065,9 +1082,6 @@ def handle_callback(state, step, value):
             return state, [], None
         if value == 'back':
             return _advance(state, [])
-        if value == 'headsup':
-            state['data']['create_heads_up'] = not state['data'].get('create_heads_up')
-            return state, [_edit_reply(state)], None
         if value in _STEP_KEYS:
             _reask(state, value)  # dependents are cleared too, so _advance re-asks only what's missing
             return _advance(state, [])

@@ -197,6 +197,7 @@ def test_inspection_flow_skips_unneeded_steps(world):
     # no templates and no earlier inspection, so template/source/photos were skipped silently
     assert state['step'] == 'tenant_email'
     state, _, _ = _text(state, 'tenant@example.com, other@example.com')
+    state, _, _ = _cb(state, 'heads_up', 'n')
     state, replies, _ = _cb(state, 'reference', 'skip')
     assert state['step'] == 'confirm'
 
@@ -271,6 +272,7 @@ def test_clerk_availability_annotation_and_conflict_warning(world):
     assert state['step'] == 'source'                      # the check-in above is a continuation candidate
     state, _, _ = _cb(state, 'source', 'n')
     state, _, _ = _cb(state, 'tenant_email', 'skip')
+    state, _, _ = _cb(state, 'heads_up', 'n')
     state, replies, _ = _cb(state, 'reference', 'skip')
     assert 'already has 1 job' in _texts(replies)
 
@@ -289,6 +291,7 @@ def test_lifecycle_continuation_and_photos(world):
     state, replies, _ = _cb(state, 'photos', 'y')
     assert state['step'] == 'tenant_email'
     state, _, _ = _cb(state, 'tenant_email', 'skip')
+    state, _, _ = _cb(state, 'heads_up', 'n')
     state, replies, _ = _cb(state, 'reference', 'skip')
     resolved = flows.build_resolved(state)
     assert resolved['source_inspection_id'] and resolved['include_photos'] is True
@@ -318,6 +321,7 @@ def test_changing_type_clears_dependent_answers_only(world):
     state, _, _ = _cb(state, 'source', 'y')
     state, _, _ = _cb(state, 'photos', 'n')
     state, _, _ = _cb(state, 'tenant_email', 'skip')
+    state, _, _ = _cb(state, 'heads_up', 'n')
     state, _, _ = _cb(state, 'reference', 'skip')
     assert state['step'] == 'confirm'
 
@@ -332,14 +336,12 @@ def test_changing_type_clears_dependent_answers_only(world):
     assert resolved['inspector_id'] == world['clerk'].id
 
 
-def test_heads_up_toggle(world):
+def test_heads_up_step(world):
     state = _inspection_to_confirm(world)
     state, _, _ = _cb(state, 'tenant_email', 'skip')
-    state, _, _ = _cb(state, 'reference', 'skip')
-    state, _, _ = _cb(state, 'confirm', 'edit')
-    state, replies, _ = _cb(state, 'edit', 'headsup')
-    assert state['step'] == 'edit' and state['data']['create_heads_up'] is True
-    state, replies, _ = _cb(state, 'edit', 'back')
+    assert state['step'] == 'heads_up'
+    state, _, _ = _cb(state, 'heads_up', 'y')
+    state, replies, _ = _cb(state, 'reference', 'skip')
     assert state['step'] == 'confirm' and 'heads-up' in _texts(replies)
     assert BUILD_PAYLOAD['book_inspection'](flows.build_resolved(state))['create_heads_up'] is True
 

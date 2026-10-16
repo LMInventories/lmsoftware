@@ -488,7 +488,8 @@ _UK_SPELLING_RULE = (
     '"discolouration" not "discoloration", "colour" not "color", "centre" not "center", '
     '"neighbour" not "neighbor", "recognise" not "recognize", "labelled" not "labeled", '
     '"mould" not "mold", "grey" not "gray", "practise" not "practice" (verb), '
-    '"limescale" not "lime scale".'
+    '"limescale" not "lime scale", '
+    '"chubb" not "chub" (the lock brand: Chubb).'
 )
 
 # NEVER-FABRICATE RULE — this is a legal inventory document. The AI must reproduce

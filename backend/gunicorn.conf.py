@@ -40,3 +40,32 @@ max_requests_jitter = 100   # stagger restarts so workers don't all recycle at o
 accesslog    = '-'      # stdout
 errorlog     = '-'
 loglevel     = os.environ.get('LOG_LEVEL', 'info')
+
+# Memory watchdog: sync workers that run PyMuPDF/Pillow on big files can balloon
+# (glibc rarely returns that memory to the OS) and with low traffic max_requests
+# never recycles them. After each request, if this worker's RSS is over the
+# limit, ask gunicorn to retire it gracefully; the master respawns a fresh one.
+WORKER_RSS_LIMIT_MB = int(os.environ.get('WORKER_RSS_LIMIT_MB', '1500'))
+
+
+def _rss_mb():
+    try:
+        with open('/proc/self/status') as f:
+            for line in f:
+                if line.startswith('VmRSS:'):
+                    return int(line.split()[1]) / 1024
+    except Exception:
+        pass
+    return 0
+
+
+def post_request(worker, req, environ, resp):
+    try:
+        import ctypes
+        ctypes.CDLL('libc.so.6').malloc_trim(0)  # hand freed arenas back to the OS
+    except Exception:
+        pass
+    rss = _rss_mb()
+    if rss > WORKER_RSS_LIMIT_MB:
+        worker.log.warning('worker %s RSS %.0fMB > %dMB, recycling', worker.pid, rss, WORKER_RSS_LIMIT_MB)
+        worker.alive = False  # finishes this request, then exits; master respawns

@@ -909,7 +909,11 @@ class _PDFBuilder:
 
         # ── Header bar ───────────────────────────────────────────────────────
         # Tall enough to give the logo generous space (matches cover-top padding ~48px+logo+40px)
-        hdr_h = 42 * mm
+        # Landscape pages are only 210mm tall, so the header/photo/footer are compressed
+        # to leave room for the type label and up to five info rows (keep in sync with
+        # COVER in frontend ReportsSettings.vue).
+        landscape_cover = pw > ph
+        hdr_h = (30 if landscape_cover else 42) * mm
         canvas.setFillColor(brand)
         canvas.rect(0, ph - hdr_h, pw, hdr_h, fill=1, stroke=0)
 
@@ -938,7 +942,7 @@ class _PDFBuilder:
             canvas.drawCentredString(pw/2, ph - hdr_h + (hdr_h - 8*mm) / 2, initials)
 
         # ── Property photo — full width, below header ─────────────────────────
-        photo_h   = 130 * mm
+        photo_h   = (70 if landscape_cover else 130) * mm
         photo_y   = ph - hdr_h - photo_h
         photo_url = self.prop.get('overview_photo')
         photo_drawn = False
@@ -961,14 +965,14 @@ class _PDFBuilder:
             canvas.drawCentredString(pw/2, photo_y + photo_h/2 - 4, 'Property overview photo')
 
         # ── Type label — centred below photo ──────────────────────────────────
-        type_y = photo_y - 14*mm
+        type_y = photo_y - (11 if landscape_cover else 14)*mm
         canvas.setFillColor(self.body_c)
         canvas.setFont('Helvetica-Bold', 18)
         canvas.drawCentredString(pw/2, type_y, self.type_label)
 
         # ── Info rows — centred, divider between every row ───────────────────
-        footer_h = 26 * mm   # taller footer to accommodate branding logos
-        row_h    = 12 * mm
+        footer_h = (22 if landscape_cover else 26) * mm   # taller footer to accommodate branding logos
+        row_h    = (10 if landscape_cover else 12) * mm
 
         # Build tenant display string (name and/or email)
         tenant_name_val  = getattr(insp, 'tenant_name',  None) or ''

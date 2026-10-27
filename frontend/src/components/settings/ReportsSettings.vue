@@ -143,7 +143,48 @@ const bodyTextPresets       = ['#1e293b', '#374151', '#4b5563', '#6b7280', '#000
 
 const footerTextColor       = computed(() => form.value.invert_logo ? '#FFFFFF' : '#0F172A')
 
-onMounted(() => fetchClients())
+// ── Cover preview geometry (mm, from _draw_cover in pdf_generator.py) ──
+const COVER_PORTRAIT  = { hdrH: 42, photoH: 130, footerH: 26, rowH: 12, typeGap: 14, margin: 14 }
+const COVER_LANDSCAPE = { hdrH: 30, photoH: 70,  footerH: 22, rowH: 10, typeGap: 11, margin: 14 }
+const PREVIEW_W_PX = 264   // rendered width of the preview, whatever the orientation
+
+const sysSettings = ref({})
+
+const pageW = computed(() => form.value.report_orientation === 'landscape' ? 297 : 210)
+const pageH = computed(() => form.value.report_orientation === 'landscape' ? 210 : 297)
+const COVER = computed(() => form.value.report_orientation === 'landscape' ? COVER_LANDSCAPE : COVER_PORTRAIT)
+const coverScale = computed(() => PREVIEW_W_PX / pageW.value)
+const u  = (mm) => `${(mm * coverScale.value).toFixed(2)}px`
+// PDF font sizes are points; 1pt = 0.3528mm
+const pt = (size) => u(size * 0.3528)
+
+const typeY   = computed(() => COVER.value.hdrH + COVER.value.photoH + COVER.value.typeGap)
+const infoTop = computed(() => typeY.value + 7)
+
+// Sample values; the PDF omits any row with no value.
+const coverRows = computed(() => [
+  { label: 'ADDRESS', value: '12 Example Street, London' },
+  { label: 'DATE',    value: today },
+  { label: 'CLIENT',  value: selectedClient.value?.company || selectedClient.value?.name || '' },
+  { label: 'CLERK',   value: 'Robyn Lee' },
+  { label: 'TENANT',  value: 'Jane Smith  jane@example.com' },
+].filter(r => r.value))
+
+const footerLogoUrl = computed(() => {
+  const s = sysSettings.value
+  return (form.value.invert_logo && s.logo_inverted) ? s.logo_inverted : (s.logo || '')
+})
+const emailReserve = computed(() => sysSettings.value.email ? 5 : 0)
+
+async function fetchSysSettings() {
+  try {
+    sysSettings.value = (await api.getSystemSettings()).data || {}
+  } catch (err) {
+    console.error('Failed to load system settings:', err)
+  }
+}
+
+onMounted(() => { fetchClients(); fetchSysSettings() })
 </script>
 
 <template>
@@ -590,47 +631,60 @@ onMounted(() => fetchClients())
         <div class="preview-label">Live Preview</div>
         <div class="preview-sub">Updates as you change settings</div>
 
-        <div class="cover-preview" :style="{ '--brand': effectiveColor }">
+        <!-- Mirrors _draw_cover() in backend/routes/pdf_generator.py: every size below is the
+             PDF's mm value × coverScale, positions are measured from the top of the page. -->
+        <div class="cover-preview" :style="{ width: u(pageW), height: u(pageH), background: '#fff' }">
 
-          <!-- 1. Header bar — full-bleed brand colour, client logo centred -->
-          <div class="cp-header">
-            <img v-if="selectedClient.logo" :src="selectedClient.logo" :alt="selectedClient.name" class="cp-header-img" />
-            <span v-else class="cp-header-init">{{ clientInitials }}</span>
+          <!-- 1. Header bar (42mm) — client logo centred, initials fallback in header text colour -->
+          <div class="cp-abs cp-center" :style="{ top: 0, left: 0, width: u(pageW), height: u(COVER.hdrH), background: effectiveColor }">
+            <img v-if="selectedClient.logo" :src="selectedClient.logo" :alt="selectedClient.name"
+              :style="{ maxHeight: u(COVER.hdrH - 12), maxWidth: u(pageW - 2 * COVER.margin), objectFit: 'contain' }" />
+            <span v-else :style="{ color: form.report_header_text_color, fontSize: pt(24), fontWeight: 700 }">{{ clientInitials }}</span>
           </div>
 
-          <!-- 2. Property photo — full width placeholder -->
-          <div class="cp-photo">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-            <span>Property photo</span>
+          <!-- 2. Property photo (130mm, full width) -->
+          <div class="cp-abs cp-photo" :style="{ top: u(COVER.hdrH), left: 0, width: u(pageW), height: u(COVER.photoH) }">
+            <!-- Simulated property overview photo (terraced house) -->
+            <svg viewBox="0 0 400 200" preserveAspectRatio="xMidYMid slice" width="100%" height="100%">
+              <rect width="400" height="200" fill="#cbd5e1"/>
+              <rect y="0" width="400" height="105" fill="#dbe4ee"/>
+              <rect x="0" y="60" width="90" height="100" fill="#b45f4a"/>
+              <rect x="310" y="60" width="90" height="100" fill="#b45f4a"/>
+              <rect x="90" y="45" width="220" height="115" fill="#a8483a"/>
+              <polygon points="80,45 200,12 320,45" fill="#6b7280"/>
+              <rect x="120" y="70" width="38" height="38" fill="#f1f5f9"/>
+              <rect x="242" y="70" width="38" height="38" fill="#f1f5f9"/>
+              <rect x="120" y="112" width="42" height="42" fill="#e2e8f0"/>
+              <rect x="176" y="100" width="48" height="60" fill="#1e293b"/>
+              <rect x="238" y="112" width="42" height="42" fill="#e2e8f0"/>
+              <rect x="0" y="160" width="400" height="14" fill="#94a3b8"/>
+              <rect x="0" y="174" width="400" height="26" fill="#64748b"/>
+            </svg>
           </div>
 
-          <!-- 3. Report type label — centred below photo, body text colour -->
-          <div class="cp-type" :style="{ color: form.report_body_text_color }">Check In Report</div>
-
-          <!-- 4. Info rows — centred, label + value, thin dividers between (matches real cover) -->
-          <div class="cp-rows">
-            <div class="cp-divider"></div>
-            <div class="cp-row">
-              <div class="cp-lbl">ADDRESS</div>
-              <div class="cp-val" :style="{ color: form.report_body_text_color }">12 Example St, London</div>
-            </div>
-            <div class="cp-divider"></div>
-            <div class="cp-row">
-              <div class="cp-lbl">DATE</div>
-              <div class="cp-val" :style="{ color: form.report_body_text_color }">{{ today }}</div>
-            </div>
-            <div class="cp-divider"></div>
-            <div class="cp-row">
-              <div class="cp-lbl">CLERK</div>
-              <div class="cp-val" :style="{ color: form.report_body_text_color }">Robyn Lee</div>
-            </div>
-            <div class="cp-divider"></div>
+          <!-- 3. Type label (18pt bold, body colour) -->
+          <div class="cp-abs cp-text" :style="{ top: u(typeY - 5), left: 0, width: u(pageW), color: form.report_body_text_color, fontSize: pt(18), fontWeight: 700 }">
+            Inventory &amp; Check In
           </div>
 
-          <!-- 5. Footer bar — brand colour, company name + email centred (matches real cover) -->
-          <div class="cp-footer">
-            <span :style="{ color: footerTextColor }">L&amp;M Inventories</span>
-            <span :style="{ color: footerTextColor }">info@lminventories.co.uk</span>
+          <!-- 4. Info rows — divider above every row plus a closing divider -->
+          <div v-for="(row, i) in coverRows" :key="row.label">
+            <div class="cp-abs cp-rule" :style="{ top: u(infoTop + i * COVER.rowH), left: u(COVER.margin), width: u(pageW - 2 * COVER.margin) }"></div>
+            <div class="cp-abs cp-text" :style="{ top: u(infoTop + i * COVER.rowH + 1.5), left: 0, width: u(pageW), color: '#94a3b8', fontSize: pt(7), fontWeight: 700 }">{{ row.label }}</div>
+            <div class="cp-abs cp-text" :style="{ top: u(infoTop + i * COVER.rowH + 4.9), left: 0, width: u(pageW), color: form.report_body_text_color, fontSize: pt(11), fontWeight: 700 }">{{ row.value }}</div>
+          </div>
+          <div class="cp-abs cp-rule" :style="{ top: u(infoTop + coverRows.length * COVER.rowH), left: u(COVER.margin), width: u(pageW - 2 * COVER.margin) }"></div>
+
+          <!-- 5. Footer bar (26mm) — centred company logo (inverted when Dark) + email, AIIC logo right -->
+          <div class="cp-abs" :style="{ bottom: 0, left: 0, width: u(pageW), height: u(COVER.footerH), background: effectiveColor }">
+            <div class="cp-abs cp-center" :style="{ top: 0, left: 0, width: u(pageW), height: u(COVER.footerH - emailReserve) }">
+              <img v-if="footerLogoUrl" :src="footerLogoUrl" alt=""
+                :style="{ maxHeight: u(COVER.footerH - 8 - emailReserve), maxWidth: u(pageW - 2 * COVER.margin), objectFit: 'contain' }" />
+              <span v-else :style="{ color: footerTextColor, fontSize: pt(9), fontWeight: 700 }">{{ selectedClient.company || selectedClient.name }}</span>
+            </div>
+            <div v-if="sysSettings.email" class="cp-abs cp-text" :style="{ bottom: u(1.2), left: 0, width: u(pageW), color: footerTextColor, fontSize: pt(7) }">{{ sysSettings.email }}</div>
+            <img v-if="sysSettings.aiic_logo" :src="sysSettings.aiic_logo" alt="" class="cp-abs"
+              :style="{ right: u(COVER.margin), top: u((COVER.footerH - (COVER.footerH - 8)) / 2), maxHeight: u(COVER.footerH - 8), maxWidth: u(pageW / 3 - COVER.margin), objectFit: 'contain' }" />
           </div>
 
         </div>
@@ -1252,100 +1306,21 @@ onMounted(() => fetchClients())
 .preview-label { font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 3px; }
 .preview-sub { font-size: 11px; color: #94a3b8; margin-bottom: 12px; }
 
-/* Cover mini preview */
+/* Cover preview — absolutely positioned to mirror the PDF canvas drawing */
 .cover-preview {
+  position: relative;
   border: 1px solid #e5e7eb;
-  border-radius: 9px;
   overflow: hidden;
-  background: white;
   box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-  font-size: 10px;
+  box-sizing: content-box;
+  font-family: Helvetica, Arial, sans-serif;
 }
-
-/* 1. Header bar — full-bleed brand colour, client logo centred */
-.cp-header {
-  background: var(--brand);
-  height: 46px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 6px 12px;
-}
-
-.cp-header-img {
-  max-height: 34px;
-  max-width: 100%;
-  object-fit: contain;
-}
-
-.cp-header-init {
-  font-size: 15px;
-  font-weight: 700;
-  color: white;
-  letter-spacing: 0.04em;
-}
-
-/* 2. Property photo placeholder — full width */
-.cp-photo {
-  height: 58px;
-  background: #f1f5f9;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 3px;
-  color: #94a3b8;
-  font-size: 9px;
-}
-
-/* 3. Report type label — centred, below photo */
-.cp-type {
-  text-align: center;
-  font-size: 9px;
-  font-weight: 700;
-  padding: 7px 8px 3px;
-}
-
-/* 4. Info rows — centred stacked rows with dividers (matches real cover layout) */
-.cp-rows {
-  padding: 0 10px;
-}
-
-.cp-divider {
-  height: 1px;
-  background: #f1f5f9;
-}
-
-.cp-row {
-  text-align: center;
-  padding: 3px 0;
-}
-
-.cp-lbl {
-  font-size: 6px;
-  font-weight: 700;
-  color: #94a3b8;
-  letter-spacing: 0.07em;
-  margin-bottom: 1px;
-}
-
-.cp-val {
-  font-size: 8px;
-  font-weight: 600;
-}
-
-/* 5. Footer — brand colour, company name + email centred (stacked) */
-.cp-footer {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
-  padding: 6px 10px;
-  font-size: 7px;
-  font-weight: 600;
-  background: var(--brand);
-}
+.cp-abs { position: absolute; }
+.cp-center { display: flex; align-items: center; justify-content: center; }
+.cp-text { text-align: center; line-height: 1.2; white-space: nowrap; overflow: hidden; }
+.cp-rule { height: 1px; background: #f1f5f9; }
+.cp-photo { background: #cbd5e1; overflow: hidden; }
+.cp-photo svg { display: block; }
 
 /* Section header preview */
 .shp { margin-top: 10px; }

@@ -104,6 +104,7 @@ const filters = ref({
   reference: '',     // reference number text search
   statuses: [],      // multi-select array
   clerk_ids: [],     // multi-select array
+  types: [],         // multi-select array of inspection_type values
   month: '',         // 'YYYY-MM' or ''
 })
 
@@ -111,8 +112,13 @@ const filters = ref({
 const calendarFilters = ref({
   client_ids: [],  // multi-select array
   statuses: [],    // multi-select array
-  clerk_ids: []    // multi-select array
+  clerk_ids: [],   // multi-select array
+  types: []        // multi-select array of inspection_type values
 })
+
+// Collapsible filter panels (closed by default)
+const filtersOpen = ref(false)
+const calFiltersOpen = ref(false)
 
 const form = ref({
   client_id: null,
@@ -274,6 +280,8 @@ function typeLabel(type) {
   return inspectionTypeLabels[type] || (type || '').replace(/_/g, ' ')
 }
 
+const typeOptions = Object.entries(inspectionTypeLabels).map(([value, label]) => ({ value, label }))
+
 const statusOptions = [
   { value: null, label: 'All Statuses' },
   { value: 'created', label: 'Created' },
@@ -363,6 +371,8 @@ const calendarEvents = computed(() => {
     filtered = filtered.filter(i => calendarFilters.value.statuses.includes(i.status))
   if (calendarFilters.value.clerk_ids?.length)
     filtered = filtered.filter(i => calendarFilters.value.clerk_ids.map(Number).includes(Number(i.inspector_id)))
+  if (calendarFilters.value.types?.length)
+    filtered = filtered.filter(i => calendarFilters.value.types.includes(i.inspection_type))
 
   return filtered
     .filter(i => i.conduct_date)
@@ -431,6 +441,8 @@ const filteredInspections = computed(() => {
     result = result.filter(i => filters.value.statuses.includes(i.status))
   if (filters.value.clerk_ids?.length)
     result = result.filter(i => filters.value.clerk_ids.map(Number).includes(Number(i.inspector_id)))
+  if (filters.value.types?.length)
+    result = result.filter(i => filters.value.types.includes(i.inspection_type))
   if (filters.value.month) {
     result = result.filter(i => {
       const d = i.conduct_date || i.created_at
@@ -506,6 +518,13 @@ function toggleCalStatus(val) {
   else calendarFilters.value.statuses.push(val)
 }
 
+function toggleType(val, isCalendar = false) {
+  const arr = isCalendar ? calendarFilters.value.types : filters.value.types
+  const i = arr.indexOf(val)
+  if (i >= 0) arr.splice(i, 1)
+  else arr.push(val)
+}
+
 function filterLabel(arr, options, emptyLabel) {
   if (!arr.length) return emptyLabel
   if (arr.length === 1) return options.find(o => o.value === arr[0])?.label || arr[0]
@@ -525,11 +544,11 @@ function clerkFilterLabel(ids, isCalendar) {
 }
 
 function clearFilters() {
-  filters.value = { client_ids: [], postcode: '', reference: '', statuses: [], clerk_ids: [], month: '' }
+  filters.value = { client_ids: [], postcode: '', reference: '', statuses: [], clerk_ids: [], types: [], month: '' }
 }
 
 function clearCalendarFilters() {
-  calendarFilters.value = { client_ids: [], statuses: [], clerk_ids: [] }
+  calendarFilters.value = { client_ids: [], statuses: [], clerk_ids: [], types: [] }
 }
 
 function handleEventClick(info) {
@@ -933,7 +952,19 @@ onMounted(async () => {
 
     <!-- List View -->
     <div v-if="activeTab === 'list'">
-      <div class="filters-bar" v-click-outside="closeDropdowns">
+      <div class="filters-toolbar">
+        <button class="btn-filters-toggle" :class="{ open: filtersOpen }" @click="filtersOpen = !filtersOpen">
+          Filters <span class="ms-chevron">▾</span>
+        </button>
+        <div class="tab-toggle grid-cols-picker" title="Cards per row (target — still adapts to window width)">
+          <button
+            v-for="n in [4,5,6,7,8]" :key="n"
+            :class="['toggle-btn', { active: gridCols === n }]"
+            @click="setGridCols(n)"
+          >{{ n }}</button>
+        </div>
+      </div>
+      <div v-show="filtersOpen" class="filters-bar" v-click-outside="closeDropdowns">
         <div v-if="authStore.isAdmin || authStore.isManager" class="filter-group">
           <label>Client</label>
           <div class="ms-dropdown" :class="{ open: openDropdown === 'client' }" @click="toggleDropdown('client')">
@@ -986,17 +1017,23 @@ onMounted(async () => {
           </div>
         </div>
         <div class="filter-group">
+          <label>Inspection Type</label>
+          <div class="ms-dropdown" :class="{ open: openDropdown === 'type' }" @click="toggleDropdown('type')">
+            <span class="ms-label">{{ filterLabel(filters.types, typeOptions, 'All Types') }}</span>
+            <span class="ms-chevron">▾</span>
+          </div>
+          <div v-show="openDropdown === 'type'" class="ms-menu">
+            <label v-for="option in typeOptions" :key="option.value" class="ms-item" @click.stop>
+              <input type="checkbox" :checked="filters.types.includes(option.value)" @change="toggleType(option.value)" />
+              <span>{{ option.label }}</span>
+            </label>
+          </div>
+        </div>
+        <div class="filter-group">
           <label>Month</label>
           <input v-model="filters.month" type="month" class="filter-input" style="min-width:140px" />
         </div>
         <button @click="clearFilters" class="btn-clear-filters">Clear Filters</button>
-        <div class="tab-toggle grid-cols-picker" title="Cards per row (target — still adapts to window width)">
-          <button
-            v-for="n in [4,5,6,7,8]" :key="n"
-            :class="['toggle-btn', { active: gridCols === n }]"
-            @click="setGridCols(n)"
-          >{{ n }}</button>
-        </div>
       </div>
 
 
@@ -1108,7 +1145,12 @@ onMounted(async () => {
 
     <!-- Calendar View -->
     <div v-if="activeTab === 'calendar'" class="calendar-view">
-      <div class="filters-bar calendar-filters" v-click-outside="closeDropdowns">
+      <div class="filters-toolbar">
+        <button class="btn-filters-toggle" :class="{ open: calFiltersOpen }" @click="calFiltersOpen = !calFiltersOpen">
+          Filters <span class="ms-chevron">▾</span>
+        </button>
+      </div>
+      <div v-show="calFiltersOpen" class="filters-bar calendar-filters" v-click-outside="closeDropdowns">
         <div v-if="authStore.isAdmin || authStore.isManager" class="filter-group">
           <label>Client</label>
           <div class="ms-dropdown" :class="{ open: openDropdown === 'cal_client' }" @click="toggleDropdown('cal_client')">
@@ -1147,6 +1189,19 @@ onMounted(async () => {
               <input type="checkbox" :checked="calendarFilters.clerk_ids.includes(clerk.id)" @change="toggleClerkFilter(clerk.id, true)" />
               <span class="ms-clerk-dot" :style="{ background: clerk.color }"></span>
               <span>{{ clerk.name }}</span>
+            </label>
+          </div>
+        </div>
+        <div class="filter-group">
+          <label>Inspection Type</label>
+          <div class="ms-dropdown" :class="{ open: openDropdown === 'cal_type' }" @click="toggleDropdown('cal_type')">
+            <span class="ms-label">{{ filterLabel(calendarFilters.types, typeOptions, 'All Types') }}</span>
+            <span class="ms-chevron">▾</span>
+          </div>
+          <div v-show="openDropdown === 'cal_type'" class="ms-menu">
+            <label v-for="option in typeOptions" :key="option.value" class="ms-item" @click.stop>
+              <input type="checkbox" :checked="calendarFilters.types.includes(option.value)" @change="toggleType(option.value, true)" />
+              <span>{{ option.label }}</span>
             </label>
           </div>
         </div>
@@ -1720,6 +1775,26 @@ onMounted(async () => {
   align-self: flex-end;
 }
 .btn-clear-filters:hover, .btn-date-picker:hover { background: #e2e8f0; }
+
+.filters-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+.btn-filters-toggle {
+  padding: 8px 16px;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #475569;
+  cursor: pointer;
+}
+.btn-filters-toggle:hover { background: #e2e8f0; }
+.btn-filters-toggle .ms-chevron { display: inline-block; transition: transform 0.15s; }
+.btn-filters-toggle.open .ms-chevron { transform: rotate(180deg); }
 
 .tab-toggle { display: flex; border: 1px solid #e2e8f0; border-radius: 7px; overflow: hidden; margin-left: auto; align-self: flex-end; }
 .toggle-btn { padding: 6px 12px; font-size: 11px; font-weight: 600; background: white; border: none; color: #64748b; cursor: pointer; }

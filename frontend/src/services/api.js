@@ -146,7 +146,7 @@ const api = {
   deleteUser(id)        { return http.delete(`/api/users/${id}`) },
 
   // ── Clients ───────────────────────────────────────────────────────────────
-  getClients()                  { return http.get('/api/clients') },
+  getClients(params)            { return http.get('/api/clients', { params }) },
   getClient(id)                 { return http.get(`/api/clients/${id}`) },
   createClient(data)            { return http.post('/api/clients', data) },
   updateClient(id, data)        { return http.put(`/api/clients/${id}`, data) },
@@ -154,7 +154,7 @@ const api = {
   pushClientCredentials(id)     { return http.post(`/api/clients/${id}/push-credentials`) },
 
   // ── Properties ────────────────────────────────────────────────────────────
-  getProperties()                { return http.get('/api/properties') },
+  getProperties(params)          { return http.get('/api/properties', { params }) },
   getProperty(id)                { return http.get(`/api/properties/${id}`) },
   createProperty(data)           { return http.post('/api/properties', data) },
   updateProperty(id, data)       { return http.put(`/api/properties/${id}`, data) },

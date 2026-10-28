@@ -17,15 +17,15 @@ _CLIENTS_CACHE_TTL = 300  # 5 minutes
 _CLIENTS_CACHE_KEY = 'all'
 
 
-def _clients_cache_get():
-    entry = _CLIENTS_CACHE.get(_CLIENTS_CACHE_KEY)
+def _clients_cache_get(key=_CLIENTS_CACHE_KEY):
+    entry = _CLIENTS_CACHE.get(key)
     if entry and time.monotonic() - entry['ts'] < _CLIENTS_CACHE_TTL:
         return entry['data']
     return None
 
 
-def _clients_cache_set(data):
-    _CLIENTS_CACHE[_CLIENTS_CACHE_KEY] = {'data': data, 'ts': time.monotonic()}
+def _clients_cache_set(data, key=_CLIENTS_CACHE_KEY):
+    _CLIENTS_CACHE[key] = {'data': data, 'ts': time.monotonic()}
 
 
 def invalidate_clients_cache():
@@ -118,6 +118,19 @@ def get_clients():
     # so it must stay. `logo_inverted` (the PDF-footer variant) is only ever read on the
     # single-client GeneralSettings view — defer it here so listing clients doesn't pull
     # a second full base64 blob per client that the list never uses.
+    # ?slim=1 — id/name/company only, for dropdowns and filters. Skips every blob column.
+    if request.args.get('slim') == '1':
+        cached = _clients_cache_get('slim')
+        if cached is not None:
+            return jsonify(cached)
+        rows = (Client.query
+                .with_entities(Client.id, Client.name, Client.company)
+                .order_by(Client.name)
+                .all())
+        data = [{'id': r.id, 'name': r.name, 'company': r.company} for r in rows]
+        _clients_cache_set(data, 'slim')
+        return jsonify(data)
+
     cached = _clients_cache_get()
     if cached is not None:
         return jsonify(cached)

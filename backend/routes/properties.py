@@ -32,7 +32,9 @@ def _prop_cache_set(key: str, data):
 def invalidate_properties_cache(user_id=None):
     """Call after any write that changes property or inspection data."""
     if user_id is not None:
-        _PROP_CACHE.pop(f'props:{user_id}', None)
+        prefix = f'props:{user_id}'
+        for k in [k for k in _PROP_CACHE if k == prefix or k.startswith(prefix + ':')]:
+            _PROP_CACHE.pop(k, None)
     else:
         _PROP_CACHE.clear()
 
@@ -102,6 +104,26 @@ def _property_list_item(p):
 @jwt_required()
 def get_properties():
     user = get_current_user()
+
+    # ?slim=1 — only the fields a property picker needs; ?client_id=N narrows to one portfolio.
+    if request.args.get('slim') == '1':
+        client_id = request.args.get('client_id', type=int)
+        cache_key = f'props:{user.id}:slim:{client_id or "all"}'
+        cached = _prop_cache_get(cache_key)
+        if cached is not None:
+            return jsonify(cached)
+        query = filter_properties_for_user(Property.query, user)
+        if client_id:
+            query = query.filter(Property.client_id == client_id)
+        rows = (query
+                .with_entities(Property.id, Property.client_id, Property.address, Property.bedrooms)
+                .order_by(Property.address)
+                .all())
+        data = [{'id': r.id, 'client_id': r.client_id, 'address': r.address, 'bedrooms': r.bedrooms}
+                for r in rows]
+        _prop_cache_set(cache_key, data)
+        return jsonify(data)
+
     cache_key = f'props:{user.id}'
     cached = _prop_cache_get(cache_key)
     if cached is not None:

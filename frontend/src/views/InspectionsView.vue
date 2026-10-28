@@ -744,18 +744,46 @@ async function fetchInspections() {
   }
 }
 
-async function fetchProperties() {
-  try {
-    const response = await api.getProperties()
-    properties.value = response.data
-  } catch (error) {
-    console.error('Failed to fetch properties:', error)
+// Properties are loaded one portfolio at a time (slim: id/client_id/address/bedrooms)
+// and memoised per client, so re-picking a portfolio is instant and the dropdown
+// never holds the whole property table. The memo holds the in-flight promise so a
+// watcher and an explicit caller asking for the same client share one request.
+const propertiesByClient = new Map()
+
+function loadPropertiesForClient(clientId) {
+  if (!clientId) return Promise.resolve([])
+  if (!propertiesByClient.has(clientId)) {
+    const p = api.getProperties({ slim: 1, client_id: clientId })
+      .then(res => res.data)
+      .catch(error => {
+        console.error('Failed to fetch properties:', error)
+        propertiesByClient.delete(clientId)  // allow a retry next time
+        return []
+      })
+    propertiesByClient.set(clientId, p)
   }
+  return propertiesByClient.get(clientId)
 }
+
+const propertiesLoading = ref(false)
+
+watch(() => form.value.client_id, async (clientId) => {
+  properties.value = []
+  propertiesLoading.value = false
+  if (!clientId) return
+  propertiesLoading.value = true
+  const list = await loadPropertiesForClient(clientId)
+  // Ignore stale responses if the portfolio changed while this was in flight
+  if (form.value.client_id === clientId) {
+    properties.value = list
+    propertiesLoading.value = false
+  }
+})
 
 async function fetchClients() {
   try {
-    const response = await api.getClients()
+    // slim: id/name/company only — skips the base64 logo blobs this page never shows
+    const response = await api.getClients({ slim: 1 })
     clients.value = response.data
   } catch (error) {
     console.error('Failed to fetch clients:', error)
@@ -774,16 +802,17 @@ async function fetchUsers() {
 let modalDataLoaded = false
 
 async function ensureModalData() {
-  // properties/templates are only needed for the Add Inspection modal, not the
-  // list view itself — fetch them lazily on first open rather than on every
-  // mount, and only once per page visit after that.
+  // Templates are only needed for the Add Inspection modal. They're prefetched in
+  // the background on mount (see onMounted) so the modal doesn't wait on them;
+  // this guard makes any later call a no-op. Properties load per portfolio — see
+  // loadPropertiesForClient().
   if (modalDataLoaded) return
   modalDataLoaded = true
-  await Promise.all([fetchProperties(), fetchTemplates()])
+  await fetchTemplates()
 }
 
-async function openModal() {
-  await ensureModalData()
+function openModal() {
+  ensureModalData()  // not awaited — the modal opens immediately
   propertySearchQuery.value = ''
   conductDateDisplay.value = ''
   form.value = {
@@ -914,16 +943,18 @@ onMounted(async () => {
       !authStore.isClient ? fetchUsers()     : Promise.resolve(),
     ])
     openModal()
-    if (qClientId) {
-      form.value.client_id = qClientId
-      await nextTick()   // let filteredProperties recompute before setting property
-    }
+    if (qClientId) form.value.client_id = qClientId
+    // Wait for that portfolio's properties so the preselected property exists in the dropdown
+    const cid = form.value.client_id
+    if (cid) await loadPropertiesForClient(cid)
+    await nextTick()   // let the client_id watcher publish the list before setting property
     if (qPropertyId) form.value.property_id = qPropertyId
   } else if (!authStore.isClient) {
     fetchClients()
     fetchUsers()
   }
-  // properties/templates are fetched lazily on modal open — see ensureModalData()
+  // Prefetch templates in the background so the Add Inspection modal opens instantly
+  if (authStore.isAdmin || authStore.isManager || authStore.isClient) ensureModalData()
 })
 </script>
 
@@ -1315,13 +1346,13 @@ onMounted(async () => {
                 />
                 <select v-model="form.property_id" required :disabled="!form.client_id">
                   <option :value="null" disabled>
-                    {{ form.client_id ? 'Select a property...' : 'Select a portfolio first' }}
+                    {{ !form.client_id ? 'Select a portfolio first' : propertiesLoading ? 'Loading properties...' : 'Select a property...' }}
                   </option>
                   <option v-for="property in filteredProperties" :key="property.id" :value="property.id">
                     {{ property.address }}
                   </option>
                 </select>
-                <p v-if="form.client_id && filteredProperties.length === 0" class="helper-text">
+                <p v-if="form.client_id && !propertiesLoading && filteredProperties.length === 0" class="helper-text">
                   No properties found{{ propertySearchQuery ? ' matching your search' : ' for this portfolio' }}.
                 </p>
               </div>

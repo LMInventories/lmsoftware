@@ -603,7 +603,7 @@ function insertPlaceholder(ph) {
   border-radius: 12px; overflow: hidden;
 }
 .settings-card h3 {
-  font-size: 16px; font-weight: 700; color: #1e293b;
+  font-size: 15px; font-weight: 700; color: #1e293b;
   padding: 18px 20px 0; margin: 0 0 6px;
 }
 .card-description {

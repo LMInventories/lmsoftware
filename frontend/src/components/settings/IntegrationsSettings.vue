@@ -1082,8 +1082,8 @@ function handleConnect(integration) {
 .integrations { max-width: 1100px; }
 
 .section-header { margin-bottom: 28px; }
-h2 { font-size: 18px; font-weight: 700; color: #0f172a; margin: 0 0 6px; }
-.section-sub { font-size: 13px; color: #64748b; line-height: 1.5; max-width: 680px; }
+h2 { font-size: 22px; font-weight: 700; color: #1e293b; margin: 0 0 6px; }
+.section-sub { font-size: 14px; color: #64748b; line-height: 1.5; max-width: 680px; }
 
 /* ─ Category ────────────────────────────────────────────────────────────── */
 .category-block { margin-bottom: 36px; }

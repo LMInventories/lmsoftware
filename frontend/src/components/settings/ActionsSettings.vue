@@ -338,7 +338,7 @@ function removeResp(r) {
   margin-bottom: 6px;
 }
 .panel-header h3 {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 700;
   color: #1e293b;
 }

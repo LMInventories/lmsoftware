@@ -314,8 +314,8 @@ onMounted(() => { checkApiKeys(); loadUsage() })
 </template>
 
 <style scoped>
-.settings-section h2 { font-size: 24px; font-weight: 600; color: #1e293b; margin-bottom: 8px; }
-.section-description { color: #64748b; font-size: 15px; margin-bottom: 32px; }
+.settings-section h2 { font-size: 22px; font-weight: 700; color: #1e293b; margin-bottom: 6px; }
+.section-description { color: #64748b; font-size: 14px; margin-bottom: 32px; }
 
 .api-status-panel { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 20px 24px; margin-bottom: 28px; }
 .api-status-panel h3 { font-size: 15px; font-weight: 700; color: #1e293b; margin-bottom: 16px; }

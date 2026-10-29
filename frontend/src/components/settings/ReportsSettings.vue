@@ -731,13 +731,13 @@ onMounted(() => { fetchClients(); fetchSysSettings() })
 .rs-title-row { margin-bottom: 20px; }
 
 .rs-title-row h2 {
-  font-size: 20px;
+  font-size: 22px;
   font-weight: 700;
   color: #1e293b;
-  margin-bottom: 3px;
+  margin-bottom: 6px;
 }
 
-.rs-subtitle { font-size: 13px; color: #64748b; }
+.rs-subtitle { font-size: 14px; color: #64748b; }
 
 /* ── Client bar ───────────────────────────────────────────── */
 .client-bar {
@@ -822,16 +822,16 @@ onMounted(() => { fetchClients(); fetchSysSettings() })
 .panel-hd {
   display: flex;
   align-items: center;
-  gap: 7px;
-  font-size: 14px;
+  gap: 8px;
+  font-size: 15px;
   font-weight: 700;
   color: #1e293b;
   margin-bottom: 14px;
 }
 
-.panel-icon { font-size: 15px; }
+.panel-icon { font-size: 16px; }
 
-.panel-desc { font-size: 12px; color: #64748b; margin-bottom: 12px; line-height: 1.5; }
+.panel-desc { font-size: 13px; color: #64748b; margin-bottom: 14px; line-height: 1.5; }
 
 .badge {
   margin-left: auto;
@@ -1007,9 +1007,10 @@ onMounted(() => { fetchClients(); fetchSysSettings() })
 
 .input {
   padding: 7px 10px;
-  border: 1px solid #cbd5e1;
-  border-radius: 6px;
-  font-size: 13px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font-size: 14px;
+  color: #1e293b;
   font-family: inherit;
 }
 
@@ -1132,9 +1133,9 @@ onMounted(() => { fetchClients(); fetchSysSettings() })
   width: 100%;
   padding: 10px 12px;
   border: 1px solid #d1d5db;
-  border-radius: 7px;
+  border-radius: 8px;
   font-family: inherit;
-  font-size: 13px;
+  font-size: 14px;
   resize: vertical;
   color: #1e293b;
   line-height: 1.6;

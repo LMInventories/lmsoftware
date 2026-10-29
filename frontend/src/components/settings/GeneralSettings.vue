@@ -469,15 +469,15 @@ onMounted(fetchSettings)
 
 <style scoped>
 .settings-section h2 {
-  font-size: 24px;
-  font-weight: 600;
+  font-size: 22px;
+  font-weight: 700;
   color: #1e293b;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 
 .section-description {
   color: #64748b;
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.5;
 }
 

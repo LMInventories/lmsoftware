@@ -239,7 +239,7 @@ onMounted(fetchTemplates)
   padding: 80px 20px;
 }
 .empty-icon { font-size: 56px; display: block; margin-bottom: 12px; }
-.empty-state h3 { font-size: 18px; font-weight: 600; color: #1e293b; margin-bottom: 6px; }
+.empty-state h3 { font-size: 16px; font-weight: 700; color: #1e293b; margin-bottom: 6px; }
 .empty-state p  { color: #64748b; margin-bottom: 20px; }
 
 .templates-grid {

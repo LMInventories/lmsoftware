@@ -2506,6 +2506,16 @@ def apply_source_inspection(inspection_id, source_id):
             source.inspection_type, 'check_out', source.report_data
         )
         inspection.report_data = json.dumps(transformed) if transformed else source.report_data
+    elif (source.inspection_type == 'check_out'
+            and inspection.inspection_type in ('check_in', 'inventory')):
+        # Check Out → new Check In: merge Check In + Check Out conditions into one
+        # condition per item and fold Additional Items into Contents, exactly as
+        # creating the Check In with "Work from" does.
+        transformed = _transform_report_data(
+            'check_out', inspection.inspection_type, source.report_data,
+            target_template_id=source.template_id,
+        )
+        inspection.report_data = json.dumps(transformed) if transformed else source.report_data
     else:
         inspection.report_data = source.report_data
 
@@ -2678,6 +2688,12 @@ def _transform_report_data(source_type, target_type, raw, include_photos=False, 
             new_section['_hiddenItems'] = section_data['_hiddenItems']
         if '_itemOrder' in section_data:
             new_section['_itemOrder'] = section_data['_itemOrder']
+        # Room overview strip (_overview._photos / _photoTs) — photos only, so it
+        # follows the Include photos toggle like item photos do.
+        if include_photos and isinstance(section_data.get('_overview'), dict):
+            new_section['_overview'] = {
+                k: v for k, v in section_data['_overview'].items() if k in ('_photos', '_photoTs')
+            }
         # Template items the clerk deleted stay deleted; renamed fixed-section rows keep their names.
         if '_deleted' in section_data:
             new_section['_deleted'] = section_data['_deleted']

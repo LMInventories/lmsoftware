@@ -126,3 +126,28 @@ def test_check_out_to_new_check_in_rebakes(world, check_in):
     assert new_tpl is not None and new_tpl.id != check_in.template_id
     assert layout_signature(resolve_layout(ci2.template, ci2.report_data)) == expected
     assert bake_property_template(ci2) is None
+
+
+@pytest.mark.parametrize('src,dst', [('check_in', 'check_out'), ('check_out', 'check_in'), ('check_in', 'check_in')])
+def test_room_overview_photos_follow_include_photos(src, dst):
+    rd = {'7': {'_overview': {'_photos': ['o1.jpg'], '_photoTs': ['t1'], 'junk': 1},
+                '9': {'description': 'x', '_photos': ['i.jpg']}}}
+    on = _transform_report_data(src, dst, rd, include_photos=True)
+    off = _transform_report_data(src, dst, rd, include_photos=False)
+    assert on['7']['_overview'] == {'_photos': ['o1.jpg'], '_photoTs': ['t1']}
+    assert on['7']['9']['_photos'] == ['i.jpg']
+    assert '_overview' not in off['7'] and '_photos' not in off['7']['9']
+
+
+def test_check_out_to_check_in_lists_all_conditions():
+    rd = {'7': {
+        '1': {'description': 'Walls', 'inventoryCondition': 'Painted white', 'checkOutCondition': 'As Inventory, scuffed',
+              '_subs': [{'_sid': 's1', 'description': 'Skirting', 'inventoryCondition': 'White',
+                         'checkOutCondition': 'Chipped'}]},
+        '_extra': [{'_eid': 'e1', 'name': 'Lamp', 'inventoryCondition': 'New', 'checkOutCondition': 'Cracked shade'}],
+    }}
+    out = _transform_report_data('check_out', 'check_in', rd)['7']
+    assert out['1']['condition'] == 'Painted white, scuffed'
+    assert out['1']['_subs'][0]['condition'] == 'White, chipped'
+    assert out['_extra'][0]['condition'] == 'New, cracked shade'
+    assert 'checkOutCondition' not in out['1'] and 'inventoryCondition' not in out['1']

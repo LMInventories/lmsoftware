@@ -143,6 +143,7 @@ const propertyHistory     = ref([])
 const lifecycleSuggestion = ref(null)   // { sourceId, sourceType, sourceDateStr, label }
 const noCheckInFound      = ref(false)  // true when check_out selected but no check_in exists
 const historyLoading      = ref(false)
+const overrideTemplate    = ref(false)  // admin chose to pick a template instead of following the source
 
 // Watch property + inspection_type — load history and compute suggestion
 watch(
@@ -150,6 +151,7 @@ watch(
   async ([propId, iType]) => {
     lifecycleSuggestion.value = null
     noCheckInFound.value = false
+    overrideTemplate.value = false
     form.value.source_inspection_id = null
     if (!propId) return
 
@@ -865,7 +867,8 @@ async function handleSubmit() {
       inspection_type: form.value.inspection_type,
       inspector_id: form.value.inspector_id,
       typist_id: form.value.typist_id,
-      template_id: form.value.template_id || null,
+      // Following a source inspection: let the server use the source's template
+      template_id: (lifecycleSuggestion.value && form.value.source_inspection_id && !overrideTemplate.value) ? null : (form.value.template_id || null),
       tenant_email: form.value.tenant_email,
       reference_number: form.value.reference_number || null,
       conduct_time_preference: timePreference,
@@ -1429,6 +1432,14 @@ onMounted(async () => {
                 <div class="form-group" v-else-if="form.inspection_type === 'heads_up'">
                   <label>Template</label>
                   <p class="helper-text">Heads Up Reports use sections configured in <strong>Settings → Heads-Up Sections</strong>. No room template required.</p>
+                </div>
+                <div class="form-group" v-else-if="lifecycleSuggestion && form.source_inspection_id && !overrideTemplate">
+                  <label>Template</label>
+                  <p class="helper-text">
+                    Follows the {{ lifecycleSuggestion.label }} layout ({{ lifecycleSuggestion.sourceDateStr }}),
+                    including any rooms and items added, renamed or removed.
+                    <a href="#" @click.prevent="overrideTemplate = true; form.template_id = null">Choose a different template</a>
+                  </p>
                 </div>
                 <div class="form-group" v-else>
                   <label>Template</label>

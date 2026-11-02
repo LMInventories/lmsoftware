@@ -2829,22 +2829,45 @@ def _transform_report_data(source_type, target_type, raw, include_photos=False, 
         custom_items = section_data.get('_customItems') or []
         if fold_custom_items and custom_items:
             contents_id = contents_by_section.get(str(section_id))
+            new_contents = False   # True when Contents is created here with no content of its own
             if not contents_id:
-                print(f'[transform] no Contents item found for section {section_id} — '
-                      f'{len(custom_items)} Additional Item(s) dropped')
-            else:
+                # The room has no Contents item (e.g. a room added in the field).
+                # Add one as an extra item in this report rather than editing the
+                # shared template; it becomes a real item when the Check In is baked.
+                extras = new_section.setdefault('_extra', [])
+                existing = next((e for e in extras
+                                 if (e.get('name') or e.get('label') or '').strip().lower() in _CONTENTS_ITEM_NAMES), None)
+                if existing:
+                    contents_id = str(existing.get('_eid'))
+                else:
+                    contents_id = f'extra_contents_{section_id}'
+                    extras.append({'_eid': contents_id, 'name': 'Contents'})
+                    new_contents = True
+            if contents_id:
                 contents_row = new_section.setdefault(contents_id, {})
                 subs = contents_row.setdefault('_subs', [])
-                for ci in custom_items:
+                for ci_idx, ci in enumerate(custom_items):
                     cid  = ci.get('_cid', '')
                     name = (ci.get('name') or '').strip()
                     desc = (ci.get('description') or '').strip()
                     combined_desc = f'{name} — {desc}' if name and desc else (name or desc)
-                    subs.append({
-                        '_sid':        cid,
-                        'description': combined_desc,
-                        'condition':   _combine_conditions(None, ci.get('checkOutCondition'), fallback=''),
-                    })
+                    condition = _combine_conditions(None, ci.get('checkOutCondition'), fallback='')
+                    if new_contents and ci_idx == 0:
+                        # Contents didn't exist, so give it a starting item: the first
+                        # Additional Item fills the lead box and the rest become sub-items.
+                        contents_row['description'] = combined_desc
+                        contents_row['condition'] = condition
+                        src_row = new_section.get(cid)
+                        if isinstance(src_row, dict):   # its photos move up to the lead item
+                            for pf in ('_photos', '_photoTs'):
+                                if pf in src_row:
+                                    contents_row[pf] = src_row.pop(pf)
+                    else:
+                        subs.append({
+                            '_sid':        cid,
+                            'description': combined_desc,
+                            'condition':   condition,
+                        })
 
                     # Sub-items added directly under the Additional Item itself
                     # flatten alongside it rather than being dropped — this

@@ -151,3 +151,43 @@ def test_check_out_to_check_in_lists_all_conditions():
     assert out['1']['_subs'][0]['condition'] == 'White, chipped'
     assert out['_extra'][0]['condition'] == 'New, cracked shade'
     assert 'checkOutCondition' not in out['1'] and 'inventoryCondition' not in out['1']
+
+
+def test_additional_items_create_contents_when_room_has_none(check_in):
+    """A room with no Contents item gets one, and it survives baking."""
+    kitchen = next(s for s in check_in.template.sections if s.name == 'Kitchen')
+    k = str(kitchen.id)
+    co_rd = {k: {'_customItems': [{'_cid': 'c1', 'name': 'Vase', 'description': 'Blue', 'checkOutCondition': 'Broken'}]},
+             'custom_1': {'_customItems': [{'_cid': 'c2', 'name': 'Lamp', 'checkOutCondition': 'Cracked'}]},
+             '_customRooms': [{'key': 'custom_1', 'name': 'Study'}]}
+    out = _transform_report_data('check_out', 'check_in', co_rd, target_template_id=check_in.template_id)
+
+    for room in (k, 'custom_1'):
+        eid = f'extra_contents_{room}'
+        assert {'_eid': eid, 'name': 'Contents'} in out[room]['_extra']
+        # No Contents existed: the first Additional Item is the lead item, not a sub-item.
+        assert out[room][eid]['condition'] in ('Broken', 'Cracked')
+        assert out[room][eid]['description'] in ('Vase — Blue', 'Lamp')
+        assert out[room][eid].get('_subs', []) == []
+    # Running it again must not add a second Contents item.
+    again = _transform_report_data('check_out', 'check_in', {**co_rd, k: {**co_rd[k], '_extra': out[k]['_extra']}},
+                                   target_template_id=check_in.template_id)
+    assert sum(1 for e in again[k]['_extra'] if e['name'] == 'Contents') == 1
+
+    check_in.report_data = json.dumps(out)
+    new_tpl = bake_property_template(check_in)
+    db.session.commit()
+    names = {r['name']: [i['name'] for i in r['items']] for r in resolve_layout(new_tpl, check_in.report_data)}
+    assert 'Contents' in names['Kitchen'] and names['Study'] == ['Contents']
+
+
+def test_first_additional_item_leads_remaining_become_subs():
+    rd = {'7': {'_customItems': [
+        {'_cid': 'c1', 'name': 'Vase', 'description': 'Blue', 'checkOutCondition': 'Broken'},
+        {'_cid': 'c2', 'name': 'Lamp', 'checkOutCondition': 'Cracked'},
+        {'_cid': 'c3', 'name': 'Rug', 'checkOutCondition': 'Stained'}],
+        'c1': {'_photos': ['v.jpg']}}}
+    row = _transform_report_data('check_out', 'check_in', rd, include_photos=True)['7']['extra_contents_7']
+    assert (row['description'], row['condition'], row['_photos']) == ('Vase \u2014 Blue', 'Broken', ['v.jpg'])
+    assert [(s['_sid'], s['description'], s['condition']) for s in row['_subs']] == [
+        ('c2', 'Lamp', 'Cracked'), ('c3', 'Rug', 'Stained')]

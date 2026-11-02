@@ -159,12 +159,7 @@ def _wrap(content_html, title='InspectPro'):
 
 # ── Inspection type display name ─────────────────────────────────────────────
 
-def _type_label(t):
-    return {
-        'inventory': 'Inventory', 'check_in': 'Check In', 'check_out': 'Check Out',
-        'mid_term': 'Mid-Term Visit', 'interim': 'Interim Inspection',
-        'snagging': 'Snagging', 'hhsrs': 'HHSRS',
-    }.get((t or '').lower().replace(' ', '_'), t or 'Inspection')
+from utils.inspection_labels import type_label as _type_label, report_name as _report_name, type_phrase as _type_phrase
 
 
 def _fmt_date(d):
@@ -870,7 +865,7 @@ def send_confirmation_email(
     plain_body = tmpl.format(
         recipient_name   = recipient_name,
         property_address = prop_addr,
-        inspection_type  = insp_type,
+        inspection_type  = _type_phrase(getattr(inspection, 'inspection_type', '')),
         date             = insp_date,
         time             = insp_time or 'TBC',
         time_str         = time_str,
@@ -919,14 +914,14 @@ def send_signing_link_email(inspection, role, signer_name, recipient_email, sign
     conduct_str = _fmt_date(inspection.conduct_date)
 
     role_label = 'Tenant' if role == 'tenant' else 'Landlord / Agent'
-    subject    = f'Please Sign: {type_label} Report — {address}'
+    subject    = f'Please Sign: {_report_name(inspection.inspection_type)} — {address}'
 
     body = f"""
 <p style="margin:0 0 20px;font-family:Arial,Helvetica,sans-serif;font-size:16px;color:#1e293b;">
   Dear {signer_name},
 </p>
 <p style="margin:0 0 16px;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#475569;line-height:1.6;">
-  A {type_label.lower()} report has been completed for the property below. Please review the
+  A {_report_name(inspection.inspection_type).lower()} has been completed for the property below. Please review the
   declaration and add your signature using the button below.
 </p>
 {_info_table_open()}
@@ -974,14 +969,14 @@ def send_signing_link_email(inspection, role, signer_name, recipient_email, sign
     conduct_str = _fmt_date(inspection.conduct_date)
 
     role_label = 'Tenant' if role == 'tenant' else 'Landlord / Agent'
-    subject    = f'Please Sign: {type_label} Report \u2014 {address}'
+    subject    = f'Please Sign: {_report_name(inspection.inspection_type)} \u2014 {address}'
 
     body = f"""
 <p style="margin:0 0 20px;font-family:Arial,Helvetica,sans-serif;font-size:16px;color:#1e293b;">
   Dear {signer_name},
 </p>
 <p style="margin:0 0 16px;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#475569;line-height:1.6;">
-  A {type_label.lower()} report has been completed for the property below. Please review the
+  A {_report_name(inspection.inspection_type).lower()} has been completed for the property below. Please review the
   declaration and add your signature using the button below.
 </p>
 {_info_table_open()}

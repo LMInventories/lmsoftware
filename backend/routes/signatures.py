@@ -176,11 +176,8 @@ def signing_page(token):
         except Exception:
             conduct_date = str(insp.conduct_date)
 
-    type_label = {
-        'inventory': 'Inventory', 'check_in': 'Check In', 'check_out': 'Check Out',
-        'mid_term': 'Mid-Term Visit', 'interim': 'Interim Inspection',
-        'snagging': 'Snagging', 'hhsrs': 'HHSRS',
-    }.get((insp.inspection_type or '').lower().replace(' ', '_'), insp.inspection_type or 'Inspection')
+    from utils.inspection_labels import report_name
+    type_label = report_name(insp.inspection_type)
 
     address = insp.property.address if insp.property else '—'
 
@@ -345,7 +342,7 @@ def _signing_page_html(token, role_label, signer_name, address, type_label, cond
   <!-- Signing form -->
   <div id="formCard" class="card">
     <div class="badge">Document Signing</div>
-    <h1>{type_label} Report</h1>
+    <h1>{type_label}</h1>
     <p class="address">{address}</p>
     <p class="meta">{conduct_date}</p>
 
@@ -353,7 +350,7 @@ def _signing_page_html(token, role_label, signer_name, address, type_label, cond
 
     <div class="declaration">
       I, the undersigned, confirm that I have had the opportunity to review the contents of this
-      {type_label.lower()} report and agree that it accurately represents the condition of the
+      {type_label.lower()} and agree that it accurately represents the condition of the
       property at the time of inspection. I understand that this document may be used as evidence
       in any future deposit dispute or legal proceedings.
     </div>

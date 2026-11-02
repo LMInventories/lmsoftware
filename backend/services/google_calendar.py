@@ -68,7 +68,8 @@ def _build_event(inspection) -> dict:
     """Build the Calendar event body from an inspection."""
     prop    = inspection.property
     address = (prop.address if prop else 'Unknown Property').strip()
-    insp_type = (inspection.inspection_type or 'inspection').replace('_', ' ').title()
+    from utils.inspection_labels import type_label
+    insp_type = type_label(inspection.inspection_type)
 
     summary = f'{insp_type} — {address}'
 

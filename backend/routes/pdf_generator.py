@@ -1120,12 +1120,8 @@ class _PDFBuilder:
         except Exception as _e:
             print(f'[pdf] signatures load failed (non-fatal): {_e}')
 
-        type_label = {
-            'inventory': 'Inventory', 'check_in': 'Check In', 'check_out': 'Check Out',
-            'mid_term': 'Mid-Term Visit', 'interim': 'Interim Inspection',
-            'snagging': 'Snagging', 'hhsrs': 'HHSRS',
-        }.get((self.inspection.inspection_type or '').lower().replace(' ', '_'),
-              self.inspection.inspection_type or 'Inspection')
+        from utils.inspection_labels import report_name
+        type_label = report_name(self.inspection.inspection_type)
 
         # Styles
         s_decl = ParagraphStyle('sig_decl', fontName='Helvetica', fontSize=9,
@@ -1140,7 +1136,7 @@ class _PDFBuilder:
 
         declaration = (
             f'I/We, the undersigned, confirm that I/we have had the opportunity to review the '
-            f'contents of this {type_label} report and agree that it accurately represents the '
+            f'contents of this {type_label.lower()} and agree that it accurately represents the '
             f'condition of the property at the time of inspection. I/we understand that this '
             f'document may be used as evidence in any future deposit dispute or legal proceedings.'
         )

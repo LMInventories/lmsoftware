@@ -108,6 +108,15 @@ def is_property_template(template):
     return bool(template and template.is_transient and (template.name or '').endswith(' (property)'))
 
 
+def has_layout_overlay(rd):
+    """True when report_data still carries layout changes on top of its template."""
+    rd = _load(rd)
+    if any(rd.get(k) for k in LAYOUT_META_KEYS):
+        return True
+    return any(isinstance(v, dict) and any(v.get(k) for k in ROOM_LAYOUT_KEYS)
+               for k, v in rd.items() if not k.startswith('_'))
+
+
 def bake_property_template(inspection):
     """
     Create a transient property template from `inspection`'s final layout and
@@ -123,8 +132,8 @@ def bake_property_template(inspection):
     rooms = resolve_layout(template, rd)
     if template is None and not rooms:
         return None
-    if is_property_template(template):
-        return None   # already baked
+    if is_property_template(template) and not has_layout_overlay(rd):
+        return None   # already baked, nothing new on top of it
 
     address = (inspection.property.address if inspection.property else '') or f'Inspection {inspection.id}'
     new_tpl = Template(

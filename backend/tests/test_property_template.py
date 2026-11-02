@@ -94,3 +94,35 @@ def test_unbaked_overlay_still_carries_forward(check_in):
     sig = layout_signature(resolve_layout(check_in.template, check_in.report_data))
     co_rd = _transform_report_data('check_in', 'check_out', check_in.report_data)
     assert layout_signature(resolve_layout(check_in.template, co_rd)) == sig
+
+
+def test_check_out_to_new_check_in_rebakes(world, check_in):
+    """Layout changes made at Check Out become the next property template."""
+    from models import Inspection
+    bake_property_template(check_in)
+    db.session.commit()
+    kitchen = next(s for s in check_in.template.sections if s.name == 'Kitchen')
+
+    co_rd = _transform_report_data('check_in', 'check_out', check_in.report_data,
+                                   target_template_id=check_in.template_id)
+    co_rd['_customRooms'] = [{'key': 'custom_9', 'name': 'Shed'}]
+    co_rd['_roomNames'] = {str(kitchen.id): 'Galley'}
+    co = Inspection(property_id=world['property'].id, template_id=check_in.template_id,
+                    inspection_type='check_out', status='complete', report_data=json.dumps(co_rd))
+    db.session.add(co)
+    db.session.commit()
+
+    ci2_rd = _transform_report_data('check_out', 'check_in', co.report_data,
+                                    target_template_id=co.template_id)
+    ci2 = Inspection(property_id=world['property'].id, template_id=co.template_id,
+                     inspection_type='check_in', status='complete', report_data=json.dumps(ci2_rd))
+    db.session.add(ci2)
+    db.session.commit()
+    expected = layout_signature(resolve_layout(ci2.template, ci2.report_data))
+    assert ('Galley' in [r[0] for r in expected]) and ('Shed' in [r[0] for r in expected])
+
+    new_tpl = bake_property_template(ci2)
+    db.session.commit()
+    assert new_tpl is not None and new_tpl.id != check_in.template_id
+    assert layout_signature(resolve_layout(ci2.template, ci2.report_data)) == expected
+    assert bake_property_template(ci2) is None

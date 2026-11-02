@@ -152,6 +152,8 @@ def get_dashboard_stats():
         .options(*_eager)
         .filter(Inspection.conduct_date >= today)
         .filter(Inspection.status.notin_(['complete']))
+        # Heads Up reports stay in the inspections list and calendar, not on the dashboard
+        .filter(or_(Inspection.inspection_type != 'heads_up', Inspection.inspection_type.is_(None)))
         .order_by(Inspection.conduct_date.asc())
         .limit(30)
         .all()

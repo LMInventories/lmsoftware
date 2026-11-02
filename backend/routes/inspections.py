@@ -403,17 +403,20 @@ def create_inspection():
 
     template_id = data.get('template_id')
     if not template_id:
-        default_template = Template.query.filter_by(
-            inspection_type=inspection_type,
-            is_default=True
-        ).first()
-        template_id = default_template.id if default_template else None
-
-        # Inherit from source inspection's template ONLY for lifecycle types
-        if not template_id and not is_standalone and data.get('source_inspection_id'):
+        # Lifecycle types follow their source inspection's template: the
+        # source's report_data is keyed by that template's section/item ids, so
+        # any other template (including the type default) would not line up.
+        if not is_standalone and data.get('source_inspection_id'):
             source_insp = db.session.get(Inspection, data['source_inspection_id'])
             if source_insp and source_insp.template_id:
                 template_id = source_insp.template_id
+
+        if not template_id:
+            default_template = Template.query.filter_by(
+                inspection_type=inspection_type,
+                is_default=True
+            ).first()
+            template_id = default_template.id if default_template else None
 
     # ── Parse conduct_date ───────────────────────────────────────────────
     conduct_date = None
@@ -771,6 +774,24 @@ def update_inspection(inspection_id):
                     ))
         except Exception as _sig_err:
             print(f'[sync] signature extraction failed (non-fatal): {_sig_err}')
+
+    # ── Completed Check In → this property's own template ────────────────────
+    # Bakes the final layout (added/renamed/deleted rooms and items) into a
+    # hidden template so the Check Out starts from it. Non-fatal: on failure the
+    # inspection completes unchanged and seeding falls back to carrying the
+    # report_data overlay forward.
+    if going_complete and inspection.inspection_type in ('check_in', 'inventory') and inspection.report_data:
+        try:
+            from services.property_template import bake_property_template
+            with db.session.begin_nested():
+                baked = bake_property_template(inspection)
+                if baked:
+                    _seed_pending_dependants(inspection)
+                    print(f'[property-template] inspection {inspection.id} → template {baked.id}')
+        except Exception as _bake_err:
+            import traceback
+            print(f'[property-template] bake failed (non-fatal): {_bake_err}')
+            traceback.print_exc()
 
     # ── Commit all field changes first ───────────────────────────────────────
     # Status is saved before PDF generation so a slow/failing PDF never blocks
@@ -2600,6 +2621,28 @@ def _contents_item_by_section(template_id):
     return result
 
 
+_LAYOUT_META_KEYS = ('_customRooms', '_roomNames', '_hiddenRooms', '_hiddenFixed',
+                     '_roomOrder', '_importedRooms')
+
+
+def _seed_pending_dependants(source):
+    """When `source` (a Check In) completes, seed any not-yet-started inspection
+    that was created from it before it had report_data — they were waiting on
+    this layout. Called after the source has been baked, so they share its template."""
+    pending = Inspection.query.filter(
+        Inspection.source_inspection_id == source.id,
+        Inspection.status.in_(('created', 'assigned')),
+        Inspection.report_data.is_(None),
+    ).all()
+    for dep in pending:
+        if dep.inspection_type in ('midterm', 'damage_report', 'heads_up'):
+            continue
+        transformed = _transform_report_data(source.inspection_type, dep.inspection_type,
+                                             source.report_data, target_template_id=source.template_id)
+        dep.template_id = source.template_id
+        dep.report_data = json.dumps(transformed) if transformed else None
+
+
 def _transform_report_data(source_type, target_type, raw, include_photos=False, target_template_id=None):
     try:
         src = json.loads(raw) if isinstance(raw, str) else raw
@@ -2610,6 +2653,13 @@ def _transform_report_data(source_type, target_type, raw, include_photos=False, 
 
     fold_custom_items = source_type == 'check_out' and target_type in ('check_in', 'inventory')
     contents_by_section = _contents_item_by_section(target_template_id) if fold_custom_items else {}
+
+    # Room layout the clerk shaped in the field: rooms added/renamed/hidden/ordered.
+    # These live at the top level of report_data and describe the layout, so they
+    # carry forward as-is (a baked property template has none of them).
+    for meta_key in _LAYOUT_META_KEYS:
+        if meta_key in src:
+            dst[meta_key] = src[meta_key]
 
     for section_id, section_data in src.items():
         if not isinstance(section_data, dict):
@@ -2628,6 +2678,11 @@ def _transform_report_data(source_type, target_type, raw, include_photos=False, 
             new_section['_hiddenItems'] = section_data['_hiddenItems']
         if '_itemOrder' in section_data:
             new_section['_itemOrder'] = section_data['_itemOrder']
+        # Template items the clerk deleted stay deleted; renamed fixed-section rows keep their names.
+        if '_deleted' in section_data:
+            new_section['_deleted'] = section_data['_deleted']
+        if '_names' in section_data:
+            new_section['_names'] = section_data['_names']
         if '_extra' in section_data:
             extras = []
             for ex in section_data['_extra']:

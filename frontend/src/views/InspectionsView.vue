@@ -5,6 +5,7 @@ import api from '../services/api'
 import { useToast } from '../composables/useToast'
 import { useAuthStore } from '../stores/auth'
 import PdfImportModal from '../components/PdfImportModal.vue'
+import { usePersistedFilters } from '../composables/usePersistedFilters'
 
 const toast = useToast()
 const authStore = useAuthStore()
@@ -98,7 +99,9 @@ const loading = ref(true)
 const showModal = ref(false)
 
 // Filters
-const filters = ref({
+// Both filter sets persist in localStorage (per user) so they survive reloads.
+// `month` is not saved — a stale month would make the list look empty.
+const filters = usePersistedFilters('inspections', {
   client_ids: [],    // multi-select array
   postcode: '',
   reference: '',     // reference number text search
@@ -106,10 +109,10 @@ const filters = ref({
   clerk_ids: [],     // multi-select array
   types: [],         // multi-select array of inspection_type values
   month: '',         // 'YYYY-MM' or ''
-})
+}, { exclude: ['month'] })
 
 // Calendar filters
-const calendarFilters = ref({
+const calendarFilters = usePersistedFilters('inspections-calendar', {
   client_ids: [],  // multi-select array
   statuses: [],    // multi-select array
   clerk_ids: [],   // multi-select array

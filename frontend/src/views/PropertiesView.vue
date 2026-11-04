@@ -5,6 +5,7 @@ import api from '../services/api'
 import { useToast } from '../composables/useToast'
 import { useConfirm } from '../composables/useConfirm'
 import { useAuthStore } from '../stores/auth'
+import { usePersistedFilters } from '../composables/usePersistedFilters'
 const toast = useToast()
 const confirmDialog = useConfirm()
 const router = useRouter()
@@ -49,7 +50,7 @@ const lookupPostcode      = ref('')   // postcode resolved from autocomplete sel
 const PC_RE = /^[A-Z]{1,2}[0-9][0-9A-Z]?\s?[0-9][A-Z]{2}$/i
 let autocompleteTimer = null
 
-const filters = ref({ client_id: null, postcode: '' })
+const filters = usePersistedFilters('properties', { client_id: null, postcode: '' })
 
 const form = ref({
   address_line1: '', address_line2: '', city: '', postcode: '',

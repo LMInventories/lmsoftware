@@ -2,3 +2,7 @@ inspectpro-mobile-new/node_modules/
 inspectpro-mobile-new/.expo/
 inspectpro-mobile-new/android/
 inspectpro-mobile-new/ios/
+
+# Python bytecode
+__pycache__/
+*.py[cod]

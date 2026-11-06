@@ -11,6 +11,8 @@ export const useAuthStore = defineStore('auth', {
     isManager: (state) => state.user?.role === 'manager',
     isClerk:   (state) => state.user?.role === 'clerk',
     isTypist:  (state) => state.user?.role === 'typist' && !state.user?.is_ai,
+    // Clerks, managers and admins manage their own availability; clients, typists etc. don't
+    canSetAvailability: (state) => ['clerk', 'manager', 'admin'].includes(state.user?.role),
     isClient:       (state) => state.user?.role === 'client',
     typistMode:     (state) => state.user?.typist_mode ?? null,
     isAiInstant:    (state) => state.user?.typist_mode === 'ai_instant',

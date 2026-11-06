@@ -151,10 +151,17 @@ def trigger_inspection_notification(event, inspection):
 # ── Clerk daily summary logic ────────────────────────────────────────────────
 
 def _send_all_clerk_summaries():
-    """Find all clerks and send them their next-day schedule."""
+    """Send every assignee (any role) their next-day schedule."""
     from routes.email_service import send_clerk_daily_summary
     tomorrow = date.today() + timedelta(days=1)
-    clerks   = User.query.filter_by(role='clerk').all()
+    # Anyone with a job assigned tomorrow gets a schedule — clerks, managers, admins, whoever.
+    clerks   = User.query.filter(User.id.in_(
+        db.session.query(Inspection.inspector_id).filter(
+            Inspection.inspector_id.isnot(None),
+            db.func.date(db.func.coalesce(Inspection.conduct_date, Inspection.scheduled_date)) == tomorrow,
+            Inspection.status.notin_(['cancelled']),
+        )
+    )).all()
     sent     = 0
     errors   = []
 

@@ -53,6 +53,9 @@ SHARE_FLOW = 'share_report'
 INVOICE_FLOW = 'invoice'
 
 PROPERTY_STEPS = ['client', 'address', 'bedrooms', 'bathrooms', 'furnished', 'features', 'elevation', 'notes']
+# Roles that can be assigned to carry out an inspection (clerks, plus managers and admins)
+INSPECTOR_ROLES = ('clerk', 'manager', 'admin')
+
 INSPECTION_STEPS = ['property', 'type', 'date', 'time', 'clerk', 'template', 'source', 'photos', 'tenant_email', 'heads_up', 'reference']
 SHARE_STEPS = ['report', 'recipients', 'note']
 INVOICE_STEPS = ['invoice']
@@ -505,7 +508,7 @@ def _accept_time(state, text, value):
 
 def _clerks_with_load(data):
     from models import Inspection, User
-    clerks = User.query.filter(User.role == 'clerk').order_by(User.name.asc()).all()
+    clerks = User.query.filter(User.role.in_(INSPECTOR_ROLES)).order_by(User.name.asc()).all()
     load = {}
     if data.get('conduct_date') and clerks:
         start, end = _day_bounds(date.fromisoformat(data['conduct_date']))
@@ -567,7 +570,7 @@ def _accept_clerk(state, text, value):
             clerk = None
     else:
         q = (text or '').strip()
-        matches = User.query.filter(User.role == 'clerk', User.name.ilike(f'%{q}%')).limit(2).all() if q else []
+        matches = User.query.filter(User.role.in_(INSPECTOR_ROLES), User.name.ilike(f'%{q}%')).limit(2).all() if q else []
         clerk = matches[0] if len(matches) == 1 else None
     if clerk is None:
         return 'Tap a clerk from the list, or type their name.', None

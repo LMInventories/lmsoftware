@@ -87,6 +87,7 @@ const router = createRouter({
         {
           path: 'availability',
           name: 'Availability',
+          meta: { roles: ['clerk', 'manager', 'admin'] },
           component: () => import('../views/AvailabilityView.vue')
         },
         {
@@ -150,6 +151,13 @@ router.beforeEach((to, from, next) => {
   // Clear an expired token so old stale JWTs don't persist in localStorage
   if (token && !valid) {
     localStorage.removeItem('token')
+  }
+
+  // Role-restricted routes: bounce anyone else to the dashboard
+  if (to.meta.roles && valid) {
+    let role = null
+    try { role = JSON.parse(localStorage.getItem('user') || 'null')?.role } catch { /* ignore */ }
+    if (!to.meta.roles.includes(role)) { next('/dashboard'); return }
   }
 
   if (to.meta.requiresMobileAuth && !valid) {

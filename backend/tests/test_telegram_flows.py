@@ -180,7 +180,7 @@ def test_duplicate_address_warning(world):
 
 # ── /inspection ─────────────────────────────────────────────────────────────
 
-def _inspection_to_confirm(world, kind='check_in', clerk_value='0'):
+def _inspection_to_confirm(world, kind='check_in', clerk_value='1'):  # option 0 is the manager (Mia), 1 the clerk (Sam)
     state, _, _ = flows.start(flows.INSPECTION_FLOW)
     state, _, _ = _text(state, 'smith')
     assert state['step'] == 'type'
@@ -266,9 +266,10 @@ def test_clerk_availability_annotation_and_conflict_warning(world):
     state, _, _ = _cb(state, 'type', 'check_out')
     state, _, _ = _text(state, 'tomorrow')
     state, replies, _ = _cb(state, 'time', 'am')
-    assert '1 job that day' in replies[0][1]['inline_keyboard'][0][0]['text']
+    assert '1 job that day' in replies[0][1]['inline_keyboard'][1][0]['text']   # Sam, after Mia
+    assert 'Mia Manager (free)' in replies[0][1]['inline_keyboard'][0][0]['text']  # managers are assignable too
 
-    state, _, _ = _cb(state, 'clerk', '0')
+    state, _, _ = _cb(state, 'clerk', '1')
     assert state['step'] == 'source'                      # the check-in above is a continuation candidate
     state, _, _ = _cb(state, 'source', 'n')
     state, _, _ = _cb(state, 'tenant_email', 'skip')
@@ -350,3 +351,25 @@ def test_invalid_tenant_email_reasks(world):
     state = _inspection_to_confirm(world)
     state, replies, _ = _text(state, 'not-an-email')
     assert state['step'] == 'tenant_email' and 'valid email' in _texts(replies)
+
+
+def test_unavailable_clerk_is_labelled_and_refused(world):
+    from datetime import datetime
+    from models import UserUnavailability, db
+    tomorrow = flows._today_london() + timedelta(days=1)
+    db.session.add(UserUnavailability(user_id=world['clerk'].id, kind='holiday', start_date=tomorrow,
+                                      end_date=tomorrow, start_min=None, end_min=None))
+    db.session.add(UserUnavailability(user_id=world['manager'].id, kind='repeating', weekday=tomorrow.weekday(),
+                                      start_min=None, end_min=None))
+    db.session.commit()
+
+    state, _, _ = flows.start(flows.INSPECTION_FLOW)
+    state, _, _ = _text(state, 'smith')
+    state, _, _ = _cb(state, 'type', 'check_out')
+    state, _, _ = _text(state, 'tomorrow')
+    state, replies, _ = _cb(state, 'time', 'am')
+    labels = [row[0]['text'] for row in replies[0][1]['inline_keyboard']]
+    assert 'Mia Manager (Unavailable)' in labels and 'Sam Clerk (Unavailable)' in labels
+
+    state, replies, _ = _cb(state, 'clerk', '1')
+    assert state['step'] == 'clerk' and 'Unavailable' in _texts(replies)

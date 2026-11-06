@@ -341,7 +341,8 @@ async function fetchUsers() {
   }
 }
 
-const clerks  = computed(() => users.value.filter(u => u.role === 'clerk'))
+// Anyone who can carry out an inspection: clerks, plus managers and admins
+const clerks  = computed(() => users.value.filter(u => ['clerk', 'manager', 'admin'].includes(u.role)))
 // Hide clerks who are unavailable at this inspection's date/time (the currently assigned clerk stays listed)
 const { unavailableIds } = useUnavailableUsers(
   () => inspection.value?.conduct_date,

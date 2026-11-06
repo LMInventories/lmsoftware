@@ -484,7 +484,8 @@ const filteredProperties = computed(() => {
   return props
 })
 
-const clerks = computed(() => users.value.filter(u => u.role === 'clerk'))
+// Anyone who can carry out an inspection: clerks, plus managers and admins
+const clerks = computed(() => users.value.filter(u => ['clerk', 'manager', 'admin'].includes(u.role)))
 const typists = computed(() => users.value.filter(u => u.role === 'typist'))
 // Clerks who haven't marked themselves unavailable for the chosen date/time (Add Inspection picker only)
 const { unavailableIds } = useUnavailableUsers(

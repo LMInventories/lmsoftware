@@ -2,11 +2,14 @@ from datetime import date
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from models import db, UserUnavailability
+from permissions import require_role
 from services.availability import unavailable_user_ids
 
 availability_bp = Blueprint('availability', __name__)
 
 KINDS = ('repeating', 'holiday')
+# Only people who can be booked onto jobs (or schedule them) manage availability.
+AVAILABILITY_ROLES = ('clerk', 'manager', 'admin')
 
 
 def _parse_date(v):
@@ -44,6 +47,7 @@ def _apply(block, data):
 
 @availability_bp.route('/me', methods=['GET'])
 @jwt_required()
+@require_role(*AVAILABILITY_ROLES)
 def list_mine():
     uid = int(get_jwt_identity())
     rows = UserUnavailability.query.filter_by(user_id=uid).order_by(UserUnavailability.id).all()
@@ -52,6 +56,7 @@ def list_mine():
 
 @availability_bp.route('/me', methods=['POST'])
 @jwt_required()
+@require_role(*AVAILABILITY_ROLES)
 def create_block():
     data = request.json or {}
     kind = data.get('kind')
@@ -68,6 +73,7 @@ def create_block():
 
 @availability_bp.route('/me/<int:block_id>', methods=['PUT'])
 @jwt_required()
+@require_role(*AVAILABILITY_ROLES)
 def update_block(block_id):
     block = UserUnavailability.query.filter_by(id=block_id, user_id=int(get_jwt_identity())).first_or_404()
     err = _apply(block, request.json or {})
@@ -80,6 +86,7 @@ def update_block(block_id):
 
 @availability_bp.route('/me/<int:block_id>', methods=['DELETE'])
 @jwt_required()
+@require_role(*AVAILABILITY_ROLES)
 def delete_block(block_id):
     block = UserUnavailability.query.filter_by(id=block_id, user_id=int(get_jwt_identity())).first_or_404()
     db.session.delete(block)
@@ -89,6 +96,7 @@ def delete_block(block_id):
 
 @availability_bp.route('/me', methods=['DELETE'])
 @jwt_required()
+@require_role(*AVAILABILITY_ROLES)
 def clear_blocks():
     """Remove all unavailability of one kind (?kind=repeating|holiday)."""
     kind = request.args.get('kind')

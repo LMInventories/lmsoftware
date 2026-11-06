@@ -304,7 +304,7 @@ async function openCreateSheet() {
     ])
     createProperties.value = pRes.data  || []
     createTemplates.value  = tRes.data  || []
-    createClerks.value     = (uRes.data || []).filter(u => u.role === 'clerk')
+    createClerks.value     = (uRes.data || []).filter(u => ['clerk', 'manager', 'admin'].includes(u.role))
   } catch {
     createError.value = 'Failed to load properties / templates — check connection'
   } finally {

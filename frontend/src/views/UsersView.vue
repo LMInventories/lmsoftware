@@ -131,6 +131,9 @@ async function deleteUser(id) {
   }
 }
 
+// Roles whose assigned inspections are colour-coded on the calendar
+function hasCalendarColor(role) { return ['clerk', 'typist', 'manager', 'admin'].includes(role) }
+
 function getRoleBadgeColor(role) {
   const colors = {
     admin: '#dc2626',
@@ -195,7 +198,7 @@ onMounted(() => {
               <div class="user-name-row">
                 <h3>{{ user.name }}</h3>
                 <span
-                  v-if="user.role === 'clerk' || user.role === 'typist'"
+                  v-if="hasCalendarColor(user.role)"
                   class="color-dot"
                   :style="{ backgroundColor: user.color }"
                   :title="`Calendar color: ${user.color}`"
@@ -262,8 +265,8 @@ onMounted(() => {
             </select>
           </div>
 
-          <!-- Color Picker (for clerks/typists) -->
-          <div v-if="form.role === 'clerk' || form.role === 'typist'" class="form-group">
+          <!-- Color Picker (anyone who can be assigned work: clerks, managers, admins; typists too) -->
+          <div v-if="hasCalendarColor(form.role)" class="form-group">
             <label>Calendar Color</label>
             <div class="color-picker-container">
               <input 

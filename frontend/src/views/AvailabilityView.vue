@@ -267,6 +267,7 @@ function shift(dir) {
 }
 function goToday() { anchor.value = startOfDay(new Date()) }
 function setView(v) { view.value = v; if (v !== 'month') scrollToMorning() }
+function openDay(dateStr) { anchor.value = fromIso(dateStr); setView('day') }
 function setMode(m) { mode.value = m; if (m === 'repeating' || view.value !== 'month') scrollToMorning() }
 
 const title = computed(() => {
@@ -306,6 +307,13 @@ function monthDown(e, cell) {
   monthDrag.value = { from: cell.date, to: cell.date }
   window.addEventListener('pointermove', monthMove)
   window.addEventListener('pointerup', monthUp)
+  window.addEventListener('pointercancel', monthCancel)
+}
+function monthCancel() {
+  window.removeEventListener('pointermove', monthMove)
+  window.removeEventListener('pointerup', monthUp)
+  window.removeEventListener('pointercancel', monthCancel)
+  monthDrag.value = null   // browser took over (e.g. the page started scrolling) — don't create anything
 }
 function monthMove(e) {
   const el = document.elementFromPoint(e.clientX, e.clientY)?.closest('[data-date]')
@@ -314,6 +322,7 @@ function monthMove(e) {
 async function monthUp() {
   window.removeEventListener('pointermove', monthMove)
   window.removeEventListener('pointerup', monthUp)
+  window.removeEventListener('pointercancel', monthCancel)
   const d = monthDrag.value
   monthDrag.value = null
   if (!d) return
@@ -326,10 +335,33 @@ function inMonthDrag(dateStr) {
   const [s, e] = d.from <= d.to ? [d.from, d.to] : [d.to, d.from]
   return dateStr >= s && dateStr <= e
 }
-onUnmounted(() => {
-  window.removeEventListener('pointermove', monthMove)
-  window.removeEventListener('pointerup', monthUp)
-})
+onUnmounted(monthCancel)
+
+// ── Add holiday by dates (works without dragging — handy on touch screens) ──
+const hf = ref({ start: '', end: '', allDay: true, from: '09:00', to: '17:00' })
+const hfSaving = ref(false)
+function toMin(t) { const [h, m] = t.split(':').map(Number); return h * 60 + m }
+
+async function addHoliday() {
+  error.value = ''
+  const { start, end, allDay, from, to } = hf.value
+  if (!start) { error.value = 'Choose a start date'; return }
+  const last = end || start
+  if (last < start) { error.value = 'End date must be on or after the start date'; return }
+  let sm = null, em = null
+  if (!allDay) {
+    if (last !== start) { error.value = 'Specific hours can only be set for a single day — use all day for a range'; return }
+    sm = toMin(from); em = toMin(to)
+    if (!from || !to || sm >= em) { error.value = 'End time must be after the start time'; return }
+  }
+  hfSaving.value = true
+  await createBlock({ kind: 'holiday', start_date: start, end_date: last, start_min: sm, end_min: em })
+  hfSaving.value = false
+  if (!error.value) {
+    anchor.value = fromIso(start)
+    hf.value.start = ''; hf.value.end = ''
+  }
+}
 
 const showTimeGrid = computed(() => mode.value === 'repeating' || view.value !== 'month')
 </script>
@@ -372,6 +404,17 @@ const showTimeGrid = computed(() => mode.value === 'repeating' || view.value !==
         <button :class="{ on: view === 'day' }" @click="setView('day')">Day</button>
       </div>
     </div>
+
+    <form v-if="mode === 'holiday'" class="hol-form" @submit.prevent="addHoliday">
+      <label>From <input type="date" v-model="hf.start" @change="if (!hf.end || hf.end < hf.start) hf.end = hf.start" /></label>
+      <label>To <input type="date" v-model="hf.end" :min="hf.start || undefined" /></label>
+      <label class="chk"><input type="checkbox" v-model="hf.allDay" /> All day</label>
+      <template v-if="!hf.allDay">
+        <label>Start time <input type="time" step="900" v-model="hf.from" /></label>
+        <label>End time <input type="time" step="900" v-model="hf.to" /></label>
+      </template>
+      <button type="submit" class="btn-add" :disabled="hfSaving">Add unavailability</button>
+    </form>
 
     <!-- ── Time grid (repeating / holiday week + day) ─────────────────── -->
     <div v-if="showTimeGrid" class="grid-scroll-x">
@@ -440,7 +483,9 @@ const showTimeGrid = computed(() => mode.value === 'repeating' || view.value !==
           :data-date="cell.date"
           @pointerdown="monthDown($event, cell)"
         >
-          <div class="mc-day">{{ ordinal(cell.day) }}</div>
+          <div class="mc-day">
+            <button class="day-link" title="Open Day view" @pointerdown.stop @click.stop="openDay(cell.date)">{{ ordinal(cell.day) }}</button>
+          </div>
           <button
             v-for="b in blocksOnDate(cell.date)" :key="b.id"
             class="chip wide" @pointerdown.stop @click.stop="removeBlock(b.id)" title="Click to remove"
@@ -474,6 +519,18 @@ const showTimeGrid = computed(() => mode.value === 'repeating' || view.value !==
 .nav-title { font-weight: 600; color: #334155; text-align: center; }
 .btn-today { background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 5px; padding: 6px 12px; font-size: 13px; color: #475569; cursor: pointer; }
 
+.hol-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; margin-bottom: 14px; padding: 12px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; }
+.hol-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: #475569; }
+.hol-form label.chk { flex-direction: row; align-items: center; gap: 6px; padding-bottom: 9px; }
+.hol-form input[type="date"], .hol-form input[type="time"] { padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 6px; font: inherit; font-size: 14px; }
+.btn-add { background: #4f86e6; color: #fff; border: none; border-radius: 6px; padding: 10px 18px; font-size: 13px; font-weight: 700; cursor: pointer; }
+.btn-add:disabled { background: #94a3b8; }
+@media (max-width: 768px) {
+  .hol-form label { flex: 1 1 140px; }
+  .hol-form input { width: 100%; box-sizing: border-box; }
+  .btn-add { width: 100%; min-height: 44px; }
+}
+
 .grid-scroll-x { overflow-x: auto; }
 .grid { min-width: 720px; border: 1px solid #d5dae1; background: #fff; }
 .grid-head { display: grid; border-bottom: 1px solid #d5dae1; }
@@ -484,26 +541,35 @@ const showTimeGrid = computed(() => mode.value === 'repeating' || view.value !==
 .allday-cell { min-height: 46px; border-right: 1px solid #e2e8f0; padding: 3px; cursor: pointer; display: flex; flex-direction: column; gap: 2px; }
 .gh-day.today, .allday-cell.today, .day-col.today { background: #fff8dc; }
 
-.grid-scroll { height: 540px; overflow-y: auto; position: relative; }
+.grid-scroll { height: clamp(320px, 62vh, 540px); overflow-y: auto; position: relative; }
 .grid-body { position: relative; }
 .gutter { position: absolute; left: 0; top: 0; bottom: 0; width: 56px; border-right: 1px solid #e2e8f0; background: #fff; z-index: 2; }
 .hour-label { position: absolute; left: 0; width: 52px; text-align: right; font-size: 13px; color: #334155; transform: translateY(-1px); padding-top: 2px; }
-.day-col { position: absolute; top: 0; bottom: 0; border-right: 1px solid #e2e8f0; touch-action: pan-y; cursor: cell; }
+.day-col { position: absolute; top: 0; bottom: 0; border-right: 1px solid #e2e8f0; touch-action: pan-x pan-y; cursor: cell; }
 .day-col:last-child { border-right: none; }
 .hour-line { position: absolute; left: 0; right: 0; border-top: 1px solid #d5dae1; pointer-events: none; }
 .half-line { position: absolute; left: 0; right: 0; border-top: 1px dotted #e2e8f0; pointer-events: none; }
 
-.block { position: absolute; left: 2px; right: 2px; background: #d4d4d8; border: 1px solid #8e8e96; border-radius: 3px; font-size: 12px; color: #27272a; overflow: hidden; cursor: grab; touch-action: none; user-select: none; z-index: 1; }
+.block { position: absolute; left: 2px; right: 2px; background: #d4d4d8; border: 1px solid #8e8e96; border-radius: 3px; font-size: 12px; color: #27272a; cursor: grab; touch-action: none; user-select: none; z-index: 1; }
 .block.draft { background: rgba(79,134,230,.35); border-color: #4f86e6; pointer-events: none; }
 .block.dragging { cursor: grabbing; box-shadow: 0 2px 8px rgba(0,0,0,.25); z-index: 3; }
-.block-text { padding: 2px 5px; display: block; pointer-events: none; }
+.block-text { padding: 2px 5px; display: block; pointer-events: none; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .handle { position: absolute; left: 0; right: 0; height: 7px; cursor: ns-resize; touch-action: none; }
 .handle.top { top: 0; }
 .handle.bottom { bottom: 0; }
+@media (pointer: coarse) {
+  /* Finger-sized resize grips that straddle the block edge */
+  .handle { height: 22px; }
+  .handle.top { top: -11px; }
+  .handle.bottom { bottom: -11px; }
+  .day-link { padding: 6px 8px; }
+  .btn-remove-all, .seg button, .btn-today { min-height: 40px; }
+}
 
 .chip { background: #d4d4d8; border: 1px solid #8e8e96; border-radius: 3px; font-size: 12px; color: #27272a; text-align: left; padding: 1px 5px; cursor: pointer; font-family: inherit; }
 .chip:hover { background: #fecaca; border-color: #dc2626; }
-.chip.wide { display: block; width: 100%; margin-top: 2px; box-sizing: border-box; }
+.chip.wide { display: block; width: 100%; margin-top: 2px; box-sizing: border-box; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.month-cell { touch-action: pan-x pan-y; }
 
 .month { border: 1px solid #d5dae1; background: #fff; user-select: none; }
 .month-head { display: grid; grid-template-columns: repeat(7, 1fr); border-bottom: 1px solid #d5dae1; }
@@ -517,12 +583,20 @@ const showTimeGrid = computed(() => mode.value === 'repeating' || view.value !==
 .month-cell.sweep { background: #dbeafe; }
 .mc-day { text-align: right; font-size: 14px; color: #334155; }
 .month-cell.other .mc-day { color: #94a3b8; }
+.day-link { background: none; border: none; padding: 0 2px; font: inherit; color: inherit; cursor: pointer; text-decoration: underline; text-decoration-color: transparent; }
+.day-link:hover { color: #2563eb; text-decoration-color: currentColor; }
 
 @media (max-width: 768px) {
   .av-page { padding: 16px 12px 40px; }
   .nav-row { grid-template-columns: 1fr; justify-items: center; }
   .nav-row > .seg:last-child { justify-self: center; }
-  .month-cell { min-height: 64px; }
-  .chip.wide { font-size: 10px; }
+  .month-cell { min-height: 64px; padding: 2px; }
+  .chip.wide { font-size: 10px; padding: 1px 2px; }
+  .mc-day { font-size: 12px; }
+  .grid { min-width: 600px; }
+  .btn-remove-all { width: 100%; justify-content: center; }
+  .av-actions { width: 100%; }
+  .av-actions .seg { width: 100%; }
+  .av-actions .seg button { flex: 1; }
 }
 </style>

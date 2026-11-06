@@ -84,6 +84,11 @@ async function cpSubmit() {
   }
 }
 
+function goAvailability() {
+  closeUserPopup()
+  router.push('/availability')
+}
+
 function logout() {
   authStore.logout()
   router.push('/login')
@@ -304,6 +309,7 @@ const pdfImportJobs = usePdfImportJobs()
           <button class="drawer-item" v-if="authStore.isAdmin || authStore.isManager" @click="navigate('/users')">Users</button>
           <div class="drawer-divider"></div>
           <button class="drawer-item" v-if="authStore.isAdmin || authStore.isManager" @click="navigate('/settings')">Settings</button>
+          <button class="drawer-item" @click="navigate('/availability')">Availability</button>
           <button class="drawer-item" @click="navigate('/change-password')">Change Password</button>
           <div class="drawer-divider"></div>
           <button class="drawer-item drawer-logout" @click="logout">Logout</button>
@@ -361,6 +367,10 @@ const pdfImportJobs = usePdfImportJobs()
           </Transition>
 
           <div v-if="!showChangePassword" class="popup-actions">
+            <button class="popup-action" @click="goAvailability">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+              Availability
+            </button>
             <button class="popup-action" @click="showChangePassword = true">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
               Change Password

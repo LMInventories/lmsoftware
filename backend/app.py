@@ -152,6 +152,7 @@ def create_app():
     from routes.signatures           import signatures_bp
     from routes.floorplans           import floorplans_bp
     from routes.floorplan_manual     import floorplan_manual_bp
+    from routes.availability         import availability_bp
 
     app.register_blueprint(auth_bp,            url_prefix='/api/auth')
     app.register_blueprint(auth_reset_bp,      url_prefix='/api/auth')
@@ -175,6 +176,7 @@ def create_app():
     app.register_blueprint(signatures_bp,      url_prefix='/api')
     app.register_blueprint(floorplans_bp,      url_prefix='/api/floorplans')
     app.register_blueprint(floorplan_manual_bp, url_prefix='/api/floorplan-manual')
+    app.register_blueprint(availability_bp,    url_prefix="/api/availability")
 
     # Optional blueprints — register only if the file exists
     _optional = [

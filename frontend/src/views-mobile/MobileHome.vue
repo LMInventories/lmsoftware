@@ -3,6 +3,7 @@ import { ref, onMounted, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { Network } from '@capacitor/network'
 import api from '../services/api'
+import { useUnavailableUsers } from '../composables/useUnavailableUsers'
 import {
   getAllInspections,
   saveInspection,
@@ -239,6 +240,9 @@ const createProperties    = ref([])
 const createTemplates     = ref([])
 const createClerks        = ref([])
 const createPropertySearch = ref('')
+const { unavailableIds: createUnavailableIds } = useUnavailableUsers(() => createForm.value.conduct_date, () => 'anytime')
+const assignableCreateClerks = computed(() =>
+  createClerks.value.filter(c => !createUnavailableIds.value.includes(c.id) || c.id === createForm.value.inspector_id))
 const createLifecycle     = ref(null)   // { sourceId, label, dateStr }
 const historyLoading      = ref(false)
 
@@ -801,7 +805,7 @@ function fmtDate(d) {
           <label class="mh-field-label">Assign Clerk</label>
           <select class="mh-input" v-model="createForm.inspector_id">
             <option :value="null">— Not assigned —</option>
-            <option v-for="c in createClerks" :key="c.id" :value="c.id">{{ c.name }}</option>
+            <option v-for="c in assignableCreateClerks" :key="c.id" :value="c.id">{{ c.name }}</option>
           </select>
         </div>
 

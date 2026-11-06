@@ -85,6 +85,11 @@ const router = createRouter({
           component: () => import('../views/settings/FixedSectionsSettings.vue')
         },
         {
+          path: 'availability',
+          name: 'Availability',
+          component: () => import('../views/AvailabilityView.vue')
+        },
+        {
           path: 'change-password',
           name: 'ChangePassword',
           component: () => import('../views/ChangePasswordView.vue')

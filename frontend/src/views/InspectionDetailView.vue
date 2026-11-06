@@ -5,6 +5,7 @@ import { useAuthStore } from '../stores/auth'
 import { useToast } from '../composables/useToast'
 import { useConfirm } from '../composables/useConfirm'
 import api from '../services/api'
+import { useUnavailableUsers } from '../composables/useUnavailableUsers'
 import TemplatePreviewModal from '../components/settings/TemplatePreviewModal.vue'
 import PdfCheckInUploadModal from '../components/PdfCheckInUploadModal.vue'
 
@@ -341,6 +342,13 @@ async function fetchUsers() {
 }
 
 const clerks  = computed(() => users.value.filter(u => u.role === 'clerk'))
+// Hide clerks who are unavailable at this inspection's date/time (the currently assigned clerk stays listed)
+const { unavailableIds } = useUnavailableUsers(
+  () => inspection.value?.conduct_date,
+  () => inspection.value?.conduct_time_preference,
+)
+const assignableClerks = computed(() =>
+  clerks.value.filter(c => !unavailableIds.value.includes(c.id) || c.id === inspection.value?.inspector_id))
 const typists = computed(() => users.value.filter(u => u.role === 'typist'))
 
 async function updateField(field, value) {
@@ -1271,7 +1279,7 @@ onMounted(() => {
           </div>
 
           <!-- INTERNAL NOTES -->
-          <div class="info-card" v-if="!authStore.isClient">
+          <div class="info-card">
             <div class="card-header">
               <h3>Internal Notes</h3>
               <button v-if="canEdit" @click="showEditNotes = true" class="btn-edit">Edit</button>
@@ -1675,7 +1683,7 @@ onMounted(() => {
           <div class="modal-body">
             <select v-model="editForms.inspector_id" class="input-field">
               <option :value="null">Not assigned</option>
-              <option v-for="clerk in clerks" :key="clerk.id" :value="clerk.id">
+              <option v-for="clerk in assignableClerks" :key="clerk.id" :value="clerk.id">
                 {{ clerk.name }} ({{ clerk.email }})
               </option>
             </select>

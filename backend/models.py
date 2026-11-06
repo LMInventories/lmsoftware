@@ -827,3 +827,35 @@ class TelegramSession(db.Model):
     lookup_history_json  = db.Column(db.Text)                                        # /lookup conversation [{role, content}] for follow-ups
     last_update_id       = db.Column(db.BigInteger)                                  # newest Telegram update_id handled, to drop redeliveries
     updated_at           = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class UserUnavailability(db.Model):
+    """
+    A block of time a user (any role) has marked themselves unavailable.
+
+    kind='repeating' - weekly pattern: `weekday` (0=Mon..6=Sun) plus a time range.
+    kind='holiday'   - specific dates: `start_date`..`end_date` inclusive. Multi-day
+                       ranges are always all-day; a single day may carry a time range.
+    start_min/end_min are minutes from midnight; both NULL means all day.
+    Clerks with a block covering an inspection's slot are hidden from the clerk
+    pickers and shown as "Unavailable" in the Telegram booking flow.
+    """
+    __tablename__ = 'user_unavailability'
+
+    id         = db.Column(db.Integer, primary_key=True)
+    user_id    = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
+    kind       = db.Column(db.String(10), nullable=False)  # 'repeating' | 'holiday'
+    weekday    = db.Column(db.Integer, nullable=True)
+    start_date = db.Column(db.Date, nullable=True)
+    end_date   = db.Column(db.Date, nullable=True)
+    start_min  = db.Column(db.Integer, nullable=True)
+    end_min    = db.Column(db.Integer, nullable=True)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    def to_dict(self):
+        return {
+            'id': self.id, 'kind': self.kind, 'weekday': self.weekday,
+            'start_date': self.start_date.isoformat() if self.start_date else None,
+            'end_date': self.end_date.isoformat() if self.end_date else None,
+            'start_min': self.start_min, 'end_min': self.end_min,
+        }

@@ -6,6 +6,7 @@ import { useToast } from '../composables/useToast'
 import { useAuthStore } from '../stores/auth'
 import PdfImportModal from '../components/PdfImportModal.vue'
 import { usePersistedFilters } from '../composables/usePersistedFilters'
+import { useUnavailableUsers, timePrefFromForm } from '../composables/useUnavailableUsers'
 
 const toast = useToast()
 const authStore = useAuthStore()
@@ -485,6 +486,13 @@ const filteredProperties = computed(() => {
 
 const clerks = computed(() => users.value.filter(u => u.role === 'clerk'))
 const typists = computed(() => users.value.filter(u => u.role === 'typist'))
+// Clerks who haven't marked themselves unavailable for the chosen date/time (Add Inspection picker only)
+const { unavailableIds } = useUnavailableUsers(
+  () => form.value.conduct_date,
+  () => timePrefFromForm(form.value.time_preference, form.value.time_hour, form.value.time_minute),
+)
+const assignableClerks = computed(() =>
+  clerks.value.filter(c => !unavailableIds.value.includes(c.id) || c.id === form.value.inspector_id))
 const filteredTemplates = computed(() =>
   form.value.inspection_type === 'damage_report'
     ? templates.value
@@ -1468,12 +1476,15 @@ onMounted(async () => {
                   <label>Clerk (Inspector) *</label>
                   <select v-model="form.inspector_id" required>
                     <option :value="null" disabled>Select a clerk...</option>
-                    <option v-for="clerk in clerks" :key="clerk.id" :value="clerk.id">
+                    <option v-for="clerk in assignableClerks" :key="clerk.id" :value="clerk.id">
                       {{ clerk.name }} ({{ clerk.email }})
                     </option>
                   </select>
                   <p v-if="clerks.length === 0" class="helper-text warning">
                     No clerks available. Create clerk users first.
+                  </p>
+                  <p v-else-if="assignableClerks.length === 0" class="helper-text warning">
+                    All clerks are unavailable on this date/time.
                   </p>
                 </div>
 

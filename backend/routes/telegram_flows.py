@@ -518,6 +518,15 @@ def _clerks_with_load(data):
     return clerks, load
 
 
+def _unavailable_clerk_ids(data, clerks):
+    """IDs of clerks whose availability blocks cover the chosen date + time slot."""
+    if not data.get('conduct_date') or not clerks:
+        return set()
+    from services.availability import unavailable_user_ids
+    return unavailable_user_ids(date.fromisoformat(data['conduct_date']),
+                                data.get('conduct_time_preference'), [c.id for c in clerks])
+
+
 def _clerk_optional(data):
     return data.get('inspection_type') in TEMPLATELESS_TYPES
 
@@ -528,10 +537,15 @@ def _ask_clerk(state):
         return None
     clerks, load = _clerks_with_load(data)
     state['options'] = [c.id for c in clerks]
+    away = _unavailable_clerk_ids(data, clerks)
     rows = []
     for i, c in enumerate(clerks):
         n = load.get(c.id, 0)
-        rows.append([_btn(c.name + (f' ({n} job{"s" if n != 1 else ""} that day)' if n else ' (free)'), 'clerk', i)])
+        if c.id in away:
+            label = c.name + ' (Unavailable)'
+        else:
+            label = c.name + (f' ({n} job{"s" if n != 1 else ""} that day)' if n else ' (free)')
+        rows.append([_btn(label, 'clerk', i)])
     if _clerk_optional(data):
         rows.append([_btn('Unassigned', 'clerk', 'none')])
     if not clerks and not _clerk_optional(data):
@@ -557,6 +571,8 @@ def _accept_clerk(state, text, value):
         clerk = matches[0] if len(matches) == 1 else None
     if clerk is None:
         return 'Tap a clerk from the list, or type their name.', None
+    if clerk.id in _unavailable_clerk_ids(data, [clerk]):
+        return f'{clerk.name} is Unavailable then — pick someone else.', None
     data.update(inspector_id=clerk.id, inspector_name=clerk.name, clerk_done=True)
     return None
 

@@ -151,11 +151,14 @@ const overrideTemplate    = ref(false)  // admin chose to pick a template instea
 // Watch property + inspection_type — load history and compute suggestion
 watch(
   () => [form.value.property_id, form.value.inspection_type],
-  async ([propId, iType]) => {
+  async ([propId, iType], [, oldIType] = []) => {
     lifecycleSuggestion.value = null
     noCheckInFound.value = false
     overrideTemplate.value = false
     form.value.source_inspection_id = null
+    // A template picked for one type must never carry over to another type
+    // (e.g. an Inventory template silently attached to a Heads Up Report).
+    if (oldIType !== undefined && oldIType !== iType) form.value.template_id = null
     if (!propId) return
 
     // Standalone types — no lifecycle lookup needed

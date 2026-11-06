@@ -401,8 +401,10 @@ def create_inspection():
     STANDALONE_TYPES = {'midterm', 'damage_report', 'heads_up'}
     is_standalone = inspection_type in STANDALONE_TYPES
 
-    template_id = data.get('template_id')
-    if not template_id:
+    # Heads-Up Reports never use a room template (their layout is the
+    # Heads-Up Sections setting), so ignore any template the client sent.
+    template_id = None if inspection_type == 'heads_up' else data.get('template_id')
+    if not template_id and inspection_type != 'heads_up':
         # Lifecycle types follow their source inspection's template: the
         # source's report_data is keyed by that template's section/item ids, so
         # any other template (including the type default) would not line up.

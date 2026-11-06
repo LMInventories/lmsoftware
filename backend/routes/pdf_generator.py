@@ -324,7 +324,9 @@ class _PDFBuilder:
         # report_data keys rooms by String(s.id) — the DB section id.
         # Items use item.id as the row key, and item.name as the label.
         self.rooms = []
-        tmpl = inspection.template
+        # Heads-Up Reports have no rooms, so never read a template for them
+        # even if a stale one is attached to the inspection.
+        tmpl = None if itype == 'heads_up' else inspection.template
         room_names   = self.rd.get('_roomNames', {})
         hidden_rooms = set(str(x) for x in (self.rd.get('_hiddenRooms') or []))
         if tmpl:

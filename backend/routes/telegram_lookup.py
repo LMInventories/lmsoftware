@@ -265,9 +265,10 @@ def search_inspections(user, reference_number: str = '', property_id: int | None
                        date_from: str = '', date_to: str = '', inspector_name: str = '',
                        tenant: str = '', invoice_paid: bool | None = None, confirmed: bool | None = None,
                        unassigned_only: bool = False, include_paper_imports: bool = False,
-                       newest_first: bool = True):
+                       newest_first: bool = True, exclude_heads_up: bool = False):
     from models import Inspection, Property, User
     from routes.telegram_intent import _day_bounds, normalize_inspection_type
+    from sqlalchemy import or_
 
     q = _inspections(user)
     if reference_number:
@@ -283,6 +284,8 @@ def search_inspections(user, reference_number: str = '', property_id: int | None
         if not t:
             return {'error': f'Unknown inspection type "{inspection_type}".'}
         q = q.filter(Inspection.inspection_type == t)
+    if exclude_heads_up:
+        q = q.filter(or_(Inspection.inspection_type != 'heads_up', Inspection.inspection_type.is_(None)))
     if status:
         q = q.filter(Inspection.status == status)
     try:
@@ -456,6 +459,7 @@ def get_schedule(user, date_from: str = '', date_to: str = '', inspector_name: s
     return search_inspections(
         user, date_from=date_from or today, date_to=date_to or date_from or today,
         inspector_name=inspector_name, unassigned_only=unassigned_only, newest_first=False,
+        exclude_heads_up=True,  # a Heads Up Report is an add-on, not a job
     )
 
 
@@ -464,6 +468,7 @@ def get_availability(user, date: str = ''):
     from models import Inspection, User
     from permissions import is_admin_or_manager
     from routes.telegram_intent import _day_bounds, _today_london, format_time_preference
+    from sqlalchemy import or_
     from sqlalchemy.orm import selectinload
 
     if not is_admin_or_manager(user):
@@ -479,7 +484,8 @@ def get_availability(user, date: str = ''):
     busy = {}
     rows = (Inspection.query
             .filter(Inspection.conduct_date >= start, Inspection.conduct_date < end,
-                    Inspection.inspector_id.isnot(None), Inspection.pdf_import.is_(False))
+                    Inspection.inspector_id.isnot(None), Inspection.pdf_import.is_(False),
+                    or_(Inspection.inspection_type != 'heads_up', Inspection.inspection_type.is_(None)))
             .options(selectinload(Inspection.property)).order_by(Inspection.conduct_date.asc()).all())
     for insp in rows:
         busy.setdefault(insp.inspector_id, []).append(_clean({

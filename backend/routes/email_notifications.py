@@ -374,6 +374,17 @@ def _send_all_clerk_summaries():
     sent     = 0
     errors   = []
 
+    # Heads Up Reports are never their own job: they ride along with the full
+    # inspection at the same property on the same day, shown as "+ Heads Up Report".
+    day_expr = db.func.date(db.func.coalesce(Inspection.conduct_date, Inspection.scheduled_date))
+    heads_up_property_ids = {
+        pid for (pid,) in db.session.query(Inspection.property_id).filter(
+            Inspection.inspection_type == 'heads_up',
+            day_expr == tomorrow,
+            Inspection.status.notin_(['cancelled']),
+        ).all()
+    }
+
     for clerk in clerks:
         if not clerk.email:
             continue
@@ -382,10 +393,9 @@ def _send_all_clerk_summaries():
             Inspection.query
             .filter(
                 Inspection.inspector_id == clerk.id,
-                db.func.date(
-                    db.func.coalesce(Inspection.conduct_date, Inspection.scheduled_date)
-                ) == tomorrow,
-                Inspection.status.notin_(['cancelled'])
+                day_expr == tomorrow,
+                Inspection.status.notin_(['cancelled']),
+                db.or_(Inspection.inspection_type != 'heads_up', Inspection.inspection_type.is_(None)),
             )
             .order_by(Inspection.conduct_time_preference)
             .all()
@@ -399,7 +409,7 @@ def _send_all_clerk_summaries():
             client = prop.client if prop else None
             tuples.append((insp, prop, client))
 
-        ok, err = send_clerk_daily_summary(clerk, tuples)
+        ok, err = send_clerk_daily_summary(clerk, tuples, heads_up_property_ids=heads_up_property_ids)
         if ok:
             sent += 1
         else:

@@ -467,11 +467,16 @@ def send_booking_confirmation_to_client(inspection, client, property_obj):
 
 # ── 2. Clerk daily summary ───────────────────────────────────────────────────
 
-def send_clerk_daily_summary(clerk, inspections_tomorrow):
+def send_clerk_daily_summary(clerk, inspections_tomorrow, heads_up_property_ids=None):
     """
     Send a clerk their work summary for the following day.
     inspections_tomorrow: list of (inspection, property, client) tuples, sorted by time.
+    heads_up_property_ids: ids of properties with a Heads Up Report that day; these
+    are not separate jobs — the matching inspection just gets a "+ Heads Up Report" tag.
     """
+    heads_up_property_ids = heads_up_property_ids or set()
+    inspections_tomorrow = [t for t in inspections_tomorrow
+                            if getattr(t[0], 'inspection_type', None) != 'heads_up']
     if not getattr(clerk, 'email', ''):
         return False, 'Clerk has no email address'
 
@@ -520,6 +525,10 @@ def send_clerk_daily_summary(clerk, inspections_tomorrow):
         if meter_water: meter_parts.append(f'<strong>Water:</strong> {meter_water}')
         meter_html = '<br/>'.join(meter_parts) if meter_parts else ''
 
+        hu_tag = ''
+        if getattr(inspection, 'property_id', None) in heads_up_property_ids:
+            hu_tag = ' <span style="font-family:Arial,Helvetica,sans-serif;font-size:13px;font-weight:bold;color:#475569;">+ Heads Up Report</span>'
+
         # Build row list so we can mark the last one correctly
         card_rows = [
             ('Property',        prop_addr),
@@ -542,7 +551,7 @@ def send_clerk_daily_summary(clerk, inspections_tomorrow):
             '''<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;margin:0 0 20px;">\n'''
             + f'''<tr><td colspan="2" style="padding:12px 16px 10px;border-bottom:1px solid #e2e8f0;">'''
             + f'''<p style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:20px;font-weight:bold;color:#1e293b;">{insp_time}</p>'''
-            + f'''<p style="margin:4px 0 0;">{_pill(insp_type)}</p>'''
+            + f'''<p style="margin:4px 0 0;">{_pill(insp_type)}{hu_tag}</p>'''
             + '</td></tr>\n'
             + ''.join(_info_row(lbl, val, last=(i == len(card_rows) - 1)) for i, (lbl, val) in enumerate(card_rows))
             + '</table>\n'

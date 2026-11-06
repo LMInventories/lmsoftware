@@ -340,6 +340,7 @@ onUnmounted(monthCancel)
 // ── Add holiday by dates (works without dragging — handy on touch screens) ──
 const hf = ref({ start: '', end: '', allDay: true, from: '09:00', to: '17:00' })
 const hfSaving = ref(false)
+function syncHolidayEnd() { if (!hf.value.end || hf.value.end < hf.value.start) hf.value.end = hf.value.start }
 function toMin(t) { const [h, m] = t.split(':').map(Number); return h * 60 + m }
 
 async function addHoliday() {
@@ -406,7 +407,7 @@ const showTimeGrid = computed(() => mode.value === 'repeating' || view.value !==
     </div>
 
     <form v-if="mode === 'holiday'" class="hol-form" @submit.prevent="addHoliday">
-      <label>From <input type="date" v-model="hf.start" @change="if (!hf.end || hf.end < hf.start) hf.end = hf.start" /></label>
+      <label>From <input type="date" v-model="hf.start" @change="syncHolidayEnd" /></label>
       <label>To <input type="date" v-model="hf.end" :min="hf.start || undefined" /></label>
       <label class="chk"><input type="checkbox" v-model="hf.allDay" /> All day</label>
       <template v-if="!hf.allDay">

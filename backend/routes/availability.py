@@ -1,8 +1,8 @@
 from datetime import date
-from flask import Blueprint, request, jsonify
-from flask_jwt_extended import jwt_required, get_jwt_identity
-from models import db, UserUnavailability
-from permissions import require_role
+from flask import Blueprint, request, jsonify, abort
+from flask_jwt_extended import jwt_required
+from models import db, User, UserUnavailability
+from permissions import require_role, get_current_user, is_admin_or_manager
 from services.availability import unavailable_user_ids
 
 availability_bp = Blueprint('availability', __name__)
@@ -45,24 +45,77 @@ def _apply(block, data):
     return None
 
 
+def _target_user_id():
+    """Whose availability this request acts on.
+
+    Everyone acts on themselves. Admins and managers may pass ?user_id=<id> to act on
+    any other admin/manager/clerk. Returns (user_id, error_response_or_None).
+    """
+    me = get_current_user()
+    raw = request.args.get('user_id')
+    if raw in (None, '', str(me.id)):
+        return me.id, None
+    if not is_admin_or_manager(me):
+        return None, (jsonify({'error': 'Forbidden'}), 403)
+    try:
+        uid = int(raw)
+    except ValueError:
+        return None, (jsonify({'error': 'invalid user_id'}), 400)
+    target = db.session.get(User, uid)
+    if not target or target.role not in AVAILABILITY_ROLES:
+        return None, (jsonify({'error': 'User not found'}), 404)
+    return uid, None
+
+
+def _own_block_or_404(block_id):
+    """Fetch a block the requester may change: their own, or anyone's for admin/manager."""
+    me = get_current_user()
+    block = UserUnavailability.query.get_or_404(block_id)
+    if block.user_id != me.id and not is_admin_or_manager(me):
+        abort(404)
+    return block
+
+
 @availability_bp.route('/me', methods=['GET'])
 @jwt_required()
 @require_role(*AVAILABILITY_ROLES)
 def list_mine():
-    uid = int(get_jwt_identity())
+    uid, err = _target_user_id()
+    if err:
+        return err
     rows = UserUnavailability.query.filter_by(user_id=uid).order_by(UserUnavailability.id).all()
     return jsonify([r.to_dict() for r in rows])
+
+
+@availability_bp.route('/team', methods=['GET'])
+@jwt_required()
+@require_role('admin', 'manager')
+def team():
+    """Every admin/manager/clerk with their colour and unavailability blocks."""
+    users = (User.query.filter(User.role.in_(AVAILABILITY_ROLES), User.is_ai.is_(False))
+             .order_by(User.name).all())
+    blocks = {}
+    for r in UserUnavailability.query.order_by(UserUnavailability.id).all():
+        blocks.setdefault(r.user_id, []).append(r.to_dict())
+    return jsonify([
+        {'id': u.id, 'name': u.name, 'role': u.role, 'color': u.color or '#6366f1',
+         'blocks': blocks.get(u.id, [])}
+        for u in users
+    ])
 
 
 @availability_bp.route('/me', methods=['POST'])
 @jwt_required()
 @require_role(*AVAILABILITY_ROLES)
 def create_block():
+    uid, err = _target_user_id()
+    if err:
+        return err
     data = request.json or {}
     kind = data.get('kind')
     if kind not in KINDS:
         return jsonify({'error': "kind must be 'repeating' or 'holiday'"}), 400
-    block = UserUnavailability(user_id=int(get_jwt_identity()), kind=kind)
+    block = UserUnavailability(user_id=uid, kind=kind)
     err = _apply(block, data)
     if err:
         return jsonify({'error': err}), 400
@@ -75,7 +128,7 @@ def create_block():
 @jwt_required()
 @require_role(*AVAILABILITY_ROLES)
 def update_block(block_id):
-    block = UserUnavailability.query.filter_by(id=block_id, user_id=int(get_jwt_identity())).first_or_404()
+    block = _own_block_or_404(block_id)
     err = _apply(block, request.json or {})
     if err:
         db.session.rollback()
@@ -88,7 +141,7 @@ def update_block(block_id):
 @jwt_required()
 @require_role(*AVAILABILITY_ROLES)
 def delete_block(block_id):
-    block = UserUnavailability.query.filter_by(id=block_id, user_id=int(get_jwt_identity())).first_or_404()
+    block = _own_block_or_404(block_id)
     db.session.delete(block)
     db.session.commit()
     return '', 204
@@ -99,16 +152,20 @@ def delete_block(block_id):
 @require_role(*AVAILABILITY_ROLES)
 def clear_blocks():
     """Remove all unavailability of one kind (?kind=repeating|holiday)."""
+    uid, err = _target_user_id()
+    if err:
+        return err
     kind = request.args.get('kind')
     if kind not in KINDS:
         return jsonify({'error': "kind must be 'repeating' or 'holiday'"}), 400
-    UserUnavailability.query.filter_by(user_id=int(get_jwt_identity()), kind=kind).delete()
+    UserUnavailability.query.filter_by(user_id=uid, kind=kind).delete()
     db.session.commit()
     return '', 204
 
 
 @availability_bp.route('/unavailable', methods=['GET'])
 @jwt_required()
+@require_role('admin', 'manager', 'clerk', 'typist')
 def unavailable():
     """User IDs unavailable for ?date=YYYY-MM-DD&time=am|pm|anytime|specific:HH_MM."""
     d = _parse_date((request.args.get('date') or '')[:10])

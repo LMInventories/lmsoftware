@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import api from '../services/api'
+import { useAuthStore } from '../stores/auth'
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const SNAP = 30                     // minutes
@@ -17,6 +18,24 @@ const blocks = ref([])
 const error = ref('')
 const scroller = ref(null)
 const bodyEl = ref(null)
+
+// ── Who are we looking at? ───────────────────────────────────────────────────
+// Clerks only ever see and edit themselves. Admins/managers get an "Everyone"
+// overview (read-only, colour-coded) plus an editor for any one person.
+const auth = useAuthStore()
+const isManagerView = computed(() => auth.isAdmin || auth.isManager)
+const who = ref(isManagerView.value ? 'team' : 'me')   // 'team' | 'me' | <user id>
+const team = ref([])                                    // [{id,name,role,color,blocks}]
+const readOnly = computed(() => who.value === 'team')
+const targetId = computed(() => (typeof who.value === 'number' && who.value !== auth.user?.id ? who.value : null))
+const targetUser = computed(() => team.value.find(u => u.id === (typeof who.value === 'number' ? who.value : auth.user?.id)))
+const apiParams = computed(() => (targetId.value ? { user_id: targetId.value } : {}))
+const colorOf = b => b.color || '#6366f1'
+function setWho(v) {
+  who.value = v
+  error.value = ''
+  load()
+}
 
 // ── Date helpers ─────────────────────────────────────────────────────────────
 function startOfDay(d) { return new Date(d.getFullYear(), d.getMonth(), d.getDate()) }
@@ -40,8 +59,18 @@ const todayIso = iso(new Date())
 // ── Load ─────────────────────────────────────────────────────────────────────
 async function load() {
   try {
-    const res = await api.http.get('/api/availability/me')
-    blocks.value = res.data
+    if (isManagerView.value) {
+      const t = await api.http.get('/api/availability/team')
+      team.value = t.data
+    }
+    if (who.value === 'team') {
+      blocks.value = team.value.flatMap(u => u.blocks.map(b => ({
+        ...b, user_id: u.id, user_name: u.name, color: u.color,
+      })))
+    } else {
+      const res = await api.http.get('/api/availability/me', { params: apiParams.value })
+      blocks.value = res.data
+    }
   } catch (e) {
     error.value = e.response?.data?.error || 'Failed to load availability'
   }
@@ -90,7 +119,7 @@ function payloadFor(col, startMin, endMin) {
 async function createBlock(payload) {
   error.value = ''
   try {
-    const res = await api.http.post('/api/availability/me', payload)
+    const res = await api.http.post('/api/availability/me', payload, { params: apiParams.value })
     blocks.value.push(res.data)
   } catch (e) {
     error.value = e.response?.data?.error || 'Failed to save'
@@ -123,10 +152,10 @@ async function removeBlock(id) {
 
 async function removeAll() {
   const what = mode.value === 'repeating' ? 'repeating' : 'holiday'
-  if (!confirm(`Remove all ${what} unavailability?`)) return
+  if (!confirm(`Remove all ${what} unavailability${targetId.value ? ` for ${targetUser.value?.name}` : ''}?`)) return
   error.value = ''
   try {
-    await api.http.delete('/api/availability/me', { params: { kind: mode.value } })
+    await api.http.delete('/api/availability/me', { params: { kind: mode.value, ...apiParams.value } })
     blocks.value = blocks.value.filter(b => b.kind !== mode.value)
   } catch (e) {
     error.value = e.response?.data?.error || 'Failed to remove'
@@ -151,6 +180,7 @@ function colAt(clientX) {
 }
 
 function startCreate(e, colIdx) {
+  if (readOnly.value) return
   if (e.button !== undefined && e.button !== 0) return
   const slotStart = Math.min(1440 - SNAP, Math.floor(minuteAt(e.clientY) / SNAP) * SNAP)
   drag.value = { type: 'create', colIdx, anchor: slotStart, startY: e.clientY, moved: false }
@@ -159,6 +189,7 @@ function startCreate(e, colIdx) {
 }
 
 function startBlock(e, block, colIdx, type) {
+  if (readOnly.value) { e.stopPropagation(); return }
   if (e.button !== undefined && e.button !== 0) return
   e.stopPropagation()
   drag.value = {
@@ -228,8 +259,37 @@ function blockStyle(b, colIdx) {
   const live = draft.value && draft.value.id === b.id ? draft.value : null
   const s = live ? live.start : b.start_min
   const e = live ? live.end : b.end_min
-  return { top: `${s * PX_PER_MIN}px`, height: `${Math.max(12, (e - s) * PX_PER_MIN)}px` }
+  const style = { top: `${s * PX_PER_MIN}px`, height: `${Math.max(12, (e - s) * PX_PER_MIN)}px` }
+  if (readOnly.value) {
+    // Overview: one lane per person so overlapping blocks sit side by side.
+    const ids = laneIds(columns.value[colIdx])
+    const n = Math.max(1, ids.length), i = Math.max(0, ids.indexOf(b.user_id))
+    style.left = `calc(2px + (100% - 4px) * ${i} / ${n})`
+    style.right = 'auto'
+    style.width = `calc((100% - 4px) / ${n} - 2px)`
+    style.background = `${colorOf(b)}59`
+    style.borderColor = colorOf(b)
+  }
+  return style
 }
+function laneIds(col) {
+  const ids = new Set(modeBlocks.value.filter(b => b.start_min != null && covers(b, col)).map(b => b.user_id))
+  return team.value.map(u => u.id).filter(id => ids.has(id))
+}
+function chipStyle(b) {
+  return readOnly.value ? { background: `${colorOf(b)}59`, borderColor: colorOf(b) } : null
+}
+// 12-hour labels for the overview: 12pm, 6:30pm
+function clock(min) {
+  const m = min % 1440, h = Math.floor(m / 60), mm = m % 60
+  const suffix = h < 12 ? 'am' : 'pm'
+  return `${h % 12 || 12}${mm ? ':' + String(mm).padStart(2, '0') : ''}${suffix}`
+}
+function teamLabel(b) {
+  const what = b.start_min == null ? 'All Day Unavailable' : `${clock(b.start_min)}–${clock(b.end_min)} Unavailable`
+  return `${b.user_name}: ${what}`
+}
+function openPerson(b) { if (readOnly.value) setWho(b.user_id) }
 function blockLabel(b, colIdx) {
   const live = draft.value && draft.value.id === b.id ? draft.value : null
   const s = live ? live.start : b.start_min
@@ -251,6 +311,7 @@ function draftBlockHere(colIdx) {
 
 // All-day cell click
 async function addAllDay(col) {
+  if (readOnly.value) return
   if (mode.value === 'repeating') {
     await createBlock({ kind: 'repeating', weekday: col.weekday, start_min: null, end_min: null })
   } else {
@@ -298,11 +359,13 @@ function blocksOnDate(dateStr) {
   return blocks.value.filter(b => b.kind === 'holiday' && b.start_date <= dateStr && dateStr <= (b.end_date || b.start_date))
 }
 function chipLabel(b) {
+  if (readOnly.value) return teamLabel(b)
   return b.start_min == null ? 'Unavailable' : `${hhmm(b.start_min)}–${endLabel(b.end_min)} Unavailable`
 }
 
 const monthDrag = ref(null)   // { from, to }
 function monthDown(e, cell) {
+  if (readOnly.value) return
   if (e.button !== undefined && e.button !== 0) return
   monthDrag.value = { from: cell.date, to: cell.date }
   window.addEventListener('pointermove', monthMove)
@@ -371,13 +434,30 @@ const showTimeGrid = computed(() => mode.value === 'repeating' || view.value !==
   <div class="av-page">
     <h1 class="av-title">Availability</h1>
 
+    <!-- Admin/manager: Everyone overview, or pick one person to edit -->
+    <div v-if="isManagerView" class="who-bar">
+      <button class="who-chip" :class="{ on: who === 'team' }" @click="setWho('team')">Everyone</button>
+      <button
+        v-for="u in team" :key="u.id"
+        class="who-chip" :class="{ on: who === u.id || (who === 'me' && u.id === auth.user?.id) }"
+        :style="{ '--c': u.color }" @click="setWho(u.id)"
+      ><span class="dot"></span>{{ u.name }}<small v-if="u.id === auth.user?.id"> (you)</small></button>
+    </div>
+
     <div class="av-toolbar">
-      <p class="av-hint">
+      <p v-if="readOnly" class="av-hint">
+        Everyone's unavailability, colour-coded by user. Click a block or a name above to edit that person's availability.
+      </p>
+      <p v-else-if="targetId" class="av-hint">
+        Editing <strong>{{ targetUser?.name }}</strong>'s availability. Drag and resize blocks to change it; click a block to remove it.
+        They won't appear as a clerk option, and will show as Unavailable in Telegram, while blocked.
+      </p>
+      <p v-else class="av-hint">
         Drag and resize blocks to change availability. Click a block to remove it.
         You won't appear as a clerk option, and will show as Unavailable in Telegram, while blocked.
       </p>
       <div class="av-actions">
-        <button class="btn-remove-all" @click="removeAll">
+        <button v-if="!readOnly" class="btn-remove-all" @click="removeAll">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
           Remove all unavailability
         </button>
@@ -406,7 +486,7 @@ const showTimeGrid = computed(() => mode.value === 'repeating' || view.value !==
       </div>
     </div>
 
-    <form v-if="mode === 'holiday'" class="hol-form" @submit.prevent="addHoliday">
+    <form v-if="mode === 'holiday' && !readOnly" class="hol-form" @submit.prevent="addHoliday">
       <label>From <input type="date" v-model="hf.start" @change="syncHolidayEnd" /></label>
       <label>To <input type="date" v-model="hf.end" :min="hf.start || undefined" /></label>
       <label class="chk"><input type="checkbox" v-model="hf.allDay" /> All day</label>
@@ -427,7 +507,8 @@ const showTimeGrid = computed(() => mode.value === 'repeating' || view.value !==
         <div class="grid-head allday" :style="{ gridTemplateColumns: `56px repeat(${columns.length}, 1fr)` }">
           <div class="gh-corner small">all-day</div>
           <div v-for="c in columns" :key="c.key" class="allday-cell" :class="{ today: c.date === todayIso }" @click="addAllDay(c)">
-            <button v-for="b in allDayFor(c)" :key="b.id" class="chip" @click.stop="removeBlock(b.id)" title="Click to remove">Unavailable</button>
+            <button v-for="b in allDayFor(c)" :key="b.id" class="chip" :style="chipStyle(b)"
+              @click.stop="readOnly ? openPerson(b) : removeBlock(b.id)" :title="readOnly ? teamLabel(b) : 'Click to remove'">{{ readOnly ? teamLabel(b) : 'Unavailable' }}</button>
           </div>
         </div>
 
@@ -449,12 +530,13 @@ const showTimeGrid = computed(() => mode.value === 'repeating' || view.value !==
                 <div
                   v-if="!isMovedAway(b, ci)"
                   class="block" :class="{ dragging: draft && draft.id === b.id }"
-                  :style="blockStyle(b, ci)"
+                  :style="blockStyle(b, ci)" :title="readOnly ? teamLabel(b) : undefined"
                   @pointerdown="startBlock($event, b, ci, 'move')"
+                  @click="openPerson(b)"
                 >
-                  <div class="handle top" @pointerdown="startBlock($event, b, ci, 'top')"></div>
-                  <span class="block-text">{{ blockLabel(b, ci) }} Unavailable</span>
-                  <div class="handle bottom" @pointerdown="startBlock($event, b, ci, 'bottom')"></div>
+                  <div v-if="!readOnly" class="handle top" @pointerdown="startBlock($event, b, ci, 'top')"></div>
+                  <span class="block-text">{{ readOnly ? teamLabel(b) : `${blockLabel(b, ci)} Unavailable` }}</span>
+                  <div v-if="!readOnly" class="handle bottom" @pointerdown="startBlock($event, b, ci, 'bottom')"></div>
                 </div>
               </template>
 
@@ -489,7 +571,8 @@ const showTimeGrid = computed(() => mode.value === 'repeating' || view.value !==
           </div>
           <button
             v-for="b in blocksOnDate(cell.date)" :key="b.id"
-            class="chip wide" @pointerdown.stop @click.stop="removeBlock(b.id)" title="Click to remove"
+            class="chip wide" :style="chipStyle(b)" @pointerdown.stop
+            @click.stop="readOnly ? openPerson(b) : removeBlock(b.id)" :title="readOnly ? teamLabel(b) : 'Click to remove'"
           >{{ chipLabel(b) }}</button>
         </div>
       </div>
@@ -501,6 +584,13 @@ const showTimeGrid = computed(() => mode.value === 'repeating' || view.value !==
 .av-page { padding: 24px 28px 48px; max-width: 1400px; }
 .av-title { font-size: 26px; font-weight: 600; color: #334155; margin: 0 0 14px; }
 .av-toolbar { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
+.who-bar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.who-chip { display: inline-flex; align-items: center; gap: 7px; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 999px; padding: 6px 14px; font-size: 13px; color: #334155; cursor: pointer; font-family: inherit; }
+.who-chip .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--c, #94a3b8); }
+.who-chip small { color: #64748b; }
+.who-chip.on { background: #334155; border-color: #334155; color: #fff; }
+.who-chip.on small { color: #cbd5e1; }
+.who-chip.on .dot { box-shadow: 0 0 0 2px #fff; }
 .av-hint { font-size: 13px; font-style: italic; color: #64748b; margin: 0; max-width: 560px; }
 .av-actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .btn-remove-all { display: inline-flex; align-items: center; gap: 8px; background: #9f2b36; color: #fff; border: none; border-radius: 6px; padding: 10px 18px; font-size: 13px; font-weight: 700; cursor: pointer; }

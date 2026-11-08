@@ -252,7 +252,7 @@ def _update_ci_enabled(inspection) -> bool:
     True when this is a Check In worked from a previous Check Out report and
     the client has "Update CI" enabled (report_photo_settings.sheet_update_ci).
     """
-    if getattr(inspection, 'inspection_type', None) != 'check_in':
+    if getattr(inspection, 'inspection_type', None) not in ('check_in', 'inventory'):
         return False
     source_id = getattr(inspection, 'source_inspection_id', None)
     if not source_id:
@@ -275,6 +275,7 @@ def _update_ci_enabled(inspection) -> bool:
 def _job_for(inspection_type: str, inspection=None) -> str:
     type_map = {
         'check_in':      'Inventory & Check In',
+        'inventory':     'Inventory & Check In',
         'check_out':     'Check Out',
         'midterm':       'Midterm',
         'damage_report': 'Damage Report',

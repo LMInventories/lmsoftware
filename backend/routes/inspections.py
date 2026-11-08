@@ -611,6 +611,11 @@ def update_inspection(inspection_id):
             # Malformed timestamp — skip conflict check rather than blocking sync
             print(f'[conflict] could not parse client_updated_at: {_cua_err}')
 
+    # Heads-Up Reports skip Review entirely: any move to review (older app
+    # builds, clerk sync, typist) completes and emails instead.
+    if inspection.inspection_type == 'heads_up' and data.get('status') == 'review':
+        data['status'] = 'complete'
+
     going_complete = (
         'status' in data and
         data['status'] == 'complete' and

@@ -1604,7 +1604,6 @@ onMounted(async () => {
     <PdfImportModal
       v-if="showPdfImportModal"
       :clients="clients"
-      :properties="properties"
       :templates="templates"
       :is-client="authStore.isClient"
       :user-client-id="authStore.user?.client_id ?? null"

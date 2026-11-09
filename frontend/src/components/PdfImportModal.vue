@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watchEffect, onMounted } from 'vue'
+import { ref, computed, watch, watchEffect, onMounted } from 'vue'
 import { useToast } from '../composables/useToast'
 import { usePdfImportJobs } from '../composables/usePdfImportJobs'
 import { usePdfHeaderReview } from '../composables/usePdfHeaderReview'
@@ -11,8 +11,6 @@ import api from '../services/api'
 const props = defineProps({
   /** Full client list from the parent store */
   clients:      { type: Array, default: () => [] },
-  /** Full property list from the parent store */
-  properties:   { type: Array, default: () => [] },
   /** All templates (non-transient) — used to discover check-in templates */
   templates:    { type: Array, default: () => [] },
   /** True when the logged-in user has the "client" role */
@@ -68,10 +66,29 @@ let _gdriveToken = null
 // Computed
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Properties filtered by the selected client */
-const filteredProperties = computed(() => {
-  if (!form.value.client_id) return props.properties
-  return props.properties.filter(p => p.client_id === form.value.client_id)
+/**
+ * Properties for the selected client. Fetched here (slim: id/client_id/address) rather
+ * than taken from the parent — the parent only loads properties for its own Add
+ * Inspection form, so this modal's client picker never triggered a load.
+ */
+const filteredProperties = ref([])
+const propertiesLoading  = ref(false)
+
+watch(() => form.value.client_id, async (clientId) => {
+  filteredProperties.value = []
+  propertiesLoading.value = false
+  if (!clientId) return
+  propertiesLoading.value = true
+  try {
+    const res = await api.getProperties({ slim: 1, client_id: clientId })
+    // Ignore stale responses if the client changed while this was in flight
+    if (form.value.client_id === clientId) filteredProperties.value = res.data
+  } catch (err) {
+    console.error('Failed to fetch properties:', err)
+    if (form.value.client_id === clientId) toast.error('Could not load properties — please try again')
+  } finally {
+    if (form.value.client_id === clientId) propertiesLoading.value = false
+  }
 })
 
 /** Flat list of all room sections across every check-in template */
@@ -465,7 +482,7 @@ function _pollRedistributionJob(inspectionId, jobId) {
               <div class="pi-fg">
                 <label>Property *</label>
                 <select v-model="form.property_id" :disabled="!form.client_id">
-                  <option :value="null" disabled>{{ form.client_id ? 'Select a property...' : 'Select a portfolio first' }}</option>
+                  <option :value="null" disabled>{{ !form.client_id ? 'Select a portfolio first' : propertiesLoading ? 'Loading properties...' : 'Select a property...' }}</option>
                   <option v-for="p in filteredProperties" :key="p.id" :value="p.id">{{ p.address }}</option>
                 </select>
               </div>

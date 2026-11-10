@@ -5,7 +5,9 @@ import pytest
 
 from models import Inspection, Item, Section, Template, db
 from routes.inspections import _transform_report_data
-from services.property_template import bake_property_template, layout_signature, resolve_layout
+from services.property_template import (
+    _has_content, bake_property_template, completeness_problem, layout_signature, orphan_room_keys, resolve_layout,
+)
 
 
 @pytest.fixture()
@@ -191,3 +193,119 @@ def test_first_additional_item_leads_remaining_become_subs():
     assert (row['description'], row['condition'], row['_photos']) == ('Vase \u2014 Blue', 'Broken', ['v.jpg'])
     assert [(s['_sid'], s['description'], s['condition']) for s in row['_subs']] == [
         ('c2', 'Lamp', 'Cracked'), ('c3', 'Rug', 'Stained')]
+
+
+# ── Template mismatch (inspection 257): phone used one template, server held another ──
+
+def _template(name, rooms):
+    """A check-in template with the given room names; returns (template, {room name: section})."""
+    tpl = Template(name=name, inspection_type='check_in', content='{}')
+    db.session.add(tpl)
+    db.session.flush()
+    secs = {}
+    for i, room in enumerate(rooms):
+        sec = Section(template_id=tpl.id, name=room, section_type='room', order_index=i)
+        db.session.add(sec)
+        db.session.flush()
+        db.session.add(Item(section_id=sec.id, name='Walls', order_index=0))
+        secs[room] = sec
+    db.session.flush()
+    return tpl, secs
+
+
+def _filled(secs):
+    """report_data keyed to `secs`: every room has a Walls entry with text."""
+    rd = {}
+    for sec in secs.values():
+        item = sec.items[0]
+        rd[str(sec.id)] = {str(item.id): {'description': f'{sec.name} walls', 'condition': 'Good'}}
+    return rd
+
+
+@pytest.fixture()
+def mismatch(world):
+    """Server booked the Flat template; the clerk used the House template on the phone."""
+    flat, _ = _template('Flat', ['Hall', 'Lounge', 'Kitchen', 'Balcony'])
+    house, house_secs = _template('House', ['Hall', 'Lounge', 'Kitchen', 'Stairs', 'Bedroom'])
+    rd = _filled(house_secs)
+    rd['_customRooms'] = [{'key': 'custom_1', 'name': 'Garden'}]
+    rd['custom_1'] = {'_extra': [{'_eid': 'g1', 'name': 'Lawn'}], 'g1': {'description': 'Turf', 'condition': 'Good'}}
+    insp = Inspection(property_id=world['property'].id, template_id=flat.id, inspection_type='check_in',
+                      status='complete', report_data=json.dumps(rd))
+    db.session.add(insp)
+    db.session.commit()
+    return insp, flat, house
+
+
+def test_bake_switches_to_the_template_the_data_was_keyed_to(mismatch):
+    insp, flat, house = mismatch
+    assert orphan_room_keys(insp), 'precondition: house-keyed data is invisible under the flat template'
+
+    baked = bake_property_template(insp)
+    db.session.commit()
+
+    assert baked is not None and insp.template_id == baked.id
+    rooms = resolve_layout(insp.template, insp.report_data)
+    assert [r['name'] for r in rooms] == ['Hall', 'Lounge', 'Kitchen', 'Stairs', 'Bedroom', 'Garden']
+    rd = json.loads(insp.report_data)
+    assert all(_has_content(rd[r['key']]) for r in rooms)      # nothing emptied
+    assert completeness_problem(insp) is None
+
+
+def test_bake_refuses_when_data_matches_no_template(world):
+    """Content under ids that exist in NO template cannot be mapped: leave the report untouched."""
+    tpl, _ = _template('Flat', ['Hall', 'Lounge', 'Kitchen', 'Balcony'])
+    rd = {'99991': {'1': {'description': 'x', 'condition': 'y'}}, '99992': {'2': {'description': 'x'}}}
+    insp = Inspection(property_id=world['property'].id, template_id=tpl.id, inspection_type='check_in',
+                      status='complete', report_data=json.dumps(rd))
+    db.session.add(insp)
+    db.session.commit()
+
+    assert bake_property_template(insp) is None
+    assert insp.template_id == tpl.id and json.loads(insp.report_data) == rd
+    assert completeness_problem(insp) == "2 room(s) of data don't match the template layout"
+
+
+def test_completeness_holds_mostly_empty_report(world):
+    tpl, secs = _template('House', ['Hall', 'Lounge', 'Kitchen', 'Stairs', 'Bedroom'])
+    filled = {str(secs['Hall'].id): _filled(secs)[str(secs['Hall'].id)]}   # 1 of 5 rooms
+    insp = Inspection(property_id=world['property'].id, template_id=tpl.id, inspection_type='check_in',
+                      status='complete', report_data=json.dumps(filled))
+    db.session.add(insp)
+    db.session.commit()
+    assert completeness_problem(insp) == 'only 1 of 5 rooms have content'
+
+    insp.report_data = json.dumps(_filled(secs))
+    assert completeness_problem(insp) is None
+
+
+def test_completeness_ignores_small_reports_and_other_types(world):
+    tpl, secs = _template('Studio', ['Main', 'Bath'])
+    insp = Inspection(property_id=world['property'].id, template_id=tpl.id, inspection_type='check_in',
+                      status='complete', report_data=json.dumps({}))
+    db.session.add(insp)
+    db.session.commit()
+    assert completeness_problem(insp) is None          # under 4 rooms: ratio rule doesn't apply
+    insp.inspection_type = 'heads_up'
+    assert completeness_problem(insp) is None          # not a room-based report
+
+
+def test_sync_applies_template_sent_by_phone(app, world, mismatch):
+    """The phone sends the template it used; unknown ids are ignored instead of 500ing."""
+    from flask_jwt_extended import create_access_token
+    from routes.inspections import inspections_bp
+
+    insp, flat, house = mismatch
+    insp.status, insp.inspector_id = 'active', world['clerk'].id
+    db.session.commit()
+    app.register_blueprint(inspections_bp, url_prefix='/api/inspections')
+    headers = {'Authorization': f"Bearer {create_access_token(identity=str(world['clerk'].id))}"}
+    http = app.test_client()
+
+    assert http.put(f'/api/inspections/{insp.id}', headers=headers, json={'template_id': 987654}).status_code == 200
+    assert db.session.get(Inspection, insp.id).template_id == flat.id
+
+    assert http.put(f'/api/inspections/{insp.id}', headers=headers, json={'template_id': house.id}).status_code == 200
+    db.session.expire_all()
+    fresh = db.session.get(Inspection, insp.id)
+    assert fresh.template_id == house.id and fresh.template.name == 'House'

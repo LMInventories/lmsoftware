@@ -655,7 +655,15 @@ def update_inspection(inspection_id):
     if 'typist_id' in data:
         inspection.typist_id = data['typist_id']
     if 'template_id' in data:
-        inspection.template_id = data['template_id']
+        # The phone sends the template its report data is keyed to (a clerk may have
+        # switched it on-device). Ignore ids that don't exist rather than 500 on the FK.
+        _tid = data['template_id']
+        _tpl = db.session.get(Template, _tid) if _tid is not None else None
+        if _tid is None or _tpl is not None:
+            inspection.template_id = _tid
+            inspection.template = _tpl
+        else:
+            print(f'[inspection {inspection.id}] ignoring unknown template_id {_tid!r}')
     if 'source_inspection_id' in data:
         inspection.source_inspection_id = data['source_inspection_id']
     if 'conduct_date' in data:
@@ -901,6 +909,15 @@ def update_inspection(inspection_id):
 
                     from routes.pdf_generator import generate_inspection_pdf, _get_report_recipients
                     recipients = _get_report_recipients(insp)
+
+                    # Hold the automatic email when the report looks mostly empty or its
+                    # data doesn't line up with its template - see completeness_problem().
+                    try:
+                        from services.property_template import completeness_problem
+                        hold_reason = completeness_problem(insp)
+                    except Exception as _chk_err:
+                        hold_reason = None
+                        print(f'[pdf] completeness check failed (non-fatal): {_chk_err}')
                     print(f'[pdf]   recipients     : {recipients}')
 
                     # Generate PDF (always — Drive upload also needs it)
@@ -914,6 +931,11 @@ def update_inspection(inspection_id):
                     # automatic email; any subsequent sends are via Share PDF.
                     if insp.completion_email_sent:
                         print(f'[pdf] auto email suppressed — already sent for inspection {_insp_id}')
+                    elif hold_reason:
+                        print(f'[pdf] auto email HELD for inspection {_insp_id}: {hold_reason}')
+                        log_activity(_insp_id, 'email_failed', user_id=_user_id,
+                                     detail=f'Held, not sent: {hold_reason}. Check the report, then use Share PDF.'[:255])
+                        _email_result_logged = True
                     else:
                         if not recipients:
                             print(f'[pdf] WARNING: no recipients resolved — set client email, email override, or tenant email on the inspection.')

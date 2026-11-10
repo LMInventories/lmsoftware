@@ -117,6 +117,106 @@ def has_layout_overlay(rd):
                for k, v in rd.items() if not k.startswith('_'))
 
 
+# Keys inside a room's data that describe layout rather than content.
+_STRUCT_KEYS = set(ROOM_LAYOUT_KEYS) | {'_hidden', '_name', '_eid'}
+
+
+def _has_content(v):
+    """True when `v` holds something a reader of the report would see."""
+    if isinstance(v, str):
+        return bool(v.strip())
+    if isinstance(v, list):
+        return any(_has_content(x) for x in v)
+    if isinstance(v, dict):
+        return any(_has_content(x) for k, x in v.items() if k not in _STRUCT_KEYS)
+    return False
+
+
+def _data_section_keys(rd):
+    """Numeric top-level keys (section ids) that carry content, excluding rooms the phone invented."""
+    custom = {str(r.get('key') or '') for r in (rd.get('_customRooms') or [])}
+    custom |= {str(r.get('id') or r.get('key') or '') for r in (rd.get('_importedRooms') or [])}
+    return {k for k, v in rd.items()
+            if k.isdigit() and k not in custom and isinstance(v, dict) and _has_content(v)}
+
+
+def orphan_room_keys(inspection):
+    """
+    Section ids holding report content that the inspection's template does not contain.
+    Content under such keys is invisible in the web editor and the PDF - the sign of a
+    report whose data was keyed to a different template than the one the server holds.
+    """
+    rd = _load(inspection.report_data)
+    template = inspection.template
+    valid = {str(s.id) for s in (template.sections if template is not None else [])}
+    valid |= {str(x) for x in (rd.get('_hiddenRooms') or [])}
+    return sorted(_data_section_keys(rd) - valid, key=int)
+
+
+def reconcile_template(inspection):
+    """
+    Re-point the inspection at the template its report data was actually keyed to.
+
+    A clerk can switch template on the phone; that choice used to stay on the device, so
+    the server kept the booked template and mapped the phone's data against the wrong
+    section ids (the data silently landed in no room). The report's own keys tell us
+    which template was used: when more of its content keys belong to another template
+    than to the current one, switch to that template. Returns the new Template, or None
+    when nothing needed changing. The caller commits.
+    """
+    keys = _data_section_keys(_load(inspection.report_data))
+    if not keys:
+        return None
+    current = inspection.template
+    current_ids = {str(s.id) for s in (current.sections if current is not None else [])}
+    matched_now = len(keys & current_ids)
+    if matched_now == len(keys):
+        return None
+    counts = {}
+    for _sid, tid in db.session.query(Section.id, Section.template_id).filter(
+            Section.id.in_([int(k) for k in keys])).all():
+        counts[tid] = counts.get(tid, 0) + 1
+    if not counts:
+        return None
+    best_tid, best = max(counts.items(), key=lambda kv: kv[1])
+    if best <= matched_now or best_tid == inspection.template_id:
+        return None
+    best_tpl = db.session.get(Template, best_tid)
+    if best_tpl is None:
+        return None
+    inspection.template = best_tpl
+    inspection.template_id = best_tpl.id
+    return best_tpl
+
+
+def report_completeness(inspection):
+    """{'rooms': rooms shown, 'with_content': rooms with anything in them, 'orphans': unmatched keys}."""
+    rd = _load(inspection.report_data)
+    rooms = resolve_layout(inspection.template, rd)
+    with_content = sum(1 for r in rooms if isinstance(rd.get(r['key']), dict) and _has_content(rd[r['key']]))
+    return {'rooms': len(rooms), 'with_content': with_content, 'orphans': orphan_room_keys(inspection)}
+
+
+# Auto-sending is held when at least this many rooms exist and fewer than half have content.
+_MIN_ROOMS_FOR_RATIO = 4
+
+
+def completeness_problem(inspection):
+    """
+    Why this report should NOT be emailed automatically, or None when it looks fine.
+    Applies to room-based reports only. A held report can still be sent by hand with
+    Share PDF once someone has checked it.
+    """
+    if inspection.inspection_type not in ('check_in', 'inventory', 'check_out'):
+        return None
+    c = report_completeness(inspection)
+    if c['orphans']:
+        return f"{len(c['orphans'])} room(s) of data don't match the template layout"
+    if c['rooms'] >= _MIN_ROOMS_FOR_RATIO and c['with_content'] * 2 < c['rooms']:
+        return f"only {c['with_content']} of {c['rooms']} rooms have content"
+    return None
+
+
 def bake_property_template(inspection):
     """
     Create a transient property template from `inspection`'s final layout and
@@ -128,7 +228,17 @@ def bake_property_template(inspection):
     (template, report_data) pair equals resolve_layout() of the old pair.
     """
     rd = _load(inspection.report_data)
+    switched = reconcile_template(inspection)
+    if switched is not None:
+        print(f'[property-template] inspection {inspection.id}: report data belongs to template '
+              f'{switched.id} ({switched.name!r}), not the booked one - switched before baking')
     template = inspection.template
+    orphans = orphan_room_keys(inspection)
+    if orphans:
+        # Baking would re-key by the wrong template and drop this content from view.
+        print(f'[property-template] inspection {inspection.id}: NOT baking - content under section ids '
+              f'{orphans} does not belong to template {inspection.template_id}')
+        return None
     rooms = resolve_layout(template, rd)
     if template is None and not rooms:
         return None

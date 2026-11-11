@@ -49,6 +49,7 @@ commands = requests.post(
         {'command': 'inspection', 'description': 'Book an inspection'},
         {'command': 'share', 'description': 'Email a completed report'},
         {'command': 'invoice', 'description': 'Look up an invoice and mark it paid or unpaid'},
+        {'command': 'change', 'description': 'Change an inspection: date, clerk, template...'},
         {'command': 'lookup', 'description': 'Ask about properties, inspections, clients, the schedule'},
         {'command': 'cancel', 'description': 'Stop what we are doing'},
         {'command': 'help', 'description': 'What I can do'},

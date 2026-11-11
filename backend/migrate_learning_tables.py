@@ -95,6 +95,40 @@ STATEMENTS = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS ix_transcription_prompt_proposals_run_date ON transcription_prompt_proposals (run_date)",
+
+    # Runtime glossary: clerk-corrected spellings / brand names the fill prompts
+    # inject on every call. Agent-proposed rows start 'pending' and only become
+    # live once a human approves them (learning/review.py).
+    """
+    CREATE TABLE IF NOT EXISTS transcription_glossary (
+        id              SERIAL PRIMARY KEY,
+        heard           VARCHAR(200) NOT NULL,
+        correct         VARCHAR(200) NOT NULL,
+        kind            VARCHAR(20) DEFAULT 'spelling',
+        auto_replace    BOOLEAN DEFAULT FALSE,
+        status          VARCHAR(10) NOT NULL DEFAULT 'pending',
+        source          VARCHAR(10) DEFAULT 'agent',
+        occurrences     INTEGER DEFAULT 0,
+        inspections     INTEGER DEFAULT 0,
+        inspectors      INTEGER DEFAULT 0,
+        rationale       TEXT,
+        example_json    TEXT,
+        last_reminded_at TIMESTAMP,
+        created_at      TIMESTAMP DEFAULT now(),
+        decided_at      TIMESTAMP,
+        CONSTRAINT uq_glossary_pair UNIQUE (heard, correct)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_transcription_glossary_status ON transcription_glossary (status)",
+    # Seed: the first pattern the pipeline found (PR #3, Oct 2026). ON CONFLICT
+    # DO NOTHING so a later human reject/edit is never overwritten on redeploy.
+    """
+    INSERT INTO transcription_glossary
+        (heard, correct, kind, auto_replace, status, source, occurrences, inspections, inspectors, rationale, decided_at)
+    VALUES ('chub', 'chubb', 'brand', FALSE, 'active', 'seed', 13, 7, 2,
+            'Lock brand Chubb - AI wrote "chub", clerks corrected it (prompt-learning PR #3).', now())
+    ON CONFLICT (heard, correct) DO NOTHING
+    """,
 ]
 
 with engine.connect() as conn:
@@ -103,4 +137,4 @@ with engine.connect() as conn:
     conn.commit()
 
 print('✓ prompt-learning tables ensured: transcription_fill_diffs, transcription_mined_inspections, '
-      'transcription_golden_fixtures, transcription_prompt_proposals')
+      'transcription_golden_fixtures, transcription_prompt_proposals, transcription_glossary')

@@ -188,6 +188,7 @@ def create_app():
         ('routes.slack_integration',   'slack_bp',        '/api/slack'),
         ('routes.zapier',          'zapier_bp',           '/api/zapier'),
         ('routes.telegram_integration', 'telegram_bp',    '/api/telegram'),
+        ('learning.review',        'learning_review_bp',  '/api/learning'),
     ]
     import importlib
     for module_name, bp_name, prefix in _optional:

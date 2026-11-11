@@ -115,9 +115,83 @@ _TRANSCRIPT_CORRECTIONS = [
     (_re.compile(r'\b\d(?:-\d){2,}\b'),           lambda m: m.group(0).replace('-', '')),
 ]
 
+# ── Runtime glossary (learned from clerk proof-reading) ───────────────────
+# transcription_glossary rows with status='active' are human-approved
+# corrections (see backend/learning/glossary_mining.py + review.py). They take
+# effect within _GLOSSARY_TTL seconds of approval — no deploy, no PR. Every
+# failure path returns the last known rows (or nothing): a glossary problem
+# must never break a transcription.
+import time as _time
+_GLOSSARY_TTL = 120
+_GLOSSARY_RETRY = 60
+_glossary_cache = {'at': 0.0, 'rows': [], 'patterns': []}
+_glossary_engine = None
+
+
+def _glossary_query_rows():
+    from sqlalchemy import text as _text
+    q = _text("SELECT heard, correct, auto_replace FROM transcription_glossary "
+              "WHERE status = 'active' ORDER BY occurrences DESC, id LIMIT 100")
+    try:
+        return [tuple(r) for r in db.session.execute(q).fetchall()]
+    except Exception:
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+    # No app context (e.g. the learning eval harness) — use a standalone engine.
+    global _glossary_engine
+    if _glossary_engine is None:
+        from learning._db import get_engine
+        _glossary_engine = get_engine()
+    with _glossary_engine.connect() as conn:
+        return [tuple(r) for r in conn.execute(q).fetchall()]
+
+
+def _clean_glossary_term(value) -> str:
+    return ' '.join(str(value or '').replace('"', "'").split())[:60]
+
+
+def _load_glossary():
+    now = _time.time()
+    if now - _glossary_cache['at'] < _GLOSSARY_TTL:
+        return _glossary_cache
+    try:
+        rows = _glossary_query_rows()
+        _glossary_cache['rows'] = [
+            (_clean_glossary_term(h), _clean_glossary_term(c), bool(a)) for h, c, a in rows
+            if _clean_glossary_term(h) and _clean_glossary_term(c)
+        ]
+        _glossary_cache['patterns'] = [
+            (_re.compile(r'' + _re.escape(h) + r'', _re.I), c)
+            for h, c, a in _glossary_cache['rows'] if a
+        ]
+        _glossary_cache['at'] = now
+    except Exception as e:
+        print(f'[glossary] load failed, keeping previous rows: {e!r}')
+        _glossary_cache['at'] = now - _GLOSSARY_TTL + _GLOSSARY_RETRY
+    return _glossary_cache
+
+
+def invalidate_glossary_cache():
+    _glossary_cache['at'] = 0.0
+
+
+def _glossary_prompt() -> str:
+    """Prompt fragment appended to the UK spelling rule in every fill prompt."""
+    rows = _load_glossary()['rows']
+    if not rows:
+        return ''
+    terms = '; '.join(f'"{c}" not "{h}"' for h, c, _a in rows[:60])
+    return (' LEARNED VOCABULARY (approved corrections from clerk proof-reading — '
+            'always use the correct form): ' + terms + '.')
+
+
 def _correct_transcript(text: str) -> str:
     """Apply known Whisper mishearing corrections for property inspection vocabulary."""
     for pattern, replacement in _TRANSCRIPT_CORRECTIONS:
+        text = pattern.sub(replacement, text)
+    for pattern, replacement in _load_glossary()['patterns']:
         text = pattern.sub(replacement, text)
     return text
 
@@ -741,7 +815,7 @@ VERBATIM RULES — absolute, no exceptions:
 - Convert spoken numbers to numerals: "two" → "2", "three" → "3"
 - Format quantities as "N x item": "two bulbs" → "2 x bulbs"
 - Capitalise the first word of each observation
-- {_UK_SPELLING_RULE}
+- {_UK_SPELLING_RULE}{_glossary_prompt()}
 - {_multi_component_rule("the condition field")}
 - {_NO_FABRICATION_RULE}
 
@@ -777,7 +851,7 @@ RULES — absolute, no exceptions:
 - Convert spoken numbers to numerals: "two" → "2", "three" → "3"
 - Format quantities as "N x item": "two marks" → "2 x marks"
 - Capitalise the first word of each line
-- {_UK_SPELLING_RULE}
+- {_UK_SPELLING_RULE}{_glossary_prompt()}
 - {_multi_component_rule("the condition field")}
 - {_NO_FABRICATION_RULE}
 
@@ -935,7 +1009,7 @@ CRITICAL LANGUAGE RULES:
 - DUPLICATE SPEECH: the recording may contain repeated or restarted phrases. If the clerk
   says the same thing twice, output it once. Never repeat an observation in your output,
   and never place the same phrase in both the description and the condition fields.
-- {_UK_SPELLING_RULE}
+- {_UK_SPELLING_RULE}{_glossary_prompt()}
 - {_NO_FABRICATION_RULE}
 {formatting_rules}
 
@@ -988,7 +1062,7 @@ Instructions:
 - DUPLICATE SPEECH: the recording may contain repeated or restarted phrases. If the clerk
   says the same thing twice, output it once. Never repeat an observation in your output,
   and never place the same phrase in both the description and the condition fields.
-- {_UK_SPELLING_RULE}
+- {_UK_SPELLING_RULE}{_glossary_prompt()}
 - {_multi_component_rule("description or condition")}
 - {_NO_FABRICATION_RULE}
 - Only fill items that are mentioned in the transcript
@@ -2655,7 +2729,7 @@ RULES:
    the retracted material, and do NOT leave a sub-item with no description or condition.
 5. Only fill items that are mentioned. Omit unmentioned items entirely from the output.
 6. {_NO_FABRICATION_RULE}
-7. {_UK_SPELLING_RULE}
+7. {_UK_SPELLING_RULE}{_glossary_prompt()}
 8. If only one piece of information is given for an item, put it in description.
 9. REPEATED OR OVERLAPPING CONTENT — treat duplicates as ONE:
    The transcript is stitched together from several audio clips and may contain the same
@@ -3205,7 +3279,7 @@ VERBATIM RULES — absolute, no exceptions:
    and include it under the parent item's "_subs" array, using the exact _sid shown above.
 6. Capitalise the first word of each observation.
 7. Only fill items/sub-items that are mentioned. Omit everything else.
-8. {_UK_SPELLING_RULE}
+8. {_UK_SPELLING_RULE}{_glossary_prompt()}
 9. {_multi_component_rule("a checkOutCondition")}
 10. {_NO_FABRICATION_RULE}
 11. REPEATED CONTENT: the transcript is stitched from several clips and may contain the same
@@ -3347,7 +3421,7 @@ RULES:
 6. Capitalise the first word of each line.
 7. Only fill items that are mentioned. Omit unmentioned items entirely.
 8. If a single component has multiple distinct damage observations, each goes on its own line.
-9. {_UK_SPELLING_RULE}
+9. {_UK_SPELLING_RULE}{_glossary_prompt()}
 10. {_NO_FABRICATION_RULE}
 11. REPEATED CONTENT: the transcript is stitched from several clips and may contain the same
     passage twice (overlapping recordings or the clerk repeating themselves). If the same or
@@ -3633,7 +3707,7 @@ RULES:
 4. ONLY remove filler sounds (um, uh, er, errr, umm, erm) and clear false starts where the clerk immediately restarts the same phrase. Do NOT remove, shorten, or paraphrase any actual content — reproduce the clerk's words in full.
 5. Only fill items that are mentioned. Omit unmentioned items entirely from the output.
 6. {_NO_FABRICATION_RULE}
-7. {_UK_SPELLING_RULE}
+7. {_UK_SPELLING_RULE}{_glossary_prompt()}
 8. Capitalise the first word of each line.
 {delete_block}
 LINE BREAKS — THIS IS CRITICAL:

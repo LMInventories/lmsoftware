@@ -280,6 +280,16 @@ def run_daily_pipeline(skip_mining: bool = False, force_live: bool = False) -> d
     clusters = proposal.build_clusters(rows)
     candidates = proposal.rank_candidates(clusters)
 
+    # Vocabulary fixes (brands, spellings) belong to the runtime glossary — skip
+    # any cluster already suggested/approved/rejected there instead of also
+    # drafting a prompt-text PR for it.
+    try:
+        from learning.glossary_mining import known_pairs
+        covered = known_pairs()
+        candidates = [kc for kc in candidates if (kc[0][2], kc[0][3]) not in covered]
+    except Exception as e:
+        print(f'[pr_pipeline] glossary filter unavailable ({e!r}) — continuing unfiltered')
+
     if not candidates:
         _record_proposal(status='skipped_no_pattern')
         return {'status': 'skipped_no_pattern'}

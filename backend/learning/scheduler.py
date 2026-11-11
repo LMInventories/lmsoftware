@@ -5,8 +5,8 @@ Registers the prompt-learning pipeline run (learning/pr_pipeline.py) with
 APScheduler, following the exact idiom already used for the Google
 connection expiry check (routes/google.py:schedule_expiry_check).
 
-Cadence is configurable via LEARNING_PIPELINE_CADENCE_DAYS (default 1 —
-daily). Set it to e.g. 14 in Railway for fortnightly, no code change or
+Cadence is configurable via LEARNING_PIPELINE_CADENCE_DAYS (default 3 —
+every three days). Set it to e.g. 14 in Railway for fortnightly, no code change or
 redeploy-time edit needed beyond the variable itself. Uses IntervalTrigger
 (not CronTrigger) anchored to a fixed start_date, so the schedule doesn't
 drift or reset to "run again tomorrow" every time the service restarts —
@@ -40,18 +40,17 @@ def schedule_learning_pipeline(app):
         from apscheduler.schedulers.background import BackgroundScheduler
         from apscheduler.triggers.interval import IntervalTrigger
 
-        cadence_days = int(os.environ.get('LEARNING_PIPELINE_CADENCE_DAYS', '1'))
+        cadence_days = int(os.environ.get('LEARNING_PIPELINE_CADENCE_DAYS', '3'))
 
         scheduler = BackgroundScheduler(timezone='Europe/London')
 
         def job():
             with app.app_context():
-                from learning.pr_pipeline import run_daily_pipeline
+                from learning.cycle import run_learning_cycle
                 try:
-                    result = run_daily_pipeline()
-                    print(f"[learning] pipeline run: {result.get('status')}")
+                    print(f'[learning] cycle: {run_learning_cycle()}')
                 except Exception as e:
-                    print(f'[learning] pipeline run FAILED: {e!r}')
+                    print(f'[learning] cycle FAILED: {e!r}')
 
         trigger = IntervalTrigger(days=cadence_days, start_date=_ANCHOR, timezone='Europe/London')
         scheduler.add_job(job, trigger)

@@ -31,6 +31,7 @@ Usage (run from backend/):
 """
 
 import argparse
+import difflib
 import hashlib
 import json
 from datetime import datetime
@@ -184,6 +185,35 @@ def _classify(ai_value, final_value) -> str:
     return 'edited'
 
 
+_SUB_MATCH_THRESHOLD = 0.45
+
+
+def _sub_signature(sub: dict) -> str:
+    return ' | '.join(
+        _normalize(v) for k, v in sorted(sub.items())
+        if k != '_sid' and not k.startswith('_') and isinstance(v, (str, int, float)) and _normalize(v)
+    )
+
+
+def _match_subs_by_similarity(ai_subs: list, current_subs: list) -> dict:
+    """{ai_index: current_index}, one-to-one, best similarity first."""
+    scored = []
+    for i, a in enumerate(ai_subs):
+        sig_a = _sub_signature(a)
+        for j, c in enumerate(current_subs):
+            ratio = difflib.SequenceMatcher(None, sig_a, _sub_signature(c)).ratio()
+            if ratio >= _SUB_MATCH_THRESHOLD:
+                scored.append((ratio, i, j))
+    scored.sort(reverse=True)
+    pairs, used_c = {}, set()
+    for _ratio, i, j in scored:
+        if i in pairs or j in used_c:
+            continue
+        pairs[i] = j
+        used_c.add(j)
+    return pairs
+
+
 def _diff_subs(ai_subs, current_subs, fill_fn_name: str) -> list[dict]:
     """
     Checkout mode: the AI's _subs entries carry a real, stable _sid (they
@@ -210,17 +240,35 @@ def _diff_subs(ai_subs, current_subs, fill_fn_name: str) -> list[dict]:
                     'edit_type': edit_type, 'match_confidence': 'exact',
                 })
     else:
+        # A NEW sub-item's _sid is only assigned client-side after the AI call,
+        # so there is no id to join on. Match by content similarity (not list
+        # position — a clerk deleting or inserting one sub-item used to shift
+        # every later one and mis-pair them), greedy best-first.
+        current_dicts = [c for c in current_subs if isinstance(c, dict)]
+        pairs = _match_subs_by_similarity(ai_subs, current_dicts)
+        matched_current = set(pairs.values())
         for i, ai_sub in enumerate(ai_subs):
-            current = current_subs[i] if i < len(current_subs) and isinstance(current_subs[i], dict) else None
+            j = pairs.get(i)
+            current = current_dicts[j] if j is not None else None
             for key, ai_value in ai_sub.items():
                 if key == '_sid':
                     continue
-                final_value = current.get(key) if current else None
-                edit_type = 'unresolved' if current is None else _classify(ai_value, final_value)
-                diffs.append({
-                    'field': f'_subs.{i}.{key}', 'ai_value': ai_value, 'final_value': final_value,
-                    'edit_type': edit_type, 'match_confidence': 'fuzzy',
-                })
+                if current is None:
+                    # The AI created it and no similar sub-item survives: the clerk removed it.
+                    diffs.append({'field': f'_subs.{i}.{key}', 'ai_value': ai_value, 'final_value': None,
+                                  'edit_type': 'deleted', 'match_confidence': 'fuzzy'})
+                else:
+                    final_value = current.get(key)
+                    diffs.append({'field': f'_subs.{i}.{key}', 'ai_value': ai_value, 'final_value': final_value,
+                                  'edit_type': _classify(ai_value, final_value), 'match_confidence': 'similar'})
+        # Sub-items present in the final report that no AI sub-item matches: the
+        # clerk added them (the AI missed or never produced them).
+        for n, j in enumerate(k for k in range(len(current_dicts)) if k not in matched_current):
+            for key, final_value in current_dicts[j].items():
+                if key == '_sid' or key.startswith('_') or not _normalize(final_value):
+                    continue
+                diffs.append({'field': f'_subs.new{n}.{key}', 'ai_value': None, 'final_value': final_value,
+                              'edit_type': 'added', 'match_confidence': 'fuzzy'})
     return diffs
 
 
@@ -455,7 +503,7 @@ def run_daily_mining(pool_size: int = 200, force_inspection_id: int | None = Non
                 ))
                 stats['diffs_written'] += len(result['diffs'])
 
-                all_unchanged = all(d['edit_type'] == 'unchanged' for d in result['diffs'])
+                all_unchanged = all(d['edit_type'] == 'unchanged' and d['match_confidence'] == 'exact' for d in result['diffs'])
                 if all_unchanged and mode == 'room':
                     section_id = result['section_id']
                     if section_id not in items_cache:
@@ -478,7 +526,16 @@ def main():
     parser = argparse.ArgumentParser(description='Mine _transcriptionLog vs report_data into transcription_fill_diffs')
     parser.add_argument('--pool-size', type=int, default=200, help='Max inspections to scan per run')
     parser.add_argument('--inspection-id', type=int, default=None, help='Force re-mine a single inspection, ignoring its ledger high-water mark')
+    parser.add_argument('--reset-ledger', action='store_true',
+                        help='Forget every high-water mark first so ALL completed inspections are re-diffed '
+                             '(backfill after changing the diff logic; upserts are idempotent)')
     args = parser.parse_args()
+
+    if args.reset_ledger:
+        with get_engine().connect() as conn:
+            conn.execute(text('DELETE FROM transcription_mined_inspections'))
+            conn.commit()
+        print('Ledger cleared — re-mining everything.')
 
     stats = run_daily_mining(pool_size=args.pool_size, force_inspection_id=args.inspection_id)
     print(

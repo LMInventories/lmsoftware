@@ -352,9 +352,9 @@ const assignableClerks = computed(() =>
   clerks.value.filter(c => !unavailableIds.value.includes(c.id) || c.id === inspection.value?.inspector_id))
 const typists = computed(() => users.value.filter(u => u.role === 'typist'))
 
-async function updateField(field, value) {
+async function updateField(field, value, extra = {}) {
   try {
-    await api.updateInspection(inspection.value.id, { [field]: value })
+    await api.updateInspection(inspection.value.id, { [field]: value, ...extra })
     toast.success('Updated successfully')
     fetchInspection()
     showEditConductDate.value = false
@@ -369,6 +369,16 @@ async function updateField(field, value) {
     showEditLandlordEmail.value = false
     showEditClientEmail.value   = false
   } catch (error) {
+    const body = error.response?.data
+    if (error.response?.status === 422 && body?.code === 'clerk_unavailable') {
+      if (body.can_override && window.confirm(`${body.error}
+
+Override their availability and save anyway?`)) {
+        return updateField(field, value, { ...extra, override_availability: true })
+      }
+      toast.warning(body.error)
+      return
+    }
     console.error('Failed to update:', error)
     toast.error('Failed to update')
   }

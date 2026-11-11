@@ -58,3 +58,35 @@ def unavailable_user_ids(d, time_pref=None, user_ids=None):
         by_user.setdefault(r.user_id, []).append(r)
     start, end = slot_window(time_pref)
     return {uid for uid, rows in by_user.items() if _covers(_blocks_for_day(rows, d), start, end)}
+
+
+def _as_date(value):
+    if value is None:
+        return None
+    return value.date() if hasattr(value, 'date') and callable(value.date) else value
+
+
+def clerk_conflict(inspector_id, conduct_date, time_pref=None):
+    """The User if `inspector_id` has availability blocks covering this date + slot, else None."""
+    d = _as_date(conduct_date)
+    if not inspector_id or d is None:
+        return None
+    if inspector_id not in unavailable_user_ids(d, time_pref, [inspector_id]):
+        return None
+    from models import db, User
+    return db.session.get(User, inspector_id)
+
+
+def availability_block_response(clerk, can_override):
+    """The 422 body returned when a booking/reassignment would land on an unavailable clerk."""
+    name = clerk.name if clerk else 'That clerk'
+    msg = f'{name} is marked unavailable at that date/time.'
+    if can_override:
+        msg += ' Choose another clerk, or override their availability.'
+    return {
+        'error': msg,
+        'code': 'clerk_unavailable',
+        'inspector_id': clerk.id if clerk else None,
+        'inspector_name': name,
+        'can_override': bool(can_override),
+    }

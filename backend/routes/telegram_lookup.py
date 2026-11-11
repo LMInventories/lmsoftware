@@ -670,7 +670,7 @@ def _system_prompt(user) -> str:
         "('and the tenant?', 'what about tomorrow?') from them. Their notes in [brackets] list the "
         "records you looked at — reuse those ids rather than searching again.\n"
         "- You cannot change anything. To add a property or book an inspection, tell the user to "
-        "use /property or /inspection. You can't read report contents (room-by-room conditions) yet.\n"
+        "use /property or /inspection; to change an existing inspection (date, clerk, template) use /change. You can't read report contents (room-by-room conditions) yet.\n"
         "- For schedule questions use get_schedule / get_availability; for unpaid invoices use "
         "list_unpaid_invoices.\n"
         "- Reply in plain text for Telegram: no markdown tables, no ** or #, short lines, "

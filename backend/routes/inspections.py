@@ -428,6 +428,18 @@ def create_inspection():
         except (ValueError, TypeError):
             pass
 
+    # ── Availability guard (admin/manager may override) ──────────────────
+    _override = bool(data.get('override_availability'))
+    if _override and not is_admin_or_manager(user):
+        return jsonify({'error': 'Only admins and managers can override availability'}), 403
+    _availability_overridden = False
+    if data.get('inspector_id') and conduct_date:
+        from services.availability import clerk_conflict, availability_block_response
+        _clash = clerk_conflict(data['inspector_id'], conduct_date, data.get('conduct_time_preference'))
+        if _clash and not _override:
+            return jsonify(availability_block_response(_clash, True)), 422
+        _availability_overridden = bool(_clash)
+
     # Standalone inspections have no source lifecycle link
     source_id = None if is_standalone else data.get('source_inspection_id')
     include_photos = bool(data.get('include_photos', False))
@@ -478,6 +490,8 @@ def create_inspection():
     db.session.commit()
     _bust_dashboard()
     log_activity(inspection.id, 'created', user_id=user.id)
+    if _availability_overridden:
+        log_activity(inspection.id, 'details_added', user_id=user.id, detail='Clerk availability overridden')
 
     # ── Auto-assign reference number if none was provided ─────────────────
     # The ID is only known after the first commit, so we persist it now so
@@ -580,6 +594,39 @@ def update_inspection(inspection_id):
             return jsonify({'error': 'Typists can only update report data and status'}), 403
         if 'status' in data and data['status'] not in ('processing', 'review'):
             return jsonify({'error': 'Typists can only move inspection to review'}), 403
+
+    # ── Availability guard ────────────────────────────────────────────────────
+    # Moving an inspection onto a clerk who is marked unavailable (new clerk, new
+    # date or new time) is refused unless an admin/manager passes
+    # override_availability=true. Only the fields that actually change are checked,
+    # so re-saving an inspection that was already on an unavailable day is fine.
+    _can_override = is_admin_or_manager(user)
+    if data.get('override_availability') and not _can_override:
+        return jsonify({'error': 'Only admins and managers can override availability'}), 403
+    if _can_override and any(k in data for k in ('inspector_id', 'conduct_date', 'conduct_time_preference')):
+        def _parse_dt(v):
+            try:
+                return datetime.fromisoformat(v) if v else None
+            except (ValueError, TypeError):
+                return None
+        _new_insp = data['inspector_id'] if 'inspector_id' in data else inspection.inspector_id
+        _new_date = _parse_dt(data['conduct_date']) if 'conduct_date' in data else inspection.conduct_date
+        _new_pref = data['conduct_time_preference'] if 'conduct_time_preference' in data else inspection.conduct_time_preference
+        _changed = (
+            _new_insp != inspection.inspector_id
+            or (_new_date.date() if _new_date else None) != (inspection.conduct_date.date() if inspection.conduct_date else None)
+            or (_new_pref or None) != (inspection.conduct_time_preference or None)
+        )
+        if _changed and not data.get('override_availability'):
+            from services.availability import clerk_conflict, availability_block_response
+            _clash = clerk_conflict(_new_insp, _new_date, _new_pref)
+            if _clash:
+                return jsonify(availability_block_response(_clash, True)), 422
+        elif _changed and data.get('override_availability'):
+            from services.availability import clerk_conflict
+            if clerk_conflict(_new_insp, _new_date, _new_pref):
+                log_activity(inspection.id, 'details_added', user_id=user.id,
+                             detail='Clerk availability overridden')
 
     # ── Conflict detection ────────────────────────────────────────────────────
     # The mobile app sends `client_updated_at` = the server's updated_at timestamp

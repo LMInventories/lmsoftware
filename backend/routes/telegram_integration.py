@@ -7,6 +7,10 @@ Staff (admin / manager) drive the app from a Telegram bot with these commands:
   /inspection  guided, button-driven flow that books an inspection
   /share       guided flow that emails a completed report's PDF
   /invoice     look up an inspection by reference or address, then mark its invoice paid or unpaid
+  /change      tell the bot in plain English what to change on an existing inspection
+               (date, time, clerk, template, ...); it stages the change, you tap Confirm.
+               A clerk who is marked unavailable can be overridden or swapped - see
+               telegram_change.py
   /lookup      conversational, read-only questions about properties, inspections,
                clients, the schedule and unpaid invoices (Claude, with memory of
                the conversation until /cancel or 30 idle minutes)
@@ -36,7 +40,7 @@ this app's own /api/properties, /api/inspections or share-pdf endpoint, authenti
 short-lived JWT minted for the linked user — so all existing role checks,
 validation, and side effects (Sheet sync, Calendar push) apply unchanged.
 
-Session (TelegramSession) states: idle | flow | lookup. In 'flow',
+Session (TelegramSession) states: idle | flow | lookup | change. In 'flow',
 pending_tool is the flow name and pending_action_json the flow engine's state
 (see telegram_flows.py); in 'lookup', lookup_history_json is the conversation.
 """
@@ -279,6 +283,114 @@ def _execute_invoice_change(session, user, state):
     _send_message(session.chat_id, f'{lead}\n\n{text}', reply_markup=kb)
 
 
+# ── Change (/change) ───────────────────────────────────────────────────────
+
+def _change_turn(session, user, text):
+    import anthropic
+    from models import db
+    from routes import telegram_change
+
+    _send_typing(session.chat_id)
+    try:
+        reply, stored, pending = telegram_change.answer_change(text, user, _lookup_messages(session))
+    except anthropic.APIError as e:
+        log.warning('[telegram] change API error: %s', e)
+        _send_message(session.chat_id, "Sorry, I couldn't process that just now — please try again in a moment.")
+        return
+    session.pending_action_json = json.dumps(pending) if pending else None
+    db.session.commit()
+    if reply:
+        _send_message(session.chat_id, reply)
+    if pending:
+        card, kb = telegram_change.confirm_card(pending)
+        _send_message(session.chat_id, card, reply_markup=kb)
+        stored += f"\n[staged for confirmation: {pending['label']}: {'; '.join(pending['lines'])}]"
+    _remember_lookup(session, text, stored)
+
+
+def _start_change(session, user, request_text):
+    from models import db
+    if session.state != 'change':
+        session.lookup_history_json = None
+    session.state = 'change'
+    session.pending_tool = None
+    session.pending_action_json = None
+    session.updated_at = datetime.now(timezone.utc)
+    db.session.commit()
+    if request_text:
+        _change_turn(session, user, request_text)
+    else:
+        _send_message(session.chat_id, _CHANGE_INTRO)
+
+
+def _change_keyboard(pending):
+    from routes import telegram_change
+    return telegram_change.confirm_card(pending)[1]
+
+
+def _clear_pending(session):
+    from models import db
+    session.pending_action_json = None
+    db.session.commit()
+
+
+def _handle_change_callback(session, user, cq, action, token):
+    """Confirm / Cancel taps on a staged /change card (callback_data 'c:<yes|no>:<token>')."""
+    try:
+        pending = json.loads(session.pending_action_json or '')
+    except (TypeError, ValueError):
+        pending = None
+    if session.state != 'change' or not isinstance(pending, dict) or pending.get('id') != token:
+        _answer_callback_query(cq['id'], 'That button has expired.')
+        return
+    _answer_callback_query(cq['id'])
+    chat_id = session.chat_id
+    if action == 'no':
+        _clear_pending(session)
+        _remember_lookup(session, '(tapped Cancel)', f"Cancelled the staged change to {pending['label']}.")
+        _send_message(chat_id, 'Okay, nothing changed. Tell me what else to change, or /cancel to finish.')
+        return
+
+    backend_url = os.environ.get('BACKEND_URL', 'https://app.lminventories.co.uk').rstrip('/')
+    jwt_token = create_access_token(identity=str(user.id), expires_delta=timedelta(minutes=2))
+    try:
+        resp = requests.put(f"{backend_url}/api/inspections/{pending['inspection_id']}", json=pending['payload'],
+                            headers={'Authorization': f'Bearer {jwt_token}'}, timeout=15)
+    except requests.RequestException as e:
+        log.warning('[telegram] change update failed for inspection %s: %s', pending['inspection_id'], e)
+        _send_message(chat_id, 'Something went wrong reaching the app — tap Confirm again in a moment.',
+                      reply_markup=_change_keyboard(pending))
+        return
+
+    body = {}
+    try:
+        body = resp.json() if resp.content else {}
+    except ValueError:
+        pass
+    if 200 <= resp.status_code < 300:
+        _clear_pending(session)
+        _remember_lookup(session, '(tapped Confirm)', f"Applied to {pending['label']}: {'; '.join(pending['lines'])}.")
+        _send_message(chat_id, f"✅ Updated {pending['label']}:\n" + '\n'.join(f'• {l}' for l in pending['lines'])
+                      + "\n\nAnything else to change? /cancel when you're done.")
+    elif resp.status_code == 422 and body.get('code') == 'clerk_unavailable':
+        # Availability changed between staging and confirming.
+        _clear_pending(session)
+        msg = body.get('error', 'That clerk is unavailable.')
+        _remember_lookup(session, '(tapped Confirm)', f'Not applied: {msg}')
+        _send_message(chat_id, f'{msg}\n\nTell me whether to override their availability or pick a different clerk.')
+    elif resp.status_code in (401, 403):
+        _clear_pending(session)
+        _send_message(chat_id, "You don't have permission to do that.")
+    elif resp.status_code == 400:
+        _clear_pending(session)
+        _send_message(chat_id, f"That didn't go through: {resp.text[:200]}")
+    else:
+        log.warning('[telegram] change update for inspection %s returned %s: %s',
+                    pending['inspection_id'], resp.status_code, resp.text[:200])
+        _send_message(chat_id, 'Something went wrong on the server — tap Confirm again in a moment.',
+                      reply_markup=_change_keyboard(pending))
+
+
 # ── Lookup (/lookup) ───────────────────────────────────────────────────────
 
 def _lookup_messages(session):
@@ -352,9 +464,16 @@ _HELP_TEXT = (
     '• /inspection — book an inspection\n'
     '• /share — email a completed report to the client, tenant or anyone else\n'
     '• /invoice — look up an inspection and mark its invoice paid or unpaid\n'
+    '• /change — tell me what to change on an inspection (date, clerk, template…); I\'ll ask you to confirm\n'
     '• /lookup — ask about a property, inspection, client, the schedule or unpaid '
     "invoices; I remember what we've talked about, so follow-ups work\n"
     "• /cancel — stop whatever we're doing"
+)
+
+_CHANGE_INTRO = (
+    'Tell me what to change, e.g. "move INS-150 to Friday", "give 12 Smith St check-in to Sam", '
+    '"switch INS-201 to the furnished template". I\'ll show you the change to confirm before saving it. '
+    "If the clerk is unavailable I'll offer to override or pick someone else. /cancel when you're done."
 )
 
 _LOOKUP_INTRO = (
@@ -387,6 +506,9 @@ def _handle_command(session, user, text):
         return True
     if cmd == '/invoice':
         _start_flow(session, telegram_flows.INVOICE_FLOW)
+        return True
+    if cmd == '/change':
+        _start_change(session, user, rest.strip())
         return True
     if cmd == '/lookup':
         _start_lookup(session, user, rest.strip())
@@ -482,8 +604,10 @@ def _handle_text_message(message, update_id=None):
         _continue_flow(session, user, telegram_flows.handle_text(state, text))
     elif session.state == 'lookup':
         _lookup_turn(session, user, text)
+    elif session.state == 'change':
+        _change_turn(session, user, text)
     else:
-        _send_message(chat_id, 'Use /property, /inspection, /share, /invoice or /lookup — or /help to see what I can do.')
+        _send_message(chat_id, 'Use /property, /inspection, /share, /invoice, /change or /lookup — or /help to see what I can do.')
 
 
 def _handle_callback_query(cq, update_id=None):
@@ -501,6 +625,9 @@ def _handle_callback_query(cq, update_id=None):
         return
 
     parts = data.split(':', 2)
+    if len(parts) == 3 and parts[0] == 'c':
+        _handle_change_callback(session, link.user, cq, parts[1], parts[2])
+        return
     state = _load_flow(session) if session.state == 'flow' else None
     if len(parts) != 3 or parts[0] != 'f' or state is None:
         _answer_callback_query(cq['id'], 'That button has expired.')

@@ -861,7 +861,7 @@ function onClientChange() {
   form.value.source_inspection_id = null
 }
 
-async function handleSubmit() {
+async function handleSubmit(overrideAvailability = false) {
   if (!form.value.property_id) {
     toast.warning('Please select a property')
     return
@@ -896,12 +896,23 @@ async function handleSubmit() {
       payload.conduct_date = form.value.conduct_date + 'T00:00:00'
     }
 
+    if (overrideAvailability === true) payload.override_availability = true
     await api.createInspection(payload)
 
     toast.success(form.value.create_heads_up ? 'Inspection and Heads Up Report created' : 'Inspection created')
     showModal.value = false
     fetchInspections()
   } catch (error) {
+    const body = error.response?.data
+    if (error.response?.status === 422 && body?.code === 'clerk_unavailable') {
+      if (body.can_override && window.confirm(`${body.error}
+
+Override their availability and book anyway?`)) {
+        return handleSubmit(true)
+      }
+      toast.warning(body.error)
+      return
+    }
     console.error('Failed to create inspection:', error)
     toast.error('Failed to create inspection')
   }

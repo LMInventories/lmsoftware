@@ -270,3 +270,107 @@ def test_old_format_history_is_ignored(world):
     session = tg._get_or_create_session(CHAT)
     session.lookup_history_json = json.dumps([{'q': 'old', 'a': 'old', 'at': '2026-01-01T00:00:00+00:00'}])
     assert tg._lookup_messages(session) == []
+
+
+# ── /property → Confirm + inspection → internal notes ───────────────────────
+
+class _Resp:
+    def __init__(self, status, body):
+        self.status_code, self._body = status, body
+        self.content, self.text = b'{}', '{}'
+
+    def json(self):
+        return self._body
+
+
+def _admin_link(world):
+    from models import TelegramLink, User, db
+    admin = User(name='Ada Admin', email='ada@example.com', role='admin', password_hash='x')
+    db.session.add(admin)
+    db.session.commit()
+    db.session.add(TelegramLink(user_id=admin.id, chat_id=CHAT))
+    db.session.commit()
+    return admin
+
+
+def _answer_property(update_start=1):
+    _say('/property', update_id=update_start)
+    _say('acme', update_id=update_start + 1)
+    _say('10 Downing Street, London SW1A 2AA', update_id=update_start + 2)
+    _tap('f:bedrooms:3', update_id=update_start + 3)
+    _tap('f:bathrooms:2', update_id=update_start + 4)
+    _tap('f:furnished:skip', update_id=update_start + 5)
+    _tap('f:features:done', update_id=update_start + 6)
+    _tap('f:elevation:skip', update_id=update_start + 7)
+    _tap('f:notes:skip', update_id=update_start + 8)
+    return update_start + 9
+
+
+def test_confirm_plus_inspection_creates_property_then_books_an_inspection_with_admin_notes(world, sent, monkeypatch):
+    _admin_link(world)
+    monkeypatch.setenv('BACKEND_URL', 'http://backend.test')
+    calls = []
+
+    def fake_request(method, url, **kw):
+        calls.append((method, url, kw))
+        if url.endswith('/api/properties'):
+            return _Resp(201, {'id': 77, 'address': '10 Downing Street, London SW1A 2AA'})
+        return _Resp(201, {'id': 5, 'reference_number': 'INS-5', 'property_address': '10 Downing Street, London SW1A 2AA'})
+
+    monkeypatch.setattr(tg.requests, 'request', fake_request)
+
+    u = _answer_property()
+    assert 'Create this property?' in _messages(sent)[-1]
+    assert 'f:confirm:yes_insp' in json.dumps(sent[-1][1]['reply_markup'])
+
+    _tap('f:confirm:yes_insp', update_id=u)
+    assert [c[1] for c in calls] == ['http://backend.test/api/properties']
+    assert 'Property created' in ' '.join(_messages(sent)) and "book an inspection" in ' '.join(_messages(sent))
+    sess = _session()
+    state = json.loads(sess.pending_action_json)
+    assert sess.state == 'flow' and state['flow'] == 'book_inspection' and state['is_admin'] is True
+    assert state['data']['property_id'] == 77 and state['step'] == 'type'     # property question skipped
+
+    _tap('f:type:check_in', update_id=u + 1)
+    _say('tomorrow', update_id=u + 2)
+    _tap('f:time:am', update_id=u + 3)
+    _tap('f:clerk:skip', update_id=u + 4) if json.loads(_session().pending_action_json)['step'] == 'clerk' and False else None
+    state = json.loads(_session().pending_action_json)
+    if state['step'] == 'clerk':
+        _tap('f:clerk:1', update_id=u + 4)
+    _tap('f:tenant_email:skip', update_id=u + 5)
+    _tap('f:heads_up:n', update_id=u + 6)
+    _tap('f:reference:skip', update_id=u + 7)
+    assert json.loads(_session().pending_action_json)['step'] == 'internal_notes'
+    _say('Key with concierge. Call tenant first.', update_id=u + 8)
+    assert 'Internal notes: Key with concierge' in _messages(sent)[-1]
+
+    _tap('f:confirm:yes', update_id=u + 9)
+    method, url, kw = calls[-1]
+    assert (method, url) == ('POST', 'http://backend.test/api/inspections')
+    assert kw['json']['property_id'] == 77
+    assert kw['json']['internal_notes'] == 'Key with concierge. Call tenant first.'
+    assert 'Inspection booked: INS-5' in _messages(sent)[-1]
+    assert _session().state == 'idle'
+
+
+def test_plain_confirm_does_not_start_an_inspection(world, sent, monkeypatch):
+    _link(world)
+    monkeypatch.setenv('BACKEND_URL', 'http://backend.test')
+    monkeypatch.setattr(tg.requests, 'request',
+                        lambda m, url, **kw: _Resp(201, {'id': 77, 'address': '10 Downing Street, London SW1A 2AA'}))
+    u = _answer_property()
+    _tap('f:confirm:yes', update_id=u)
+    assert 'Property created' in _messages(sent)[-1]
+    assert _session().state == 'idle'
+
+
+def test_manager_is_not_asked_for_internal_notes(world, sent, monkeypatch):
+    _link(world)                                             # a manager
+    monkeypatch.setenv('BACKEND_URL', 'http://backend.test')
+    monkeypatch.setattr(tg.requests, 'request',
+                        lambda m, url, **kw: _Resp(201, {'id': 77, 'address': '10 Downing Street, London SW1A 2AA'}))
+    u = _answer_property()
+    _tap('f:confirm:yes_insp', update_id=u)
+    state = json.loads(_session().pending_action_json)
+    assert state['flow'] == 'book_inspection' and state['is_admin'] is False

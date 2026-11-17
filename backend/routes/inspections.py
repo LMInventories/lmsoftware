@@ -484,6 +484,9 @@ def create_inspection():
         report_data=seeded_report_data,
         client_booked=is_client(user),
         pdf_import=bool(data.get('pdf_import')),
+        # Internal notes can be set at booking time, but only by an admin
+        # (e.g. from the Telegram /inspection flow); anyone else's are ignored.
+        internal_notes=((data.get('internal_notes') or '').strip() or None) if user and user.role == 'admin' else None,
     )
 
     db.session.add(inspection)

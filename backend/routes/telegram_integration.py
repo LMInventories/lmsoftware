@@ -188,8 +188,8 @@ def _load_flow(session):
     return state if isinstance(state, dict) and state.get('flow') in telegram_flows.STEPS else None
 
 
-def _start_flow(session, flow_name):
-    state, replies, _ = telegram_flows.start(flow_name)
+def _start_flow(session, flow_name, is_admin=False, prefill=None):
+    state, replies, _ = telegram_flows.start(flow_name, prefill=prefill, is_admin=is_admin)
     session.lookup_history_json = None
     _save_flow(session, state)
     _send_replies(session.chat_id, replies)
@@ -236,7 +236,14 @@ def _execute_flow(session, user, state):
         body = resp.json() if resp.content else {}
         _reset_session(session)
         if tool_name == 'create_property':
-            _send_message(session.chat_id, f"✅ Property created: {body.get('address', payload.get('address'))}")
+            address = body.get('address', payload.get('address'))
+            if state.get('chain_inspection') and body.get('id'):
+                # "Confirm + inspection": carry straight on into booking an inspection at the new property.
+                _send_message(session.chat_id, f"✅ Property created: {address}\n\nNow let's book an inspection for it.")
+                _start_flow(session, telegram_flows.INSPECTION_FLOW, is_admin=user.role == 'admin',
+                            prefill={'property_id': body['id'], 'property_address': address})
+            else:
+                _send_message(session.chat_id, f"✅ Property created: {address}")
         elif tool_name == 'share_report':
             _send_message(session.chat_id, f"✅ Sending the report for {resolved['property_address']} to "
                                            f"{', '.join(resolved['emails'])}. It can take a minute or two to arrive.")
@@ -460,8 +467,8 @@ def _start_lookup(session, user, question):
 
 _HELP_TEXT = (
     'I can add properties and inspections, email reports, update invoices and answer questions. Commands:\n'
-    "• /property — add a property (I'll ask you step by step)\n"
-    '• /inspection — book an inspection\n'
+    "• /property — add a property (I'll ask you step by step), then optionally book an inspection for it\n"
+    '• /inspection — book an inspection (admins can add internal notes)\n'
     '• /share — email a completed report to the client, tenant or anyone else\n'
     '• /invoice — look up an inspection and mark its invoice paid or unpaid\n'
     '• /change — tell me what to change on an inspection (date, clerk, template…); I\'ll ask you to confirm\n'
@@ -499,7 +506,7 @@ def _handle_command(session, user, text):
         _start_flow(session, telegram_flows.PROPERTY_FLOW)
         return True
     if cmd == '/inspection':
-        _start_flow(session, telegram_flows.INSPECTION_FLOW)
+        _start_flow(session, telegram_flows.INSPECTION_FLOW, is_admin=user.role == 'admin')
         return True
     if cmd == '/share':
         _start_flow(session, telegram_flows.SHARE_FLOW)

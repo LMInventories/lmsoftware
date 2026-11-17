@@ -56,7 +56,9 @@ PROPERTY_STEPS = ['client', 'address', 'bedrooms', 'bathrooms', 'furnished', 'fe
 # Roles that can be assigned to carry out an inspection (clerks, plus managers and admins)
 INSPECTOR_ROLES = ('clerk', 'manager', 'admin')
 
-INSPECTION_STEPS = ['property', 'type', 'date', 'time', 'clerk', 'template', 'source', 'photos', 'tenant_email', 'heads_up', 'reference']
+# 'internal_notes' is only ever asked of admins (state['is_admin']); for everyone else it is skipped.
+INSPECTION_STEPS = ['property', 'type', 'date', 'time', 'clerk', 'template', 'source', 'photos', 'tenant_email', 'heads_up', 'reference',
+                    'internal_notes']
 SHARE_STEPS = ['report', 'recipients', 'note']
 INVOICE_STEPS = ['invoice']
 STEPS = {PROPERTY_FLOW: PROPERTY_STEPS, INSPECTION_FLOW: INSPECTION_STEPS,
@@ -83,6 +85,7 @@ _STEP_KEYS = {
     'tenant_email': ['tenant_email', 'tenant_email_done'],
     'heads_up': ['create_heads_up'],
     'reference': ['reference_number', 'reference_done'],
+    'internal_notes': ['internal_notes', 'internal_notes_done'],
     'report': ['report_id', 'report_label', 'property_address', 'inspection_type', 'candidates'],
     'recipients': ['emails', 'recipients_done'],
     'note': ['note', 'note_done'],
@@ -732,6 +735,27 @@ def _accept_reference(state, text, value):
     return None
 
 
+_MAX_INTERNAL_NOTES = 2000
+
+
+def _ask_internal_notes(state):
+    # Admin-only: managers (and anyone else) are never asked, and the backend ignores
+    # internal_notes on create unless the caller is an admin.
+    if not state.get('is_admin') or state['data'].get('internal_notes_done'):
+        return None
+    return ("Add internal notes? They'll appear in the Internal Notes section of the inspection page. "
+            'Type them, or Skip.'), _keyboard([_skip_row('internal_notes')])
+
+
+def _accept_internal_notes(state, text, value):
+    note = None if value == 'skip' else (text or '').strip()
+    if note and len(note) > _MAX_INTERNAL_NOTES:
+        return (f'That is too long — keep it under {_MAX_INTERNAL_NOTES} characters, or Skip.',
+                _keyboard([_skip_row('internal_notes')]))
+    state['data'].update(internal_notes=note or None, internal_notes_done=True)
+    return None
+
+
 # ── Flow: share_report (steps: report, recipients, note) ─────────────────────
 
 def _report_label(insp):
@@ -957,6 +981,7 @@ _ASK = {
     'property': _ask_property, 'type': _ask_type, 'date': _ask_date, 'time': _ask_time, 'clerk': _ask_clerk,
     'template': _ask_template, 'source': _ask_source, 'photos': _ask_photos,
     'tenant_email': _ask_tenant_email, 'heads_up': _ask_heads_up, 'reference': _ask_reference,
+    'internal_notes': _ask_internal_notes,
     'report': _ask_report, 'recipients': _ask_recipients, 'note': _ask_note, 'invoice': _ask_invoice,
 }
 _ACCEPT = {
@@ -966,6 +991,7 @@ _ACCEPT = {
     'property': _accept_property, 'type': _accept_type, 'date': _accept_date, 'time': _accept_time,
     'clerk': _accept_clerk, 'template': _accept_template, 'source': _accept_source, 'photos': _accept_photos,
     'tenant_email': _accept_tenant_email, 'heads_up': _accept_heads_up, 'reference': _accept_reference,
+    'internal_notes': _accept_internal_notes,
     'report': _accept_report, 'recipients': _accept_recipients, 'note': _accept_note, 'invoice': _accept_invoice,
 }
 
@@ -999,6 +1025,7 @@ def build_resolved(state) -> dict:
         'source_label': d.get('source_label') if d.get('continue') else None,
         'include_photos': bool(d.get('include_photos')),
         'create_heads_up': bool(d.get('create_heads_up')),
+        'internal_notes': d.get('internal_notes'),
     }
 
 
@@ -1033,20 +1060,31 @@ def _confirm_reply(state):
     if state['flow'] == INSPECTION_FLOW and resolved.get('create_heads_up'):
         lines.append('• Also creating a linked heads-up')
     lines += _warnings(state)
-    kb = _keyboard([[_btn('✅ Confirm', 'confirm', 'yes'), _btn('✏️ Edit', 'confirm', 'edit'), _btn('❌ Cancel', 'confirm', 'no')]])
+    if state['flow'] == PROPERTY_FLOW:
+        # A new property usually needs an inspection straight away, so offer to carry on into booking one.
+        lines.append('Tap "Confirm + inspection" to create it and go straight on to booking an inspection.')
+        kb = _keyboard([[_btn('✅ Confirm', 'confirm', 'yes'), _btn('➕ Confirm + inspection', 'confirm', 'yes_insp')],
+                        [_btn('✏️ Edit', 'confirm', 'edit'), _btn('❌ Cancel', 'confirm', 'no')]])
+    else:
+        kb = _keyboard([[_btn('✅ Confirm', 'confirm', 'yes'), _btn('✏️ Edit', 'confirm', 'edit'), _btn('❌ Cancel', 'confirm', 'no')]])
     return '\n'.join(lines), kb
 
 
 def _edit_reply(state):
-    buttons = [_btn(label, 'edit', step) for step, label in _EDIT_LABELS[state['flow']]]
+    labels = list(_EDIT_LABELS[state['flow']])
+    if state['flow'] == INSPECTION_FLOW and state.get('is_admin'):
+        labels.append(('internal_notes', 'Internal notes'))
+    buttons = [_btn(label, 'edit', step) for step, label in labels]
     rows = _chunk(buttons, 2) + [[_btn('« Back', 'edit', 'back')]]
     return 'What would you like to change?', _keyboard(rows)
 
 
 # ── Engine ──────────────────────────────────────────────────────────────────
 
-def start(flow: str):
-    state = {'flow': flow, 'step': None, 'data': {}, 'options': []}
+def start(flow: str, prefill: dict | None = None, is_admin: bool = False):
+    """Begin a flow. `prefill` seeds already-known answers (e.g. the property just created, so
+    the inspection flow skips its property question); `is_admin` unlocks admin-only steps."""
+    state = {'flow': flow, 'step': None, 'data': dict(prefill or {}), 'options': [], 'is_admin': bool(is_admin)}
     return _advance(state, [])
 
 
@@ -1090,7 +1128,10 @@ def handle_callback(state, step, value):
     if step == 'confirm':
         if cur != 'confirm':
             return state, [], None
-        if value == 'yes':
+        if value in ('yes', 'yes_insp'):
+            # 'yes_insp' (property flow only): create the property, then carry straight on into booking an
+            # inspection for it. Always (re)set the flag so a retry after a failure uses the button tapped now.
+            state['chain_inspection'] = value == 'yes_insp' and state['flow'] == PROPERTY_FLOW
             return state, [], 'execute'
         if value == 'no':
             return state, [], 'cancelled'

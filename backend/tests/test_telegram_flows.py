@@ -180,8 +180,8 @@ def test_duplicate_address_warning(world):
 
 # ── /inspection ─────────────────────────────────────────────────────────────
 
-def _inspection_to_confirm(world, kind='check_in', clerk_value='1'):  # option 0 is the manager (Mia), 1 the clerk (Sam)
-    state, _, _ = flows.start(flows.INSPECTION_FLOW)
+def _inspection_to_confirm(world, kind='check_in', clerk_value='1', is_admin=False):  # option 0 is the manager (Mia), 1 the clerk (Sam)
+    state, _, _ = flows.start(flows.INSPECTION_FLOW, is_admin=is_admin)
     state, _, _ = _text(state, 'smith')
     assert state['step'] == 'type'
     state, _, _ = _cb(state, 'type', kind)
@@ -373,3 +373,105 @@ def test_unavailable_clerk_is_labelled_and_refused(world):
 
     state, replies, _ = _cb(state, 'clerk', '1')
     assert state['step'] == 'clerk' and 'Unavailable' in _texts(replies)
+
+
+# ── /property → "Confirm + inspection" ──────────────────────────────────────
+
+def _buttons(replies):
+    return {b['callback_data']: b['text'] for row in replies[-1][1]['inline_keyboard'] for b in row}
+
+
+def test_property_confirm_card_offers_confirm_and_create_inspection(world):
+    state, replies = _property_to_confirm(world)
+    buttons = _buttons(replies)
+    assert set(buttons) == {'f:confirm:yes', 'f:confirm:yes_insp', 'f:confirm:edit', 'f:confirm:no'}
+    assert 'inspection' in buttons['f:confirm:yes_insp'].lower()
+
+
+def test_other_flows_confirm_card_is_unchanged(world):
+    state = _inspection_to_confirm(world)
+    state, _, _ = _cb(state, 'tenant_email', 'skip')
+    state, _, _ = _cb(state, 'heads_up', 'n')
+    state, replies, _ = _cb(state, 'reference', 'skip')
+    assert set(_buttons(replies)) == {'f:confirm:yes', 'f:confirm:edit', 'f:confirm:no'}
+
+
+def test_confirm_plus_inspection_executes_and_flags_the_chain(world):
+    state, _ = _property_to_confirm(world)
+    state, _, action = _cb(state, 'confirm', 'yes_insp')
+    assert action == 'execute' and state['chain_inspection'] is True
+    # a retry with the plain Confirm button must not chain
+    state, _, action = _cb(state, 'confirm', 'yes')
+    assert action == 'execute' and state['chain_inspection'] is False
+
+
+def test_yes_insp_is_ignored_outside_the_property_flow(world):
+    state = _inspection_to_confirm(world)
+    state, _, _ = _cb(state, 'tenant_email', 'skip')
+    state, _, _ = _cb(state, 'heads_up', 'n')
+    state, _, _ = _cb(state, 'reference', 'skip')
+    state, _, action = _cb(state, 'confirm', 'yes_insp')
+    assert action == 'execute' and state['chain_inspection'] is False
+
+
+def test_prefilled_property_skips_the_property_question(world):
+    prop = world['property']
+    state, replies, _ = flows.start(flows.INSPECTION_FLOW, prefill={'property_id': prop.id, 'property_address': prop.address})
+    assert state['step'] == 'type'
+    assert 'Which property' not in _texts(replies)
+    assert state['data']['property_id'] == prop.id
+
+
+# ── Internal notes (admin only) ─────────────────────────────────────────────
+
+def _admin_to_reference(world, is_admin):
+    state = _inspection_to_confirm(world, is_admin=is_admin)
+    state, _, _ = _cb(state, 'tenant_email', 'skip')
+    state, _, _ = _cb(state, 'heads_up', 'n')
+    state, replies, _ = _cb(state, 'reference', 'skip')
+    return state, replies
+
+
+def test_internal_notes_are_asked_of_admins_only(world):
+    state, replies = _admin_to_reference(world, is_admin=False)
+    assert state['step'] == 'confirm'                       # managers go straight to confirm
+    assert 'Internal notes' not in _texts(replies)
+
+    state, replies = _admin_to_reference(world, is_admin=True)
+    assert state['step'] == 'internal_notes'
+    assert 'Internal Notes section' in _texts(replies)
+
+
+def test_admin_internal_notes_flow_into_summary_and_payload(world):
+    state, _ = _admin_to_reference(world, is_admin=True)
+    state, replies, _ = _text(state, '  Key is with the concierge.\nTenant is elderly - call first.  ')
+    assert state['step'] == 'confirm'
+    assert 'Internal notes: Key is with the concierge. Tenant is elderly - call first.' in _texts(replies)
+    payload = BUILD_PAYLOAD['book_inspection'](flows.build_resolved(state))
+    assert payload['internal_notes'] == 'Key is with the concierge.\nTenant is elderly - call first.'
+
+
+def test_admin_can_skip_internal_notes(world):
+    state, _ = _admin_to_reference(world, is_admin=True)
+    state, replies, _ = _cb(state, 'internal_notes', 'skip')
+    assert state['step'] == 'confirm' and 'Internal notes' not in _texts(replies)
+    assert BUILD_PAYLOAD['book_inspection'](flows.build_resolved(state))['internal_notes'] is None
+
+
+def test_overlong_internal_notes_are_refused(world):
+    state, _ = _admin_to_reference(world, is_admin=True)
+    state, replies, _ = _text(state, 'x' * 2001)
+    assert state['step'] == 'internal_notes' and 'too long' in _texts(replies)
+
+
+def test_internal_notes_can_be_edited_from_confirm_by_admins_only(world):
+    state, _ = _admin_to_reference(world, is_admin=True)
+    state, _, _ = _cb(state, 'internal_notes', 'skip')
+    state, replies, _ = _cb(state, 'confirm', 'edit')
+    assert 'f:edit:internal_notes' in _buttons(replies)
+    state, replies, _ = _cb(state, 'edit', 'internal_notes')
+    assert state['step'] == 'internal_notes'
+
+    state, _ = _admin_to_reference(world, is_admin=False)
+    state, replies, _ = _cb(state, 'confirm', 'edit')
+    assert 'f:edit:internal_notes' not in _buttons(replies)

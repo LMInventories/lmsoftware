@@ -363,6 +363,9 @@ def summarize_inspection(resolved: dict) -> str:
     if resolved.get('source_inspection_id'):
         lines.append(f"• Continuing from: {resolved['source_label']}")
         lines.append(f"• Include photos: {'Yes' if resolved.get('include_photos') else 'No'}")
+    if resolved.get('internal_notes'):
+        notes = ' '.join(resolved['internal_notes'].split())
+        lines.append(f"• Internal notes: {notes if len(notes) <= 200 else notes[:199] + '…'}")
     return '\n'.join(lines)
 
 
@@ -435,6 +438,7 @@ def build_inspection_payload(resolved: dict) -> dict:
         'source_inspection_id':    resolved.get('source_inspection_id'),
         'include_photos':          resolved.get('include_photos', False),
         'create_heads_up':         bool(resolved.get('create_heads_up')),
+        'internal_notes':          resolved.get('internal_notes'),
     }
 
 

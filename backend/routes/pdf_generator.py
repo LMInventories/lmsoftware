@@ -320,6 +320,15 @@ class _PDFBuilder:
             except Exception:
                 pass
 
+        # ── Fixed sections the clerk deleted on the phone ──────────────────
+        # The mobile app records a deleted whole section's key in _hiddenFixed (and drops its
+        # data). Filter them out here, before anything reads self.fixed_sections, so they vanish
+        # from the contents page, the section letters/refs, the body and the H&S issues summary.
+        # Ids keep their original fs_{idx}_{slug} form, so report_data lookups are unaffected.
+        hidden_fixed = set(str(x) for x in (self.rd.get('_hiddenFixed') or []))
+        if hidden_fixed:
+            self.fixed_sections = [fs for fs in self.fixed_sections if str(fs.get('id')) not in hidden_fixed]
+
         # ── Rooms — from template.sections filtered by section_type='room' ──
         # report_data keys rooms by String(s.id) — the DB section id.
         # Items use item.id as the row key, and item.name as the label.

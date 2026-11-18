@@ -1487,6 +1487,9 @@ const fixedSections = computed(() =>
         rows,
       }
     })
+    // Sections the clerk deleted on the phone are recorded in _hiddenFixed. Filter after the
+    // map so the ids (which embed the original index) still match report_data.
+    .filter(sec => !(reportData.value?._hiddenFixed || []).includes(sec.id))
 )
 
 // Rooms come from the template's relational sections (section_type === 'room')

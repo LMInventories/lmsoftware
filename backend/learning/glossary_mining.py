@@ -3,7 +3,7 @@ backend/learning/glossary_mining.py
 ─────────────────────────────────────
 The glossary agent. Reads the clerk-edit diffs written by learning/mining.py,
 finds word/phrase SUBSTITUTIONS that clerks keep making (AI wrote "chub", the
-finished report says "chubb"), asks Sonnet to judge which are genuine
+finished report says "chubb") - from fill diffs AND from accepted AI Proofread suggestions, asks Sonnet to judge which are genuine
 vocabulary corrections (brands, spellings, trade terms) as opposed to
 property-specific content edits or formatting rules, and queues the good ones in
 transcription_glossary as status='pending'.
@@ -51,7 +51,39 @@ def _load_rows(engine, window_days: int):
           AND d.mined_at >= :since
     ''')
     with engine.connect() as conn:
-        return conn.execute(query, {'since': since}).fetchall()
+        rows = conn.execute(query, {'since': since}).fetchall()
+        rows += _load_proofread_rows(conn, since, 'accepted')
+    return rows
+
+
+def _load_proofread_rows(conn, since, decision: str) -> list:
+    """Clerk decisions on AI Proofread suggestions (mobile Review Report), shaped like
+    the fill-diff rows above: original -> ai_value, suggested -> final_value. Returns []
+    if the table doesn't exist yet (migration not run) so the agent keeps working."""
+    try:
+        return conn.execute(text('''
+            SELECT p.id, p.inspection_id, p.field, NULL AS transcript_excerpt,
+                   p.original AS ai_value, p.suggested AS final_value,
+                   p.item_name, i.inspector_id
+            FROM transcription_proofread_suggestions p
+            JOIN inspections i ON i.id = p.inspection_id
+            WHERE p.decision = :decision AND p.created_at >= :since
+        '''), {'decision': decision, 'since': since}).fetchall()
+    except Exception as e:
+        conn.rollback()
+        print(f'[glossary] proofread rows unavailable: {e!r}')
+        return []
+
+
+def _dismissed_counts(engine, window_days: int) -> dict:
+    """(removed, added) -> how many times clerks dismissed that exact AI Proofread correction."""
+    since = datetime.now(timezone.utc) - timedelta(days=window_days)
+    counts = defaultdict(int)
+    with engine.connect() as conn:
+        for r in _load_proofread_rows(conn, since, 'dismissed'):
+            for pair in _extract_ops(r.ai_value, r.final_value):
+                counts[pair] += 1
+    return counts
 
 
 def _known_pairs(engine) -> set:
@@ -66,9 +98,14 @@ def known_pairs() -> set:
     return _known_pairs(get_engine())
 
 
-def build_candidates(rows, known: set) -> list:
-    """Substitution clusters only (removed AND added both non-empty, short)."""
-    clusters = defaultdict(lambda: {'rows': [], 'inspections': set(), 'inspectors': set()})
+def build_candidates(rows, known: set, dismissed: dict | None = None) -> list:
+    """Substitution clusters only (removed AND added both non-empty, short).
+
+    The same fix can arrive twice for one item - once as an AI-fill diff and once as an
+    accepted proofread suggestion - so a cluster counts each (inspection, item) once.
+    A cluster clerks dismissed at least as often as it was applied is dropped."""
+    dismissed = dismissed or {}
+    clusters = defaultdict(lambda: {'rows': [], 'inspections': set(), 'inspectors': set(), 'seen': set()})
     for r in rows:
         for removed, added in _extract_ops(r.ai_value, r.final_value):
             if not removed or not added:
@@ -78,6 +115,10 @@ def build_candidates(rows, known: set) -> list:
             if (removed, added) in known:
                 continue
             c = clusters[(removed, added)]
+            once = (r.inspection_id, _normalize(r.item_name))
+            if once in c['seen']:
+                continue
+            c['seen'].add(once)
             c['rows'].append(r)
             c['inspections'].add(r.inspection_id)
             if r.inspector_id is not None:
@@ -85,6 +126,7 @@ def build_candidates(rows, known: set) -> list:
     out = [
         (key, c) for key, c in clusters.items()
         if len(c['rows']) >= MIN_ROWS and len(c['inspections']) >= MIN_INSPECTIONS
+        and dismissed.get(key, 0) < len(c['rows'])
     ]
     out.sort(key=lambda kc: len(kc[1]['rows']), reverse=True)
     return out
@@ -164,7 +206,7 @@ Respond with strict JSON only, no markdown — an array with one object per cand
 def run_glossary_agent(window_days: int = 90, judge: bool = True) -> dict:
     engine = get_engine()
     rows = _load_rows(engine, window_days)
-    candidates = build_candidates(rows, _known_pairs(engine))
+    candidates = build_candidates(rows, _known_pairs(engine), _dismissed_counts(engine, window_days))
     stats = {'rows': len(rows), 'candidates': len(candidates), 'queued': 0}
     if not candidates or not judge:
         stats['candidate_preview'] = [

@@ -4612,6 +4612,253 @@ CRITICAL JSON FORMATTING:
     return jsonify({'filled': filled})
 
 
+# ── AI Proofread (mobile Review Report) ──────────────────────────────────────
+# Text-only pass over ONE room's recorded content. Returns small, verifiable
+# snippet-level suggestions the clerk accepts or dismisses; nothing is changed
+# server-side. Accept/dismiss decisions come back via /proofread/decisions and
+# feed the glossary agent (learning/glossary_mining.py).
+
+_PROOFREAD_MODEL = 'claude-sonnet-4-6'
+_PROOFREAD_KINDS = ('spelling', 'mistranscription', 'grammar', 'wording')
+_PROOFREAD_FIELDS = ('description', 'condition', 'sub_label', 'sub_cond')
+_PROOFREAD_MAX_SUGGESTIONS = 40
+
+
+def _proofread_field_text(items: list) -> dict:
+    """{(itemId, subId|None, field): text} for every non-empty field supplied."""
+    out = {}
+    for it in items:
+        iid = str(it.get('id') or '')
+        if not iid:
+            continue
+        for field in ('description', 'condition'):
+            val = it.get(field)
+            if isinstance(val, str) and val.strip():
+                out[(iid, None, field)] = val
+        for sub in it.get('subs') or []:
+            sid = str(sub.get('id') or '')
+            if not sid:
+                continue
+            for field, key in (('sub_label', 'description'), ('sub_cond', 'condition')):
+                val = sub.get(key)
+                if isinstance(val, str) and val.strip():
+                    out[(iid, sid, field)] = val
+    return out
+
+
+def _validate_proofread_suggestions(raw, items: list) -> list:
+    """
+    Keep only suggestions that are safe to show: the `original` snippet must
+    literally occur in the field it points at (so the app can apply it with a
+    plain replace and the model cannot invent text), it must actually change
+    something, and it must not add, drop or alter any number.
+    """
+    if not isinstance(raw, list):
+        return []
+    fields = _proofread_field_text(items)
+    name_by_id = {str(it.get('id')): (it.get('name') or '') for it in items}
+    seen, out = set(), []
+    for n, sug in enumerate(raw):
+        if not isinstance(sug, dict):
+            continue
+        item_id = str(sug.get('itemId') or '')
+        sub_id = str(sug.get('subId')) if sug.get('subId') else None
+        field = sug.get('field')
+        original = sug.get('original')
+        suggested = sug.get('suggested')
+        if field not in _PROOFREAD_FIELDS or not isinstance(original, str) or not isinstance(suggested, str):
+            continue
+        if field in ('description', 'condition'):
+            sub_id = None
+        elif not sub_id:
+            continue
+        text = fields.get((item_id, sub_id, field))
+        if text is None or not original.strip() or original not in text:
+            continue
+        if len(original) > 200 or len(suggested) > 200 or original == suggested:
+            continue
+        if sorted(_re.findall(r'\d+', original)) != sorted(_re.findall(r'\d+', suggested)):
+            continue
+        key = (item_id, sub_id, field, original)
+        if key in seen:
+            continue
+        seen.add(key)
+        kind = sug.get('kind') if sug.get('kind') in _PROOFREAD_KINDS else 'wording'
+        out.append({
+            'id': f'{item_id}|{sub_id or ""}|{field}|{n}',
+            'itemId': item_id,
+            'subId': sub_id,
+            'itemName': name_by_id.get(item_id, ''),
+            'field': field,
+            'original': original,
+            'suggested': suggested,
+            'kind': kind,
+            'reason': str(sug.get('reason') or '')[:200],
+        })
+        if len(out) >= _PROOFREAD_MAX_SUGGESTIONS:
+            break
+    return out
+
+
+@transcribe_bp.route('/proofread', methods=['POST'])
+@jwt_required()
+def proofread_room():
+    """
+    Proofread one room's report text.
+
+    Request JSON:
+    {
+      "inspectionId": 123,
+      "roomName": "Kitchen",
+      "isCheckOut": false,
+      "items": [
+        {"id": "55", "name": "Floor", "description": "Grey vinyl", "condition": "Worn to entrence",
+         "subs": [{"id": "s1", "description": "Silver threshold", "condition": "Light scratching"}]}
+      ]
+    }
+
+    Response JSON: {"suggestions": [{id, itemId, subId, itemName, field, original, suggested, kind, reason}]}
+    field is description | condition | sub_label | sub_cond; original/suggested are snippets.
+    """
+    data = request.get_json() or {}
+    items = data.get('items') or []
+    room_name = str(data.get('roomName') or '')[:100]
+    inspection_id = int(data['inspectionId']) if data.get('inspectionId') else None
+    if not isinstance(items, list) or not _proofread_field_text(items):
+        return jsonify({'suggestions': []})
+
+    if not os.environ.get('ANTHROPIC_API_KEY'):
+        return jsonify({'error': 'ANTHROPIC_API_KEY not configured on server'}), 503
+
+    lines = []
+    for it in items:
+        iid = str(it.get('id') or '')
+        lines.append(f'ITEM id={iid} name={json.dumps(it.get("name") or "")}')
+        for field in ('description', 'condition'):
+            if (it.get(field) or '').strip():
+                lines.append(f'  {field}: {json.dumps(it[field])}')
+        for sub in it.get('subs') or []:
+            sid = str(sub.get('id') or '')
+            lines.append(f'  SUB subId={sid}')
+            if (sub.get('description') or '').strip():
+                lines.append(f'    sub_label: {json.dumps(sub["description"])}')
+            if (sub.get('condition') or '').strip():
+                lines.append(f'    sub_cond: {json.dumps(sub["condition"])}')
+
+    prompt = f"""You are proof-reading one room of a UK property inventory / check-in / check-out report.
+The text was dictated by a clerk, transcribed by speech-to-text, then tidied by AI, so it may contain
+mis-heard words, misspellings and the odd grammar slip. A human clerk will accept or dismiss each of your
+suggestions, so only raise things you are confident about.
+
+ROOM: {json.dumps(room_name)}
+
+REPORT TEXT (each field is a JSON string):
+{chr(10).join(lines)}
+
+WHAT TO FLAG (kind):
+- "spelling": a misspelt word, or a US spelling. {_UK_SPELLING_RULE}{_glossary_prompt()}
+- "mistranscription": a word that is almost certainly a speech-to-text mishearing in context
+  (e.g. "cereal number" for "serial number", "mold" for "mould", "sealent" for "sealant", a brand misheard).
+- "grammar": a clear grammatical error (wrong agreement, doubled word, missing word that makes it unreadable).
+- "wording": inconsistent wording within this room - the same thing named or phrased two different ways
+  across items (e.g. "wardrobe" vs "wardrobes" for one fitting, "Good order" vs "Good condition" style drift),
+  or wording that is confusing. Suggest aligning to the dominant or clearer form.
+
+HOUSE STYLE - do NOT flag any of these, they are intentional:
+- Terse inventory fragments rather than full sentences ("Worn to edges", "Light scratching to top").
+- Missing full stops, lower-case/upper-case first letters, line breaks between observations.
+- Standard boilerplate such as "As Inventory" prefixes, "All tested for power", "Good order".
+- Measurements, model numbers, serial numbers, colours, quantities or any digits - NEVER change a number.
+
+RULES:
+- NEVER add facts. Do not add a component, colour, material or defect that is not already in the text.
+- "original" must be copied EXACTLY (same case and spacing) from a single field's text, as short as possible
+  (usually one to four words). "suggested" is what that snippet should become.
+- One suggestion per distinct problem. If nothing needs changing, return an empty list. Most rooms need few or none.
+- "field" is one of: description, condition, sub_label, sub_cond. For sub_label/sub_cond include "subId".
+- "reason" is a few words a clerk can read at a glance.
+
+Return ONLY JSON, no markdown:
+{{"suggestions": [{{"itemId": "...", "subId": null, "field": "condition", "original": "entrence", "suggested": "entrance", "kind": "spelling", "reason": "Misspelt"}}]}}"""
+
+    client = anthropic.Anthropic(api_key=os.environ.get('ANTHROPIC_API_KEY'))
+    try:
+        message = client.messages.create(
+            model=_PROOFREAD_MODEL,
+            max_tokens=3000,
+            messages=[
+                {'role': 'user', 'content': prompt},
+                {'role': 'assistant', 'content': '{'},   # prefill forces JSON-only output
+            ],
+        )
+    except Exception as e:
+        print(f'[proofread] Claude call failed: {e!r}')
+        return jsonify({'error': 'AI proofread is unavailable right now — please try again'}), 502
+
+    raw = ('{' + message.content[0].text).strip().replace('```json', '').replace('```', '').strip()
+    try:
+        parsed = json.loads(_sanitise_json(raw))
+    except json.JSONDecodeError:
+        print(f'[proofread] JSON parse error (stop_reason={getattr(message, "stop_reason", None)}): {raw[:300]}')
+        return jsonify({'error': 'AI returned an invalid response — please try again'}), 500
+
+    suggestions = _validate_proofread_suggestions(
+        parsed.get('suggestions') if isinstance(parsed, dict) else None, items)
+
+    try:
+        db.session.add(TranscriptionUsage(
+            call_type='item',
+            inspection_id=inspection_id,
+            user_id=int(get_jwt_identity()),
+            audio_seconds=0,
+            input_tokens=message.usage.input_tokens if message.usage else 0,
+            output_tokens=message.usage.output_tokens if message.usage else 0,
+            section_type='proofread',
+        ))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+    return jsonify({'suggestions': suggestions})
+
+
+@transcribe_bp.route('/proofread/decisions', methods=['POST'])
+@jwt_required()
+def proofread_decisions():
+    """
+    Record which proofread suggestions the clerk accepted or dismissed.
+
+    Request JSON: {"inspectionId": 123, "decisions": [
+        {"room": "Kitchen", "itemName": "Floor", "field": "condition", "kind": "spelling",
+         "original": "entrence", "suggested": "entrance", "decision": "accepted"}]}
+    """
+    from models import ProofreadSuggestionLog
+    data = request.get_json() or {}
+    inspection_id = int(data['inspectionId']) if data.get('inspectionId') else None
+    user_id = int(get_jwt_identity())
+    saved = 0
+    for d in (data.get('decisions') or [])[:200]:
+        if not isinstance(d, dict) or d.get('decision') not in ('accepted', 'dismissed'):
+            continue
+        original, suggested = d.get('original'), d.get('suggested')
+        if not isinstance(original, str) or not isinstance(suggested, str) or not original.strip():
+            continue
+        db.session.add(ProofreadSuggestionLog(
+            inspection_id=inspection_id,
+            user_id=user_id,
+            room=str(d.get('room') or '')[:255] or None,
+            item_name=str(d.get('itemName') or '')[:255] or None,
+            field=str(d.get('field') or '')[:30] or 'condition',
+            kind=d.get('kind') if d.get('kind') in _PROOFREAD_KINDS else 'wording',
+            original=original[:500],
+            suggested=suggested[:500],
+            decision=d['decision'],
+        ))
+        saved += 1
+    db.session.commit()
+    return jsonify({'saved': saved})
+
+
 @transcribe_bp.route('/full', methods=['POST'])
 @jwt_required()
 def transcribe_full():

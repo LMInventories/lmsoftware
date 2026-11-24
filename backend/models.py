@@ -608,6 +608,30 @@ class FloorPlanRoom(db.Model):
         }
 
 
+class ProofreadSuggestionLog(db.Model):
+    """
+    One row per AI Proofread suggestion a clerk explicitly accepted or dismissed
+    on the mobile app's Review Report screen (routes/transcribe.py
+    /proofread/decisions). Accepted rows are an extra evidence source for the
+    glossary agent (learning/glossary_mining.py); dismissed rows are a negative
+    signal that stops it proposing corrections clerks keep rejecting.
+    original/suggested are the changed snippets, not whole fields.
+    """
+    __tablename__ = 'transcription_proofread_suggestions'
+
+    id            = db.Column(db.Integer, primary_key=True)
+    inspection_id = db.Column(db.Integer, db.ForeignKey('inspections.id', ondelete='SET NULL'), nullable=True, index=True)
+    user_id       = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
+    room          = db.Column(db.String(255), nullable=True)
+    item_name     = db.Column(db.String(255), nullable=True)
+    field         = db.Column(db.String(30), nullable=False)
+    kind          = db.Column(db.String(30), nullable=False)    # spelling | mistranscription | grammar | wording
+    original      = db.Column(db.Text, nullable=False)
+    suggested     = db.Column(db.Text, nullable=False)
+    decision      = db.Column(db.String(10), nullable=False)    # accepted | dismissed
+    created_at    = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+
 class TranscriptionFillDiff(db.Model):
     """
     One row per (log entry x field) comparison between what an AI fill call

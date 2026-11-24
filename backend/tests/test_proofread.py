@@ -57,20 +57,36 @@ def client(app, world, monkeypatch):
     return SimpleNamespace(http=app.test_client(), h={'Authorization': f'Bearer {token}'}, world=world)
 
 
-def fake_anthropic(monkeypatch, reply):
+def fake_anthropic(monkeypatch, reply, seen=None):
     class Msgs:
         def create(self, **kw):
             self.kw = kw
+            if seen is not None:
+                seen.append(kw)
             return SimpleNamespace(content=[SimpleNamespace(text=reply)], stop_reason='end_turn',
                                    usage=SimpleNamespace(input_tokens=10, output_tokens=5))
     monkeypatch.setattr(tr.anthropic, 'Anthropic', lambda **k: SimpleNamespace(messages=Msgs()))
 
 
 def test_proofread_endpoint_filters_model_output(client, monkeypatch):
-    reply = json.dumps({'suggestions': [sug(), sug(original='invented', suggested='x')]})[1:]  # prefill eats '{'
-    fake_anthropic(monkeypatch, reply)
+    reply = json.dumps({'suggestions': [sug(), sug(original='invented', suggested='x')]})
+    seen = []
+    fake_anthropic(monkeypatch, reply, seen)
     r = client.http.post('/api/transcribe/proofread', headers=client.h,
                          json={'roomName': 'Kitchen', 'items': ITEMS})
+    assert r.status_code == 200
+    assert [s['original'] for s in r.get_json()['suggestions']] == ['entrence']
+    # claude-sonnet-4-6 rejects assistant prefill with a 400: the request must end with the user turn
+    assert [m['role'] for m in seen[0]['messages']] == ['user']
+
+
+@pytest.mark.parametrize('wrap', [
+    lambda j: '```json\n' + j + '\n```',
+    lambda j: 'Here are the fixes:\n' + j + '\nLet me know if you need more.',
+])
+def test_proofread_tolerates_fences_and_chatter_around_the_json(client, monkeypatch, wrap):
+    fake_anthropic(monkeypatch, wrap(json.dumps({'suggestions': [sug()]})))
+    r = client.http.post('/api/transcribe/proofread', headers=client.h, json={'items': ITEMS})
     assert r.status_code == 200
     assert [s['original'] for s in r.get_json()['suggestions']] == ['entrence']
 

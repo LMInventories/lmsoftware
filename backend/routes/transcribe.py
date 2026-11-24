@@ -4786,16 +4786,21 @@ Return ONLY JSON, no markdown:
         message = client.messages.create(
             model=_PROOFREAD_MODEL,
             max_tokens=3000,
+            # No assistant prefill: claude-sonnet-4-6 rejects it with a 400. The prompt
+            # already says "Return ONLY JSON"; the parsing below copes with stray text.
             messages=[
                 {'role': 'user', 'content': prompt},
-                {'role': 'assistant', 'content': '{'},   # prefill forces JSON-only output
             ],
         )
     except Exception as e:
         print(f'[proofread] Claude call failed: {e!r}')
         return jsonify({'error': 'AI proofread is unavailable right now — please try again'}), 502
 
-    raw = ('{' + message.content[0].text).strip().replace('```json', '').replace('```', '').strip()
+    raw = (message.content[0].text if message.content else '').strip().replace('```json', '').replace('```', '').strip()
+    # Keep just the outermost {...} in case the model added a preamble or trailing remark.
+    _start, _end = raw.find('{'), raw.rfind('}')
+    if _start != -1 and _end > _start:
+        raw = raw[_start:_end + 1]
     try:
         parsed = json.loads(_sanitise_json(raw))
     except json.JSONDecodeError:

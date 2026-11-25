@@ -262,7 +262,8 @@ def suggest():
                 client = anthropic.Anthropic(api_key=os.environ.get('ANTHROPIC_API_KEY'))
                 message = client.messages.create(
                     model=_MODEL, max_tokens=4000,
-                    messages=[{'role': 'user', 'content': prompt}, {'role': 'assistant', 'content': '{'}],
+                    # No assistant prefill: claude-sonnet-4-6 rejects it with a 400.
+                    messages=[{'role': 'user', 'content': prompt}],
                 )
             except Exception as e:
                 print(f'[action-tags] Claude call failed: {e!r}')
@@ -271,7 +272,12 @@ def suggest():
                 message = None
             if message is not None:
                 from routes.transcribe import _sanitise_json
-                raw = ('{' + message.content[0].text).strip().replace('```json', '').replace('```', '').strip()
+                raw = (message.content[0].text if message.content else '').strip()
+                raw = raw.replace('```json', '').replace('```', '').strip()
+                # Keep just the outermost {...} in case the model added a preamble or trailing remark.
+                start, end = raw.find('{'), raw.rfind('}')
+                if start != -1 and end > start:
+                    raw = raw[start:end + 1]
                 try:
                     parsed = json.loads(_sanitise_json(raw))
                     resolved.update(_validate_ai_tags(parsed.get('tags') if isinstance(parsed, dict) else None,

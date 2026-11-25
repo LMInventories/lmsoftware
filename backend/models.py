@@ -27,6 +27,8 @@ class User(db.Model):
     # human      — audio clips synced to server; typist receives email and types the report
     typist_mode        = db.Column(db.String(20), nullable=True)
     camera_option      = db.Column(db.String(20), nullable=True)
+    # Floating camera preview opacity as a percentage (20-100). NULL = solid (100). Mobile 'Default Settings'.
+    floating_camera_opacity = db.Column(db.Integer, nullable=True)
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -46,6 +48,7 @@ class User(db.Model):
             'client_id':   self.client_id,
             'typist_mode':   self.typist_mode,
             'camera_option': self.camera_option,
+            'floating_camera_opacity': self.floating_camera_opacity,
             'created_at':  self.created_at.isoformat() if self.created_at else None,
         }
 
@@ -630,6 +633,33 @@ class ProofreadSuggestionLog(db.Model):
     suggested     = db.Column(db.Text, nullable=False)
     decision      = db.Column(db.String(10), nullable=False)    # accepted | dismissed
     created_at    = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+
+class ActionTagDecision(db.Model):
+    """
+    One row per AI action-tag suggestion a clerk accepted, edited or declined on the
+    check-out room screen (routes/action_tags.py). This is the memory the suggester
+    learns from: lines clerks keep tagging the same way become 'learned' suggestions
+    and the closest past decisions are shown to the model as examples.
+    source='history' rows are back-filled from finished reports (clerk tagged by hand).
+    final_* are NULL for declined rows.
+    """
+    __tablename__ = 'action_tag_decisions'
+
+    id                  = db.Column(db.Integer, primary_key=True)
+    inspection_id       = db.Column(db.Integer, db.ForeignKey('inspections.id', ondelete='SET NULL'), nullable=True, index=True)
+    user_id             = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
+    room                = db.Column(db.String(255), nullable=True)
+    item_name           = db.Column(db.String(255), nullable=True)
+    line                = db.Column(db.Text, nullable=False)
+    line_norm           = db.Column(db.String(300), nullable=False, index=True)
+    suggested_action_id = db.Column(db.String(64), nullable=True)
+    suggested_resp      = db.Column(db.String(100), nullable=True)
+    final_action_id     = db.Column(db.String(64), nullable=True)
+    final_resp          = db.Column(db.String(100), nullable=True)
+    decision            = db.Column(db.String(10), nullable=False)    # accepted | edited | declined
+    source              = db.Column(db.String(10), nullable=False, default='ai')   # rule | learned | ai | history
+    created_at          = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), index=True)
 
 
 class TranscriptionFillDiff(db.Model):

@@ -143,6 +143,7 @@ def create_app():
     from routes.fixed_sections  import fixed_sections_bp, midterm_sections_bp, heads_up_sections_bp
     from routes.ai              import ai_bp
     from routes.transcribe      import transcribe_bp
+    from routes.action_tags     import action_tags_bp
     from routes.pdf_import      import pdf_import_bp
     from routes.section_presets import section_presets_bp
     from routes.address_lookup  import address_lookup_bp
@@ -167,6 +168,7 @@ def create_app():
     app.register_blueprint(heads_up_sections_bp, url_prefix='/api/heads-up-sections')
     app.register_blueprint(ai_bp,              url_prefix='/api/ai')
     app.register_blueprint(transcribe_bp,      url_prefix='/api/transcribe')
+    app.register_blueprint(action_tags_bp,     url_prefix='/api/action-tags')
     app.register_blueprint(pdf_import_bp,      url_prefix='/api/ai')
     app.register_blueprint(section_presets_bp, url_prefix='/api/section-presets')
     app.register_blueprint(address_lookup_bp,  url_prefix='/api/address')
@@ -292,6 +294,11 @@ def _setup_database():
     if not column_exists('users', 'camera_option'):
         _alter_column("users.camera_option",
                       "ALTER TABLE users ADD COLUMN camera_option VARCHAR(20)")
+
+    # users.floating_camera_opacity — 20-100 (%), floating camera preview transparency; null = solid
+    if not column_exists('users', 'floating_camera_opacity'):
+        _alter_column("users.floating_camera_opacity",
+                      "ALTER TABLE users ADD COLUMN floating_camera_opacity INTEGER")
 
     # inspections.typist_mode — per-inspection override of clerk-level typist_mode
     if not column_exists('inspections', 'typist_mode'):

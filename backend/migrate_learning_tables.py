@@ -140,6 +140,29 @@ STATEMENTS = [
     """,
     "CREATE INDEX IF NOT EXISTS ix_transcription_proofread_suggestions_inspection_id ON transcription_proofread_suggestions (inspection_id)",
     "CREATE INDEX IF NOT EXISTS ix_transcription_proofread_suggestions_created_at ON transcription_proofread_suggestions (created_at)",
+    # Check-out action-tag decisions (accepted / edited / declined AI suggestions) -
+    # the memory the action-tag suggester learns from.
+    """
+    CREATE TABLE IF NOT EXISTS action_tag_decisions (
+        id                  SERIAL PRIMARY KEY,
+        inspection_id       INTEGER REFERENCES inspections(id) ON DELETE SET NULL,
+        user_id             INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        room                VARCHAR(255),
+        item_name           VARCHAR(255),
+        line                TEXT NOT NULL,
+        line_norm           VARCHAR(300) NOT NULL,
+        suggested_action_id VARCHAR(64),
+        suggested_resp      VARCHAR(100),
+        final_action_id     VARCHAR(64),
+        final_resp          VARCHAR(100),
+        decision            VARCHAR(10) NOT NULL,
+        source              VARCHAR(10) NOT NULL DEFAULT 'ai',
+        created_at          TIMESTAMP DEFAULT now()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_action_tag_decisions_inspection_id ON action_tag_decisions (inspection_id)",
+    "CREATE INDEX IF NOT EXISTS ix_action_tag_decisions_line_norm ON action_tag_decisions (line_norm)",
+    "CREATE INDEX IF NOT EXISTS ix_action_tag_decisions_created_at ON action_tag_decisions (created_at)",
     # Seed: the first pattern the pipeline found (PR #3, Oct 2026). ON CONFLICT
     # DO NOTHING so a later human reject/edit is never overwritten on redeploy.
     """
@@ -158,4 +181,4 @@ with engine.connect() as conn:
 
 print('✓ prompt-learning tables ensured: transcription_fill_diffs, transcription_mined_inspections, '
       'transcription_golden_fixtures, transcription_prompt_proposals, transcription_glossary, '
-      'transcription_proofread_suggestions')
+      'transcription_proofread_suggestions, action_tag_decisions')

@@ -36,6 +36,7 @@ def login():
             'is_ai':       user.is_ai,
             'typist_mode':   user.typist_mode,   # 'ai_instant' | 'ai_room' | 'human' | null
             'camera_option': user.camera_option,
+            'floating_camera_opacity': user.floating_camera_opacity,
             'client_id':     user.client_id,
         }
     })
@@ -59,6 +60,7 @@ def get_current_user():
         'is_ai':       user.is_ai,
         'typist_mode':   user.typist_mode,
         'camera_option': user.camera_option,
+        'floating_camera_opacity': user.floating_camera_opacity,
         'client_id':     user.client_id,
     })
 
@@ -75,6 +77,10 @@ def update_my_defaults():
         user.typist_mode = data['typist_mode'] or None
     if 'camera_option' in data:
         user.camera_option = data['camera_option'] or None
+    if 'floating_camera_opacity' in data:
+        v = data['floating_camera_opacity']
+        # 20-100 (%); anything else (or null) means solid
+        user.floating_camera_opacity = v if isinstance(v, int) and not isinstance(v, bool) and 20 <= v <= 99 else None
     db.session.commit()
     return jsonify({
         'id':            user.id,
@@ -85,6 +91,7 @@ def update_my_defaults():
         'is_ai':         user.is_ai,
         'typist_mode':   user.typist_mode,
         'camera_option': user.camera_option,
+        'floating_camera_opacity': user.floating_camera_opacity,
         'client_id':     user.client_id,
     })
 

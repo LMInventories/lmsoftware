@@ -77,10 +77,11 @@ def client(app, world, monkeypatch):
     return SimpleNamespace(http=app.test_client(), h={'Authorization': f'Bearer {token}'})
 
 
-def fake_anthropic(monkeypatch, reply):
+def fake_anthropic(monkeypatch, reply, seen=None):
     class Msgs:
         def create(self, **kw):
-            self.kw = kw
+            if seen is not None:
+                seen.append(kw)
             return SimpleNamespace(content=[SimpleNamespace(text=reply)], stop_reason='end_turn',
                                    usage=SimpleNamespace(input_tokens=10, output_tokens=5))
     monkeypatch.setattr(at.anthropic, 'Anthropic', lambda **k: SimpleNamespace(messages=Msgs()))
@@ -90,8 +91,9 @@ def test_suggest_mixes_rule_learned_and_ai(client, monkeypatch):
     db.session.add_all([row('Light scuffing'), row('light scuffing')])
     db.session.commit()
     reply = json.dumps({'tags': [{'itemId': '5', 'line': 'Heavy marks', 'action': 'Review',
-                                  'responsibility': 'Investigate', 'confidence': 'low', 'reason': 'Unclear'}]})[1:]
-    fake_anthropic(monkeypatch, reply)
+                                  'responsibility': 'Investigate', 'confidence': 'low', 'reason': 'Unclear'}]})
+    seen = []
+    fake_anthropic(monkeypatch, reply, seen)
     r = client.http.post('/api/action-tags/suggest', headers=client.h, json={
         'roomName': 'Hall', 'items': [{'id': '5', 'name': 'Walls', 'lines': ['Not seen', 'Light scuffing', 'Heavy marks']}]})
     assert r.status_code == 200
@@ -99,6 +101,20 @@ def test_suggest_mixes_rule_learned_and_ai(client, monkeypatch):
     assert by_line['Not seen']['source'] == 'rule'
     assert by_line['Light scuffing']['source'] == 'learned'
     assert by_line['Heavy marks']['source'] == 'ai' and by_line['Heavy marks']['confidence'] == 'low'
+    # claude-sonnet-4-6 rejects assistant prefill with a 400: the request must end with the user turn
+    assert [m['role'] for m in seen[0]['messages']] == ['user']
+
+
+@pytest.mark.parametrize('wrap', [
+    lambda j: '```json' + chr(10) + j + chr(10) + '```',
+    lambda j: 'Here you go:' + chr(10) + j + chr(10) + 'Let me know if you need more.',
+])
+def test_tolerates_fences_and_chatter_around_the_json(client, monkeypatch, wrap):
+    tags = {'tags': [{'itemId': '5', 'line': 'Heavy marks', 'action': 'Review', 'responsibility': 'Tenant'}]}
+    fake_anthropic(monkeypatch, wrap(json.dumps(tags)))
+    r = client.http.post('/api/action-tags/suggest', headers=client.h,
+                         json={'items': [{'id': '5', 'name': 'Walls', 'lines': ['Heavy marks']}]})
+    assert r.status_code == 200 and [s['line'] for s in r.get_json()['suggestions']] == ['Heavy marks']
 
 
 def test_suggest_with_everything_resolved_makes_no_ai_call(client, monkeypatch):

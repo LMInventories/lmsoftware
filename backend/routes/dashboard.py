@@ -82,23 +82,27 @@ def get_dashboard_stats():
     )
     sc = {s: c for s, c in status_rows}  # e.g. {'created': 3, 'active': 12, ...}
 
+    def _real_inspection_count(q):
+        # Total Inspections tile: leave out paper/PDF imports (digitised historical records)
+        return q.filter(Inspection.pdf_import.is_(False)).count()
+
     # ── Totals — scoped to role ──────────────────────────────────────────────
     if role in ('admin', 'manager'):
         total_clients     = Client.query.count()
         total_properties  = Property.query.count()
         total_users       = User.query.count()
-        total_inspections = Inspection.query.count()
+        total_inspections = _real_inspection_count(Inspection.query)
     elif role == 'client':
         total_clients     = 1
         total_properties  = Property.query.filter_by(client_id=current_user.client_id).count()
         total_users       = None
-        total_inspections = _base_inspection_query().count()
+        total_inspections = _real_inspection_count(_base_inspection_query())
     else:
         # clerk / typist — show their own inspection count only
         total_clients     = None
         total_properties  = None
         total_users       = None
-        total_inspections = _base_inspection_query().count()
+        total_inspections = _real_inspection_count(_base_inspection_query())
 
     # Shared eager-load options for the list queries below.
     # selectinload avoids a conflict with the Property JOIN the 'client' role

@@ -83,8 +83,11 @@ def get_dashboard_stats():
     sc = {s: c for s, c in status_rows}  # e.g. {'created': 3, 'active': 12, ...}
 
     def _real_inspection_count(q):
-        # Total Inspections tile: leave out paper/PDF imports (digitised historical records)
-        return q.filter(Inspection.pdf_import.is_(False)).count()
+        # Total Inspections tile: check ins and check outs only - no PDF imports (digitised
+        # historical records), heads up reports or other report types
+        return (q.filter(Inspection.pdf_import.is_(False))
+                 .filter(Inspection.inspection_type.in_(['check_in', 'check_out']))
+                 .count())
 
     # ── Totals — scoped to role ──────────────────────────────────────────────
     if role in ('admin', 'manager'):

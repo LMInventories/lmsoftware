@@ -38,13 +38,9 @@ _DRIVE_FILES_URL  = 'https://www.googleapis.com/drive/v3/files'
 # ── Connection check ──────────────────────────────────────────────────────────
 
 def is_drive_connected() -> bool:
-    """True if Google is connected (service account or OAuth) and Drive access
-    is available — the service account always requests full Drive scope, so
-    it's implicitly "granted" whenever one is configured."""
+    """True if Google is connected and Drive access is available."""
     try:
-        from routes.google import is_connected, _load_tokens, _service_account_configured
-        if _service_account_configured():
-            return True
+        from routes.google import is_connected, _load_tokens
         if not is_connected():
             return False
         tokens = _load_tokens()

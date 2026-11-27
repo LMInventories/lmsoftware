@@ -2,8 +2,8 @@
 backend/learning/scheduler.py
 ────────────────────────────────
 Registers the prompt-learning pipeline run (learning/pr_pipeline.py) with
-APScheduler, following the exact idiom already used for the Google
-connection expiry check (routes/google.py:schedule_expiry_check).
+APScheduler, following the same idiom as schedule_clerk_summaries
+(routes/email_notifications.py).
 
 Cadence is configurable via LEARNING_PIPELINE_CADENCE_DAYS (default 3 —
 every three days). Set it to e.g. 14 in Railway for fortnightly, no code change or

@@ -98,12 +98,15 @@ async function loadGoogleStatus() {
   }
 }
 
-function connectGoogle() {
-  // Redirect the browser to the backend OAuth start — it will redirect to
-  // Google's consent screen and eventually back to
-  // /settings?tab=integrations&google=connected
-  const base = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
-  window.location.href = `${base}/api/google/auth`
+async function connectGoogle() {
+  // The backend only hands a consent-screen link to a signed-in admin or manager.
+  // Google then sends the browser back to /settings?tab=integrations&google=connected
+  try {
+    const res = await api.http.post('/api/google/auth-url')
+    window.location.href = res.data.url
+  } catch (e) {
+    alert(e.response?.data?.error || 'Could not start Google sign-in — please try again.')
+  }
 }
 
 async function disconnectGoogle() {

@@ -2410,6 +2410,165 @@ def _cross_duplicate_retry_note(duplicates: list) -> str:
     )
 
 
+# ── Walls: every surface is its own element ─────────────────────────────────
+# A painted wall and a tiled wall are separate entries in a report, so on a Walls item a new
+# surface starts a sub-item whether or not "add sub item" was said. The prompt asks for this;
+# _split_wall_surfaces makes sure of it when the model merges them anyway.
+_WALL_COLOUR = (r'(?:off[\s-]white|white|cream|magnolia|ivory|beige|grey|gray|black|brown|blue|green|red|'
+                r'yellow|pink|purple|orange|neutral|taupe|navy|teal|silver|stone|mushroom|terracotta|'
+                r'lilac|mint|peach|charcoal|anthracite|duck\s+egg|multi[\s-]?colou?r(?:ed)?)')
+_WALL_STYLE = (r'(?:part(?:ly|ially)?|half|feature|remaining|light|dark|pale|deep|bright|dusty|soft|warm|cool|'
+               r'matte?|gloss|satin|silk|patterned|plain|textured|ceramic|porcelain|metro|subway|mosaic|'
+               r'marble[\s-]effect|stone[\s-]effect|wood[\s-]effect|brick[\s-]effect|large|small|square|'
+               r'rectangular|vertical|horizontal)')
+_WALL_FINISH = (r'(?:painted|tiled|tiles|tile|wall\s?papered|wall\s?paper|emulsion(?:ed)?|panell?ed|'
+                r'panell?ing|artex(?:ed)?|plastered)')
+_WALL_SEP = r'[\s,/&-]+'
+_WALL_SURFACE_RE = _re.compile(
+    rf'^(?:walls?{_WALL_SEP})?(?P<lead>(?:(?:{_WALL_STYLE}|{_WALL_COLOUR}|and){_WALL_SEP})*)'
+    rf'{_WALL_FINISH}'
+    rf'(?P<tail>(?:{_WALL_SEP}(?:{_WALL_STYLE}|{_WALL_COLOUR}|and|plaster|walls?|splash\s?back|surrounds?|'
+    rf'sections?|areas?|effect|{_WALL_FINISH}))*)'
+    rf'(?P<where>\s+(?:to|around|above|below|behind|surrounding|within|on|at|in|throughout|over|under|from)\b.*)?$',
+    _re.IGNORECASE,
+)
+# A line with any of these describes a defect or fixing, even if it starts like a surface.
+_WALL_NOT_SURFACE_RE = _re.compile(
+    r'\b(?:chip|mark|scuff|crack|stain|damag|rub|dent|indent|hole|scratch|scrape|discolou?r|peel|flak|loose|'
+    r'missing|patch|touch|drip|spatter|splash(?!\s?back)|mould|worn|wear|poor|uneven|shad|gap|lift|runs?\b|'
+    r'nail|screw|hook|plug|sticker|tape|seal|grout|odd|occasional|scattered|bubbl|repair|fill|tear|torn|fade|'
+    r'dirt|dust(?!y)|grease|residue|cobweb|spot|knock|blemish|bare|exposed|visible|seen)',
+    _re.IGNORECASE,
+)
+
+
+def _is_walls_item(name: str) -> bool:
+    n = (name or '').strip().lower()
+    return n == 'wall' or bool(_re.search(r'\bwalls\b', n))
+
+
+def _is_wall_surface(line: str) -> bool:
+    """True for a line that declares a surface ("Painted grey", "Part beige tiled")."""
+    text = line.strip().rstrip('.').strip()
+    if not text or _WALL_NOT_SURFACE_RE.search(text):
+        return False
+    m = _WALL_SURFACE_RE.match(text)
+    if not m:
+        return False
+    # "Painted around fittings" is an observation: with a location, a colour or style is needed.
+    if m.group('where'):
+        described = m.group('lead') + m.group('tail')
+        return bool(_re.search(rf'\b(?:{_WALL_COLOUR}|{_WALL_STYLE})\b', described, _re.IGNORECASE))
+    return True
+
+
+def _wall_lines(text) -> list:
+    """The non-blank lines of a field, with "Painted white and part tiled" split into two."""
+    out = []
+    for line in (text or '').split('\n'):
+        if not line.strip():
+            continue
+        parts = [p for p in _re.split(r'\s*(?:,|&|\band\b|\bwith\b)\s*', line.strip()) if p]
+        both = (_re.search(r'\btil(?:e|es|ed)\b', line, _re.IGNORECASE)
+                and _re.search(r'\b(?:painted|emulsion(?:ed)?|wall\s?paper(?:ed)?)\b', line, _re.IGNORECASE))
+        if both and len(parts) > 1 and all(_is_wall_surface(p) for p in parts):
+            out.extend(p[0].upper() + p[1:] for p in parts)
+        else:
+            out.append(line)
+    return out
+
+
+def _wall_key(text: str) -> frozenset:
+    """Matches "Painted brown" with "Brown painted"."""
+    return frozenset(_re.findall(r'[a-z]+', (text or '').lower())) - {'wall', 'walls'}
+
+
+def _split_wall_element(element: dict) -> tuple:
+    """(the element keeping only its first surface, [a new element for each later surface])."""
+    description, condition, extra = [], [], []
+    established = False
+    for line in _wall_lines(element.get('description')):
+        repeat = _wall_key(line) in [_wall_key(d) for d in description]   # left for the line dedupe
+        if established and not repeat and _is_wall_surface(line):
+            extra.append({'description': [line], 'condition': [], 'from_description': True})
+        else:
+            description.append(line)
+            established = True
+    current = None
+    original_condition = _wall_lines(element.get('condition'))
+    for line in original_condition:
+        surface = _is_wall_surface(line)
+        if surface and established:
+            current = {'description': [line], 'condition': [], 'from_description': False}
+            extra.append(current)
+        elif current:
+            current['condition'].append(line)
+        else:
+            condition.append(line)
+            established = established or surface
+    if not extra:
+        return element, []
+
+    if original_condition and not condition:
+        condition = ['In good order']
+    new = []
+    for e in extra:
+        lines = e['condition']
+        if not lines:
+            if not e['from_description']:
+                lines = ['In good order']            # the standard default when none was said
+            elif condition and all(_is_good_order(c) for c in condition):
+                lines = list(condition)              # one good-order remark covering both surfaces
+        new.append({'description': '\n'.join(e['description']), 'condition': '\n'.join(lines)})
+    return {**element, 'description': '\n'.join(description), 'condition': '\n'.join(condition)}, new
+
+
+def _split_wall_surfaces(filled: dict, items: list) -> dict:
+    """Move any second surface on a Walls item (or on one of its sub-items) into its own sub-item.
+    Explicit amendments ("add to condition", "amend") are left exactly as dictated."""
+    if not isinstance(filled, dict):
+        return filled
+    walls = {str(i.get('id')) for i in items if _is_walls_item(i.get('name'))}
+    out = dict(filled)
+    for item_id, fields in filled.items():
+        if (str(item_id) not in walls or not isinstance(fields, dict) or fields.get('_delete')
+                or fields.get('_descAction') or fields.get('_condAction')):
+            continue
+        main, from_main = _split_wall_element(fields)
+        existing = [_split_wall_element(e) for e in fields.get('_subs') or [] if isinstance(e, dict)]
+        moved = len(from_main) + sum(len(more) for _, more in existing)
+        if not moved:
+            continue
+
+        subs = []
+
+        def keep_one(entry):
+            """Add a split-off surface, unless it is already a sub-item (a retry can leave a
+            sub-item's text on the main item too): then keep one copy."""
+            key = _wall_key(entry['description'])
+            match = next((x for x in subs + [sub for sub, _ in existing]
+                          if _wall_key(x.get('description')) == key), None)
+            if match is None:
+                subs.append(entry)
+                return
+            have = {_norm_fill_line(l) for l in (match.get('condition') or '').split('\n')}
+            fresh = [l for l in entry['condition'].split('\n')
+                     if l and _norm_fill_line(l) not in have and not _is_good_order(l)]
+            if fresh:
+                match['condition'] = '\n'.join(filter(None, [match.get('condition')] + fresh))
+
+        # Spoken order: surfaces split off the main item, then each sub-item and its own.
+        for entry in from_main:
+            keep_one(entry)
+        for sub, more in existing:
+            subs.append(sub)
+            for entry in more:
+                keep_one(entry)
+        out[item_id] = {**main, '_subs': subs}
+        print(f'[transcribe/room] walls: {moved} further surface(s) moved into sub-items')
+    return out
+
+
 def _fill_room_with_subitem_retry(fill_fn, full_transcript, section_name, items, processed_item_ids, fn_name):
     """
     Calls fill_fn (either _claude_fill_room or _claude_fill_room_damage), then checks for four
@@ -2430,7 +2589,7 @@ def _fill_room_with_subitem_retry(fill_fn, full_transcript, section_name, items,
              {'type', 'item_name', 'detail'} dicts, empty when nothing is still flagged.
     """
     filled, fill_msg = fill_fn(full_transcript, section_name, items, processed_item_ids or None)
-    filled = _enforce_processed_skip(filled, processed_item_ids)
+    filled = _split_wall_surfaces(_enforce_processed_skip(filled, processed_item_ids), items)
 
     shortfall_items   = _find_subitem_shortfall_items(full_transcript, items, filled)
     missing_items     = _find_missing_mentioned_items(full_transcript, items, filled)
@@ -2457,7 +2616,7 @@ def _fill_room_with_subitem_retry(fill_fn, full_transcript, section_name, items,
 
         retry_note = ''.join(notes)
         retried, retry_msg = fill_fn(full_transcript, section_name, items, processed_item_ids or None, retry_note=retry_note)
-        retried = _enforce_processed_skip(retried, processed_item_ids)
+        retried = _split_wall_surfaces(_enforce_processed_skip(retried, processed_item_ids), items)
 
         retry_shortfall  = _find_subitem_shortfall_items(full_transcript, items, retried)
         retry_missing    = _find_missing_mentioned_items(full_transcript, items, retried)
@@ -2839,7 +2998,8 @@ STEP 4: A new element ("_subs" entry) is created ONLY when the clerk speaks an e
          trigger phrase ("sub-item", "add sub item", etc — see EXPLICIT SUB-ITEM TRIGGER below).
          NEVER infer a new element just because a new material, colour, surface, component, or
          quantity is mentioned — that content stays in the CURRENT element's condition. There is
-         no automatic/implicit sub-item detection: no trigger phrase means no new element, full stop.
+         no automatic/implicit sub-item detection: no trigger phrase means no new element.
+         The ONLY exception is the Walls item — see WALLS: EVERY SURFACE IS ITS OWN ELEMENT.
          → When a trigger phrase IS spoken, close the current element and go back to STEP 2 for
            the new element.
 STEP 5: Repeat for as many elements as the clerk describes.
@@ -3063,7 +3223,8 @@ Example — three elements with two triggers:
   → sub[0]: description="White emulsion"  condition="Light scuffing to base"
   → sub[1]: description="White emulsion"  condition="Fair wear and tear"
 
-When no explicit trigger is spoken, do NOT create a new element under any circumstances.
+When no explicit trigger is spoken, do NOT create a new element (the only exception is the
+Walls item, below).
 
 ══════════════════════════════════════════════════════
 NO AUTOMATIC DETECTION — a trigger phrase is the ONLY way to open a new element
@@ -3073,13 +3234,35 @@ explicit trigger phrase ("sub-item", "add sub item", etc). A new colour, materia
 component appearing after a condition has closed is NEVER by itself a reason to start a new
 element — it is simply more content for the CURRENT element's condition.
 
-  ✗ Does NOT create sub-item: "Green painted [condition closes] … White painted …"
-      (new colour alone is not a trigger — stays in the current element's condition)
   ✗ Does NOT create sub-item: "White UPVC door, in good order … White painted frame, light scuffing"
       (new component alone is not a trigger — stays in the current element's condition)
   ✗ Does NOT create sub-item: "light scuffing to right hand side wall"
       ("right hand side wall" is a location qualifier, not a new component)
   ✓ Creates sub-item ONLY when a trigger phrase is spoken: "… in good order. Sub-item. White painted …"
+
+══════════════════════════════════════════════════════
+WALLS: EVERY SURFACE IS ITS OWN ELEMENT — Walls item only, overrides the rules above
+══════════════════════════════════════════════════════
+On the Walls item, each different surface or finish — painted, tiled, wallpapered, panelled,
+or a different colour of any of these — is a separate element. A new surface ALWAYS starts a
+new _subs entry, whether or not "add sub item" is spoken.
+  - The first surface described is the main element. Each later surface is one sub-item.
+  - "Add sub item" followed by a surface opens ONE new element, not two.
+  - Never put a second surface in the main item's description or condition, and never repeat a
+    sub-item's content on the main item.
+  - Each element keeps its own condition, even when the wording repeats: "good order" said for
+    both surfaces appears on both.
+  - A defect or location that merely mentions paint or tiles is NOT a new surface:
+    "paint chip high level", "grouting discoloured", "crack to tiled window ledge".
+
+  "Walls. Beige tile, good order. Add sub item. Painted grey, good order."
+  → main:   description="Beige tiled"     condition="In good order"
+  → sub[0]: description="Painted grey"    condition="In good order"
+
+  "Walls. Painted white. Light scuffing to low level. White tiled to bath area. Grouting
+   discoloured."
+  → main:   description="Painted white"             condition="Light scuffing to low level"
+  → sub[0]: description="White tiled to bath area"  condition="Grouting discoloured"
 
 MULTI-COMPONENT (no sub-item): When the clerk lists several parts of the SAME thing and
   gives ONE condition phrase at the end covering everything:

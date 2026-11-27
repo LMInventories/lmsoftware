@@ -21,27 +21,16 @@ import urllib.parse
 import urllib.error
 from datetime import timedelta
 
-# "primary" resolves to whichever account owns the access token — correct
-# under the OAuth flow (the connected personal Gmail's own calendar is the
-# real booking calendar), but under a service account "primary" would
-# resolve to the service account's own (empty, unused) calendar instead of
-# the office's real one. GOOGLE_CALENDAR_ID must be set to the real booking
-# calendar's ID (its owner email, or a shared calendar's group ID) when using
-# a service account — that calendar must also be shared with the service
-# account's email as an editor. Defaults to 'primary' to keep today's OAuth
-# behaviour unchanged when the service account isn't configured.
+# "primary" is the connected account's own calendar. Set GOOGLE_CALENDAR_ID to
+# write events to a different calendar that account can edit.
 _CALENDAR_ID = os.environ.get('GOOGLE_CALENDAR_ID', 'primary')
 _CALENDAR_EVENTS_URL = f'https://www.googleapis.com/calendar/v3/calendars/{urllib.parse.quote(_CALENDAR_ID, safe="")}/events'
 
 
 def is_calendar_connected() -> bool:
-    """True if Google is connected (service account or OAuth) and Calendar
-    access is available — the service account always requests calendar scope,
-    so it's implicitly "granted" whenever one is configured."""
+    """True if Google is connected and Calendar access is available."""
     try:
-        from routes.google import is_connected, _load_tokens, _service_account_configured
-        if _service_account_configured():
-            return True
+        from routes.google import is_connected, _load_tokens
         if not is_connected():
             return False
         tokens = _load_tokens()

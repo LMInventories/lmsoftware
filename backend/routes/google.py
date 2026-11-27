@@ -1,49 +1,39 @@
 """
 routes/google.py
 ────────────────
-Google integration — Drive + Calendar + Sheets. Two auth methods:
+Google integration — Drive + Calendar + Sheets, through one OAuth 2.0 user
+connection.
 
-  1. Service account (preferred — see GOOGLE_SERVICE_ACCOUNT_JSON below). No
-     consent screen, no verification, no token expiry. Requires the target
-     Drive folder / Sheet / Calendar to be explicitly shared with the service
-     account's email as an Editor.
-  2. OAuth 2.0 user consent (legacy, still supported as a fallback when no
-     service account is configured). The connected account here is a personal
-     Gmail, so the OAuth app is stuck in Google's "Testing" publishing status
-     — External Testing mode caps refresh tokens at 7 days, hence the repeated
-     "please reconnect Google" problem this integration used to have.
+The OAuth app's publishing status in Google Cloud (Google Auth Platform →
+Audience) must be "In production". While it is "Testing", Google expires the
+refresh token after 7 days and the account has to be reconnected.
+
+A service account is deliberately not used: it can't own files in a personal
+Google Drive, so report uploads would fail.
 
 Endpoints:
-  GET    /api/google/auth         → redirect to Google consent screen (OAuth path only)
-  GET    /api/google/callback     → exchange code → store tokens → redirect to frontend
-  GET    /api/google/status       → { connected, auth_method, email, has_drive, has_calendar, has_sheets }
-  DELETE /api/google/disconnect   → revoke token + clear stored credentials (OAuth path only)
+  POST   /api/google/auth-url    → { url } of Google's consent screen (admin/manager)
+  GET    /api/google/callback    → check state → exchange code → store tokens → redirect to frontend
+  GET    /api/google/health      → { issues } for the admin/manager notification banner
+  GET    /api/google/status      → { connected, email, has_drive, has_calendar, has_sheets }
+  DELETE /api/google/disconnect  → revoke token + clear stored credentials (admin/manager)
 
-OAuth tokens are stored as SystemSetting rows (internal — never exposed via /api/system-settings):
+Tokens are stored as SystemSetting rows (internal — never exposed via /api/system-settings):
   google_access_token   — short-lived (1 h)
   google_refresh_token  — long-lived; used to refresh access token automatically
   google_token_expiry   — ISO datetime of access token expiry
   google_scopes         — space-separated list of granted scopes
   google_email          — the connected Google account email (shown in UI)
+  google_connected_at   — ISO datetime consent was last granted
 
 Environment variables (set in Railway dashboard):
-  GOOGLE_SERVICE_ACCOUNT_JSON  — full contents of a downloaded service-account JSON
-                                 key file. When set, this takes priority over the
-                                 OAuth flow everywhere in this module and in
-                                 services/google_drive.py, google_sheets.py,
-                                 google_calendar.py.
-  GOOGLE_CALENDAR_ID           — the real booking calendar's ID (its owner email, or
-                                 a shared calendar's group ID) — required alongside
-                                 GOOGLE_SERVICE_ACCOUNT_JSON, since "primary" (the
-                                 OAuth-path default) would otherwise resolve to the
-                                 service account's own unused calendar. Must be
-                                 shared with the service account's email too.
-  GOOGLE_CLIENT_ID      — OAuth 2.0 client ID (OAuth path only)
-  GOOGLE_CLIENT_SECRET  — OAuth 2.0 client secret (OAuth path only)
+  GOOGLE_CLIENT_ID      — OAuth 2.0 client ID
+  GOOGLE_CLIENT_SECRET  — OAuth 2.0 client secret
+  GOOGLE_CALENDAR_ID    — optional; calendar to write events to (default "primary")
   BACKEND_URL           — public URL of this Flask service (e.g. https://api.lminventories.co.uk)
-                          used to build the redirect_uri sent to Google (OAuth path only)
+                          used to build the redirect_uri sent to Google
   FRONTEND_URL          — public URL of the Vue frontend (e.g. https://app.lminventories.co.uk)
-                          used to redirect the browser after OAuth completes (OAuth path only)
+                          used to redirect the browser after OAuth completes
 """
 
 from __future__ import annotations
@@ -58,6 +48,9 @@ from typing import Optional
 
 from flask import Blueprint, request, jsonify, redirect
 from flask_jwt_extended import jwt_required
+
+from permissions import get_current_user, is_admin_or_manager
+from services.oauth_tokens import new_state, verify_state
 
 google_bp = Blueprint('google', __name__)
 
@@ -79,63 +72,6 @@ _AUTH_URL     = 'https://accounts.google.com/o/oauth2/v2/auth'
 _TOKEN_URL    = 'https://oauth2.googleapis.com/token'
 _REVOKE_URL   = 'https://oauth2.googleapis.com/revoke'
 _USERINFO_URL = 'https://www.googleapis.com/oauth2/v3/userinfo'
-
-# ── Service account (preferred over the OAuth flow above when configured) ─────
-# The OAuth app above is stuck in Google's "Testing" publishing status (the
-# connected account is a personal Gmail, not Workspace, so "Internal" mode
-# isn't available, and External Testing mode caps refresh tokens at 7 days —
-# hence the repeated "please reconnect Google" problem). A service account
-# sidesteps this entirely: no consent screen, no verification, no expiry.
-# It only sees files/calendars explicitly shared with its email — share the
-# Drive reports folder, the master Sheet, and the booking Calendar with the
-# service account's email (Console → IAM & Admin → Service Accounts) as Editor.
-# Set GOOGLE_SERVICE_ACCOUNT_JSON to the full contents of the downloaded JSON
-# key file. When unset, everything falls back to the OAuth flow unchanged.
-_SERVICE_ACCOUNT_JSON = os.environ.get('GOOGLE_SERVICE_ACCOUNT_JSON', '')
-_SA_SCOPES = [
-    'https://www.googleapis.com/auth/drive',
-    'https://www.googleapis.com/auth/calendar',
-    'https://www.googleapis.com/auth/spreadsheets',
-]
-_sa_credentials = None  # lazily built + cached; google-auth handles refresh internally
-
-
-def _service_account_configured() -> bool:
-    return bool(_SERVICE_ACCOUNT_JSON.strip())
-
-
-def _service_account_email() -> Optional[str]:
-    """The service account's own email, for display in the Integrations status UI —
-    lets you confirm you shared the folder/sheet/calendar with the right identity."""
-    if not _service_account_configured():
-        return None
-    try:
-        return json.loads(_SERVICE_ACCOUNT_JSON).get('client_email')
-    except Exception:
-        return None
-
-
-def _get_service_account_token() -> Optional[str]:
-    """Mint (or reuse/refresh) an access token from the service account.
-    Returns None on any failure — callers fall back to the OAuth path."""
-    global _sa_credentials
-    if not _service_account_configured():
-        return None
-    try:
-        from google.oauth2 import service_account
-        from google.auth.transport.requests import Request as _GARequest
-
-        if _sa_credentials is None:
-            info = json.loads(_SERVICE_ACCOUNT_JSON)
-            _sa_credentials = service_account.Credentials.from_service_account_info(
-                info, scopes=_SA_SCOPES
-            )
-        if not _sa_credentials.valid:
-            _sa_credentials.refresh(_GARequest())
-        return _sa_credentials.token
-    except Exception as e:
-        print(f'[google] service account token error: {e}')
-        return None
 
 # SystemSetting keys used internally by this module
 _TOKEN_KEYS = (
@@ -182,10 +118,7 @@ def _save_tokens(tokens: dict) -> None:
         'google_scopes':        tokens.get('scope', ' '.join(SCOPES)),
     }
     # Only overwrite refresh_token if a new one was supplied (Google only
-    # sends it on first authorisation, not on every token refresh). This is
-    # also the moment that starts the 7-day refresh-token countdown (see
-    # refresh_token_expiry_estimate), since it's the last time consent was
-    # actually granted.
+    # sends it when consent is granted, not on every token refresh).
     if tokens.get('refresh_token'):
         data['google_refresh_token'] = tokens['refresh_token']
         data['google_connected_at']  = datetime.now(timezone.utc).isoformat()
@@ -270,16 +203,8 @@ def _refresh_access_token(refresh_token: str) -> Optional[str]:
 def get_valid_access_token() -> Optional[str]:
     """
     Return a valid Google access token, transparently refreshing if expired.
-    Prefers the service account when GOOGLE_SERVICE_ACCOUNT_JSON is set (falling
-    through to the OAuth path only if the service account is configured but
-    fails, so a misconfigured key doesn't silently break everything with no
-    fallback). Returns None if neither is connected or working.
+    Returns None if not connected or the refresh fails.
     """
-    if _service_account_configured():
-        token = _get_service_account_token()
-        if token:
-            return token
-
     tokens = _load_tokens()
     if not tokens.get('google_access_token'):
         return None
@@ -301,137 +226,15 @@ def get_valid_access_token() -> Optional[str]:
 
 
 def is_connected() -> bool:
-    """Quick check — True if a service account is configured, or both OAuth
-    access and refresh tokens exist."""
-    if _service_account_configured():
-        return True
+    """Quick check — True if both access and refresh tokens exist."""
     tokens = _load_tokens()
     return bool(tokens.get('google_access_token') and tokens.get('google_refresh_token'))
-
-
-# ── Refresh-token expiry estimate ─────────────────────────────────────────────
-# Google enforces a hard 7-day refresh-token lifetime for OAuth apps whose
-# consent screen is in "Testing" publishing status (this app currently is —
-# see Settings → Integrations). There's no API to ask Google when a refresh
-# token will stop working, so we estimate it from when it was last (re)issued.
-
-def refresh_token_expiry_estimate() -> Optional[datetime]:
-    """Best-effort estimate of when the current refresh token stops working.
-    Returns None if not connected, or if connected before this field existed."""
-    tokens = _load_tokens()
-    if not tokens.get('google_refresh_token'):
-        return None
-    connected_at_str = tokens.get('google_connected_at')
-    if not connected_at_str:
-        return None
-    try:
-        connected_at = datetime.fromisoformat(connected_at_str)
-        if connected_at.tzinfo is None:
-            connected_at = connected_at.replace(tzinfo=timezone.utc)
-    except Exception:
-        return None
-    return connected_at + timedelta(days=7)
-
-
-def expiry_warning_state() -> dict:
-    """{'expires_at': iso_str|None, 'hours_left': float|None, 'expiring_soon': bool}"""
-    expiry = refresh_token_expiry_estimate()
-    if expiry is None:
-        return {'expires_at': None, 'hours_left': None, 'expiring_soon': False}
-    hours_left = (expiry - datetime.now(timezone.utc)).total_seconds() / 3600
-    return {
-        'expires_at':    expiry.isoformat(),
-        'hours_left':    round(hours_left, 1),
-        'expiring_soon': 0 <= hours_left <= 24,
-    }
-
-
-def _check_and_send_expiry_warning():
-    """
-    Email info@lminventories.co.uk once per connection cycle when the Google
-    connection is within 24 hours of the 7-day refresh-token cliff. Safe to
-    call repeatedly — tracks the connected_at it last warned for so it won't
-    re-send until the connection is renewed (a fresh 7-day cycle starts).
-    """
-    from models import db, SystemSetting
-
-    state = expiry_warning_state()
-    if not state['expiring_soon']:
-        return
-
-    tokens = _load_tokens()
-    connected_at = tokens.get('google_connected_at', '')
-    sent_row = SystemSetting.query.filter_by(key='google_expiry_warning_sent_for').first()
-    if sent_row and sent_row.value == connected_at:
-        return  # already warned for this connection cycle
-
-    try:
-        from routes.email_service import _send, _wrap
-        email = tokens.get('google_email', 'the connected account')
-        hours_left = int(state['hours_left'])
-        body = _wrap(
-            f'<h2>Google connection expiring soon</h2>'
-            f'<p>The Google integration ({email}) will disconnect in approximately '
-            f'{hours_left} hour{"s" if hours_left != 1 else ""}.</p>'
-            f'<p>This happens because the Google OAuth app is in "Testing" mode, '
-            f'which caps every connection at 7 days. Reconnect from '
-            f'<a href="{_frontend_url("/settings?tab=integrations")}">Settings &rarr; Integrations &rarr; Google</a> '
-            f'to avoid an interruption to Sheets, Drive and Calendar syncing.</p>',
-            'Google Connection Expiring Soon',
-        )
-        ok, err = _send(
-            os.environ.get('SMTP_FROM', 'no-reply@lminventories.co.uk'),
-            'info@lminventories.co.uk',
-            'Action needed: Google connection expires in 24 hours',
-            body,
-        )
-    except Exception as exc:
-        print(f'[google] expiry warning email exception: {exc}')
-        return
-
-    if not ok:
-        print(f'[google] expiry warning email failed (will retry next check): {err}')
-        return
-
-    print('[google] expiry warning email sent')
-    if sent_row:
-        sent_row.value = connected_at
-    else:
-        db.session.add(SystemSetting(key='google_expiry_warning_sent_for', value=connected_at))
-    db.session.commit()
-
-
-def schedule_expiry_check(app):
-    """
-    Register a periodic check (every 6h) that emails a warning when the
-    Google connection is within 24 hours of expiry. Call once after
-    create_app():
-        from routes.google import schedule_expiry_check
-        schedule_expiry_check(app)
-    """
-    try:
-        from apscheduler.schedulers.background import BackgroundScheduler
-        from apscheduler.triggers.cron import CronTrigger
-
-        scheduler = BackgroundScheduler(timezone='Europe/London')
-
-        def job():
-            with app.app_context():
-                _check_and_send_expiry_warning()
-
-        scheduler.add_job(job, CronTrigger(hour='*/6', minute=0, timezone='Europe/London'))
-        scheduler.start()
-        print('[google] expiry-warning scheduler started — checks every 6h')
-        return scheduler
-    except ImportError:
-        print('[google] APScheduler not installed — expiry warning email disabled')
-        return None
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @google_bp.route('', methods=['OPTIONS'])
-@google_bp.route('/auth', methods=['OPTIONS'])
+@google_bp.route('/auth-url', methods=['OPTIONS'])
 @google_bp.route('/health', methods=['OPTIONS'])
 @google_bp.route('/status', methods=['OPTIONS'])
 @google_bp.route('/disconnect', methods=['OPTIONS'])
@@ -440,15 +243,16 @@ def handle_options():
     return '', 204
 
 
-@google_bp.route('/auth', methods=['GET'])
-def google_auth():
+@google_bp.route('/auth-url', methods=['POST'])
+@jwt_required()
+def google_auth_url():
     """
-    Step 1 — redirect the user's browser to Google's consent screen.
-    Called from the frontend when the user clicks "Connect Google".
-    No JWT required — this is a browser redirect, not an XHR call, so the
-    Authorization header cannot be sent. Access is implicitly restricted
-    because only logged-in users can reach the Settings page that calls it.
+    Step 1 — return the URL of Google's consent screen for the frontend to open.
+    Needs a signed-in admin or manager: whoever completes this flow becomes the
+    account that receives the app's reports, sheet rows and calendar events.
     """
+    if not is_admin_or_manager(get_current_user()):
+        return jsonify({'error': 'Forbidden'}), 403
     if not CLIENT_ID:
         return jsonify({'error': 'GOOGLE_CLIENT_ID is not configured on the server'}), 500
 
@@ -460,22 +264,27 @@ def google_auth():
         'access_type':            'offline',       # request a refresh_token
         'prompt':                 'consent',        # force Google to re-issue refresh_token
         'include_granted_scopes': 'true',
+        'state':                  new_state('google'),  # single use, checked by the callback
     }
     url = f'{_AUTH_URL}?{urllib.parse.urlencode(params)}'
-    return redirect(url)
+    return jsonify({'url': url})
 
 
 @google_bp.route('/callback', methods=['GET'])
 def google_callback():
     """
     Step 2 — Google redirects here with ?code=... after the user consents.
-    No JWT required — this is an open redirect endpoint called by Google.
-    Exchanges the code for tokens, stores them, then redirects back to the
+    No JWT is possible on a redirect from Google, so the request must carry the
+    single-use state issued by /auth-url. Exchanges the code for tokens, stores them, then redirects back to the
     frontend settings page.
     """
     error = request.args.get('error')
     if error:
         print(f'[google] OAuth error from Google: {error}')
+        return redirect(_frontend_url('/settings?tab=integrations&google=error'))
+
+    if not verify_state('google', request.args.get('state', '')):
+        print('[google] callback rejected — missing, unknown or expired state')
         return redirect(_frontend_url('/settings?tab=integrations&google=error'))
 
     code = request.args.get('code')
@@ -539,7 +348,6 @@ def google_health():
     the connection has been lost (tokens cleared after invalid_grant).
     """
     from models import SystemSetting
-    from permissions import get_current_user, is_admin_or_manager
 
     user = get_current_user()
     if not is_admin_or_manager(user):
@@ -553,27 +361,14 @@ def google_health():
 
     google_connected = bool(_get('google_access_token') and _get('google_refresh_token'))
 
-    if not google_connected:
-        # Only warn when at least one Google feature is actively configured,
-        # so a user who never set up Google doesn't see a spurious warning.
-        sheet_configured = bool(_get('google_master_sheet_id'))
-        if sheet_configured:
-            issues.append({
-                'key':     'google',
-                'label':   'Google',
-                'message': 'Google disconnected — Sheets, Drive and Calendar sync are paused.',
-            })
-    else:
-        state = expiry_warning_state()
-        if state['expiring_soon']:
-            hours_left = int(state['hours_left'])
-            issues.append({
-                'key':     'google_expiring',
-                'label':   'Google',
-                'message': f'Google connection expires in about {hours_left} hour'
-                           f'{"s" if hours_left != 1 else ""} — reconnect in Settings → '
-                           f'Integrations to avoid interrupting Sheets/Drive/Calendar sync.',
-            })
+    # Only warn when at least one Google feature is actively configured,
+    # so a user who never set up Google doesn't see a spurious warning.
+    if not google_connected and _get('google_master_sheet_id'):
+        issues.append({
+            'key':     'google',
+            'label':   'Google',
+            'message': 'Google disconnected — Sheets, Drive and Calendar sync are paused.',
+        })
 
     return jsonify({'issues': issues})
 
@@ -585,17 +380,6 @@ def google_status():
     Return the current Google connection state.
     Called by IntegrationsSettings.vue on mount and after OAuth redirect.
     """
-    if _service_account_configured():
-        token = get_valid_access_token()
-        return jsonify({
-            'connected':    token is not None,
-            'auth_method':  'service_account',
-            'email':        _service_account_email() or 'Service Account',
-            'has_drive':    True,
-            'has_calendar': True,
-            'has_sheets':   True,
-        })
-
     # Validate the token (auto-refreshes if expired; auto-clears if invalid_grant)
     valid_token = get_valid_access_token()
     # Re-load after potential refresh/clear so email/scopes reflect current state
@@ -603,7 +387,6 @@ def google_status():
     scopes = tokens.get('google_scopes', '')
     return jsonify({
         'connected':     valid_token is not None,
-        'auth_method':   'oauth',
         'email':         tokens.get('google_email', ''),
         'has_drive':     'drive' in scopes,
         'has_calendar':  'calendar' in scopes,
@@ -618,16 +401,8 @@ def google_disconnect():
     Revoke the OAuth token at Google and delete all stored credentials.
     After this the user will need to go through the consent flow again.
     """
-    if _service_account_configured():
-        # There's no stored OAuth token to revoke, and get_valid_access_token()
-        # prefers the service account regardless — clearing tokens here would
-        # silently do nothing, then the next status check would immediately
-        # flip back to "connected", which reads as broken rather than as
-        # correct behaviour. Tell the caller what's actually true instead.
-        return jsonify({
-            'error': 'Google is connected via a service account (GOOGLE_SERVICE_ACCOUNT_JSON). '
-                     'Remove that environment variable in Railway to disconnect.'
-        }), 400
+    if not is_admin_or_manager(get_current_user()):
+        return jsonify({'error': 'Forbidden'}), 403
 
     tokens = _load_tokens()
     # Prefer revoking the refresh_token (revokes all related access tokens too)

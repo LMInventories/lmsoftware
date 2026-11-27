@@ -141,9 +141,6 @@ def inspection_detail(inspection):
             'property_type': inspection.property.property_type,
             'bedrooms': inspection.property.bedrooms,
             'bathrooms': inspection.property.bathrooms,
-            'furnished': inspection.property.furnished,
-            'parking': inspection.property.parking,
-            'garden': inspection.property.garden,
             'client_id': inspection.property.client_id,
             'overview_photo': inspection.property.overview_photo,
         }

@@ -83,12 +83,6 @@ def _property_list_item(p):
         'property_type':     p.property_type,
         'bedrooms':          p.bedrooms,
         'bathrooms':         p.bathrooms,
-        'furnished':         p.furnished,
-        'parking':           p.parking,
-        'garden':            p.garden,
-        'elevator':          p.elevator,
-        'detachment_type':   p.detachment_type,
-        'elevation':         p.elevation,
         'meter_electricity': p.meter_electricity,
         'meter_gas':         p.meter_gas,
         'meter_heat':        p.meter_heat,
@@ -171,12 +165,6 @@ def create_property():
         property_type=data.get('property_type', 'residential'),
         bedrooms=data.get('bedrooms'),
         bathrooms=data.get('bathrooms'),
-        furnished=data.get('furnished'),
-        parking=bool(data.get('parking', False)),
-        garden=bool(data.get('garden', False)),
-        elevator=bool(data.get('elevator', False)),
-        detachment_type=data.get('detachment_type'),
-        elevation=data.get('elevation'),
         meter_electricity=data.get('meter_electricity'),
         meter_gas=data.get('meter_gas'),
         meter_heat=data.get('meter_heat'),
@@ -205,12 +193,6 @@ def update_property(property_id):
     if 'property_type'     in data: prop.property_type     = data['property_type']
     if 'bedrooms'          in data: prop.bedrooms          = data['bedrooms']
     if 'bathrooms'         in data: prop.bathrooms         = data['bathrooms']
-    if 'furnished'         in data: prop.furnished         = data['furnished']
-    if 'parking'           in data: prop.parking           = bool(data['parking'])
-    if 'garden'            in data: prop.garden            = bool(data['garden'])
-    if 'elevator'          in data: prop.elevator          = bool(data['elevator'])
-    if 'detachment_type'   in data: prop.detachment_type   = data['detachment_type']
-    if 'elevation'         in data: prop.elevation         = data['elevation']
     if 'meter_electricity' in data: prop.meter_electricity = data['meter_electricity']
     if 'meter_gas'         in data: prop.meter_gas         = data['meter_gas']
     if 'meter_heat'        in data: prop.meter_heat        = data['meter_heat']

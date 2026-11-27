@@ -52,12 +52,12 @@ INSPECTION_FLOW = 'book_inspection'
 SHARE_FLOW = 'share_report'
 INVOICE_FLOW = 'invoice'
 
-PROPERTY_STEPS = ['client', 'address', 'bedrooms', 'bathrooms', 'furnished', 'features', 'elevation', 'notes']
+PROPERTY_STEPS = ['client', 'address', 'bedrooms', 'bathrooms', 'notes']
 # Roles that can be assigned to carry out an inspection (clerks, plus managers and admins)
 INSPECTOR_ROLES = ('clerk', 'manager', 'admin')
 
 # 'internal_notes' is only ever asked of admins (state['is_admin']); for everyone else it is skipped.
-INSPECTION_STEPS = ['property', 'type', 'date', 'time', 'clerk', 'template', 'source', 'photos', 'tenant_email', 'heads_up', 'reference',
+INSPECTION_STEPS = ['property', 'type', 'date', 'time', 'clerk', 'template', 'photos', 'tenant_email', 'heads_up', 'reference',
                     'internal_notes']
 SHARE_STEPS = ['report', 'recipients', 'note']
 INVOICE_STEPS = ['invoice']
@@ -70,17 +70,13 @@ _STEP_KEYS = {
     'address': ['address', 'address_raw', 'address_options'],
     'bedrooms': ['bedrooms'],
     'bathrooms': ['bathrooms'],
-    'furnished': ['furnished', 'furnished_done'],
-    'features': ['parking', 'garden', 'elevator', 'features_done'],
-    'elevation': ['elevation', 'elevation_done'],
     'notes': ['notes', 'notes_done'],
     'property': ['property_id', 'property_address'],
     'type': ['inspection_type'],
     'date': ['conduct_date'],
     'time': ['conduct_time_preference'],
     'clerk': ['inspector_id', 'inspector_name', 'clerk_done'],
-    'template': ['template_id', 'template_name', 'template_done'],
-    'source': ['continue', 'source_inspection_id', 'source_label'],
+    'template': ['template_id', 'template_name', 'continue', 'source_inspection_id', 'source_label'],
     'photos': ['include_photos'],
     'tenant_email': ['tenant_email', 'tenant_email_done'],
     'heads_up': ['create_heads_up'],
@@ -93,17 +89,17 @@ _STEP_KEYS = {
 }
 # Answers that become invalid when an earlier one changes.
 _DEPENDENTS = {
-    'property': ['template', 'source', 'photos'],
-    'type': ['template', 'source', 'photos'],
+    'property': ['template', 'photos'],
+    'type': ['template', 'photos'],
+    'template': ['photos'],
     'report': ['recipients'],
 }
 
 _EDIT_LABELS = {
-    PROPERTY_FLOW: [('client', 'Client'), ('address', 'Address'), ('bedrooms', 'Bedrooms'), ('bathrooms', 'Bathrooms'),
-                    ('furnished', 'Furnished'), ('features', 'Features'), ('elevation', 'Floor'), ('notes', 'Notes')],
+    PROPERTY_FLOW: [('client', 'Client'), ('address', 'Address'), ('bedrooms', 'Bedrooms'), ('bathrooms', 'Bathrooms'), ('notes', 'Notes')],
     INSPECTION_FLOW: [('property', 'Property'), ('type', 'Type'), ('date', 'Date'), ('time', 'Time'),
-                      ('clerk', 'Clerk'), ('tenant_email', 'Tenant email'), ('heads_up', 'Heads-up'),
-                      ('reference', 'Reference')],
+                      ('clerk', 'Clerk'), ('template', 'Template'), ('tenant_email', 'Tenant email'),
+                      ('heads_up', 'Heads-up'), ('reference', 'Reference')],
     SHARE_FLOW: [('report', 'Report'), ('recipients', 'Recipients'), ('note', 'Message')],
     INVOICE_FLOW: [],
 }
@@ -307,102 +303,6 @@ def _accept_count(key):
     return accept
 
 
-# ── Step: furnished ─────────────────────────────────────────────────────────
-
-_FURNISHED = {'f': 'Furnished', 'p': 'Part Furnished', 'u': 'Unfurnished'}
-
-
-def _ask_furnished(state):
-    if state['data'].get('furnished_done'):
-        return None
-    rows = [[_btn(label, 'furnished', k) for k, label in _FURNISHED.items()], _skip_row('furnished')]
-    return 'Furnished?', _keyboard(rows)
-
-
-def _accept_furnished(state, text, value):
-    data = state['data']
-    raw = (value if value is not None else text or '').strip().lower()
-    if raw in ('skip', ''):
-        data['furnished'] = None
-    elif raw in _FURNISHED:
-        data['furnished'] = _FURNISHED[raw]
-    elif raw.startswith('part') or raw.startswith('semi'):
-        data['furnished'] = 'Part Furnished'
-    elif raw.startswith('un') or raw.startswith('not'):
-        data['furnished'] = 'Unfurnished'
-    elif 'furn' in raw:
-        data['furnished'] = 'Furnished'
-    else:
-        return 'Choose Furnished, Part Furnished, Unfurnished or Skip.', None
-    data['furnished_done'] = True
-    return None
-
-
-# ── Step: features (parking / garden / lift) ────────────────────────────────
-
-_FEATURES = [('p', 'parking', 'Parking'), ('g', 'garden', 'Garden'), ('l', 'elevator', 'Lift')]
-
-
-def _features_keyboard(data):
-    toggles = [_btn(('✅ ' if data.get(key) else '⬜ ') + label, 'features', k) for k, key, label in _FEATURES]
-    return _keyboard([toggles, [_btn('Done', 'features', 'done')]])
-
-
-def _ask_features(state):
-    if state['data'].get('features_done'):
-        return None
-    return 'Any of these? Tap to toggle, then Done.', _features_keyboard(state['data'])
-
-
-def _accept_features(state, text, value):
-    data = state['data']
-    if value in ('p', 'g', 'l'):
-        key = next(k for c, k, _ in _FEATURES if c == value)
-        data[key] = not data.get(key)
-        return 'Any of these? Tap to toggle, then Done.', _features_keyboard(data)
-    if value == 'done':
-        data['features_done'] = True
-        return None
-    words = (text or '').lower()
-    if words.strip() in ('done', 'none', 'no', 'skip', 'nothing'):
-        data['features_done'] = True
-        return None
-    if not any(w in words for w in ('park', 'garden', 'lift', 'elevator')):
-        return 'Tap the buttons, or say which apply (e.g. "parking and garden"), or Done.', _features_keyboard(data)
-    data['parking'] = data.get('parking') or 'park' in words
-    data['garden'] = data.get('garden') or 'garden' in words
-    data['elevator'] = data.get('elevator') or 'lift' in words or 'elevator' in words
-    data['features_done'] = True
-    return None
-
-
-# ── Step: elevation (floor) ─────────────────────────────────────────────────
-
-_FLOORS = ['Ground Floor', '1st Floor', '2nd Floor', '3rd Floor']
-
-
-def _ask_elevation(state):
-    if state['data'].get('elevation_done'):
-        return None
-    rows = _chunk([_btn(f, 'elevation', i) for i, f in enumerate(_FLOORS)], 2) + [_skip_row('elevation')]
-    return 'Which floor is it on? Tap one, or type it (e.g. "5th Floor").', _keyboard(rows)
-
-
-def _accept_elevation(state, text, value):
-    data = state['data']
-    if value == 'skip':
-        data['elevation'] = None
-    elif value is not None:
-        try:
-            data['elevation'] = _FLOORS[int(value)]
-        except (ValueError, IndexError):
-            return 'Choose a floor, or type it.', None
-    else:
-        data['elevation'] = _clip((text or '').strip(), 50) or None
-    data['elevation_done'] = True
-    return None
-
-
 # ── Step: notes ─────────────────────────────────────────────────────────────
 
 def _ask_notes(state):
@@ -583,7 +483,7 @@ def _accept_clerk(state, text, value):
     return None
 
 
-# ── Step: template ──────────────────────────────────────────────────────────
+# ── Step: template (or work from a previous inspection) ──────────────────────
 
 def _templates_for(inspection_type):
     from models import Template
@@ -593,35 +493,6 @@ def _templates_for(inspection_type):
             .order_by(Template.is_default.desc(), Template.name).all())
 
 
-def _ask_template(state):
-    data = state['data']
-    if data.get('template_done'):
-        return None
-    t = data.get('inspection_type')
-    templates = [] if t in TEMPLATELESS_TYPES else _templates_for(t)
-    if len(templates) <= 1:  # nothing to choose — the backend falls back to the type's default
-        data.update(template_id=templates[0].id if templates else None,
-                    template_name=templates[0].name if templates else None, template_done=True)
-        return None
-    state['options'] = [tpl.id for tpl in templates]
-    rows = [[_btn(_clip(tpl.name) + (' (default)' if tpl.is_default else ''), 'template', i)] for i, tpl in enumerate(templates)]
-    return f'Which report template for this {t.replace("_", " ")}?', _keyboard(rows)
-
-
-def _accept_template(state, text, value):
-    from models import Template, db
-    try:
-        tpl = db.session.get(Template, state['options'][int(value)])
-    except (ValueError, IndexError, TypeError):
-        tpl = None
-    if tpl is None:
-        return 'Tap a template from the list.', None
-    state['data'].update(template_id=tpl.id, template_name=tpl.name, template_done=True)
-    return None
-
-
-# ── Steps: source (continue from previous) / photos ─────────────────────────
-
 def _source_for(data):
     from models import Property, db
     if data.get('inspection_type') not in ('check_in', 'check_out'):
@@ -630,36 +501,71 @@ def _source_for(data):
     return _find_lifecycle_source(prop, data['inspection_type']) if prop else None
 
 
+def _source_date(source):
+    when = source.conduct_date or source.created_at
+    return when.strftime('%d %b %Y') if when else 'no date on record'
+
+
 def _source_label(source):
-    date_label = source.conduct_date.strftime('%a %d %b %Y') if source.conduct_date else 'no date on record'
-    return f"{source.inspection_type.replace('_', ' ').title()} on {date_label}"
+    return f"{source.inspection_type.replace('_', ' ').title()} on {_source_date(source)}"
 
 
-def _ask_source(state):
+def _template_options(data):
+    """(templates, previous inspection or None, whether there is anything to ask)."""
+    t = data.get('inspection_type')
+    templates = [] if t in TEMPLATELESS_TYPES else _templates_for(t)
+    source = _source_for(data)
+    return templates, source, source is not None or len(templates) > 1
+
+
+def _use_template(data, tpl):
+    """Start a fresh report on `tpl` (None: the backend falls back to the type's default)."""
+    data.update({'template_id': tpl.id if tpl else None, 'template_name': tpl.name if tpl else None,
+                 'continue': False})
+
+
+def _ask_template(state):
     data = state['data']
     if 'continue' in data:
         return None
-    source = _source_for(data)
-    if source is None:
-        data['continue'] = False
+    templates, source, has_choice = _template_options(data)
+    if not has_choice:
+        _use_template(data, templates[0] if templates else None)
         return None
-    data['source_inspection_id'] = source.id
-    data['source_label'] = _source_label(source)
-    return f'Continue this report from the {data["source_label"]}?', _yn_keyboard('source')
+    state['options'] = [tpl.id for tpl in templates]
+    rows = [[_btn(_clip(tpl.name) + (' (default)' if tpl.is_default else ''), 'template', i)] for i, tpl in enumerate(templates)]
+    if source is not None:
+        rows.insert(0, [_btn(f'Work from Previous Inspection ({_source_date(source)})', 'template', 'prev')])
+        if not templates:  # there must still be a way not to continue
+            rows.append([_btn('Start fresh', 'template', 'fresh')])
+    return f'Which report template for this {data["inspection_type"].replace("_", " ")}?', _keyboard(rows)
 
 
-def _accept_source(state, text, value):
-    raw = (value if value is not None else text or '').strip().lower()
-    if raw in ('y', 'yes'):
-        state['data']['continue'] = True
-    elif raw in ('n', 'no'):
-        state['data']['continue'] = False
-        state['data'].pop('source_inspection_id', None)
-        state['data'].pop('source_label', None)
-    else:
-        return 'Yes or No?', _yn_keyboard('source')
+def _accept_template(state, text, value):
+    from models import Template, db
+    data = state['data']
+    if value == 'prev':
+        source = _source_for(data)
+        if source is None:
+            return 'That inspection is no longer available — pick a template instead.', None
+        data.update({'template_id': source.template_id,
+                     'template_name': source.template.name if source.template else None,
+                     'continue': True, 'source_inspection_id': source.id, 'source_label': _source_label(source)})
+        return None
+    if value == 'fresh':
+        _use_template(data, None)
+        return None
+    try:
+        tpl = db.session.get(Template, state['options'][int(value)])
+    except (ValueError, IndexError, TypeError):
+        tpl = None
+    if tpl is None:
+        return 'Tap one of the options above.', None
+    _use_template(data, tpl)
     return None
 
+
+# ── Step: photos ────────────────────────────────────────────────────────────
 
 def _ask_photos(state):
     data = state['data']
@@ -977,9 +883,9 @@ def _accept_invoice(state, text, value):
 
 _ASK = {
     'client': _ask_client, 'address': _ask_address, 'bedrooms': _ask_bedrooms, 'bathrooms': _ask_bathrooms,
-    'furnished': _ask_furnished, 'features': _ask_features, 'elevation': _ask_elevation, 'notes': _ask_notes,
+    'notes': _ask_notes,
     'property': _ask_property, 'type': _ask_type, 'date': _ask_date, 'time': _ask_time, 'clerk': _ask_clerk,
-    'template': _ask_template, 'source': _ask_source, 'photos': _ask_photos,
+    'template': _ask_template, 'photos': _ask_photos,
     'tenant_email': _ask_tenant_email, 'heads_up': _ask_heads_up, 'reference': _ask_reference,
     'internal_notes': _ask_internal_notes,
     'report': _ask_report, 'recipients': _ask_recipients, 'note': _ask_note, 'invoice': _ask_invoice,
@@ -987,9 +893,9 @@ _ASK = {
 _ACCEPT = {
     'client': _accept_client, 'address': _accept_address,
     'bedrooms': _accept_count('bedrooms'), 'bathrooms': _accept_count('bathrooms'),
-    'furnished': _accept_furnished, 'features': _accept_features, 'elevation': _accept_elevation, 'notes': _accept_notes,
+    'notes': _accept_notes,
     'property': _accept_property, 'type': _accept_type, 'date': _accept_date, 'time': _accept_time,
-    'clerk': _accept_clerk, 'template': _accept_template, 'source': _accept_source, 'photos': _accept_photos,
+    'clerk': _accept_clerk, 'template': _accept_template, 'photos': _accept_photos,
     'tenant_email': _accept_tenant_email, 'heads_up': _accept_heads_up, 'reference': _accept_reference,
     'internal_notes': _accept_internal_notes,
     'report': _accept_report, 'recipients': _accept_recipients, 'note': _accept_note, 'invoice': _accept_invoice,
@@ -1005,8 +911,7 @@ def build_resolved(state) -> dict:
         return {
             'address': d['address'], 'client_id': d['client_id'], 'client_name': d['client_name'],
             'property_type': 'residential', 'bedrooms': d['bedrooms'], 'bathrooms': d['bathrooms'],
-            'furnished': d.get('furnished'), 'parking': bool(d.get('parking')), 'garden': bool(d.get('garden')),
-            'elevator': bool(d.get('elevator')), 'elevation': d.get('elevation'), 'notes': d.get('notes'),
+            'notes': d.get('notes'),
         }
     if state['flow'] == SHARE_FLOW:
         return {'inspection_id': d['report_id'], 'property_address': d['property_address'],
@@ -1072,8 +977,11 @@ def _confirm_reply(state):
 
 def _edit_reply(state):
     labels = list(_EDIT_LABELS[state['flow']])
-    if state['flow'] == INSPECTION_FLOW and state.get('is_admin'):
-        labels.append(('internal_notes', 'Internal notes'))
+    if state['flow'] == INSPECTION_FLOW:
+        if not _template_options(state['data'])[2]:  # the button would just bounce back to this card
+            labels.remove(('template', 'Template'))
+        if state.get('is_admin'):
+            labels.append(('internal_notes', 'Internal notes'))
     buttons = [_btn(label, 'edit', step) for step, label in labels]
     rows = _chunk(buttons, 2) + [[_btn('« Back', 'edit', 'back')]]
     return 'What would you like to change?', _keyboard(rows)
@@ -1155,6 +1063,8 @@ def _apply(state, step, text=None, value=None):
     if state['flow'] == INVOICE_FLOW and value in ('pay', 'unpay') and 'inspection_id' in state['data']:
         state['data']['target'] = value == 'pay'
         return state, [], 'execute'
+    if step not in STEPS[state['flow']]:  # saved session sitting on a since-removed question
+        return _advance(state, [])
     stay = _ACCEPT[step](state, text, value)
     if stay is not None:
         return state, [stay], None

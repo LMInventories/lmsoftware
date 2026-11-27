@@ -4244,7 +4244,6 @@ def generate_condition_summary():
     prop_type  = (prop_details.get('property_type') or '').strip()
     bedrooms   = prop_details.get('bedrooms')
     bathrooms  = prop_details.get('bathrooms')
-    furnished  = (prop_details.get('furnished') or '').strip()
     address    = (prop_details.get('address') or '').strip()
 
     prop_parts = []
@@ -4252,8 +4251,6 @@ def generate_condition_summary():
         prop_parts.append(f'{int(bedrooms)}-bedroom')
     if bathrooms is not None:
         prop_parts.append(f'{int(bathrooms)}-bathroom')
-    if furnished:
-        prop_parts.append(furnished.lower())
     if prop_type:
         prop_parts.append(prop_type.lower())
 
@@ -4497,7 +4494,6 @@ ASSIGNMENT AND FORMATTING RULES
    If a section is named "Overview" or "Property Description" (or similar), write exactly
    one sentence using PROPERTY DETAILS above. No findings, no defects, no other content.
    Format: "{overview_prefix}{property_description}"
-   Append outdoor features if present in the data (e.g. "with garden", "with garage").
 
 6. LIGHTING RULE
    If a section is named "Lighting" or "Light Fittings", the first line must always be

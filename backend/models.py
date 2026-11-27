@@ -110,6 +110,7 @@ class Property(db.Model):
     property_type     = db.Column(db.String(50))
     bedrooms          = db.Column(db.Integer)
     bathrooms         = db.Column(db.Integer)
+    # furnished..elevation are retired: no longer collected or returned, kept for historical data.
     furnished         = db.Column(db.String(50))           # 'Furnished', 'Part Furnished', 'Unfurnished'
     parking           = db.Column(db.Boolean, default=False)
     garden            = db.Column(db.Boolean, default=False)
@@ -136,12 +137,6 @@ class Property(db.Model):
             'property_type':     self.property_type,
             'bedrooms':          self.bedrooms,
             'bathrooms':         self.bathrooms,
-            'furnished':         self.furnished,
-            'parking':           self.parking,
-            'garden':            self.garden,
-            'elevator':          self.elevator,
-            'detachment_type':   self.detachment_type,
-            'elevation':         self.elevation,
             'meter_electricity': self.meter_electricity,
             'meter_gas':         self.meter_gas,
             'meter_heat':        self.meter_heat,

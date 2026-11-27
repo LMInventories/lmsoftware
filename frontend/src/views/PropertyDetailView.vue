@@ -20,9 +20,7 @@ const showPhotoModal = ref(false)
 
 const editForm = ref({
   address_line1: '', address_line2: '', city: '', postcode: '',
-  bedrooms: '', bathrooms: '', furnished: '',
-  detachment_type: '', elevation: '',
-  parking: false, garden: false, elevator: false,
+  bedrooms: '', bathrooms: '',
   client_id: null
 })
 
@@ -113,12 +111,6 @@ function openEditDetails() {
     ...parsed,
     bedrooms: p.bedrooms ?? '',
     bathrooms: p.bathrooms ?? '',
-    furnished: p.furnished || '',
-    detachment_type: p.detachment_type || '',
-    elevation: p.elevation || '',
-    parking: !!p.parking,
-    garden: !!p.garden,
-    elevator: !!p.elevator,
     client_id: p.client_id
   }
   addressQuery.value = ''
@@ -128,26 +120,10 @@ function openEditDetails() {
 async function saveDetails() {
   const address = buildAddress()
   if (!address) { toast.warning('Address is required'); return }
-  const DETACHMENT_TYPE_MAP = {
-    'Terraced':           'house',
-    'Semi-Detached':      'house',
-    'Detached':           'house',
-    'Purpose Built Flat': 'flat',
-    'Converted Flat':     'flat',
-    'Bungalow':           'bungalow',
-    'Penthouse':          'flat',
-  }
   const payload = {
     address,
-    property_type: DETACHMENT_TYPE_MAP[editForm.value.detachment_type] || 'residential',
     bedrooms: editForm.value.bedrooms === '' ? null : Number(editForm.value.bedrooms),
     bathrooms: editForm.value.bathrooms === '' ? null : Number(editForm.value.bathrooms),
-    furnished: editForm.value.furnished,
-    detachment_type: editForm.value.detachment_type,
-    elevation: editForm.value.elevation,
-    parking: editForm.value.parking,
-    garden: editForm.value.garden,
-    elevator: editForm.value.elevator,
     client_id: editForm.value.client_id
   }
   try {
@@ -204,15 +180,6 @@ async function removePhoto() {
 }
 
 const inspectionCount = computed(() => property.value?.inspections?.length || 0)
-
-const featureChips = computed(() => {
-  if (!property.value) return []
-  const chips = []
-  if (property.value.parking) chips.push({ label: 'Parking' })
-  if (property.value.garden) chips.push({ label: 'Garden' })
-  if (property.value.elevator) chips.push({ label: 'Elevator' })
-  return chips
-})
 
 const hasMeters = computed(() => {
   const p = property.value
@@ -273,14 +240,6 @@ onMounted(fetchProperty)
                 <strong>Address</strong>
                 <span>{{ property.address }}</span>
               </div>
-              <div v-if="property.detachment_type" class="detail-row">
-                <strong>Type</strong>
-                <span>{{ property.detachment_type }}</span>
-              </div>
-              <div v-if="property.elevation" class="detail-row">
-                <strong>Floor</strong>
-                <span>{{ property.elevation }}</span>
-              </div>
               <div v-if="property.bedrooms != null" class="detail-row">
                 <strong>Bedrooms</strong>
                 <span>{{ property.bedrooms }}</span>
@@ -288,16 +247,6 @@ onMounted(fetchProperty)
               <div v-if="property.bathrooms != null" class="detail-row">
                 <strong>Bathrooms</strong>
                 <span>{{ property.bathrooms }}</span>
-              </div>
-              <div v-if="property.furnished" class="detail-row">
-                <strong>Furnishing</strong>
-                <span>{{ property.furnished }}</span>
-              </div>
-              <!-- Feature chips -->
-              <div v-if="featureChips.length" class="feature-chips">
-                <span v-for="chip in featureChips" :key="chip.label" class="feature-chip">
-                  {{ chip.icon }} {{ chip.label }}
-                </span>
               </div>
             </div>
           </div>
@@ -412,102 +361,43 @@ onMounted(fetchProperty)
 
     <!-- Edit Details modal -->
     <div v-if="showEditDetails" class="modal-overlay" @click.self="showEditDetails = false">
-      <div class="modal modal-wide">
+      <div class="modal">
         <div class="modal-header">
           <h2>Edit Property Details</h2>
           <button @click="showEditDetails = false" class="btn-close">✕</button>
         </div>
         <div class="modal-body">
-          <div class="modal-cols">
-            <!-- Col 1 -->
-            <div class="modal-col">
-              <div class="col-section-title">Address</div>
-              <div class="form-group">
-                <label>Address Lookup</label>
-                <div class="addr-lookup-row">
-                  <input v-model="addressQuery" type="text" placeholder="Search by address or postcode…" class="addr-search-input" @keydown.enter.prevent="lookupAddress" />
-                  <button type="button" class="btn-lookup" @click="lookupAddress" :disabled="addressSearching">{{ addressSearching ? '…' : 'Search' }}</button>
-                </div>
-                <div v-if="showAddressDropdown && addressResults.length" class="addr-dropdown">
-                  <div v-for="(r, i) in addressResults" :key="i" class="addr-option" @click="selectAddress(r)">{{ r.display }}</div>
-                </div>
-              </div>
-              <div class="form-group"><label>Address Line 1</label><input v-model="editForm.address_line1" type="text" /></div>
-              <div class="form-group"><label>Address Line 2</label><input v-model="editForm.address_line2" type="text" /></div>
-              <div class="form-row">
-                <div class="form-group"><label>City</label><input v-model="editForm.city" type="text" /></div>
-                <div class="form-group"><label>Postcode</label><input v-model="editForm.postcode" type="text" /></div>
-              </div>
-              <div class="form-row">
-                <div class="form-group">
-                  <label>Bedrooms</label>
-                  <select v-model="editForm.bedrooms">
-                    <option value="">—</option>
-                    <option v-for="n in 10" :key="n" :value="n-1">{{ n-1 }}</option>
-                  </select>
-                </div>
-                <div class="form-group">
-                  <label>Bathrooms</label>
-                  <select v-model="editForm.bathrooms">
-                    <option value="">—</option>
-                    <option v-for="n in 10" :key="n" :value="n-1">{{ n-1 }}</option>
-                  </select>
-                </div>
-              </div>
-              <div class="form-group">
-                <label>Furnishing</label>
-                <select v-model="editForm.furnished">
-                  <option value="">Not specified</option>
-                  <option value="Furnished">Furnished</option>
-                  <option value="Part Furnished">Part Furnished</option>
-                  <option value="Unfurnished">Unfurnished</option>
-                </select>
-              </div>
+          <div class="col-section-title">Address</div>
+          <div class="form-group">
+            <label>Address Lookup</label>
+            <div class="addr-lookup-row">
+              <input v-model="addressQuery" type="text" placeholder="Search by address or postcode…" class="addr-search-input" @keydown.enter.prevent="lookupAddress" />
+              <button type="button" class="btn-lookup" @click="lookupAddress" :disabled="addressSearching">{{ addressSearching ? '…' : 'Search' }}</button>
             </div>
-            <!-- Col 2 -->
-            <div class="modal-col modal-col-divider">
-              <div class="col-section-title">Characteristics</div>
-              <div class="form-group">
-                <label>Detachment Type</label>
-                <select v-model="editForm.detachment_type">
-                  <option value="">Not specified</option>
-                  <option value="Terraced">Terraced</option>
-                  <option value="Semi-Detached">Semi-Detached</option>
-                  <option value="Detached">Detached</option>
-                  <option value="Purpose Built Flat">Purpose Built Flat</option>
-                  <option value="Converted Flat">Converted Flat</option>
-                  <option value="Bungalow">Bungalow</option>
-                  <option value="Penthouse">Penthouse</option>
-                </select>
-              </div>
-              <div class="form-group">
-                <label>Floor / Elevation</label>
-                <select v-model="editForm.elevation">
-                  <option value="">Not specified</option>
-                  <option value="Ground Floor">Ground Floor</option>
-                  <option value="1st Floor">1st Floor</option>
-                  <option value="2nd Floor">2nd Floor</option>
-                  <option value="3rd Floor">3rd Floor</option>
-                  <option value="4th Floor or Above">4th Floor or Above</option>
-                </select>
-              </div>
-              <div class="form-group">
-                <label>Features</label>
-                <div class="toggle-group">
-                  <label class="toggle-row" :class="{ 'toggle-on': editForm.parking }">
-                    <span class="toggle-label">Parking</span>
-                    <div class="toggle-switch" @click="editForm.parking = !editForm.parking"><div class="toggle-knob" :class="{ 'toggle-knob-on': editForm.parking }"></div></div>
-                  </label>
-                  <label class="toggle-row" :class="{ 'toggle-on': editForm.garden }">
-                    <span class="toggle-label">Garden</span>
-                    <div class="toggle-switch" @click="editForm.garden = !editForm.garden"><div class="toggle-knob" :class="{ 'toggle-knob-on': editForm.garden }"></div></div>
-                  </label>
-                  <label class="toggle-row" :class="{ 'toggle-on': editForm.elevator }">
-                    <span class="toggle-label">Elevator / Lift</span>
-                    <div class="toggle-switch" @click="editForm.elevator = !editForm.elevator"><div class="toggle-knob" :class="{ 'toggle-knob-on': editForm.elevator }"></div></div>
-                  </label>
-                </div>
-              </div>
+            <div v-if="showAddressDropdown && addressResults.length" class="addr-dropdown">
+              <div v-for="(r, i) in addressResults" :key="i" class="addr-option" @click="selectAddress(r)">{{ r.display }}</div>
+            </div>
+          </div>
+          <div class="form-group"><label>Address Line 1</label><input v-model="editForm.address_line1" type="text" /></div>
+          <div class="form-group"><label>Address Line 2</label><input v-model="editForm.address_line2" type="text" /></div>
+          <div class="form-row">
+            <div class="form-group"><label>City</label><input v-model="editForm.city" type="text" /></div>
+            <div class="form-group"><label>Postcode</label><input v-model="editForm.postcode" type="text" /></div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Bedrooms</label>
+              <select v-model="editForm.bedrooms">
+                <option value="">—</option>
+                <option v-for="n in 10" :key="n" :value="n-1">{{ n-1 }}</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Bathrooms</label>
+              <select v-model="editForm.bathrooms">
+                <option value="">—</option>
+                <option v-for="n in 10" :key="n" :value="n-1">{{ n-1 }}</option>
+              </select>
             </div>
           </div>
         </div>
@@ -609,8 +499,6 @@ onMounted(fetchProperty)
 .detail-row span { color: #1e293b; }
 
 /* Feature chips */
-.feature-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; padding-top: 10px; border-top: 1px solid #f1f5f9; }
-.feature-chip { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 20px; font-size: 12px; color: #16a34a; font-weight: 600; }
 
 /* Photo card */
 .photo-card .card-content { padding: 0; }
@@ -648,7 +536,6 @@ onMounted(fetchProperty)
 /* ── Modal ── */
 .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 20px; }
 .modal { background: white; border-radius: 12px; max-height: 92vh; overflow-y: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.2); width: min(500px, 95vw); }
-.modal-wide { width: min(780px, 96vw); }
 .modal-header { display: flex; justify-content: space-between; align-items: center; padding: 16px 22px; border-bottom: 1px solid #e5e7eb; position: sticky; top: 0; background: white; z-index: 1; }
 .modal-header h2 { font-size: 15px; font-weight: 700; color: #0f172a; }
 .btn-close { background: none; border: none; font-size: 16px; color: #94a3b8; cursor: pointer; padding: 4px 7px; border-radius: 4px; }
@@ -657,10 +544,6 @@ onMounted(fetchProperty)
 .modal-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 22px; border-top: 1px solid #e5e7eb; background: #f8fafc; }
 
 /* Two-col modal */
-.modal-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0; }
-.modal-col { padding: 20px 22px; display: flex; flex-direction: column; gap: 12px; }
-.modal-col-divider { border-left: 1px solid #f1f5f9; }
-.col-section-title { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.8px; color: #94a3b8; padding-bottom: 4px; border-bottom: 1px solid #f1f5f9; margin-bottom: 2px; }
 
 /* Form */
 .form-group { display: flex; flex-direction: column; gap: 4px; }
@@ -685,14 +568,6 @@ onMounted(fetchProperty)
 .addr-option:last-child { border-bottom: none; }
 
 /* Toggles */
-.toggle-group { display: flex; flex-direction: column; gap: 8px; }
-.toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border: 1px solid #e2e8f0; border-radius: 8px; cursor: pointer; transition: all 0.15s; }
-.toggle-row.toggle-on { background: #f0fdf4; border-color: #86efac; }
-.toggle-label { font-size: 13px; color: #374151; font-weight: 500; }
-.toggle-switch { width: 38px; height: 22px; background: #cbd5e1; border-radius: 11px; position: relative; transition: background 0.2s; flex-shrink: 0; }
-.toggle-row.toggle-on .toggle-switch { background: #22c55e; }
-.toggle-knob { width: 16px; height: 16px; background: white; border-radius: 50%; position: absolute; top: 3px; left: 3px; transition: transform 0.2s; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
-.toggle-knob-on { transform: translateX(16px); }
 
 /* Meter edit */
 .meter-edit-grid { display: flex; flex-direction: column; gap: 14px; }
@@ -711,8 +586,6 @@ onMounted(fetchProperty)
 @media (max-width: 768px) {
   .content-grid { grid-template-columns: 1fr; }
   .main { padding: 16px 14px 40px; }
-  .modal-cols { grid-template-columns: 1fr; }
-  .modal-col-divider { border-left: none; border-top: 1px solid #f1f5f9; }
 }
 
 /* ══════════════════════════════════════

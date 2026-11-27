@@ -323,15 +323,6 @@ def summarize_property(resolved: dict) -> str:
         lines.append(f"• Bedrooms: {resolved['bedrooms']}")
     if resolved.get('bathrooms') is not None:
         lines.append(f"• Bathrooms: {resolved['bathrooms']}")
-    if resolved.get('furnished'):
-        lines.append(f"• Furnished: {resolved['furnished']}")
-    if resolved.get('detachment_type'):
-        lines.append(f"• Type: {resolved['detachment_type']}")
-    if resolved.get('elevation'):
-        lines.append(f"• Floor: {resolved['elevation']}")
-    features = [name for name, key in (('Parking', 'parking'), ('Garden', 'garden'), ('Lift', 'elevator')) if resolved.get(key)]
-    if features:
-        lines.append(f"• Features: {', '.join(features)}")
     meters = [f"{label} ({resolved[key]})" for label, key in (
         ('Electricity', 'meter_electricity'), ('Gas', 'meter_gas'),
         ('Heat', 'meter_heat'), ('Water', 'meter_water'),
@@ -411,12 +402,6 @@ def build_property_payload(resolved: dict) -> dict:
         'property_type':     resolved.get('property_type') or 'residential',
         'bedrooms':          resolved.get('bedrooms'),
         'bathrooms':         resolved.get('bathrooms'),
-        'furnished':         resolved.get('furnished'),
-        'parking':           resolved.get('parking'),
-        'garden':            resolved.get('garden'),
-        'elevator':          resolved.get('elevator'),
-        'detachment_type':   resolved.get('detachment_type'),
-        'elevation':         resolved.get('elevation'),
         'meter_electricity': resolved.get('meter_electricity'),
         'meter_gas':         resolved.get('meter_gas'),
         'meter_heat':        resolved.get('meter_heat'),

@@ -51,11 +51,6 @@ def _property_to_confirm(world):
     assert state['step'] == 'bedrooms'
     state, _, _ = _cb(state, 'bedrooms', '3')
     state, _, _ = _text(state, '2')                       # typed bathrooms
-    state, _, _ = _cb(state, 'furnished', 'p')
-    state, _, _ = _cb(state, 'features', 'p')             # toggle parking
-    state, _, _ = _cb(state, 'features', 'l')             # toggle lift
-    state, _, _ = _cb(state, 'features', 'done')
-    state, _, _ = _cb(state, 'elevation', '1')
     state, replies, _ = _cb(state, 'notes', 'skip')
     return state, replies
 
@@ -70,9 +65,7 @@ def test_property_flow_reaches_confirm_with_expected_payload(world):
     payload = BUILD_PAYLOAD['create_property'](resolved)
     assert payload['client_id'] == world['client'].id
     assert (payload['bedrooms'], payload['bathrooms']) == (3, 2)
-    assert payload['furnished'] == 'Part Furnished'
-    assert payload['parking'] is True and payload['garden'] is False and payload['elevator'] is True
-    assert payload['elevation'] == '1st Floor'
+    assert not {'furnished', 'parking', 'garden', 'elevator', 'detachment_type', 'elevation'} & payload.keys()
 
     state, replies, action = _cb(state, 'confirm', 'yes')
     assert action == 'execute'
@@ -133,6 +126,17 @@ def test_stale_button_is_ignored(world):
     assert replies == [] and action is None and state['data'] == before and state['step'] == 'address'
 
 
+def test_saved_session_on_a_removed_question_moves_on(world):
+    state, _, _ = flows.start(flows.PROPERTY_FLOW)
+    state, _, _ = _text(state, 'acme')
+    state, _, _ = _text(state, '10 Downing Street SW1A 2AA')
+    state, _, _ = _cb(state, 'bedrooms', '2')
+    state, _, _ = _cb(state, 'bathrooms', '1')
+    state['step'] = 'furnished'                           # saved before the question was removed
+    state, _, _ = _cb(state, 'furnished', 'p')
+    assert state['step'] == 'notes'
+
+
 def test_bad_number_reasks(world):
     state, _, _ = flows.start(flows.PROPERTY_FLOW)
     state, _, _ = _text(state, 'acme')
@@ -172,8 +176,6 @@ def test_duplicate_address_warning(world):
     state, _, _ = _text(state, '12 Smith Street, London, E1 6AN')
     state, _, _ = _cb(state, 'bedrooms', '2')
     state, _, _ = _cb(state, 'bathrooms', '1')
-    for step, value in (('furnished', 'skip'), ('features', 'done'), ('elevation', 'skip')):
-        state, _, _ = _cb(state, step, value)
     state, replies, _ = _cb(state, 'notes', 'skip')
     assert 'already has a property' in _texts(replies)
 
@@ -194,7 +196,7 @@ def _inspection_to_confirm(world, kind='check_in', clerk_value='1', is_admin=Fal
 
 def test_inspection_flow_skips_unneeded_steps(world):
     state = _inspection_to_confirm(world)
-    # no templates and no earlier inspection, so template/source/photos were skipped silently
+    # no templates and no earlier inspection, so template/photos were skipped silently
     assert state['step'] == 'tenant_email'
     state, _, _ = _text(state, 'tenant@example.com, other@example.com')
     state, _, _ = _cb(state, 'heads_up', 'n')
@@ -270,8 +272,8 @@ def test_clerk_availability_annotation_and_conflict_warning(world):
     assert 'Mia Manager (free)' in replies[0][1]['inline_keyboard'][0][0]['text']  # managers are assignable too
 
     state, _, _ = _cb(state, 'clerk', '1')
-    assert state['step'] == 'source'                      # the check-in above is a continuation candidate
-    state, _, _ = _cb(state, 'source', 'n')
+    assert state['step'] == 'template'                    # the check-in above is a continuation candidate
+    state, _, _ = _cb(state, 'template', 'fresh')
     state, _, _ = _cb(state, 'tenant_email', 'skip')
     state, _, _ = _cb(state, 'heads_up', 'n')
     state, replies, _ = _cb(state, 'reference', 'skip')
@@ -286,8 +288,8 @@ def test_lifecycle_continuation_and_photos(world):
     db.session.commit()
 
     state = _inspection_to_confirm(world, kind='check_out')
-    assert state['step'] == 'source'
-    state, replies, _ = _cb(state, 'source', 'y')
+    assert state['step'] == 'template'
+    state, replies, _ = _cb(state, 'template', 'prev')
     assert state['step'] == 'photos'
     state, replies, _ = _cb(state, 'photos', 'y')
     assert state['step'] == 'tenant_email'
@@ -306,9 +308,95 @@ def test_declining_continuation_skips_photos(world):
                               conduct_date=datetime(2026, 1, 5), report_data='{}', pdf_import=False))
     db.session.commit()
     state = _inspection_to_confirm(world, kind='check_out')
-    state, _, _ = _cb(state, 'source', 'n')
+    state, _, _ = _cb(state, 'template', 'fresh')
     assert state['step'] == 'tenant_email'
     assert flows.build_resolved(state)['source_inspection_id'] is None
+
+
+def _previous_check_in_and_templates(count):
+    """An earlier check-in on its own template, plus `count` check-out templates."""
+    from models import Inspection, Template, db
+    from datetime import datetime
+    previous = Template(name='Previous Layout', inspection_type='check_in')
+    options = [Template(name=f'Out {i}', inspection_type='check_out', is_default=i == 0) for i in range(count)]
+    db.session.add_all([previous, *options])
+    db.session.flush()
+    source = Inspection(property_id=_property_id(), inspection_type='check_in', template_id=previous.id,
+                        conduct_date=datetime(2026, 1, 5), pdf_import=False)
+    db.session.add(source)
+    db.session.commit()
+    return source, previous, options
+
+
+def _property_id():
+    from models import Property
+    return Property.query.filter(Property.address.ilike('12 Smith%')).one().id
+
+
+@pytest.mark.parametrize('count', [0, 1, 2])
+def test_work_from_previous_inspection_assigns_its_template(world, count):
+    source, previous, _ = _previous_check_in_and_templates(count)
+    state = _inspection_to_confirm(world, kind='check_out')
+    assert state['step'] == 'template'
+    _, keyboard = flows._ask_template(state)
+    labels = [row[0]['text'] for row in keyboard['inline_keyboard']]
+    assert labels[0] == 'Work from Previous Inspection (05 Jan 2026)'
+    assert len(labels) == (2 if count == 0 else count + 1)
+
+    state, _, _ = _cb(state, 'template', 'prev')
+    assert state['step'] == 'photos'
+    resolved = flows.build_resolved(state)
+    assert (resolved['template_id'], resolved['template_name']) == (previous.id, 'Previous Layout')
+    assert resolved['source_inspection_id'] == source.id
+
+
+def test_picking_a_template_does_not_continue_from_previous(world):
+    _, _, options = _previous_check_in_and_templates(2)
+    state = _inspection_to_confirm(world, kind='check_out')
+    state, _, _ = _cb(state, 'template', '1')
+    assert state['step'] == 'tenant_email'                # no photos question
+    resolved = flows.build_resolved(state)
+    assert resolved['template_id'] == options[1].id
+    assert resolved['source_inspection_id'] is None and resolved['include_photos'] is False
+
+
+def _edit_menu(state):
+    state, replies, _ = _cb(state, 'confirm', 'edit')
+    return state, [b['text'] for row in replies[0][1]['inline_keyboard'] for b in row]
+
+
+def test_edit_template_reasks_template_and_photos_only(world):
+    source, _, options = _previous_check_in_and_templates(2)
+    state = _inspection_to_confirm(world, kind='check_out')
+    for step, value in (('template', 'prev'), ('photos', 'y'), ('tenant_email', 'skip'),
+                        ('heads_up', 'n'), ('reference', 'skip')):
+        state, _, _ = _cb(state, step, value)
+    state, labels = _edit_menu(state)
+    assert 'Template' in labels
+
+    state, _, _ = _cb(state, 'edit', 'template')
+    assert state['step'] == 'template'
+    state, _, _ = _cb(state, 'template', '0')
+    assert state['step'] == 'confirm'
+    resolved = flows.build_resolved(state)
+    assert resolved['template_id'] == options[0].id
+    assert resolved['source_inspection_id'] is None and resolved['include_photos'] is False
+
+    state, _ = _edit_menu(state)
+    state, _, _ = _cb(state, 'edit', 'template')
+    state, _, _ = _cb(state, 'template', 'prev')
+    assert state['step'] == 'photos'                      # asked afresh
+    state, _, _ = _cb(state, 'photos', 'n')
+    assert state['step'] == 'confirm'
+    assert flows.build_resolved(state)['source_inspection_id'] == source.id
+
+
+def test_edit_menu_hides_template_when_there_is_nothing_to_choose(world):
+    state = _inspection_to_confirm(world)                 # no templates, no earlier inspection
+    for step, value in (('tenant_email', 'skip'), ('heads_up', 'n'), ('reference', 'skip')):
+        state, _, _ = _cb(state, step, value)
+    _, labels = _edit_menu(state)
+    assert 'Clerk' in labels and 'Template' not in labels
 
 
 def test_changing_type_clears_dependent_answers_only(world):
@@ -319,7 +407,7 @@ def test_changing_type_clears_dependent_answers_only(world):
     db.session.commit()
 
     state = _inspection_to_confirm(world, kind='check_out')
-    state, _, _ = _cb(state, 'source', 'y')
+    state, _, _ = _cb(state, 'template', 'prev')
     state, _, _ = _cb(state, 'photos', 'n')
     state, _, _ = _cb(state, 'tenant_email', 'skip')
     state, _, _ = _cb(state, 'heads_up', 'n')

@@ -512,7 +512,7 @@ def sheets_force_sync():
     """
     import datetime as dt
     import time as _time
-    from services.google_sheets import sync_inspection_row, get_existing_reference_numbers
+    from services.google_sheets import sync_inspection_row, get_existing_reference_numbers, get_sheet_layout
     from models import Inspection, SystemSetting
 
     if not is_connected():
@@ -524,6 +524,9 @@ def sheets_force_sync():
     existing_refs, refs_err = get_existing_reference_numbers()
     if existing_refs is None:
         return jsonify({'error': f'Could not read master sheet: {refs_err}'}), 400
+    layout, layout_err = get_sheet_layout()
+    if layout is None:
+        return jsonify({'error': f'Could not read master sheet: {layout_err}'}), 400
 
     body = request.get_json(silent=True) or {}
     since_str = body.get('since')
@@ -560,7 +563,7 @@ def sheets_force_sync():
         if reference and reference in existing_refs:
             results['skipped'] += 1
             continue
-        ok, outcome = sync_inspection_row(insp)
+        ok, outcome = sync_inspection_row(insp, layout)
         if ok:
             results['synced'] += 1
             print(f'[sheets_force_sync] synced inspection {insp.id}')

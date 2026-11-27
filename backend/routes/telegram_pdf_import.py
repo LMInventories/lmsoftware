@@ -16,6 +16,7 @@ Endpoints (no login; the link's single-use token is sent in a header):
   GET  /api/telegram-import/info           → what the link is for
   PUT  /api/telegram-import/chunk/<index>  → one piece of the file
   POST /api/telegram-import/complete       → assemble, check and start the import
+                                             (photos only with include_photos: true)
 """
 from __future__ import annotations
 
@@ -138,10 +139,17 @@ def _chunk_dir(record) -> str:
     return os.path.join(UPLOAD_DIR, str(record.id))
 
 
+@telegram_pdf_bp.after_request
+def _never_cache(response):
+    # Every link shares these addresses (the token is in a header), and browsers keep a
+    # 410 or 404 indefinitely unless told not to: one used link would break all later ones.
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
 @telegram_pdf_bp.route('/upload', methods=['GET'])
 def upload_page():
-    return Response(_PAGE, mimetype='text/html',
-                    headers={'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer'})
+    return Response(_PAGE, mimetype='text/html', headers={'Referrer-Policy': 'no-referrer'})
 
 
 @telegram_pdf_bp.route('/info', methods=['GET'])
@@ -181,6 +189,7 @@ def upload_complete():
     body = request.get_json(silent=True) or {}
     chunks, size = body.get('chunks'), body.get('size')
     filename = str(body.get('filename') or 'report.pdf')[:200]
+    include_photos = body.get('include_photos') is True  # photos are opt-in
     if not isinstance(chunks, int) or not 0 < chunks <= MAX_CHUNKS:
         return jsonify({'error': 'The upload was incomplete — please try again.'}), 400
     paths = [os.path.join(_chunk_dir(record), f'{i}.part') for i in range(chunks)]
@@ -204,23 +213,26 @@ def upload_complete():
         return jsonify({'error': 'This link has already been used.'}), 410
     shutil.rmtree(_chunk_dir(record), ignore_errors=True)
 
-    _send(record.chat_id, f'📄 Received "{filename}". Building the Check In — this usually takes 2–5 minutes.')
-    _start_processing(current_app._get_current_object(), record.id, raw, filename)
+    without = '' if include_photos else ' without photos'
+    _send(record.chat_id, f'📄 Received "{filename}". Building the Check In{without} — '
+                          'this usually takes 2–5 minutes.')
+    _start_processing(current_app._get_current_object(), record.id, raw, filename, include_photos)
     return jsonify({'ok': True})
 
 
 # ── Processing ──────────────────────────────────────────────────────────────
 
-def _start_processing(app, import_id, raw, filename):
+def _start_processing(app, import_id, raw, filename, include_photos):
     # Not a daemon thread: a worker being recycled should let it finish if it can.
-    threading.Thread(target=process_import, args=(app, import_id, raw, filename), daemon=False).start()
+    threading.Thread(target=process_import, args=(app, import_id, raw, filename, include_photos),
+                     daemon=False).start()
 
 
-def process_import(app, import_id: int, raw: bytes, filename: str):
+def process_import(app, import_id: int, raw: bytes, filename: str, include_photos: bool = False):
     with app.app_context():
         from models import db
         try:
-            _run_import(import_id, raw, filename)
+            _run_import(import_id, raw, filename, include_photos)
         except ImportFailed as e:
             _fail(import_id, str(e))
         except Exception:
@@ -231,7 +243,7 @@ def process_import(app, import_id: int, raw: bytes, filename: str):
             db.session.remove()
 
 
-def _extract(raw: bytes, filename: str) -> dict:
+def _extract(raw: bytes, filename: str, include_photos: bool = True) -> dict:
     """The same extraction the web app's PDF import runs, called directly."""
     from routes import pdf_import
     api_key = os.environ.get('ANTHROPIC_API_KEY')
@@ -242,8 +254,10 @@ def _extract(raw: bytes, filename: str) -> dict:
     use_text = len(text) >= pdf_import.MIN_TEXT_CHARS
     pdf_b64 = None if use_text else base64.b64encode(raw).decode('utf-8')
     job_id = str(uuid.uuid4())
+    # The PDF's bytes are only used there to pull photos out, so leaving them off means
+    # no photos are extracted or uploaded at all.
     pdf_import._run_import_job(job_id, api_key, text, pdf_b64, _NO_TEMPLATE, use_text, '', filename,
-                               page_texts, raw)
+                               page_texts, raw if include_photos else None)
     job = pdf_import._read_job(job_id) or {}
     pdf_import._delete_job(job_id)
     if job.get('status') != 'done':
@@ -312,7 +326,7 @@ def _move(import_id: int, from_status: str, **values) -> bool:
     return bool(moved)
 
 
-def _run_import(import_id: int, raw: bytes, filename: str):
+def _run_import(import_id: int, raw: bytes, filename: str, include_photos: bool):
     from models import TelegramPdfImport, User, db
 
     record = db.session.get(TelegramPdfImport, import_id)
@@ -323,7 +337,7 @@ def _run_import(import_id: int, raw: bytes, filename: str):
     property_id, conduct_date = record.property_id, record.conduct_date
     db.session.commit()  # don't hold a database transaction open while the PDF is read
 
-    parsed = _extract(raw, filename)
+    parsed = _extract(raw, filename, include_photos)
     rooms = merge_continuation_rooms(parsed.get('rooms') or [])
     if not any(room['items'] for room in rooms):
         raise ImportFailed('No rooms or items could be read from that PDF.')
@@ -346,16 +360,17 @@ def _run_import(import_id: int, raw: bytes, filename: str):
     if not _move(import_id, 'saving', status='done'):
         return
 
-    _send_result(chat_id, import_id, created, rooms, parsed)
+    _send_result(chat_id, import_id, created, rooms, parsed, include_photos)
     _store_original(inspection_id, raw)
 
 
-def _send_result(chat_id, import_id, created, rooms, parsed):
+def _send_result(chat_id, import_id, created, rooms, parsed, include_photos):
     items = sum(len(r['items']) for r in rooms)
     photos = sum(len(r.get('_photos') or []) for r in rooms) + sum(
         len(parsed.get(k) or []) for k in ('_overviewPhotos', '_keysPhotos', '_meterPhotos'))
     lines = [f"✅ Backdated Check In created: {created.get('reference_number') or '#' + str(created['id'])}",
-             f'• {len(rooms)} rooms · {items} items · {photos} photos']
+             f'• {len(rooms)} rooms · {items} items · '
+             + (f'{photos} photos' if include_photos else 'photos not imported')]
     if parsed.get('_skippedChunks'):
         lines.append(f"⚠️ {parsed['_skippedChunks']} sections of the PDF couldn't be read — "
                      'check for missing rooms and items.')
@@ -470,6 +485,14 @@ _PAGE = """<!doctype html>
   .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; }
   p { margin: 0 0 12px; line-height: 1.5; }
   input[type=file] { display: block; width: 100%; margin: 8px 0 16px; font-size: 15px; }
+  .toggle { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 16px;
+            padding: 12px; border: 1px solid #e2e8f0; border-radius: 8px; font-weight: 600; }
+  .toggle input { appearance: none; -webkit-appearance: none; flex-shrink: 0; position: relative; margin: 0;
+                  width: 44px; height: 26px; border-radius: 13px; background: #cbd5e1; transition: background .2s; }
+  .toggle input::after { content: ''; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px;
+                         border-radius: 50%; background: #fff; transition: transform .2s; }
+  .toggle input:checked { background: #22c55e; }
+  .toggle input:checked::after { transform: translateX(18px); }
   button { width: 100%; padding: 14px; border: 0; border-radius: 8px; background: #6366f1; color: #fff;
            font-size: 16px; font-weight: 600; }
   button:disabled { opacity: .5; }
@@ -486,6 +509,9 @@ _PAGE = """<!doctype html>
     <p id="what">Checking your link…</p>
     <form id="form" hidden>
       <input id="file" type="file" accept="application/pdf,.pdf" required>
+      <label class="toggle">Import photos from the PDF
+        <input id="photos" type="checkbox" role="switch">
+      </label>
       <button id="send" type="submit">Upload</button>
     </form>
     <progress id="bar" max="100" value="0" hidden></progress>
@@ -505,6 +531,7 @@ _PAGE = """<!doctype html>
 
   function call(path, options) {
     options = options || {}
+    options.cache = 'no-store'  // also skips any reply the browser saved before
     options.headers = Object.assign({ 'X-Upload-Token': token }, options.headers || {})
     return fetch(path, options).then(function (res) {
       return res.json().catch(function () { return {} }).then(function (body) {
@@ -541,7 +568,8 @@ _PAGE = """<!doctype html>
     if (!file) return
     if (file.size > limits.max_bytes) { say('That PDF is over 150 MB.', true); return }
     var count = Math.ceil(file.size / limits.chunk_bytes)
-    el('send').disabled = el('file').disabled = true
+    var includePhotos = el('photos').checked
+    el('send').disabled = el('file').disabled = el('photos').disabled = true
     el('bar').hidden = false
 
     var chain = Promise.resolve()
@@ -554,13 +582,14 @@ _PAGE = """<!doctype html>
     }
     chain.then(function () {
       return call('complete', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ filename: file.name, chunks: count, size: file.size }) })
+                                body: JSON.stringify({ filename: file.name, chunks: count, size: file.size,
+                                                       include_photos: includePhotos }) })
     }).then(function () {
       el('bar').value = 100
       el('form').hidden = true
       say('Uploaded. You can close this page — the bot will message you when the report is ready.')
     }).catch(function (error) {
-      el('send').disabled = el('file').disabled = false
+      el('send').disabled = el('file').disabled = el('photos').disabled = false
       say(error.message + ' Please try again.', true)
     })
   })

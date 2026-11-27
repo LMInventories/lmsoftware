@@ -23,7 +23,9 @@ Button callback_data is "f:<step>:<value>" (Telegram caps it at 64 bytes), and
 a button whose step is no longer the current one is ignored as stale.
 
 Public API (all return (state, replies, action); replies is a list of
-(text, inline_keyboard_or_None); action is None, 'execute' or 'cancelled'):
+(text, inline_keyboard_or_None); action is None, 'execute', 'cancelled', or 'import'
+(/inspection with a past date: data['import_date'] is the date of a backdated Check In
+to be imported from a PDF, see telegram_pdf_import.py):
     start(flow)
     handle_text(state, text)
     handle_callback(state, step, value)
@@ -73,7 +75,7 @@ _STEP_KEYS = {
     'notes': ['notes', 'notes_done'],
     'property': ['property_id', 'property_address'],
     'type': ['inspection_type'],
-    'date': ['conduct_date'],
+    'date': ['conduct_date', 'backdate_offer', 'import_date'],
     'time': ['conduct_time_preference'],
     'clerk': ['inspector_id', 'inspector_name', 'clerk_done'],
     'template': ['template_id', 'template_name', 'continue', 'source_inspection_id', 'source_label'],
@@ -183,6 +185,21 @@ def _build_date(day, month, year, today):
         return d if d >= today else date(today.year + 1, month, day)
     except ValueError:
         return None
+
+
+def _passed_this_year(text: str, today: date) -> date | None:
+    """For a day and month typed without a year that has already passed this year, that past
+    date (parse_date reads it as next year's); otherwise None."""
+    d = parse_date(text, today)
+    if d is None or d.year <= today.year or not re.search(r'\d', text):
+        return None
+    if re.search(r'\d{4}|\d[/.\-]\d{1,2}[/.\-]\d{2}', text):  # a year was typed
+        return None
+    try:
+        earlier = d.replace(year=today.year)
+    except ValueError:
+        return None
+    return earlier if earlier < today else None
 
 
 def _yn_keyboard(step):
@@ -377,16 +394,51 @@ def _ask_date(state):
     if 'conduct_date' in state['data']:
         return None
     kb = _keyboard([[_btn('Today', 'date', 'today'), _btn('Tomorrow', 'date', 'tomorrow')]])
-    return 'What date? Tap one, or type it (e.g. Thu, 25/09, 25 Sep).', kb
+    prompt = 'What date? Tap one, or type it (e.g. Thu, 25/09, 25 Sep).'
+    if state['data'].get('inspection_type') in _IMPORT_TYPES:
+        prompt += "\nTo import another clerk's report as a backdated Check In, type that report's past date."
+    return prompt, kb
+
+
+# A past date on these types offers to import another clerk's PDF as a backdated Check In.
+_IMPORT_TYPES = ('check_in', 'check_out')
 
 
 def _accept_date(state, text, value):
-    d = parse_date(value if value is not None else text or '')
+    data = state['data']
+    offered = data.pop('backdate_offer', None)
+    raw = (value if value is not None else text or '').strip()
+    if offered and raw.lower() in ('y', 'yes'):
+        raw = f'imp:{offered}'
+    elif raw == 'retry' or (offered and raw.lower() in ('n', 'no')):
+        return _ask_date(state)
+
+    kind, _, iso = raw.partition(':')
+    chosen = kind if kind in ('imp', 'book') and iso else None
+    d = parse_date(iso if chosen else raw)
     if d is None:
         return 'I couldn\'t read that date — try "Thu", "25/09" or "25 Sep".', None
-    if d < _today_london():
-        return f'{d.strftime("%a %d %b %Y")} is in the past — what date did you mean?', None
-    state['data']['conduct_date'] = d.isoformat()
+
+    today = _today_london()
+    can_import = data.get('inspection_type') in _IMPORT_TYPES
+    if chosen == 'imp' and can_import and d < today:
+        data['import_date'] = d.isoformat()
+        return None
+    earlier = _passed_this_year(raw, today) if can_import and not chosen else None
+    if earlier:
+        return (f'{earlier.strftime("%d %b")} has already passed this year. Which did you mean?', _keyboard([
+            [_btn(f'Import PDF: Check In of {earlier.strftime("%d %b %Y")}', 'date', f'imp:{earlier.isoformat()}')],
+            [_btn(f'Book {d.strftime("%a %d %b %Y")}', 'date', f'book:{d.isoformat()}')],
+        ]))
+    if d < today:
+        label = d.strftime('%a %d %b %Y')
+        if not can_import:
+            return f'{label} is in the past — what date did you mean?', None
+        data['backdate_offer'] = d.isoformat()
+        return (f"{label} is in the past. Import a backdated Check In from another clerk's PDF, dated {label}?",
+                _keyboard([[_btn('Yes, upload the PDF', 'date', f'imp:{d.isoformat()}')],
+                           [_btn('No, change the date', 'date', 'retry')]]))
+    data['conduct_date'] = d.isoformat()
     return None
 
 
@@ -1068,4 +1120,6 @@ def _apply(state, step, text=None, value=None):
     stay = _ACCEPT[step](state, text, value)
     if stay is not None:
         return state, [stay], None
+    if state['data'].get('import_date'):
+        return state, [], 'import'
     return _advance(state, [])

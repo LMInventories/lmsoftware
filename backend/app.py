@@ -190,6 +190,7 @@ def create_app():
         ('routes.slack_integration',   'slack_bp',        '/api/slack'),
         ('routes.zapier',          'zapier_bp',           '/api/zapier'),
         ('routes.telegram_integration', 'telegram_bp',    '/api/telegram'),
+        ('routes.telegram_pdf_import',  'telegram_pdf_bp', '/api/telegram-import'),
         ('learning.review',        'learning_review_bp',  '/api/learning'),
     ]
     import importlib
@@ -664,6 +665,9 @@ app = create_app()
 
 from routes.email_notifications import schedule_clerk_summaries  # noqa
 schedule_clerk_summaries(app)
+
+from routes.telegram_pdf_import import schedule_stalled_import_check  # noqa
+schedule_stalled_import_check(app)
 
 from learning.scheduler import schedule_learning_pipeline  # noqa
 schedule_learning_pipeline(app)

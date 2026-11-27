@@ -123,9 +123,6 @@ def test_property_flow_end_to_end_posts_to_the_app(world, sent, monkeypatch):
     _say('10 Downing Street, London SW1A 2AA', update_id=3)
     _tap('f:bedrooms:3', update_id=4)
     _tap('f:bathrooms:2', update_id=5)
-    _tap('f:furnished:skip', update_id=6)
-    _tap('f:features:done', update_id=7)
-    _tap('f:elevation:skip', update_id=8)
     _tap('f:notes:skip', update_id=9)
     assert 'Create this property?' in _messages(sent)[-1]
     assert not calls
@@ -152,7 +149,7 @@ def test_api_rejection_is_reported_and_clears_the_flow(world, sent, monkeypatch)
     _say('/property')
     _say('acme')
     _say('10 Downing Street SW1A 2AA')
-    for data in ('f:bedrooms:1', 'f:bathrooms:1', 'f:furnished:skip', 'f:features:done', 'f:elevation:skip', 'f:notes:skip', 'f:confirm:yes'):
+    for data in ('f:bedrooms:1', 'f:bathrooms:1', 'f:notes:skip', 'f:confirm:yes'):
         _tap(data)
     assert "didn't go through: address missing" in _messages(sent)[-1]
     assert _session().state == 'idle'
@@ -170,7 +167,7 @@ def test_server_error_keeps_the_confirm_card_retryable(world, sent, monkeypatch)
     _say('/property')
     _say('acme')
     _say('10 Downing Street SW1A 2AA')
-    for data in ('f:bedrooms:1', 'f:bathrooms:1', 'f:furnished:skip', 'f:features:done', 'f:elevation:skip', 'f:notes:skip', 'f:confirm:yes'):
+    for data in ('f:bedrooms:1', 'f:bathrooms:1', 'f:notes:skip', 'f:confirm:yes'):
         _tap(data)
     assert 'tap Confirm again' in _messages(sent)[-1]
     assert _session().state == 'flow'
@@ -299,9 +296,6 @@ def _answer_property(update_start=1):
     _say('10 Downing Street, London SW1A 2AA', update_id=update_start + 2)
     _tap('f:bedrooms:3', update_id=update_start + 3)
     _tap('f:bathrooms:2', update_id=update_start + 4)
-    _tap('f:furnished:skip', update_id=update_start + 5)
-    _tap('f:features:done', update_id=update_start + 6)
-    _tap('f:elevation:skip', update_id=update_start + 7)
     _tap('f:notes:skip', update_id=update_start + 8)
     return update_start + 9
 

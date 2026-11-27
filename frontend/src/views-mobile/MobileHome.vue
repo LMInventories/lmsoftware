@@ -135,12 +135,6 @@ const propForm = ref({
   property_type:     '',
   bedrooms:          '',
   bathrooms:         '',
-  furnished:         '',
-  detachment_type:   '',
-  elevation:         '',
-  parking:           false,
-  garden:            false,
-  elevator:          false,
   meter_electricity: '',
   meter_gas:         '',
   meter_heat:        '',
@@ -149,15 +143,10 @@ const propForm = ref({
 })
 
 const PROPERTY_TYPES    = ['House', 'Flat', 'Studio', 'Bungalow', 'Maisonette', 'Cottage', 'Commercial', 'Other']
-const FURNISHED_OPTS    = ['Furnished', 'Part Furnished', 'Unfurnished']
-const DETACHMENT_OPTS   = ['Terraced', 'End Terrace', 'Semi-Detached', 'Detached', 'Purpose Built']
-const ELEVATION_OPTS    = ['Ground Floor', '1st Floor', '2nd Floor', '3rd Floor', '4th Floor', '5th Floor+', 'Top Floor', 'Penthouse']
 
 async function openPropertySheet() {
   propForm.value = {
     client_id: null, address: '', property_type: '', bedrooms: '', bathrooms: '',
-    furnished: '', detachment_type: '', elevation: '',
-    parking: false, garden: false, elevator: false,
     meter_electricity: '', meter_gas: '', meter_heat: '', meter_water: '',
     notes: '',
   }
@@ -186,12 +175,6 @@ async function submitProperty() {
     property_type:     propForm.value.property_type     || null,
     bedrooms:          propForm.value.bedrooms !== ''   ? Number(propForm.value.bedrooms)   : null,
     bathrooms:         propForm.value.bathrooms !== ''  ? Number(propForm.value.bathrooms)  : null,
-    furnished:         propForm.value.furnished         || null,
-    detachment_type:   propForm.value.detachment_type   || null,
-    elevation:         propForm.value.elevation         || null,
-    parking:           propForm.value.parking,
-    garden:            propForm.value.garden,
-    elevator:          propForm.value.elevator,
     meter_electricity: propForm.value.meter_electricity || null,
     meter_gas:         propForm.value.meter_gas         || null,
     meter_heat:        propForm.value.meter_heat        || null,
@@ -599,52 +582,6 @@ function fmtDate(d) {
           <div class="mh-field-group mh-field-half">
             <label class="mh-field-label">Bathrooms</label>
             <input class="mh-input" type="number" min="0" max="20" placeholder="0" v-model="propForm.bathrooms" />
-          </div>
-        </div>
-
-        <!-- ── Furnished ──────────────���───────────────── -->
-        <div class="mh-field-group">
-          <label class="mh-field-label">Furnished</label>
-          <select class="mh-input" v-model="propForm.furnished">
-            <option value="">— Select —</option>
-            <option v-for="f in FURNISHED_OPTS" :key="f" :value="f">{{ f }}</option>
-          </select>
-        </div>
-
-        <!-- ── Detachment / Elevation ───────���─────────── -->
-        <div class="mh-field-row">
-          <div class="mh-field-group mh-field-half">
-            <label class="mh-field-label">Detachment</label>
-            <select class="mh-input" v-model="propForm.detachment_type">
-              <option value="">— Select —</option>
-              <option v-for="d in DETACHMENT_OPTS" :key="d" :value="d">{{ d }}</option>
-            </select>
-          </div>
-          <div class="mh-field-group mh-field-half">
-            <label class="mh-field-label">Elevation</label>
-            <select class="mh-input" v-model="propForm.elevation">
-              <option value="">— Select —</option>
-              <option v-for="e in ELEVATION_OPTS" :key="e" :value="e">{{ e }}</option>
-            </select>
-          </div>
-        </div>
-
-        <!-- ── Feature toggles ───────────────────────── -->
-        <div class="mh-field-group">
-          <label class="mh-field-label">Features</label>
-          <div class="mh-toggles">
-            <label class="mh-toggle-chip" :class="{ active: propForm.parking }">
-              <input type="checkbox" v-model="propForm.parking" />
-              🚗 Parking
-            </label>
-            <label class="mh-toggle-chip" :class="{ active: propForm.garden }">
-              <input type="checkbox" v-model="propForm.garden" />
-              🌿 Garden
-            </label>
-            <label class="mh-toggle-chip" :class="{ active: propForm.elevator }">
-              <input type="checkbox" v-model="propForm.elevator" />
-              🛗 Elevator
-            </label>
           </div>
         </div>
 
@@ -1314,34 +1251,6 @@ function fmtDate(d) {
   gap: 10px;
 }
 .mh-field-half { flex: 1; min-width: 0; }
-
-/* Feature toggle chips */
-.mh-toggles {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.mh-toggle-chip {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 14px;
-  border: 1.5px solid #334155;
-  border-radius: 20px;
-  background: #0f172a;
-  color: #64748b;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: border-color 0.12s, color 0.12s, background 0.12s;
-  user-select: none;
-}
-.mh-toggle-chip input[type="checkbox"] { display: none; }
-.mh-toggle-chip.active {
-  border-color: #10b981;
-  color: #34d399;
-  background: rgba(16,185,129,0.08);
-}
 
 /* Meter readings */
 .mh-meter-grid {

@@ -1206,18 +1206,6 @@ onMounted(() => {
                 <strong>Bathrooms:</strong>
                 <span>{{ inspection.property.bathrooms }}</span>
               </div>
-              <div class="detail-row" v-if="inspection.property.furnished">
-                <strong>Furnished:</strong>
-                <span>{{ inspection.property.furnished }}</span>
-              </div>
-              <div class="detail-row" v-if="inspection.property.parking">
-                <strong>Parking:</strong>
-                <span>{{ inspection.property.parking }}</span>
-              </div>
-              <div class="detail-row" v-if="inspection.property.garden">
-                <strong>Garden:</strong>
-                <span>{{ inspection.property.garden }}</span>
-              </div>
             </div>
           </div>
 

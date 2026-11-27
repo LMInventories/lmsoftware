@@ -635,9 +635,6 @@ def _setup_database():
             property_type='residential',
             bedrooms=2,
             bathrooms=1,
-            furnished=False,
-            parking=True,
-            garden=True,
         )
         db.session.add(prop)
         db.session.commit()

@@ -54,9 +54,7 @@ const filters = usePersistedFilters('properties', { client_id: null, postcode: '
 
 const form = ref({
   address_line1: '', address_line2: '', city: '', postcode: '',
-  bedrooms: '', bathrooms: '', furnished: '',
-  detachment_type: '', elevation: '',
-  parking: false, garden: false, elevator: false,
+  bedrooms: '', bathrooms: '',
   meter_electricity: '', meter_gas: '', meter_heat: '', meter_water: '',
   client_id: null
 })
@@ -181,9 +179,7 @@ async function fetchClients() {
 function blankForm() {
   return {
     address_line1: '', address_line2: '', city: '', postcode: '',
-    bedrooms: '', bathrooms: '', furnished: '',
-    detachment_type: '', elevation: '',
-    parking: false, garden: false, elevator: false,
+    bedrooms: '', bathrooms: '',
     meter_electricity: '', meter_gas: '', meter_heat: '', meter_water: '',
     client_id: authStore.isClient ? authStore.user.client_id : null
   }
@@ -218,12 +214,6 @@ function openEditModal(property) {
     ...parsed,
     bedrooms: property.bedrooms ?? '',
     bathrooms: property.bathrooms ?? '',
-    furnished: property.furnished || '',
-    detachment_type: property.detachment_type || '',
-    elevation: property.elevation || '',
-    parking: !!property.parking,
-    garden: !!property.garden,
-    elevator: !!property.elevator,
     meter_electricity: property.meter_electricity || '',
     meter_gas: property.meter_gas || '',
     meter_heat: property.meter_heat || '',
@@ -240,26 +230,10 @@ async function saveProperty() {
   if (!form.value.postcode.trim()) { toast.warning('Postcode is required'); return null }
   if (!address) { toast.warning('Address is required'); return null }
   if (!form.value.client_id) { toast.warning('Client is required'); return null }
-  const DETACHMENT_TYPE_MAP = {
-    'Terraced':           'house',
-    'Semi-Detached':      'house',
-    'Detached':           'house',
-    'Purpose Built Flat': 'flat',
-    'Converted Flat':     'flat',
-    'Bungalow':           'bungalow',
-    'Penthouse':          'flat',
-  }
   const payload = {
     address,
-    property_type: DETACHMENT_TYPE_MAP[form.value.detachment_type] || 'residential',
     bedrooms: form.value.bedrooms === '' ? null : Number(form.value.bedrooms),
     bathrooms: form.value.bathrooms === '' ? null : Number(form.value.bathrooms),
-    furnished: form.value.furnished,
-    detachment_type: form.value.detachment_type,
-    elevation: form.value.elevation,
-    parking: form.value.parking,
-    garden: form.value.garden,
-    elevator: form.value.elevator,
     meter_electricity: form.value.meter_electricity,
     meter_gas: form.value.meter_gas,
     meter_heat: form.value.meter_heat,
@@ -409,10 +383,6 @@ onMounted(() => { fetchProperties(); fetchClients() })
           <div class="card-specs">
             <span v-if="property.bedrooms" class="spec-chip">{{ property.bedrooms }} bed</span>
             <span v-if="property.bathrooms" class="spec-chip">{{ property.bathrooms }} bath</span>
-            <span v-if="property.furnished" class="spec-chip">{{ property.furnished }}</span>
-            <span v-if="property.parking" class="spec-chip">Parking</span>
-            <span v-if="property.garden" class="spec-chip">Garden</span>
-            <span v-if="property.elevator" class="spec-chip">Lift</span>
           </div>
         </div>
         <div class="card-footer">
@@ -437,10 +407,6 @@ onMounted(() => { fetchProperties(); fetchClients() })
           <div class="card-specs">
             <span v-if="property.bedrooms" class="spec-chip">{{ property.bedrooms }} bed</span>
             <span v-if="property.bathrooms" class="spec-chip">{{ property.bathrooms }} bath</span>
-            <span v-if="property.furnished" class="spec-chip">{{ property.furnished }}</span>
-            <span v-if="property.parking" class="spec-chip">Parking</span>
-            <span v-if="property.garden" class="spec-chip">Garden</span>
-            <span v-if="property.elevator" class="spec-chip">Lift</span>
           </div>
         </div>
         <div class="card-footer">
@@ -570,79 +536,14 @@ onMounted(() => { fetchProperties(); fetchClients() })
                   </select>
                 </div>
               </div>
-
-              <!-- Furnishing -->
-              <div class="form-group">
-                <label>Furnishing</label>
-                <select v-model="form.furnished">
-                  <option value="">Not specified</option>
-                  <option value="Furnished">Furnished</option>
-                  <option value="Part Furnished">Part Furnished</option>
-                  <option value="Unfurnished">Unfurnished</option>
-                </select>
-              </div>
             </div>
 
-            <!-- ── Column 2: Property Characteristics ── -->
+            <!-- ── Column 2: Meter Locations ── -->
             <div class="modal-col modal-col-divider">
-              <div class="col-section-title">Property Characteristics</div>
-
-              <!-- Detachment type -->
-              <div class="form-group">
-                <label>Detachment Type</label>
-                <select v-model="form.detachment_type">
-                  <option value="">Not specified</option>
-                  <option value="Terraced">Terraced</option>
-                  <option value="Semi-Detached">Semi-Detached</option>
-                  <option value="Detached">Detached</option>
-                  <option value="Purpose Built Flat">Purpose Built Flat</option>
-                  <option value="Converted Flat">Converted Flat</option>
-                  <option value="Bungalow">Bungalow</option>
-                  <option value="Penthouse">Penthouse</option>
-                </select>
-              </div>
-
-              <!-- Elevation -->
-              <div class="form-group">
-                <label>Elevation / Floor</label>
-                <select v-model="form.elevation">
-                  <option value="">Not specified</option>
-                  <option value="Ground Floor">Ground Floor</option>
-                  <option value="1st Floor">1st Floor</option>
-                  <option value="2nd Floor">2nd Floor</option>
-                  <option value="3rd Floor">3rd Floor</option>
-                  <option value="4th Floor or Above">4th Floor or Above</option>
-                </select>
-              </div>
-
-              <!-- Toggles -->
-              <div class="form-group">
-                <label>Features</label>
-                <div class="toggle-group">
-                  <label class="toggle-row" :class="{ 'toggle-on': form.parking }">
-                    <span class="toggle-label">Parking</span>
-                    <div class="toggle-switch" @click="form.parking = !form.parking">
-                      <div class="toggle-knob" :class="{ 'toggle-knob-on': form.parking }"></div>
-                    </div>
-                  </label>
-                  <label class="toggle-row" :class="{ 'toggle-on': form.garden }">
-                    <span class="toggle-label">Garden</span>
-                    <div class="toggle-switch" @click="form.garden = !form.garden">
-                      <div class="toggle-knob" :class="{ 'toggle-knob-on': form.garden }"></div>
-                    </div>
-                  </label>
-                  <label class="toggle-row" :class="{ 'toggle-on': form.elevator }">
-                    <span class="toggle-label">Elevator / Lift</span>
-                    <div class="toggle-switch" @click="form.elevator = !form.elevator">
-                      <div class="toggle-knob" :class="{ 'toggle-knob-on': form.elevator }"></div>
-                    </div>
-                  </label>
-                </div>
-              </div>
+              <div class="col-section-title">Meter Locations</div>
 
               <!-- Meter locations -->
               <div class="form-group">
-                <label>Meter Locations</label>
                 <div class="meter-grid">
                   <div class="meter-field">
                     <span class="meter-label-txt">Electricity</span>
@@ -796,14 +697,6 @@ h1 { font-size: 21px; font-weight: 700; color: #0f172a; margin: 0 0 2px; }
 .addr-backdrop { position: fixed; inset: 0; z-index: 299; }
 
 /* Toggles */
-.toggle-group { display: flex; flex-direction: column; gap: 8px; padding: 4px 0; }
-.toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border: 1px solid #e2e8f0; border-radius: 8px; cursor: pointer; transition: all 0.15s; }
-.toggle-row.toggle-on { background: #f0fdf4; border-color: #86efac; }
-.toggle-label { font-size: 13px; color: #374151; font-weight: 500; }
-.toggle-switch { width: 38px; height: 22px; background: #cbd5e1; border-radius: 11px; position: relative; transition: background 0.2s; flex-shrink: 0; }
-.toggle-row.toggle-on .toggle-switch { background: #22c55e; }
-.toggle-knob { width: 16px; height: 16px; background: white; border-radius: 50%; position: absolute; top: 3px; left: 3px; transition: transform 0.2s; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
-.toggle-knob-on { transform: translateX(16px); }
 
 /* Meters */
 .meter-grid { display: flex; flex-direction: column; gap: 6px; }

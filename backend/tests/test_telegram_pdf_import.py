@@ -147,7 +147,7 @@ def web(app, world, sent, monkeypatch, tmp_path):
 
     monkeypatch.setattr(imp.requests, 'request', request)
     monkeypatch.setattr(imp, 'UPLOAD_DIR', str(tmp_path))
-    monkeypatch.setattr(imp, '_extract', lambda raw, filename: _pdf_rooms())
+    monkeypatch.setattr(imp, '_extract', lambda *args: _pdf_rooms())
     monkeypatch.setattr(imp, '_start_processing', imp.process_import)        # run inline
     monkeypatch.setenv('RAILWAY_PUBLIC_DOMAIN', 'backend.test')
     client.calls = calls
@@ -167,13 +167,13 @@ def _ask_for_link(sent):
     return url.split('#', 1)[1]
 
 
-def _upload(web, token, data=PDF, piece=2000):
+def _upload(web, token, data=PDF, piece=2000, **options):
     headers = {'X-Upload-Token': token}
     pieces = [data[i:i + piece] for i in range(0, len(data), piece)]
     for i, chunk in enumerate(pieces):
         assert web.put(f'/api/telegram-import/chunk/{i}', data=chunk, headers=headers).status_code == 200
     return web.post('/api/telegram-import/complete', headers=headers,
-                    json={'filename': 'report.pdf', 'chunks': len(pieces), 'size': len(data)})
+                    json={'filename': 'report.pdf', 'chunks': len(pieces), 'size': len(data), **options})
 
 
 def test_import_creates_a_backdated_check_in_and_offers_the_check_out(web, world, sent):
@@ -184,7 +184,7 @@ def test_import_creates_a_backdated_check_in_and_offers_the_check_out(web, world
     info = web.get('/api/telegram-import/info', headers={'X-Upload-Token': token}).get_json()
     assert info['address'] == world['property'].address and info['date'] == 'Thu 12 Mar 2026'
 
-    assert _upload(web, token).status_code == 200
+    assert _upload(web, token, include_photos=True).status_code == 200
 
     inspection = Inspection.query.one()
     assert (inspection.inspection_type, inspection.status, inspection.pdf_import) == ('check_in', 'complete', True)
@@ -223,8 +223,39 @@ def test_book_button_waits_for_a_flow_in_progress_and_ignores_other_chats(web, w
     assert 'Finish or /cancel' in _messages(sent)[-1]
 
 
+@pytest.mark.parametrize('options, wanted', [({}, False), ({'include_photos': True}, True),
+                                             ({'include_photos': False}, False)])
+def test_photo_choice_reaches_the_reading_of_the_pdf(web, sent, monkeypatch, options, wanted):
+    asked = []
+    monkeypatch.setattr(imp, '_extract', lambda raw, name, photos: asked.append(photos) or _pdf_rooms())
+    _upload(web, _ask_for_link(sent), **options)
+    assert asked == [wanted]
+    result = _messages(sent)[-1]
+    assert ('3 photos' in result) is wanted and ('photos not imported' in result) is not wanted
+    assert any('without photos' in m for m in _messages(sent)) is not wanted
+
+
+def test_omitting_photos_extracts_and_saves_none(monkeypatch):
+    """Through the real reading pipeline (only the AI is stubbed): no photo work, nothing attached,
+    and the property's cover photo is left alone."""
+    from routes import pdf_import
+    monkeypatch.setenv('ANTHROPIC_API_KEY', 'test-key')
+    rooms = {'rooms': [{'name': 'Hallway', 'items': [{'label': 'Walls'}]}], 'fixedSections': {}}
+    monkeypatch.setattr(pdf_import, '_call_claude', lambda *a, **k: json.loads(json.dumps(rooms)))
+    looked = []
+    monkeypatch.setattr(pdf_import, '_extract_pdf_images',
+                        lambda *a, **k: looked.append(1) or ({0: [{'url': 'https://x/1.jpg', 'ref': None}]},
+                                                             'https://x/cover.jpg'))
+    parsed = imp._extract(_small_pdf(), 'report.pdf', include_photos=False)
+    assert not looked and parsed['rooms'] and not [k for k in parsed if 'hoto' in k]
+    assert '_photos' not in parsed['rooms'][0]
+
+    parsed = imp._extract(_small_pdf(), 'report.pdf', include_photos=True)
+    assert looked and parsed['_coverPhoto'] == 'https://x/cover.jpg'
+
+
 def test_skipped_sections_are_flagged(web, sent, monkeypatch):
-    monkeypatch.setattr(imp, '_extract', lambda raw, filename: {**_pdf_rooms(), '_skippedChunks': '1 of 8'})
+    monkeypatch.setattr(imp, '_extract', lambda *args: {**_pdf_rooms(), '_skippedChunks': '1 of 8'})
     _upload(web, _ask_for_link(sent))
     assert '1 of 8 sections' in _messages(sent)[-1]
 
@@ -233,7 +264,7 @@ def test_skipped_sections_are_flagged(web, sent, monkeypatch):
 def test_unreadable_pdf_creates_nothing_and_sends_a_new_link(web, sent, monkeypatch, outcome):
     from models import Inspection
 
-    def extract(raw, filename):
+    def extract(*args):
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
@@ -293,10 +324,21 @@ def test_upload_rejects_bad_links_and_files(web, sent):
     assert web.get('/api/telegram-import/info', headers=headers).status_code == 410
 
 
+def test_no_reply_about_a_link_is_ever_cached(web, sent):
+    token = _ask_for_link(sent)
+    replies = [web.get('/api/telegram-import/info'),                                          # 404
+               web.get('/api/telegram-import/info', headers={'X-Upload-Token': token})]       # 200
+    _upload(web, token)
+    replies.append(web.get('/api/telegram-import/info', headers={'X-Upload-Token': token}))   # 410
+    assert [r.status_code for r in replies] == [404, 200, 410]
+    assert all(r.headers['Cache-Control'] == 'no-store' for r in replies)
+
+
 def test_upload_page_is_served(web):
     res = web.get('/api/telegram-import/upload')
     assert res.status_code == 200 and b'Upload Check In PDF' in res.data
     assert res.headers['Cache-Control'] == 'no-store'
+    assert b'<input id="photos" type="checkbox" role="switch">' in res.data      # photos off until chosen
 
 
 def test_continuation_merge_matches_the_web_app():

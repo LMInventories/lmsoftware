@@ -1202,6 +1202,7 @@ def _run_import_job(job_id, api_key, extracted_text, pdf_b64, template_structure
             print('[pdf-import] job ' + job_id + ' text mode, chunked: ' + str(len(chunks)) + ' chunks from ' + str(len(extracted_text)) + ' chars')
 
             results = []
+            skipped = 0
             for i, chunk in enumerate(chunks):
                 print('[pdf-import] job ' + job_id + ' chunk ' + str(i + 1) + '/' + str(len(chunks)) + ' (' + str(len(chunk)) + ' chars)')
                 _write_job(job_id, {
@@ -1225,12 +1226,15 @@ def _run_import_job(job_id, api_key, extracted_text, pdf_b64, template_structure
                 except json.JSONDecodeError as e:
                     print('[pdf-import] job ' + job_id + ' chunk ' + str(i + 1) + ' JSON error (skipping): ' + str(e))
                     # Skip bad chunks rather than failing the whole job
+                    skipped += 1
                     continue
 
             if not results:
                 raise ValueError('All chunks failed to parse — no usable data extracted')
 
             parsed = _merge_results(results)
+            if skipped:
+                parsed['_skippedChunks'] = f'{skipped} of {len(chunks)}'
 
         # ── Map images to rooms / fixed sections ─────────────────────────
         # Done AFTER Claude so we can use the actual room names Claude extracted.

@@ -878,6 +878,24 @@ class TelegramSession(db.Model):
     updated_at           = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
+class TelegramPdfImport(db.Model):
+    """A backdated Check In being imported from a PDF via Telegram (routes/telegram_pdf_import.py).
+    Times are naive UTC."""
+    __tablename__ = 'telegram_pdf_imports'
+
+    id            = db.Column(db.Integer, primary_key=True)
+    token_hash    = db.Column(db.String(64), nullable=False, unique=True, index=True)  # sha256 of the link token
+    user_id       = db.Column(db.Integer, nullable=False)
+    chat_id       = db.Column(db.BigInteger, nullable=False)
+    property_id   = db.Column(db.Integer, nullable=False)
+    conduct_date  = db.Column(db.Date, nullable=False)
+    status        = db.Column(db.String(20), nullable=False, default='waiting')  # waiting | processing | saving | done | failed
+    inspection_id = db.Column(db.Integer)
+    expires_at    = db.Column(db.DateTime, nullable=False)
+    started_at    = db.Column(db.DateTime)
+    created_at    = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+
 class UserUnavailability(db.Model):
     """
     A block of time a user (any role) has marked themselves unavailable.

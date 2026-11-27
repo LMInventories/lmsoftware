@@ -50,7 +50,7 @@ import json
 import logging
 import os
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import requests
 from flask import Blueprint, request, jsonify
@@ -205,6 +205,11 @@ def _continue_flow(session, user, result):
         _send_message(session.chat_id, 'Cancelled.')
     elif action == 'execute':
         _execute_flow(session, user, state)
+    elif action == 'import':
+        from routes import telegram_pdf_import
+        telegram_pdf_import.offer_upload(session.chat_id, user, state['data']['property_id'],
+                                         date.fromisoformat(state['data']['import_date']))
+        _reset_session(session)
 
 
 def _execute_flow(session, user, state):
@@ -288,6 +293,21 @@ def _execute_invoice_change(session, user, state):
     _save_flow(session, state)
     text, kb = telegram_flows.invoice_card(state)
     _send_message(session.chat_id, f'{lead}\n\n{text}', reply_markup=kb)
+
+
+def _handle_import_callback(session, user, cq, action, import_id):
+    """The "Book the Check Out" button under a finished PDF import (callback_data 'i:co:<import id>')."""
+    from routes import telegram_pdf_import
+    prefill = telegram_pdf_import.check_out_prefill(import_id, session.chat_id) if action == 'co' else None
+    if prefill is None:
+        _answer_callback_query(cq['id'], 'That button has expired.')
+        return
+    _answer_callback_query(cq['id'])
+    _expire_if_stale(session)
+    if session.state == 'flow':
+        _send_message(session.chat_id, "Finish or /cancel what you're doing first, then tap that button again.")
+        return
+    _start_flow(session, telegram_flows.INSPECTION_FLOW, is_admin=user.role == 'admin', prefill=prefill)
 
 
 # ── Change (/change) ───────────────────────────────────────────────────────
@@ -468,7 +488,8 @@ def _start_lookup(session, user, question):
 _HELP_TEXT = (
     'I can add properties and inspections, email reports, update invoices and answer questions. Commands:\n'
     "• /property — add a property (I'll ask you step by step), then optionally book an inspection for it\n"
-    '• /inspection — book an inspection (admins can add internal notes)\n'
+    '• /inspection — book an inspection (admins can add internal notes). A past date on a check-in or '
+    "check-out imports another clerk's PDF as a backdated Check In\n"
     '• /share — email a completed report to the client, tenant or anyone else\n'
     '• /invoice — look up an inspection and mark its invoice paid or unpaid\n'
     '• /change — tell me what to change on an inspection (date, clerk, template…); I\'ll ask you to confirm\n'
@@ -634,6 +655,9 @@ def _handle_callback_query(cq, update_id=None):
     parts = data.split(':', 2)
     if len(parts) == 3 and parts[0] == 'c':
         _handle_change_callback(session, link.user, cq, parts[1], parts[2])
+        return
+    if len(parts) == 3 and parts[0] == 'i':
+        _handle_import_callback(session, link.user, cq, parts[1], parts[2])
         return
     state = _load_flow(session) if session.state == 'flow' else None
     if len(parts) != 3 or parts[0] != 'f' or state is None:
